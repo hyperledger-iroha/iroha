@@ -524,18 +524,6 @@ fn authorize_and_prepare_raw_contract_dispatch<R: StateReadOnly>(
     };
     Ok((call_context, runtime_context, authorization))
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn validate_bound_contract_manifest(
-    manifest: &ContractManifest,
-    summary: &ProgramSummary,
-) -> Result<(), OverlayBuildError> {
-    crate::smartcontracts::ivm::validate_manifest_hashes(
-        manifest,
-        summary.code_hash,
-        summary.abi_hash,
-    )
-    .map_err(OverlayBuildError::HeaderPolicy)
-}
 fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
     match err {
         ProgramAnalysisError::Metadata(error) if error.execution_deferral().is_some() => {
@@ -2489,16 +2477,14 @@ where
             let code_hash = identity.code_hash;
             let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
-            let manifest = state_ro
-                .world()
-                .contract_manifests()
-                .get(&artifact_id)
-                .ok_or_else(|| {
-                    OverlayBuildError::ContractCall(format!(
-                        "contract instance `{}` has no manifest",
-                        call.contract_address
-                    ))
-                })?;
+            let manifest =
+                code::registered_manifest::RegisteredManifest::get(state_ro.world(), &artifact_id)
+                    .ok_or_else(|| {
+                        OverlayBuildError::ContractCall(format!(
+                            "contract instance `{}` has no manifest",
+                            call.contract_address
+                        ))
+                    })?;
             let code_bytes = state_ro
                 .world()
                 .contract_code()
@@ -2531,7 +2517,12 @@ where
                 state_ro.pipeline().ivm_max_cycles_upper_bound,
                 &meta,
             )?;
-            validate_bound_contract_manifest(manifest, &summary)?;
+            crate::smartcontracts::ivm::validate_manifest_hash_fields(
+                manifest.hashes(),
+                summary.code_hash,
+                summary.abi_hash,
+            )
+            .map_err(OverlayBuildError::HeaderPolicy)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
             let lifecycle_transition = crate::executor::validate_prepared_contract_lifecycle_call(
                 state_ro.world(),
@@ -3052,16 +3043,14 @@ where
             let code_hash = identity.code_hash;
             let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
-            let manifest = state_ro
-                .world()
-                .contract_manifests()
-                .get(&artifact_id)
-                .ok_or_else(|| {
-                    OverlayBuildError::ContractCall(format!(
-                        "contract instance `{}` has no manifest",
-                        call.contract_address
-                    ))
-                })?;
+            let manifest =
+                code::registered_manifest::RegisteredManifest::get(state_ro.world(), &artifact_id)
+                    .ok_or_else(|| {
+                        OverlayBuildError::ContractCall(format!(
+                            "contract instance `{}` has no manifest",
+                            call.contract_address
+                        ))
+                    })?;
             let code_bytes = state_ro
                 .world()
                 .contract_code()
@@ -3093,7 +3082,12 @@ where
                 state_ro.pipeline().ivm_max_cycles_upper_bound,
                 &meta,
             )?;
-            validate_bound_contract_manifest(manifest, &summary)?;
+            crate::smartcontracts::ivm::validate_manifest_hash_fields(
+                manifest.hashes(),
+                summary.code_hash,
+                summary.abi_hash,
+            )
+            .map_err(OverlayBuildError::HeaderPolicy)?;
             let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
             let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
@@ -3561,16 +3555,14 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             let code_hash = identity.code_hash;
             let artifact_id = ContractArtifactId::for_address(&call.contract_address, code_hash)
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
-            let manifest = state_ro
-                .world()
-                .contract_manifests()
-                .get(&artifact_id)
-                .ok_or_else(|| {
-                    OverlayBuildError::ContractCall(format!(
-                        "contract instance `{}` has no manifest",
-                        call.contract_address
-                    ))
-                })?;
+            let manifest =
+                code::registered_manifest::RegisteredManifest::get(state_ro.world(), &artifact_id)
+                    .ok_or_else(|| {
+                        OverlayBuildError::ContractCall(format!(
+                            "contract instance `{}` has no manifest",
+                            call.contract_address
+                        ))
+                    })?;
             let code_bytes = state_ro
                 .world()
                 .contract_code()
@@ -3605,7 +3597,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 require_ivm_gas_limit(tx.fee_payment_intent())?,
                 NonZeroU64::new(max_gas_cap).map(NonZeroU64::get),
             );
-            validate_bound_contract_manifest(manifest, &summary)?;
+            crate::smartcontracts::ivm::validate_manifest_hash_fields(
+                manifest.hashes(),
+                summary.code_hash,
+                summary.abi_hash,
+            )
+            .map_err(OverlayBuildError::HeaderPolicy)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
             let lifecycle_transition = crate::executor::validate_prepared_contract_lifecycle_call(
                 state_ro.world(),

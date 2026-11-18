@@ -15,11 +15,32 @@
 //!
 //! The rejection parents ([`ValidationFailC10V1`], [`TransactionRejectionReasonC10V1`],
 //! [`TransactionStatusC10V1`]) are new definitions for the same reason: each embeds a changed
-//! member.
-// TODO(phase 5, `specs/runtime/ivm_baseline_and_c10_profiles.md` "Phase 5 record"): the event
-// filter, trigger descriptor, manifest and trigger parents, the two registration instructions
-// (`RegisterSmartContractCodeC10V1`, `RegisterTriggerC10V1`), their storage and the selected
-// dispatch that reports C10 executions through these families are not yet defined.
+//! member. So is every public parent that reaches a transaction status (owner decision
+//! 2026-11-17): the pipeline events and event filters ([`events`]), the contract manifest and its
+//! trigger descriptors ([`manifest`]), the trigger and its action ([`trigger`]), the certified
+//! transaction result and the two registration payloads ([`result`]). Each keeps the baseline
+//! parent's members, order and tags, with the C10 member in place of the changed one.
+//! The governed addition owns both registration wire IDs. Its execution service selects this
+//! result family for certified network and trigger outputs, and its storage definitions bind
+//! registered artifacts and trigger actions to their original C10 host profile.
+
+pub mod events;
+pub mod manifest;
+pub mod result;
+pub mod trigger;
+
+pub use self::{
+    events::{
+        EventBoxC10V1, EventFilterBoxC10V1, PipelineEventBoxC10V1, PipelineEventFilterBoxC10V1,
+        TransactionEventC10V1, TransactionEventFilterC10V1,
+    },
+    manifest::{ContractManifestC10V1, EntrypointDescriptorC10V1, TriggerDescriptorC10V1},
+    result::{
+        RegisterSmartContractCodeC10V1, RegisterTriggerC10V1, TransactionResultC10V1,
+        TransactionResultInnerC10V1,
+    },
+    trigger::{ActionC10V1, StoredC10TriggerV1, TriggerC10V1},
+};
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -479,6 +500,21 @@ pub enum TransactionStatusC10V1 {
     /// Transaction was stored in the block as invalid
     Rejected(Box<TransactionRejectionReasonC10V1>),
 }
+
+// The baseline rejection reason and pipeline status have base64 JSON forms; so do their C10
+// counterparts, which events, results and Torii carry.
+events::c10_json_via_norito_bytes!(TransactionRejectionReasonC10V1, TransactionStatusC10V1);
+
+// A certified result (`Result<_, TransactionRejectionReasonC10V1>`) decodes its rejection as one
+// complete canonical field, as the baseline rejection decodes inside `TransactionResult`.
+impl<'a> norito::core::DecodeFromSlice<'a> for TransactionRejectionReasonC10V1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
+#[cfg(test)]
+mod family_tests;
 
 #[cfg(test)]
 mod tests {

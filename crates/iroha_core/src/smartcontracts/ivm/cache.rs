@@ -2738,9 +2738,15 @@ mod tests {
             let image_bytes = usize::try_from(runtime.memory.stack_top()).unwrap();
             let leaf_bytes = image_bytes.div_ceil(32) * 32;
             let funded_bytes = budget.reserved_bytes();
+            let runtime_bytes = funded_bytes - prepared_bytes;
+            assert!(!runtime.memory.merkle_storage_allocated());
             assert!(
-                funded_bytes > 2 * (image_bytes + leaf_bytes),
-                "both VM and baseline image, leaves, nodes, and tracking are prepaid"
+                runtime_bytes > 2 * image_bytes,
+                "both images own their tracking"
+            );
+            assert!(
+                runtime_bytes < 2 * (image_bytes + leaf_bytes),
+                "unused Merkle storage is admitted on the first request"
             );
             funded_bytes
         };
@@ -3238,13 +3244,13 @@ impl PreparedContractCache {
     }
 }
 impl IvmCache {
-    /// Summarize the original artifact under the exact root-selected policy.
+    /// Summarize a raw executable under its original admission interface.
     pub(crate) fn summarize_executable_in_world(
         &mut self,
         world: &impl crate::state::WorldReadOnly,
         bytes: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        let profile = super::profile::resolve_artifact(world, bytes);
+        let profile = super::profile::resolve_raw_artifact(world, bytes);
         self.summarize_executable_for_profile(bytes, profile.id())
     }
     /// Summarize trusted content with its original root's explicit policy.

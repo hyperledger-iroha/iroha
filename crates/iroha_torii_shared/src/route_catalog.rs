@@ -3146,6 +3146,21 @@ pub mod runtime_governance {
         "governance.parliament.transition.draft",
         "/v1/gov/parliament/transitions/draft",
     );
+    /// Create one retryable attempt for exact proposal content.
+    pub const GOV_ANONYMOUS_PARLIAMENT_ATTEMPT_DRAFT: RouteDescriptor = app_signed_post(
+        "governance.anonymous_parliament.attempt.draft",
+        "/v1/gov/anonymous-parliament/attempts/draft",
+    );
+    /// Draft an account-signed transition against an existing attempt.
+    pub const GOV_ANONYMOUS_PARLIAMENT_TRANSITION_DRAFT: RouteDescriptor = app_signed_post(
+        "governance.anonymous_parliament.transition.draft",
+        "/v1/gov/anonymous-parliament/transitions/draft",
+    );
+    /// Draft a proof-carrying credential registration for a binding seat.
+    pub const GOV_ANONYMOUS_PARLIAMENT_CREDENTIAL_DRAFT: RouteDescriptor = app_signed_post(
+        "governance.anonymous_parliament.credential.draft",
+        "/v1/gov/anonymous-parliament/credentials/draft",
+    );
     /// Submit one canonical signerless anonymous-ballot envelope.
     ///
     /// The route is account- and session-free (`specs/parliament_private_ballot_design.md`
@@ -3368,6 +3383,9 @@ pub mod runtime_governance {
         GOV_PARLIAMENT_ATTEMPT_READ,
         GOV_PARLIAMENT_ATTEMPT_PLAN,
         GOV_PARLIAMENT_TRANSITION_DRAFT,
+        GOV_ANONYMOUS_PARLIAMENT_ATTEMPT_DRAFT,
+        GOV_ANONYMOUS_PARLIAMENT_TRANSITION_DRAFT,
+        GOV_ANONYMOUS_PARLIAMENT_CREDENTIAL_DRAFT,
         GOV_ANONYMOUS_BALLOT_SUBMIT,
         GOV_ANONYMOUS_BALLOT_BOARD_READ,
         GOV_ANONYMOUS_BALLOT_ATTEMPT_READ,

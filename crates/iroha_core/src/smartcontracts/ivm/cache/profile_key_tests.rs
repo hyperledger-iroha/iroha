@@ -33,17 +33,16 @@ fn keys_of_one_code_hash_differ_by_profile_and_engine_scope() {
         "tests address baseline keys"
     );
     assert_eq!(baseline, SummaryKey::for_profile(BASELINE, hash));
+    let c10 = SummaryKey::for_profile(IvmProfileId::C10_ABI_V1, hash);
     assert_eq!(
         SummaryKey::every_profile(hash).collect::<Vec<_>>(),
-        vec![baseline, named]
+        vec![baseline, named, c10]
     );
-    // ABI V1 runs the baseline engine and the runtime lifecycle policy runs C10, so neither
-    // implemented profile has a foreign key of its own engine.
     assert_eq!(baseline.profile.engine(), IvmEngine::Baseline);
     assert_eq!(named.profile.engine(), IvmEngine::C10);
-    for key in [baseline, named] {
-        assert_eq!(key.same_engine_foreign().count(), 0);
-    }
+    assert_eq!(baseline.same_engine_foreign().count(), 0);
+    assert_eq!(named.same_engine_foreign().collect::<Vec<_>>(), [c10]);
+    assert_eq!(c10.same_engine_foreign().collect::<Vec<_>>(), [named]);
     let runtime = RuntimeKey::for_profile(baseline.profile, hash, 1, 2);
     let other = RuntimeKey::for_profile(named.profile, hash, 1, 2);
     assert_ne!(runtime, other);

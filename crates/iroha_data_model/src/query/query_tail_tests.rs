@@ -436,7 +436,7 @@ mod canonical_output_inclusion_tests {
             .unwrap()
             .insert("merge_inclusion".into(), norito::json::Value::Null);
         assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
-        let result = committed.result().clone();
+        let result = committed.output.network().unwrap().result.clone();
         let old = RetiredCommitted {
             block_hash: committed.block_hash,
             entrypoint_hash: committed.entrypoint_hash,
@@ -571,7 +571,7 @@ mod fault_injection_tests {
             let original_proof = tx.output_proof.clone();
 
             tx.swap_result();
-            assert!(tx.result().0.is_err());
+            assert!(tx.result().is_err());
             assert_ne!(tx.output_hash, original_hash);
             assert_eq!(tx.output_hash, HashOf::new(&tx.output));
             assert_eq!(tx.output.trigger_lifecycle(), output.trigger_lifecycle());
@@ -614,7 +614,7 @@ mod fault_injection_tests {
         let old_hash = tx.output_hash;
         let proof = tx.output_proof.clone();
         tx.swap_result();
-        assert!(tx.result().0.is_err());
+        assert!(tx.result().is_err());
         assert_eq!(tx.result().batch_transfer_outcomes(), [outcome]);
         assert_ne!(tx.output_hash, old_hash);
         assert_eq!(tx.output_hash, HashOf::new(&tx.output));

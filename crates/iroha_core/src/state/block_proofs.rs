@@ -434,9 +434,11 @@ pub(super) fn block_proofs_for_entry_from_kura(
         })?;
     let input_index = u32::try_from(input_index)
         .map_err(|_| invalid_outputs(block_height, &("Network input index exceeds proof width")))?;
-    let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
-        invalid_outputs(block_height, &("Network input has no exact output join"))
-    })?;
+    let (output_index, _) = block
+        .network_execution_output_at(input_index)
+        .ok_or_else(|| {
+            invalid_outputs(block_height, &("Network input has no exact output join"))
+        })?;
     let output = block
         .execution_outputs()
         .get(output_index as usize)
@@ -800,11 +802,12 @@ fn kagemusha_ledger_entry(
     };
     let input_index = u32::try_from(index)
         .map_err(|_| invalid_outputs(block_height, &("Network input index exceeds proof width")))?;
-    // The Network row sits at the output position equal to its input index, so both leaf
-    // indices equal `input_index`. The join is explicit, never inferred from a result index.
-    let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
-        invalid_outputs(block_height, &("Network input has no exact output join"))
-    })?;
+    // Governance outputs can precede the Network rows. Bind both proof positions to the original input.
+    let (output_index, _) = block
+        .network_execution_output_at(input_index)
+        .ok_or_else(|| {
+            invalid_outputs(block_height, &("Network input has no exact output join"))
+        })?;
     let owner = KagemushaLedgerEntryOwnerV1::from_signed(signed)?;
     Ok((input_index, output_index, owner))
 }

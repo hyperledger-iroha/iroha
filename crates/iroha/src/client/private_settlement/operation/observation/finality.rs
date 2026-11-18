@@ -318,8 +318,8 @@ impl Walk {
                     (bundle_id == request.manifest().bundle_id
                         && block
                             .block()
-                            .network_output_at(index)
-                            .is_some_and(|(_, output)| output.result.is_ok()))
+                            .network_execution_output_at(index)
+                            .is_some_and(|(_, output)| output.result().is_ok()))
                     .then(|| super::super::identity(transaction))
                 })
                 .ok_or(PrivateSettlementError::Binding)?

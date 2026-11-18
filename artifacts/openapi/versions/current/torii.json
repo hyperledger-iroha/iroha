@@ -14929,6 +14929,343 @@
         "minItems": 48,
         "type": "array"
       },
+      "GovernanceAnonymousParliamentAttemptDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_sequence": {
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
+          }
+        },
+        "required": [
+          "proposal",
+          "attempt_sequence"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentAttemptDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.anonymous.attempt.create.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentCredentialDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "election_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "registration": {
+            "additionalProperties": false,
+            "properties": {
+              "authorization": {
+                "maxLength": 128,
+                "minLength": 128,
+                "pattern": "^[0-9a-f]{128}$",
+                "type": "string"
+              },
+              "commitment": {
+                "maxLength": 256,
+                "minLength": 256,
+                "pattern": "^[0-9a-f]{256}$",
+                "type": "string"
+              },
+              "proof": {
+                "contentEncoding": "base64",
+                "description": "Padded base64 of the 160148-byte V1 registration proof.",
+                "maxLength": 213532,
+                "minLength": 213532,
+                "type": "string"
+              }
+            },
+            "required": [
+              "commitment",
+              "authorization",
+              "proof"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "governance_attempt_id",
+          "election_attempt_id",
+          "registration"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentCredentialDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.credential.register.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentTransitionDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "transition": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentEscalateRiskPayloadV1"
+                  },
+                  "transition": {
+                    "const": "EscalateRisk",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "CloseQualificationEarly",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "RegisterInitialSortition",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "RegisterSortitionRetry",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentRecordInvitationResponsePayloadV1"
+                  },
+                  "transition": {
+                    "const": "RecordInvitationResponse",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "body_instance_id": {
+                        "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+                      },
+                      "phase": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Orientation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Evidence",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Questions",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Responses",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Deliberation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "body_instance_id",
+                      "phase"
+                    ],
+                    "type": "object"
+                  },
+                  "transition": {
+                    "const": "ClosePhaseEarly",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentRecordAttemptAbsencePayloadV1"
+                  },
+                  "transition": {
+                    "const": "RecordAttemptAbsence",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentEndorsePublicFindingPayloadV1"
+                  },
+                  "transition": {
+                    "const": "EndorsePublicFinding",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "governance_attempt_id",
+          "transition"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentTransitionDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.anonymous.transition.submit.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
       "GovernanceAtWindowV1": {
         "additionalProperties": false,
         "description": "Inclusive governance block-height window. The lower bound must not exceed the upper bound.",
@@ -38126,6 +38463,37 @@
         "required": [
           "attestation",
           "expected_location_revision"
+        ],
+        "type": "object"
+      },
+      "RegisteredManifestC10V1": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/ContractArtifactId"
+          },
+          "host_profile": {
+            "description": "Captured immutable C10 host definition.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "manifest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            ],
+            "description": "Signed ContractManifestC10V1, including the captured ABI hash and family-specific provenance."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          }
+        },
+        "required": [
+          "network_id",
+          "artifact_id",
+          "host_profile",
+          "manifest"
         ],
         "type": "object"
       },
@@ -71599,6 +71967,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ContractArtifactManifestResponse"
                 }
+              },
+              "application/vnd.iroha.c10-manifest.v1+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredManifestC10V1"
+                }
               }
             },
             "description": "The exact scoped contract manifest and network binding.",
@@ -80545,6 +80918,447 @@
           "stableRouteId": "governance.anonymous_ballot.board.read"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/anonymous-parliament/attempts/draft": {
+      "post": {
+        "description": "Draft an anonymous-family Parliament attempt for exact proposal content. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentAttemptDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentAttemptDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentAttemptDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft an anonymous-family Parliament attempt for exact proposal content.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.attempt.draft"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/gov/anonymous-parliament/credentials/draft": {
+      "post": {
+        "description": "Draft a binding-seat credential registration with its public registration proof. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentCredentialDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentCredentialDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentCredentialDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft a binding-seat credential registration with its public registration proof.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.credential.draft"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/gov/anonymous-parliament/transitions/draft": {
+      "post": {
+        "description": "Draft an account-signed fact or intent for the anonymous Parliament family. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentTransitionDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentTransitionDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentTransitionDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft an account-signed fact or intent for the anonymous Parliament family.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.transition.draft"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/ballots/plain": {

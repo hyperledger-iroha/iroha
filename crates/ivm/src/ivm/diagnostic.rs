@@ -12,10 +12,13 @@ use iroha_data_model::executor::fault::{
     IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1, IvmInvocationSelectorV1,
 };
 
+use iroha_data_model::ivm_c10::IvmFaultC10V1;
+
 /// Inline trap-time values. The source index resolves only against this VM's debug owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TrapSnapshot {
     pub(super) fault: Option<IvmFaultV1>,
+    pub(super) c10_fault: Option<IvmFaultC10V1>,
     pub(super) propagated: bool,
     pub(super) trap_kind: VmTrapKind,
     pub(super) pc: u64,
@@ -46,6 +49,7 @@ impl IVM {
         });
         Some(VmExecutionDiagnostic {
             fault: trap.fault,
+            c10_fault: trap.c10_fault,
             trap_kind: trap.trap_kind,
             pc: trap.pc,
             source,
@@ -71,25 +75,26 @@ impl IVM {
     }
 
     pub(super) fn capture_trap_at(&mut self, error: &VMError, position: IvmFaultPositionV1) {
-        let inherited = self
-            .last_diagnostic
-            .filter(|snapshot| snapshot.propagated)
-            .and_then(|snapshot| snapshot.fault);
+        let inherited = self.last_diagnostic.filter(|snapshot| snapshot.propagated);
         self.last_diagnostic = None;
         if error.execution_deferral().is_some() {
             return;
         }
         // Read diagnostics outside the guest register transcript.
         let _mask = crate::zk::RegLoggerGuard::mask();
-        let fault = inherited.or_else(|| self.execution_fault(error, position));
-        let relative_pc = match fault {
-            Some(fault) if fault.site.code_hash.as_ref() != &self.code_hash => None,
-            Some(IvmFaultV1 {
-                site:
-                    IvmFaultSiteV1 {
-                        position: IvmFaultPositionV1::Execute { pc_offset },
-                        ..
-                    },
+        let fault = inherited
+            .and_then(|snapshot| snapshot.fault)
+            .or_else(|| self.execution_fault(error, position));
+        let c10_fault = inherited
+            .and_then(|snapshot| snapshot.c10_fault)
+            .or_else(|| self.c10_execution_fault(error, position));
+        let site = c10_fault
+            .map(|fault| fault.site)
+            .or_else(|| fault.map(|fault| fault.site));
+        let relative_pc = match site {
+            Some(site) if site.code_hash.as_ref() != &self.code_hash => None,
+            Some(IvmFaultSiteV1 {
+                position: IvmFaultPositionV1::Execute { pc_offset },
                 ..
             }) => Some(pc_offset),
             Some(_) => None,
@@ -107,6 +112,7 @@ impl IVM {
         let predecoded_loaded = self.prepared.is_some();
         self.last_diagnostic = Some(TrapSnapshot {
             fault,
+            c10_fault,
             propagated: false,
             trap_kind: Self::classify_trap(error),
             pc: self.pc,
@@ -167,7 +173,26 @@ impl IVM {
         })
     }
 
-    /// Artifact, invocation selector and `position` of a fault raised by this VM.
+    /// Return the selected C10 fault with the original nested invocation site.
+    /// Local resource deferrals and declared contract rejections have no fault.
+    pub fn c10_execution_fault(
+        &self,
+        error: &VMError,
+        position: IvmFaultPositionV1,
+    ) -> Option<IvmFaultC10V1> {
+        if self.profile_id() != ivm_abi::IvmProfileId::C10_ABI_V1 {
+            return None;
+        }
+        let kind = ivm_abi::profile::c10_wire_fault_kind(error)?;
+        if let Some(fault) = self.last_diagnostic.and_then(|snapshot| snapshot.c10_fault) {
+            return Some(fault);
+        }
+        Some(IvmFaultC10V1 {
+            kind,
+            site: self.fault_site(position)?,
+        })
+    }
+
     fn fault_site(&self, position: IvmFaultPositionV1) -> Option<IvmFaultSiteV1> {
         let selector = match self.contract_interface() {
             None => IvmInvocationSelectorV1::Generic,
@@ -198,12 +223,14 @@ impl IVM {
         position: IvmFaultPositionV1,
     ) {
         let fault = child.execution_fault(error, position);
-        if fault.is_none() {
+        let c10_fault = child.c10_execution_fault(error, position);
+        if fault.is_none() && c10_fault.is_none() {
             return;
         }
         self.capture_trap(error);
         if let Some(snapshot) = self.last_diagnostic.as_mut() {
             snapshot.fault = fault;
+            snapshot.c10_fault = c10_fault;
             snapshot.propagated = true;
             snapshot.source_index = None;
         }

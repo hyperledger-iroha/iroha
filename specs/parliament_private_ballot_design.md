@@ -2247,12 +2247,8 @@ still open (last bullet).
   - A real-peer test of the pass (seal, opening, successor-block clock and
     closure with identical committed rows on every peer and across a restart):
     it belongs with the slice 4 corridor below.
-  - Clients (slice 5): no query projects an attempt's schedule. A
-    committed-transaction proof already locates a Network output after the
-    block's governance rows (`SignedBlock::network_output_at`, checked by the
-    seal test of HC807 and the transaction-history projection); the selective
-    verifier of a committed transaction accepts signed inputs only, so
-    anonymous evidence needs its own verification path.
+  - The public attempt read includes the reducer's schedule. Selective ballot
+    execution evidence is described under slice 5.
   - Production enactment in G3 (slice 5). This release certifies no
     production attempt.
 
@@ -2400,21 +2396,45 @@ implemented and stays disabled.
   records (`Client::anonymous_ballot_board`,
   `Client::anonymous_parliament_attempt`); the CLI exposes them as `iroha
   gov anonymous-ballot submit|board|attempt`. `submit` transports an
-  envelope a wallet produced; neither proves or stamps.
+  envelope a wallet produced. Kotlin's `AnonymousBallotToriiClientV1` and
+  the dedicated `AnonymousBallotClientV1` in Swift, JavaScript
+  (`@iroha/iroha-js/anonymous-ballot`) and Python
+  (`iroha_torii_client`) support both whole-record reads and credential-free
+  submission. The clients return opaque board and attempt bytes. The wallet
+  checks its authenticated seal and accepted corpus.
+- **Rust wallet.** The `parliament_ballot_wallet` example reads the whole
+  public board over a dedicated connection, checks it against the
+  credential owner's independently authenticated seal and displays the
+  disclosure and proposal digest. It atomically records the choice in the
+  credential directory and confirms the bytes read back before starting the
+  native proof and stamp job. Cancellation discards the job result. A retry
+  recovers the same choice. A `202` reports peer handling.
+- **Selective execution evidence.** Given an independently verified compact
+  certificate and authenticated ballot state at the chosen input, the
+  ballot crate's `verify_selective_ballot_v1` authenticates the two Merkle
+  paths and the source index in the typed Network row. It reruns the ordinary
+  ballot decision and compares the entire recorded result. Corpus completeness
+  and closure verification require the full interval.
+- **Account-authenticated drafts.** The three POST routes under
+  `/v1/gov/anonymous-parliament/{attempts,transitions,credentials}/draft`
+  accept the strict JSON form of the corresponding V1 instruction. Each
+  returns its registered `wire_id` and canonical framed `payload_hex` for
+  local signing. The credential route takes a public registration proof.
+  Casting remains a separate account-free operation.
+- **Service test.** The signed-origin public vectors in
+  `fixtures/governance/anonymous_ballot_http_v1/` carry the candidate
+  reducer's opening board, stored attempt, registrations and a genuine
+  ballot with a 28-bit admission stamp. The Core parity test reproduces
+  them. Torii's `anonymous_ballot_http_reads_open_records_and_admits_the_genuine_envelope`
+  reads both complete records and submits that envelope twice to the socket,
+  requiring the same empty 202 and one queue resident.
 - **Open.**
-  - The wallet path in a client: no SDK or CLI calls
-    `iroha_parliament_ballot::wallet` (credential generation, registration
-    proof, choice locking, ballot proof and stamp) yet.
-  - Draft routes for the family's instructions (attempt creation,
-    transitions, credential registration). Rust clients build these
-    instructions from the data model; Kotlin, Swift, JavaScript and Python
-    have only the baseline Parliament routes and none of the three
-    anonymous-family routes.
-  - A positive test of the two reads and of an admitted submission over
-    HTTP: Torii's fixtures hold no anonymous-family record, so the tests
-    cover refusals, absence and isolation only.
-  - Verification of anonymous evidence in the selective
-    committed-transaction verifier, which accepts signed inputs only.
+  - Native wallet bindings for Kotlin, Swift, JavaScript and Python, and
+    client integration for seat credential generation and registration.
+  - Swift, JavaScript and Python transports for the two whole-record reads
+    and signerless submission.
+  - Retrieval and full-interval verification of the finalized seal, all
+    ballot inputs and the casting-clock and closure outputs.
   - Production enactment in G3, which executes the proposal the attempt
     stores (slice 3, "Attempt creation").
   - A qualified anonymity transport (section 6).

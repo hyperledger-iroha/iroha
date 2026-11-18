@@ -351,7 +351,7 @@ impl IVM {
                 perm: Perm::EXECUTE,
             });
         }
-        let inst = decoder::decode(&self.memory, self.pc)?;
+        let inst = decoder::decode_guest(&mut self.memory, self.pc)?;
         Ok(FetchedOp {
             inst,
             wide_op: bwide::opcode(inst),
@@ -483,13 +483,14 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.last_diagnostic = None;
         self.ensure_complete_program_image()?;
-        // TODO: the baseline's proof-trace producers (register authentication logs over the
-        // 256-register file, delta-register traces, diagnostic step records and native execution
-        // packets) are not reconstructed. They are refused locally instead of recording C10-shaped
-        // observations of a baseline execution; consensus execution never requests them.
+        // Delta-register traces (`TraceMode::DeltaRegisters`) record the baseline's own
+        // 256-register geometry, as the anchor did; like PC traces they only observe.
+        // TODO: the baseline's other proof-trace producers (register authentication logs over the
+        // 256-register file, diagnostic step records and native execution packets) are not
+        // reconstructed. They are refused locally instead of recording C10-shaped observations of
+        // a baseline execution; consensus execution never requests them.
         if (self.zk_mode && self.zk_trace_enabled)
             || zk::scoped_reg_logger_enabled() == Some(true)
-            || self.trace_mode == TraceMode::DeltaRegisters
             || self.native_packets.is_some()
             || recorder.is_some()
         {
@@ -1289,7 +1290,10 @@ impl IVM {
                             return Err(VMError::PrivacyViolation);
                         }
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                        let value = self.memory.load_u64(addr)?;
+                        let value = u64::from_le_bytes(
+                            self.memory
+                                .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)?,
+                        );
                         let tag = self.memory_load_privacy_tag(addr, 8)?;
                         self.memory.diagnostic_classify_last_access(
                             addr,
@@ -1322,7 +1326,10 @@ impl IVM {
                         if !addr.is_multiple_of(16) {
                             return Err(VMError::MisalignedAccess { addr: addr as u32 });
                         }
-                        let value = self.memory.load_u128(addr)?;
+                        let value = u128::from_le_bytes(
+                            self.memory
+                                .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)?,
+                        );
                         let tag = self.memory_load_privacy_tag(addr, 16)?;
                         self.memory.diagnostic_classify_last_access(
                             addr,

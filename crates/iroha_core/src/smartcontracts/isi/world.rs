@@ -727,13 +727,14 @@ pub mod isi {
         };
         let target_address =
             resolve_trigger_callback_contract_address(state_transaction, namespace)?;
-        let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
-            state_transaction,
-            &target_address,
-        )
-        .map_err(|error| {
-            error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
-        })?
+        let Some((code_hash, code_bytes)) =
+            crate::smartcontracts::code::fetch_bound_contract_program(
+                state_transaction,
+                &target_address,
+            )
+            .map_err(|error| {
+                error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
+            })?
         else {
             return Err(invalid_smart_contract_parameter(format!(
                 "cross-contract trigger callback namespace `{}` resolved to inactive contract `{}`",
@@ -743,10 +744,14 @@ pub mod isi {
             .into());
         };
         Ok(TriggerCallbackContract {
-            contract_address: record.contract_address,
-            contract_alias: record.contract_alias,
-            code_hash: record.code_hash,
-            code_bytes: record.code_bytes,
+            contract_alias: state_transaction
+                .world
+                .contract_alias_bindings
+                .get(&target_address)
+                .map(|binding| binding.alias.clone()),
+            contract_address: target_address,
+            code_hash,
+            code_bytes,
         })
     }
     fn validate_trigger_callback_dispatch(
@@ -768,6 +773,88 @@ pub mod isi {
             })
         })
     }
+    fn prepare_manifest_trigger_callback(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        code_hash: Hash,
+        code_bytes: &[u8],
+        trigger_id: &TriggerId,
+        callback: &iroha_data_model::smart_contract::manifest::TriggerCallback,
+        declared_metadata: &Metadata,
+    ) -> Result<(Executable, Metadata), Error> {
+        let callback_contract = resolve_trigger_callback_contract(
+            state_transaction,
+            callback.namespace.as_deref(),
+            contract_address,
+            code_hash,
+            code_bytes,
+        )
+        .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
+        let code_hash_string = callback_contract.code_hash.to_string();
+        let trigger_id_string = trigger_id.to_string();
+        let mut metadata = declared_metadata.clone();
+        let address_key = Name::from_str("contract_address").expect("static metadata key");
+        let alias_key = Name::from_str("contract_alias").expect("static metadata key");
+        let namespace_key =
+            Name::from_str("contract_callback_namespace").expect("static metadata key");
+        let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
+        let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
+        let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
+        ensure_metadata_value(
+            &mut metadata,
+            &address_key,
+            iroha_primitives::json::Json::from(callback_contract.contract_address.as_str()),
+        )?;
+        if let Some(contract_alias) = callback_contract.contract_alias.as_ref() {
+            let alias_string = contract_alias.to_string();
+            ensure_metadata_value(
+                &mut metadata,
+                &alias_key,
+                iroha_primitives::json::Json::from(alias_string.as_str()),
+            )?;
+        }
+        if let Some(namespace) = callback.namespace.as_deref() {
+            ensure_metadata_value(
+                &mut metadata,
+                &namespace_key,
+                iroha_primitives::json::Json::from(namespace.trim()),
+            )?;
+        }
+        ensure_metadata_value(
+            &mut metadata,
+            &ep_key,
+            iroha_primitives::json::Json::from(callback.entrypoint.as_str()),
+        )?;
+        ensure_metadata_value(
+            &mut metadata,
+            &code_key,
+            iroha_primitives::json::Json::from(code_hash_string.as_str()),
+        )?;
+        ensure_metadata_value(
+            &mut metadata,
+            &trigger_key,
+            iroha_primitives::json::Json::from(trigger_id_string.as_str()),
+        )?;
+        validate_trigger_callback_dispatch(
+            &state_transaction.world,
+            trigger_id,
+            &metadata,
+            callback_contract.code_bytes.as_ref(),
+        )
+        .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?;
+        Ok((
+            Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: callback_contract.contract_address,
+                    expected_code_hash: callback_contract.code_hash,
+                    entrypoint: callback.entrypoint.clone(),
+                    arguments: None,
+                },
+            ),
+            metadata,
+        ))
+    }
+
     fn register_manifest_triggers(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -792,79 +879,21 @@ pub mod isi {
         })?;
         for entrypoint in entrypoints {
             for descriptor in &entrypoint.triggers {
-                let callback_contract = resolve_trigger_callback_contract(
+                let (executable, metadata) = prepare_manifest_trigger_callback(
                     state_transaction,
-                    descriptor.callback.namespace.as_deref(),
                     contract_address,
                     code_hash,
                     code_bytes,
-                )
-                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
-                let code_hash_string = callback_contract.code_hash.to_string();
-                let trigger_id_string = descriptor.id.to_string();
-                let mut metadata = descriptor.metadata.clone();
-                let address_key = Name::from_str("contract_address").expect("static metadata key");
-                let alias_key = Name::from_str("contract_alias").expect("static metadata key");
-                let namespace_key =
-                    Name::from_str("contract_callback_namespace").expect("static metadata key");
-                let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
-                let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
-                let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
-                ensure_metadata_value(
-                    &mut metadata,
-                    &address_key,
-                    iroha_primitives::json::Json::from(callback_contract.contract_address.as_str()),
-                )?;
-                if let Some(contract_alias) = callback_contract.contract_alias.as_ref() {
-                    let alias_string = contract_alias.to_string();
-                    ensure_metadata_value(
-                        &mut metadata,
-                        &alias_key,
-                        iroha_primitives::json::Json::from(alias_string.as_str()),
-                    )?;
-                }
-                if let Some(namespace) = descriptor.callback.namespace.as_deref() {
-                    ensure_metadata_value(
-                        &mut metadata,
-                        &namespace_key,
-                        iroha_primitives::json::Json::from(namespace.trim()),
-                    )?;
-                }
-                ensure_metadata_value(
-                    &mut metadata,
-                    &ep_key,
-                    iroha_primitives::json::Json::from(descriptor.callback.entrypoint.as_str()),
-                )?;
-                ensure_metadata_value(
-                    &mut metadata,
-                    &code_key,
-                    iroha_primitives::json::Json::from(code_hash_string.as_str()),
-                )?;
-                ensure_metadata_value(
-                    &mut metadata,
-                    &trigger_key,
-                    iroha_primitives::json::Json::from(trigger_id_string.as_str()),
-                )?;
-                validate_trigger_callback_dispatch(
-                    &state_transaction.world,
                     &descriptor.id,
-                    &metadata,
-                    callback_contract.code_bytes.as_ref(),
-                )
-                .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?;
+                    &descriptor.callback,
+                    &descriptor.metadata,
+                )?;
                 let trigger_authority = descriptor
                     .authority
                     .clone()
                     .unwrap_or_else(|| contract_subject.clone());
                 let action = iroha_data_model::trigger::action::Action::new(
-                    Executable::ContractCall(
-                        iroha_data_model::transaction::executable::ContractInvocation {
-                            contract_address: callback_contract.contract_address,
-                            expected_code_hash: callback_contract.code_hash,
-                            entrypoint: descriptor.callback.entrypoint.clone(),
-                            arguments: None,
-                        },
-                    ),
+                    executable,
                     descriptor.repeats,
                     trigger_authority,
                     descriptor.filter.clone(),
@@ -882,6 +911,74 @@ pub mod isi {
                 // must already exist. Explicit unrelated authorities continue
                 // through normal CanRegisterTrigger authorization.
                 register_trigger_internal(
+                    authority,
+                    state_transaction,
+                    trigger,
+                    Some(contract_subject),
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn register_c10_manifest_triggers(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        contract_subject: &AccountId,
+        code_bytes: &[u8],
+        manifest: &iroha_data_model::ivm_c10::ContractManifestC10V1,
+    ) -> Result<(), Error> {
+        let Some(entrypoints) = manifest.entrypoints.as_ref() else {
+            return Ok(());
+        };
+        let has_triggers = entrypoints
+            .iter()
+            .any(|entrypoint| !entrypoint.triggers.is_empty());
+        if !has_triggers {
+            return Ok(());
+        }
+        let code_hash = manifest.code_hash.ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "contract manifest missing code_hash for trigger registration".into(),
+            ))
+        })?;
+        for entrypoint in entrypoints {
+            for descriptor in &entrypoint.triggers {
+                let (executable, metadata) = prepare_manifest_trigger_callback(
+                    state_transaction,
+                    contract_address,
+                    code_hash,
+                    code_bytes,
+                    &descriptor.id,
+                    &descriptor.callback,
+                    &descriptor.metadata,
+                )?;
+                let trigger_authority = descriptor
+                    .authority
+                    .clone()
+                    .unwrap_or_else(|| contract_subject.clone());
+                let action = iroha_data_model::ivm_c10::ActionC10V1::new(
+                    executable,
+                    descriptor.repeats,
+                    trigger_authority,
+                    descriptor.filter.clone(),
+                )
+                .map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid manifest trigger `{}` action: {error}",
+                        descriptor.id
+                    ))
+                })?
+                .with_metadata(metadata);
+                let trigger = iroha_data_model::ivm_c10::TriggerC10V1 {
+                    id: descriptor.id.clone(),
+                    action,
+                };
+                // The lifecycle path may register only a manifest trigger owned
+                // by this contract's exact derived subject. The subject account
+                // must already exist. Explicit unrelated authorities continue
+                // through normal CanRegisterTrigger authorization.
+                crate::smartcontracts::isi::triggers::isi::register_c10_trigger_internal(
                     authority,
                     state_transaction,
                     trigger,
@@ -2472,84 +2569,42 @@ pub mod isi {
         world: &WorldTransaction<'_, '_>,
         budget: &iroha_allocation::AllocationBudget,
     ) -> Result<&'manifest ManifestProvenance, InstructionExecutionError> {
-        use crate::execution_attempt::{
-            ExecutionAttemptError, ExecutionDeferred, norito_decode_attempt_error,
-        };
-        use norito::core::{BoundedEncodeError, DecodeBudgetContext};
-        let provenance = manifest.provenance.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "manifest.provenance missing".into(),
-            ))
-        })?;
-
-        let defer = |reason: ExecutionDeferred| {
-            world.attempt_error_to_instruction_error(ExecutionAttemptError::Deferred(reason))
-        };
-        // The context and exact output frame belong to the same State execution pool.
-        // Local capacity limits never become a verdict about the signed content.
-        let max_frame_bytes = budget.limit_bytes();
-        let mut counter = budget
-            .try_reserve(DecodeBudgetContext::allocation_layout())
-            .map_err(|original| defer(original.into()))?;
-        let context = DecodeBudgetContext::from_reservation(
-            norito::DecodeLimits::new(
-                max_frame_bytes,
-                max_frame_bytes,
-                max_frame_bytes,
-                max_frame_bytes,
-                norito::core::MAX_VALUE_NESTING_DEPTH,
-            ),
-            &mut counter,
+        verify_manifest_provenance(
+            manifest.provenance.as_ref(),
+            world,
+            budget,
+            || norito::canonical_frame_len(&manifest.signature_payload()),
+            |context, limit| manifest.signature_payload_bytes(context, limit),
         )
-        .map_err(|error| {
-            let reason = match error {
-                iroha_allocation::PrepaidSharedError::Allocator { .. } => {
-                    ivm::error::ExecutionDeferral::AllocationUnavailable
-                }
-                iroha_allocation::PrepaidSharedError::Reservation(_) => {
-                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
-                }
-            };
-            defer(reason.into())
-        })?;
-        let encode_error = |error: BoundedEncodeError| match error {
-            BoundedEncodeError::Serialization(error) => world.attempt_error_to_instruction_error(
-                norito_decode_attempt_error(error, |error| {
-                    invalid_smart_contract_parameter(format!(
-                        "manifest signing payload encoding failed: {error}"
-                    ))
-                }),
-            ),
-            BoundedEncodeError::AllocationFailed { .. } => {
-                defer(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
-            }
-            BoundedEncodeError::FrameTooLarge { .. } => {
-                defer(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
-            }
-        };
-        // Count the borrowed canonical payload before reserving its real output.
-        // The reservation remains live until the payload has been verified and freed.
-        let encoded_bytes = context.with(|| {
-            norito::canonical_frame_len(&manifest.signature_payload())
-                .map_err(BoundedEncodeError::from)
-                .map_err(encode_error)
-        })?;
-        let _frame = budget
-            .try_reserve_bytes(encoded_bytes)
-            .map_err(|original| defer(original.into()))?;
-        let payload = context.with(|| {
-            manifest
-                .signature_payload_bytes(&context, max_frame_bytes)
-                .map_err(encode_error)
-        })?;
-        verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
-            |_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "manifest signature verification failed".into(),
-                ))
-            },
-        )?;
-        Ok(provenance)
+    }
+
+    fn ensure_c10_manifest_signature<'manifest>(
+        manifest: &'manifest iroha_data_model::ivm_c10::ContractManifestC10V1,
+        tx: &StateTransaction<'_, '_>,
+    ) -> Result<&'manifest ManifestProvenance, InstructionExecutionError> {
+        verify_manifest_provenance(
+            manifest.provenance.as_ref(),
+            &tx.world,
+            &tx.execution_budget(),
+            || norito::canonical_frame_len(&manifest.signature_payload()),
+            |context, limit| manifest.signature_payload_bytes(context, limit),
+        )
+    }
+
+    fn verify_manifest_provenance<'manifest>(
+        provenance: Option<&'manifest ManifestProvenance>,
+        world: &WorldTransaction<'_, '_>,
+        budget: &iroha_allocation::AllocationBudget,
+        frame_len: impl FnOnce() -> Result<usize, norito::core::Error>,
+        encode: impl FnOnce(
+            &norito::core::DecodeBudgetContext,
+            usize,
+        ) -> Result<Vec<u8>, norito::core::BoundedEncodeError>,
+    ) -> Result<&'manifest ManifestProvenance, InstructionExecutionError> {
+        crate::smartcontracts::code::registered_manifest::verify_provenance(
+            provenance, budget, frame_len, encode,
+        )
+        .map_err(|error| world.attempt_error_to_instruction_error(error))
     }
     fn artifact_admission_instruction_error(
         world: &WorldTransaction<'_, '_>,
@@ -5534,6 +5589,53 @@ pub mod isi {
                 ),
             ));
         }
+        if verified.profile == ivm::IvmProfileId::C10_ABI_V1 {
+            ensure_new_c10_registration(state_transaction)?;
+            state_transaction.mark_c10_execution();
+            let host =
+                crate::smartcontracts::ivm::profile::ResolvedIvmProfile::of_id(verified.profile)
+                    .definition_id();
+            let mut manifest =
+                iroha_data_model::ivm_c10::ContractManifestC10V1::try_from(verified.manifest)
+                    .map_err(invalid_smart_contract_parameter)?;
+            if state_transaction
+                .world
+                .contract_manifests
+                .get(&key)
+                .is_some()
+            {
+                return Err(invalid_smart_contract_parameter(
+                    "C10 artifact already has a baseline registration",
+                ));
+            }
+            let existing = state_transaction.world.c10_contract_manifests.get(&key);
+            let binding = state_transaction.world.c10_contract_profiles.get(&key);
+            if let Some(existing) = existing {
+                if binding != Some(&host) || !manifest.same_signed_content(existing) {
+                    return Err(invalid_smart_contract_parameter(
+                        "governance C10 manifest or captured profile differs from the verified artifact",
+                    ));
+                }
+                ensure_c10_manifest_signature(existing, state_transaction)?;
+                return Ok(false);
+            }
+            if binding.is_some() {
+                return Err(invalid_smart_contract_parameter(
+                    "orphan C10 profile binding",
+                ));
+            }
+            manifest.provenance = provenance.cloned();
+            ensure_c10_manifest_signature(&manifest, state_transaction)?;
+            state_transaction
+                .world
+                .c10_contract_manifests
+                .insert(key, manifest);
+            state_transaction
+                .world
+                .c10_contract_profiles
+                .insert(key, host);
+            return Ok(true);
+        }
         if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
             if !existing.same_signed_content(&verified.manifest) {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -5769,6 +5871,103 @@ pub mod isi {
         }
         Ok(contract_subject)
     }
+    /// Recheck the captured profile and authenticated artifact before creating an instance.
+    fn activation_manifest(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        address: &iroha_data_model::smart_contract::ContractAddress,
+        code_hash: iroha_crypto::Hash,
+    ) -> Result<
+        (
+            crate::smartcontracts::code::registered_manifest::RegisteredManifest<'static>,
+            Vec<u8>,
+        ),
+        Error,
+    > {
+        use crate::smartcontracts::code::registered_manifest::RegisteredManifest;
+        let key = ContractArtifactId::for_address(address, code_hash)
+            .map_err(|e| invalid_smart_contract_parameter(e.to_string()))?;
+        let manifest = RegisteredManifest::get(&state_transaction.world, &key)
+            .ok_or_else(|| invalid_smart_contract_parameter("manifest for code_hash not found"))?
+            .into_owned();
+        let bytes = match &manifest {
+            RegisteredManifest::Baseline(m) => verify_registered_contract_artifact_for_manifest(
+                &state_transaction.world,
+                &state_transaction.execution_budget(),
+                &key,
+                m,
+            )?,
+            RegisteredManifest::C10(_) => {
+                ensure_new_c10_registration(state_transaction)?;
+                state_transaction.mark_c10_execution();
+                let bytes = state_transaction
+                    .world
+                    .contract_code
+                    .get(&key)
+                    .ok_or_else(|| invalid_smart_contract_parameter("C10 bytecode not found"))?;
+                let verified = ivm::verify_contract_artifact_with_memory_budget_for_profile(
+                    bytes,
+                    &state_transaction.execution_budget(),
+                    ivm::IvmProfileId::C10_ABI_V1,
+                )
+                .map_err(|e| artifact_admission_instruction_error(&state_transaction.world, e))?;
+                if verified.code_hash != code_hash
+                    || !manifest.agrees_with(verified.profile, verified.manifest)
+                {
+                    return Err(invalid_smart_contract_parameter(
+                        "C10 activation disagrees with its immutable registration",
+                    ));
+                }
+                bytes.clone()
+            }
+        };
+        Ok((manifest, bytes))
+    }
+
+    fn enable_registered_manifest_triggers(
+        authority: &AccountId,
+        tx: &mut StateTransaction<'_, '_>,
+        address: &iroha_data_model::smart_contract::ContractAddress,
+        subject: &AccountId,
+        bytes: &[u8],
+        manifest: &crate::smartcontracts::code::registered_manifest::RegisteredManifest<'_>,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::code::registered_manifest::RegisteredManifest;
+        match manifest {
+            RegisteredManifest::Baseline(m) => {
+                register_manifest_triggers(authority, tx, address, subject, bytes, m)
+            }
+            RegisteredManifest::C10(m) => {
+                register_c10_manifest_triggers(authority, tx, address, subject, bytes, m)
+            }
+        }
+    }
+
+    fn remove_registered_manifest_triggers(
+        tx: &mut StateTransaction<'_, '_>,
+        address: &iroha_data_model::smart_contract::ContractAddress,
+        code_hash: iroha_crypto::Hash,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::code::registered_manifest::RegisteredManifest;
+        let key = ContractArtifactId::for_address(address, code_hash)
+            .map_err(|e| invalid_smart_contract_parameter(e.to_string()))?;
+        let Some(manifest) = RegisteredManifest::get(&tx.world, &key) else {
+            return Ok(());
+        };
+        let ids = manifest.trigger_ids();
+        let c10 = matches!(manifest, RegisteredManifest::C10(_));
+        for id in ids {
+            if c10 {
+                crate::smartcontracts::isi::triggers::isi::remove_c10_trigger(tx, &id);
+            } else if tx.world.triggers.remove(&id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    tx, &id,
+                );
+                tx.world.emit_events(Some(TriggerEvent::Deleted(id)));
+            }
+        }
+        Ok(())
+    }
+
     fn bind_contract_instance(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5778,26 +5977,8 @@ pub mod isi {
         governance_attempt_id: [u8; 32],
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
-        let manifest = state_transaction
-            .world
-            .contract_manifests
-            .get(
-                &ContractArtifactId::for_address(&contract_address, key)
-                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-            )
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "exact verified manifest must be registered before governance binding".into(),
-                ))
-            })?;
-        let code_bytes = verify_registered_contract_artifact_for_manifest(
-            &state_transaction.world,
-            &state_transaction.execution_budget(),
-            &ContractArtifactId::for_address(&contract_address, key)
-                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-            &manifest,
-        )?;
+        let (manifest, code_bytes) =
+            activation_manifest(state_transaction, &contract_address, key)?;
         if state_transaction
             .world
             .contract_subject_bindings
@@ -5826,12 +6007,8 @@ pub mod isi {
                 ),
             ),
         )?;
-        let declares_hajimari = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-            entrypoints.iter().any(|entrypoint| {
-                entrypoint.kind
-                    == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
-            })
-        });
+        let declares_hajimari =
+            manifest.declares(iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari);
         let pending_lifecycle = declares_hajimari
             .then(|| {
                 crate::smartcontracts::code::new_pending_contract_lifecycle(
@@ -5846,7 +6023,7 @@ pub mod isi {
             .map_err(|error| {
                 InstructionExecutionError::InvariantViolation(error.to_owned().into())
             })?;
-        register_manifest_triggers(
+        enable_registered_manifest_triggers(
             authority,
             state_transaction,
             &contract_address,
@@ -6801,26 +6978,8 @@ pub mod isi {
         key: iroha_crypto::Hash,
         advance_revision: bool,
     ) -> Result<(), Error> {
-        let Some(manifest) = state_transaction
-            .world
-            .contract_manifests
-            .get(
-                &ContractArtifactId::for_address(&contract_address, key)
-                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-            )
-            .cloned()
-        else {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
-            ));
-        };
-        let code_bytes = verify_registered_contract_artifact_for_manifest(
-            &state_transaction.world,
-            &state_transaction.execution_budget(),
-            &ContractArtifactId::for_address(&contract_address, key)
-                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-            &manifest,
-        )?;
+        let (manifest, code_bytes) =
+            activation_manifest(state_transaction, &contract_address, key)?;
         let contract_subject =
             ensure_contract_subject_binding(authority, state_transaction, &contract_address, None)?;
         let existing = state_transaction
@@ -6881,12 +7040,8 @@ pub mod isi {
             ));
         }
         let pending_lifecycle_kind = match retained {
-            None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                entrypoints.iter().any(|entrypoint| {
-                    entrypoint.kind
-                        == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
-                })
-            }) =>
+            None if manifest
+                .declares(iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari) =>
             {
                 Some((
                     iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
@@ -6895,12 +7050,9 @@ pub mod isi {
             }
             Some(previous_code_hash)
                 if previous_code_hash != key
-                    && manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                        entrypoints.iter().any(|entrypoint| {
-                            entrypoint.kind
-                            == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
-                        })
-                    }) =>
+                    && manifest.declares(
+                        iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
+                    ) =>
             {
                 Some((
                     iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
@@ -6924,53 +7076,20 @@ pub mod isi {
                 InstructionExecutionError::InvariantViolation(error.to_owned().into())
             })?);
         if let Some(previous_code_hash) = existing {
-            let previous_trigger_ids: Vec<TriggerId> = state_transaction
-                .world
-                .contract_manifests
-                .get(
-                    &ContractArtifactId::for_address(&contract_address, previous_code_hash)
-                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-                )
-                .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
-                .map(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .flat_map(|entrypoint| {
-                            entrypoint
-                                .triggers
-                                .iter()
-                                .map(|descriptor| descriptor.id.clone())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for trigger_id in previous_trigger_ids {
-                if state_transaction.world.triggers.remove(&trigger_id) {
-                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                            state_transaction,
-                            &trigger_id,
-                        );
-                    state_transaction
-                        .world
-                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-                }
-            }
-        }
-        let needs_trigger_registration = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-            entrypoints
-                .iter()
-                .any(|entrypoint| !entrypoint.triggers.is_empty())
-        });
-        if needs_trigger_registration {
-            register_manifest_triggers(
-                authority,
+            remove_registered_manifest_triggers(
                 state_transaction,
                 &contract_address,
-                &contract_subject,
-                &code_bytes,
-                &manifest,
+                previous_code_hash,
             )?;
         }
+        enable_registered_manifest_triggers(
+            authority,
+            state_transaction,
+            &contract_address,
+            &contract_subject,
+            &code_bytes,
+            &manifest,
+        )?;
         state_transaction
             .world
             .contract_instances
@@ -7501,28 +7620,8 @@ pub mod isi {
                 state_transaction,
                 &contract_alias,
             )?;
-            let manifest = state_transaction
-                .world
-                .contract_manifests
-                .get(
-                    &ContractArtifactId::for_address(&contract_address, code_hash)
-                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-                )
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "manifest for code_hash not found".into(),
-                        ),
-                    )
-                })?;
-            verify_registered_contract_artifact_for_manifest(
-                &state_transaction.world,
-                &state_transaction.execution_budget(),
-                &ContractArtifactId::for_address(&contract_address, code_hash)
-                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-                &manifest,
-            )?;
+            // Verify the exact registered family before changing a subject or rotating its alias.
+            activation_manifest(state_transaction, &contract_address, code_hash)?;
             ensure_contract_subject_binding(
                 authority,
                 state_transaction,
@@ -7633,37 +7732,7 @@ pub mod isi {
                 Some(trimmed.to_owned())
             }
         });
-        let trigger_ids: Vec<TriggerId> = state_transaction
-            .world
-            .contract_manifests
-            .get(
-                &ContractArtifactId::for_address(&key, prev_hash)
-                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
-            )
-            .and_then(|manifest| manifest.entrypoints.as_ref())
-            .map(|entrypoints| {
-                entrypoints
-                    .iter()
-                    .flat_map(|entrypoint| {
-                        entrypoint
-                            .triggers
-                            .iter()
-                            .map(|descriptor| descriptor.id.clone())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        for trigger_id in trigger_ids {
-            if state_transaction.world.triggers.remove(&trigger_id) {
-                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                    state_transaction,
-                    &trigger_id,
-                );
-                state_transaction
-                    .world
-                    .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-            }
-        }
+        remove_registered_manifest_triggers(state_transaction, &key, prev_hash)?;
         let lifecycle = state_transaction
             .world
             .contract_subject_bindings
@@ -7898,6 +7967,11 @@ pub mod isi {
         code: Vec<u8>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let profile = crate::smartcontracts::ivm::artifact_profile(&state_transaction.world, &code);
+        if profile == ivm::IvmProfileId::C10_ABI_V1 {
+            ensure_new_c10_registration(state_transaction)?;
+            state_transaction.mark_c10_execution();
+        }
         let code_len = u64::try_from(code.len()).map_err(|_| {
             invalid_smart_contract_parameter("contract artifact length exceeds u64 representation")
         })?;
@@ -7915,12 +7989,19 @@ pub mod isi {
                 format!("code bytes exceed cap: {code_len} > {cap_bytes}").into(),
             ));
         }
-        let verified = crate::smartcontracts::ivm::verify_contract_in_world(
-            &state_transaction.world,
+        let verified = ivm::verify_contract_artifact_with_memory_budget_for_profile(
             &code,
             &state_transaction.execution_budget(),
+            profile,
         )
-        .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
+        .map_err(|error| {
+            if profile == ivm::IvmProfileId::C10_ABI_V1
+                && let Some(original) = error.c10_header_error()
+            {
+                state_transaction.record_c10_admission_error(&original);
+            }
+            artifact_admission_instruction_error(&state_transaction.world, error)
+        })?;
         crate::smartcontracts::ivm::validate_cycle_ceiling_for(
             verified.profile.engine(),
             &verified.metadata,
@@ -8232,6 +8313,11 @@ pub mod isi {
                 .contract_manifests
                 .get(self.artifact_id())
                 .is_some()
+                || state_transaction
+                    .world
+                    .c10_contract_manifests
+                    .get(self.artifact_id())
+                    .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract manifest referencing code_hash still exists".into(),
@@ -14187,6 +14273,129 @@ pub mod isi {
             persist_finalized_standalone_election_v1(id, st, self.tally(), state_transaction)
         }
     }
+    fn ensure_manifest_signer_authority(
+        authority: &AccountId,
+        provenance: &ManifestProvenance,
+    ) -> Result<(), InstructionExecutionError> {
+        let signer_allowed = match authority.controller() {
+            AccountController::Single(signatory) => signatory == &provenance.signer,
+            AccountController::Multisig(policy) => policy
+                .members()
+                .iter()
+                .any(|member| member.public_key() == &provenance.signer),
+        };
+        if !signer_allowed {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "manifest signer is not authorised for the submitting account".into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_new_c10_registration(tx: &StateTransaction<'_, '_>) -> Result<(), Error> {
+        crate::smartcontracts::ivm::host_profile::ensure_at_height(
+            &tx.world,
+            ivm::IvmProfileId::C10_ABI_V1,
+            tx.block_height(),
+        )
+        .map_err(|e| match e {
+            iroha_data_model::executor::ValidationFail::InstructionFailed(reason) => reason,
+            other => invalid_smart_contract_parameter(other.to_string()),
+        })
+    }
+    impl Execute for iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            use crate::smartcontracts::ivm::profile::ResolvedIvmProfile;
+            use iroha_data_model::ivm_c10::ContractManifestC10V1;
+            let profile = ivm::IvmProfileId::C10_ABI_V1;
+            ensure_new_c10_registration(state_transaction)?;
+            state_transaction.mark_c10_execution();
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
+            let key = self.artifact_id;
+            let manifest = self.manifest;
+            if manifest.code_hash != Some(key.code_hash)
+                || manifest.abi_hash != Some(iroha_crypto::Hash::prehashed(profile.abi_hash()))
+            {
+                return Err(invalid_smart_contract_parameter(
+                    "C10 manifest must bind its exact artifact and C10 ABI",
+                ));
+            }
+            let budget = state_transaction.execution_budget();
+            let provenance = ensure_c10_manifest_signature(&manifest, state_transaction)?;
+            ensure_manifest_signer_authority(authority, provenance)?;
+            let bytes = state_transaction
+                .world
+                .contract_code
+                .get(&key)
+                .ok_or_else(|| {
+                    invalid_smart_contract_parameter("C10 contract bytecode not found")
+                })?;
+            let verified = ivm::verify_contract_artifact_with_memory_budget_for_profile(
+                bytes, &budget, profile,
+            )
+            .map_err(|error| {
+                artifact_admission_instruction_error(&state_transaction.world, error)
+            })?;
+            if verified.code_hash != key.code_hash || verified.profile != profile {
+                return Err(invalid_smart_contract_parameter(
+                    "stored C10 bytecode differs from the manifest binding",
+                ));
+            }
+            let expected = ContractManifestC10V1::try_from(verified.manifest)
+                .map_err(invalid_smart_contract_parameter)?;
+            if !expected.same_signed_content(&manifest) {
+                return Err(invalid_smart_contract_parameter(
+                    "C10 manifest differs from the authenticated compiler interface",
+                ));
+            }
+            if state_transaction
+                .world
+                .contract_manifests
+                .get(&key)
+                .is_some()
+            {
+                return Err(invalid_smart_contract_parameter(
+                    "contract already registered under another manifest family",
+                ));
+            }
+            let host = ResolvedIvmProfile::of_id(profile).definition_id();
+            if let Some(existing) = state_transaction.world.c10_contract_manifests.get(&key) {
+                if existing.same_signed_content(&manifest)
+                    && state_transaction.world.c10_contract_profiles.get(&key) == Some(&host)
+                {
+                    return Ok(());
+                }
+                return Err(invalid_smart_contract_parameter(
+                    "existing C10 registration differs from the manifest or host profile",
+                ));
+            }
+            if state_transaction
+                .world
+                .c10_contract_profiles
+                .get(&key)
+                .is_some()
+            {
+                return Err(invalid_smart_contract_parameter(
+                    "C10 profile binding has no registered manifest",
+                ));
+            }
+            state_transaction
+                .world
+                .c10_contract_manifests
+                .insert(key, manifest);
+            state_transaction
+                .world
+                .c10_contract_profiles
+                .insert(key, host);
+            Ok(())
+        }
+    }
     impl Execute for smart_contract_code::RegisterSmartContractCode {
         fn execute(
             self,
@@ -14211,25 +14420,24 @@ pub mod isi {
                     InvalidParameterError::SmartContract("manifest.abi_hash missing".into()),
                 ));
             }
+            if manifest.abi_hash
+                == Some(iroha_crypto::Hash::prehashed(
+                    ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
+                ))
+                && crate::runtime::catalog::ivm_c10::selected(
+                    state_transaction.world.runtime_selection(),
+                )
+            {
+                return Err(invalid_smart_contract_parameter(
+                    "C10 artifacts require the C10 manifest registration interface",
+                ));
+            }
             let provenance = ensure_manifest_signature(
                 &manifest,
                 &state_transaction.world,
                 &state_transaction.execution_budget(),
             )?;
-            let signer_allowed = match authority.controller() {
-                AccountController::Single(signatory) => signatory == &provenance.signer,
-                AccountController::Multisig(policy) => policy
-                    .members()
-                    .iter()
-                    .any(|member| member.public_key() == &provenance.signer),
-            };
-            if !signer_allowed {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "manifest signer is not authorised for the submitting account".into(),
-                    ),
-                ));
-            }
+            ensure_manifest_signer_authority(authority, provenance)?;
             let _code_bytes = verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
                 &state_transaction.execution_budget(),

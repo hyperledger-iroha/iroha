@@ -125,9 +125,9 @@ fn network_result_counts(
     for index in 0..block.network_entrypoint_count() {
         let index = u32::try_from(index).map_err(|_| StatusSnapshotError::CounterOverflow)?;
         let (_, output) = block
-            .network_output_at(index)
+            .network_execution_output_at(index)
             .ok_or(StatusSnapshotError::CounterMismatch)?;
-        if output.result.is_err() {
+        if output.result().is_err() {
             add(&mut rejected, 1)?;
         } else {
             add(&mut accepted, 1)?;

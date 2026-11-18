@@ -118,6 +118,8 @@ pub struct VmExecutionContext<'a> {
 pub struct VmExecutionDiagnostic<'a> {
     /// Canonical bounded execution fault, absent for application rejections.
     pub fault: Option<IvmFaultV1>,
+    /// Original structured fault when the selected ABI V1 C10 profile ran.
+    pub c10_fault: Option<iroha_data_model::ivm_c10::IvmFaultC10V1>,
     pub trap_kind: VmTrapKind,
     pub pc: u64,
     pub source: Option<VmSourceLocation<'a>>,

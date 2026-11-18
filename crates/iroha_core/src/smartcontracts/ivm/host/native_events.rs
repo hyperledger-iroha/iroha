@@ -158,24 +158,25 @@ impl HostExecutionArtifacts {
             dataspace,
             emission.code_hash,
         );
-        let manifest = world.contract_manifests().get(&artifact).ok_or_else(|| {
+        let manifest = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            world, &artifact,
+        )
+        .ok_or_else(|| {
             ValidationFail::NotPermitted("contract emission has no current signed manifest".into())
         })?;
-        let entrypoint = manifest
-            .entrypoints
-            .as_deref()
-            .and_then(|entries| entries.get(emission.entrypoint as usize))
+        let (entrypoint_name, kind) = manifest
+            .entrypoint(emission.entrypoint as usize)
             .ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "contract emission has an invalid entrypoint ordinal".into(),
                 )
             })?;
-        if entrypoint.name.as_ref() != authorization.entrypoint
+        if entrypoint_name != authorization.entrypoint
             || matches!(
-                entrypoint.kind,
+                kind,
                 iroha_data_model::smart_contract::manifest::EntryPointKind::View
             )
-            || manifest.events.get(emission.event as usize) != Some(&emission.definition)
+            || manifest.events().get(emission.event as usize) != Some(&emission.definition)
         {
             return Err(ValidationFail::NotPermitted(
                 "contract emission differs from its signed declaration".into(),

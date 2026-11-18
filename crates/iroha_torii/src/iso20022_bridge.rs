@@ -2940,6 +2940,14 @@ impl Iso20022BridgeRuntime {
         tx_hash: &str,
         reason: Option<&TransactionRejectionReason>,
     ) -> bool {
+        self.mark_profiled_transaction_rejected(tx_hash, reason.map(Into::into))
+    }
+
+    pub(crate) fn mark_profiled_transaction_rejected(
+        &self,
+        tx_hash: &str,
+        reason: Option<iroha_data_model::block::execution_output::TransactionRejectionRef<'_>>,
+    ) -> bool {
         let _state_guard = self.state_lock.lock();
         if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
             let (detail, reason_code) = reason.map(Self::rejection_reason_metadata).map_or_else(
@@ -3004,63 +3012,70 @@ impl Iso20022BridgeRuntime {
                 && record.transaction_hash.as_deref() == Some(tx_hash)
         })
     }
-    fn rejection_reason_metadata(reason: &TransactionRejectionReason) -> (String, String) {
-        match reason {
-            TransactionRejectionReason::AccountDoesNotExist(_) => {
+    fn rejection_reason_metadata<'a>(
+        reason: impl Into<iroha_data_model::block::execution_output::TransactionRejectionRef<'a>>,
+    ) -> (String, String) {
+        use iroha_data_model::{
+            block::execution_output::TransactionRejectionRef::{Baseline, C10},
+            ivm_c10::{TransactionRejectionReasonC10V1 as C, ValidationFailC10V1 as V},
+            transaction::error::TransactionRejectionReason as B,
+        };
+        match reason.into() {
+            Baseline(B::AccountDoesNotExist(_)) | C10(C::AccountDoesNotExist(_)) => {
                 ("AC01".to_owned(), "Account does not exist".to_owned())
             }
-            TransactionRejectionReason::LimitCheck(err) => (
+            Baseline(B::LimitCheck(err)) | C10(C::LimitCheck(err)) => (
                 "BE01".to_owned(),
                 format!("Transaction limit check failed: {}", err.reason),
             ),
-            TransactionRejectionReason::Validation(fail) => match fail {
-                ValidationFail::AxtReject(ctx) => {
-                    let mut detail =
-                        format!("AXT rejection ({}): {}", ctx.reason.label(), ctx.detail);
-                    if let Some(snapshot_version) = ctx.snapshot_version {
-                        let _ = FmtWrite::write_fmt(
-                            &mut detail,
-                            format_args!(" snapshot_version={snapshot_version}"),
-                        );
-                    }
-                    if let Some(dsid) = ctx.dataspace {
-                        let _ = FmtWrite::write_fmt(
-                            &mut detail,
-                            format_args!(" dsid={}", dsid.as_u64()),
-                        );
-                    }
-                    if let Some(lane) = ctx.lane {
-                        let _ = FmtWrite::write_fmt(
-                            &mut detail,
-                            format_args!(" lane={}", lane.as_u32()),
-                        );
-                    }
-                    if let Some(era) = ctx.active_handle_era {
-                        let _ = FmtWrite::write_fmt(
-                            &mut detail,
-                            format_args!(" active_handle_era={era}"),
-                        );
-                    }
-                    if let Some(sub) = ctx.next_handle_counter {
-                        let _ = FmtWrite::write_fmt(
-                            &mut detail,
-                            format_args!(" next_handle_counter={sub}"),
-                        );
-                    }
-                    (format!("PRTRY:{}", ctx.reason.code()), detail)
+            Baseline(B::Validation(ValidationFail::AxtReject(ctx)))
+            | C10(C::Validation(V::AxtReject(ctx))) => {
+                let mut detail = format!("AXT rejection ({}): {}", ctx.reason.label(), ctx.detail);
+                if let Some(snapshot_version) = ctx.snapshot_version {
+                    let _ = FmtWrite::write_fmt(
+                        &mut detail,
+                        format_args!(" snapshot_version={snapshot_version}"),
+                    );
                 }
-                ValidationFail::IvmFault(fault) => ("PRTRY:IVM_EXEC".to_owned(), fault.to_string()),
-                other => ("BE01".to_owned(), format!("Validation failed: {other}")),
-            },
-            TransactionRejectionReason::InstructionExecution(fail) => (
+                if let Some(dsid) = ctx.dataspace {
+                    let _ =
+                        FmtWrite::write_fmt(&mut detail, format_args!(" dsid={}", dsid.as_u64()));
+                }
+                if let Some(lane) = ctx.lane {
+                    let _ =
+                        FmtWrite::write_fmt(&mut detail, format_args!(" lane={}", lane.as_u32()));
+                }
+                if let Some(era) = ctx.active_handle_era {
+                    let _ =
+                        FmtWrite::write_fmt(&mut detail, format_args!(" active_handle_era={era}"));
+                }
+                if let Some(sub) = ctx.next_handle_counter {
+                    let _ = FmtWrite::write_fmt(
+                        &mut detail,
+                        format_args!(" next_handle_counter={sub}"),
+                    );
+                }
+                (format!("PRTRY:{}", ctx.reason.code()), detail)
+            }
+            Baseline(B::Validation(ValidationFail::IvmFault(fault))) => {
+                ("PRTRY:IVM_EXEC".to_owned(), fault.to_string())
+            }
+            C10(C::Validation(V::IvmFault(fault))) => {
+                ("PRTRY:IVM_EXEC".to_owned(), fault.to_string())
+            }
+            Baseline(B::Validation(other)) => {
+                ("BE01".to_owned(), format!("Validation failed: {other}"))
+            }
+            C10(C::Validation(other)) => ("BE01".to_owned(), format!("Validation failed: {other}")),
+            Baseline(B::InstructionExecution(fail)) | C10(C::InstructionExecution(fail)) => (
                 "PRTRY:INSTRUCTION_EXEC".to_owned(),
                 format!("Instruction execution failed: {}", fail.reason),
             ),
-            TransactionRejectionReason::AnonymousBallot(reason) => (
+            Baseline(B::AnonymousBallot(reason)) | C10(C::AnonymousBallot(reason)) => (
                 "PRTRY:ANONYMOUS_BALLOT".to_owned(),
                 format!("Anonymous ballot rejected: {reason}"),
             ),
-            TransactionRejectionReason::TriggerExecution(fail) => (
+            Baseline(B::TriggerExecution(fail)) | C10(C::TriggerExecution(fail)) => (
                 "PRTRY:TRIGGER_EXEC".to_owned(),
                 format!("Trigger execution failed: {fail}"),
             ),

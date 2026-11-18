@@ -657,6 +657,10 @@ fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
             "ContractArtifactManifestResponse",
             &["network_id", "artifact_id", "manifest"][..],
         ),
+        (
+            "RegisteredManifestC10V1",
+            &["network_id", "artifact_id", "host_profile", "manifest"][..],
+        ),
     ] {
         let schema = contract_schema(schemas, name);
         assert_eq!(
@@ -675,6 +679,14 @@ fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
             required.iter().copied().collect::<BTreeSet<_>>()
         );
     }
+    let manifest = openapi_operation(
+        &document, "/v1/contracts/artifacts/{dataspace_id}/{code_hash}", "get"
+    );
+    let media = &manifest["responses"]["200"]["content"];
+    assert_eq!(
+        media[iroha_data_model::ivm_c10::manifest::REGISTERED_MANIFEST_MEDIA_TYPE]["schema"]["$ref"].as_str(),
+        Some("#/components/schemas/RegisteredManifestC10V1")
+    );
     let identity = contract_schema(schemas, "ContractArtifactId");
     let properties = identity.get("properties").unwrap().as_object().unwrap();
     assert_eq!(

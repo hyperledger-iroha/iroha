@@ -28,7 +28,7 @@ fn allow_exact_invocation_shell(vm: &mut IVM, budget: &AllocationBudget) {
 #[test]
 fn load_program_reuses_cached_prepared_ops() {
     set_banner_enabled(false);
-    ivm_cache::init_global_with_capacity(64);
+    let _retention = ivm_cache::default_retention();
     let program = program_with_imm(7);
     let mut first_vm = IVM::new(u64::MAX);
     first_vm
@@ -326,6 +326,8 @@ fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas(
     let ordinary_template = ordinary.try_runtime_template().unwrap();
     let before_gas = vm.remaining_gas();
     let before_pc = vm.pc;
+    // Admit the root used to compare both images across the zero-limit resets.
+    vm.memory.ensure_merkle_storage().unwrap();
     // Tracked probes reuse this prepaid read array throughout zero-limit resets.
     assert!(matches!(vm.memory.load_u64(Memory::STACK_START), Ok(0)));
     let reserved = budget.reserved_bytes();
@@ -390,10 +392,10 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     local.load_program(&program).unwrap();
     // Probe reads below must not borrow write-log or bitmap observation credit.
     assert!(matches!(vm.memory.load_u64(Memory::STACK_START), Ok(0)));
+    let root = vm.memory.root().unwrap();
     let base = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     let pc = vm.pc;
-    let root = vm.memory.root().unwrap();
     let privacy = vm.private_memory_bytes.pairs_for_testing().to_vec();
     budget.set_limit_bytes(0);
     assert!(matches!(
@@ -733,6 +735,7 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
 fn sample_worker_diagnostic() -> super::super::diagnostic::TrapSnapshot {
     super::super::diagnostic::TrapSnapshot {
         fault: None,
+        c10_fault: None,
         propagated: false,
         trap_kind: VmTrapKind::MemoryFault,
         pc: 32,
@@ -873,7 +876,7 @@ fn try_new_preserves_public_gas_limit_with_charged_memory() {
     );
 }
 #[test]
-fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_and_refund() {
+fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() {
     let gas_limit = 257;
     let stack_limit = IvmConfig::adaptive(gas_limit).stack_limit_for_gas();
     let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
@@ -884,8 +887,10 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     .unwrap();
     let bitmap_bytes = 2 * image_bytes.div_ceil(32).div_ceil(64) * 8;
     let register_bytes = Registers::initial_tree_allocation_bytes().unwrap();
-    let insufficient =
-        AllocationBudget::new(image_bytes + leaf_bytes + node_bytes + bitmap_bytes - 1);
+    // Construction admits the image and its bitmaps; the memory Merkle storage
+    // is admitted from the same pool by the first root request.
+    let tree_bytes = leaf_bytes + node_bytes;
+    let insufficient = AllocationBudget::new(image_bytes + bitmap_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &insufficient),
         Err(VMError::AllocationDeferred(
@@ -894,9 +899,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     ));
     assert_eq!(insufficient.reserved_bytes(), 0);
 
-    let tree_insufficient = AllocationBudget::new(
-        image_bytes + leaf_bytes + node_bytes + bitmap_bytes + register_bytes - 1,
-    );
+    let tree_insufficient = AllocationBudget::new(image_bytes + bitmap_bytes + register_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &tree_insufficient),
         Err(VMError::AllocationDeferred(
@@ -906,8 +909,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert_eq!(tree_insufficient.reserved_bytes(), 0);
 
     let shell_bytes = zk::SharedRegLog::allocation_layout().size();
-    let total_bytes =
-        image_bytes + leaf_bytes + node_bytes + bitmap_bytes + register_bytes + shell_bytes;
+    let total_bytes = image_bytes + bitmap_bytes + register_bytes + shell_bytes;
     let shell_insufficient = AllocationBudget::new(total_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &shell_insufficient),
@@ -936,11 +938,30 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     // unprepared fetch allocates separate read rows. Admit the exact peak of
     // these sequential stages without changing the construction charge.
     let read_bytes = 4 * std::mem::size_of::<crate::AccessRange>();
-    allow_exact_invocation_shell(&mut vm, &budget);
+    budget.set_limit_bytes(total_bytes + shell_bytes - 1);
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes, ..
+        })) if requested_bytes == shell_bytes
+    ));
+    assert_eq!(vm.remaining_gas(), gas_limit);
+    assert!(!vm.memory.merkle_storage_allocated());
+    assert_eq!(budget.reserved_bytes(), total_bytes);
     budget.set_limit_bytes(total_bytes + shell_bytes.max(read_bytes));
     vm.run().unwrap();
     ordinary.run().unwrap();
     assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
+    // Loading and running requested no root: the pool cannot admit the Merkle
+    // storage until its limit covers it, and the refusal changes nothing.
+    assert!(!vm.memory.merkle_storage_allocated());
+    let before_root = budget.reserved_bytes();
+    assert!(matches!(
+        vm.memory.root(),
+        Err(VMError::AllocationDeferred(_))
+    ));
+    assert_eq!(budget.reserved_bytes(), before_root);
+    budget.set_limit_bytes(before_root + tree_bytes);
     assert_eq!(vm.memory.root().unwrap(), ordinary.memory.root().unwrap());
     assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
     vm.reset().expect("private lifecycle cleanup succeeds");
@@ -948,7 +969,10 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
         .reset()
         .expect("private lifecycle cleanup succeeds");
     assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
-    assert_eq!(budget.reserved_bytes(), total_bytes + read_bytes);
+    assert_eq!(
+        budget.reserved_bytes(),
+        total_bytes + read_bytes + tree_bytes
+    );
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1050,10 +1074,10 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     for _ in 0..4 {
         vm.memory.load_u8(Memory::OUTPUT_START).unwrap();
     }
+    let root = vm.memory.root().unwrap();
     let occupied = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     let pc = vm.pc;
-    let root = vm.memory.root().unwrap();
     let privacy = vm.private_memory_bytes.pairs_for_testing().to_vec();
     let mut output = [0xa5; 8];
     budget.set_limit_bytes(0);
@@ -1125,7 +1149,7 @@ fn executed_runtime_is_retainable_after_template_reset() {
 }
 
 #[test]
-fn funded_non_zk_merkle_syscall_allocates_from_prepaid_credit_without_pool_admission() {
+fn funded_non_zk_merkle_syscall_defers_on_pool_admission_and_replays_whole() {
     let gas_limit = 1_000_000;
     let address = Memory::HEAP_START;
     let mut program = ProgramMetadata::default().encode();
@@ -1134,6 +1158,7 @@ fn funded_non_zk_merkle_syscall_allocates_from_prepaid_credit_without_pool_admis
             .to_le_bytes(),
     );
     program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+    // What a caller installs before every attempt, including an earlier write.
     let prepare = |vm: &mut IVM| {
         vm.load_program(&program).unwrap();
         vm.memory.store_u32(address, 0xABCD).unwrap();
@@ -1154,16 +1179,29 @@ fn funded_non_zk_merkle_syscall_allocates_from_prepaid_credit_without_pool_admis
     let budget = AllocationBudget::new(usize::MAX);
     let mut vm = IVM::try_new_with_memory_budget(gas_limit, &budget).unwrap();
     prepare(&mut vm);
-    assert!(!vm.memory.merkle_storage_allocated());
-    // Ordinary loading and running admitted the Merkle storage with the image
-    // and never allocated it. A syscall reached mid-run is the first request:
-    // it allocates from that prepaid credit, so the pool is never asked for the
-    // storage and the invocation meets no new deferral point.
     let image_bytes = usize::try_from(vm.memory.stack_top()).unwrap();
     let tree_bytes = crate::byte_merkle_tree::ByteMerkleTree::memory_plan(image_bytes.div_ceil(32))
         .unwrap()
         .requested_bytes();
+    // The pool covers everything this invocation admits except the Merkle
+    // storage, which the syscall is the first to request.
     budget.set_limit_bytes(budget.reserved_bytes() + tree_bytes / 2);
+    let error = vm
+        .run()
+        .expect_err("the pool cannot admit the Merkle storage");
+    assert!(matches!(error, VMError::AllocationDeferred(_)), "{error:?}");
+    assert!(error.execution_deferral().is_some() && error.fault_kind().is_none());
+    // The syscall published nothing; the earlier write is intact.
+    assert!(!vm.memory.merkle_storage_allocated());
+    assert_eq!(vm.memory.output_used_len(), 0);
+    assert_eq!(vm.register(10), address);
+    assert_eq!(vm.memory.load_u32(address).unwrap(), 0xABCD);
+    // The attempt already consumed gas: it is abandoned and replayed whole
+    // once the pool has capacity, never resumed.
+    assert!(vm.remaining_gas() < gas_limit);
+    budget.set_limit_bytes(usize::MAX);
+    vm.set_gas_limit(gas_limit);
+    prepare(&mut vm);
     vm.run().unwrap();
     assert!(vm.memory.merkle_storage_allocated());
     assert_eq!(vm.register(10), path_len);

@@ -70,5 +70,7 @@ pub(super) fn instruction(word: u32) -> Result<usize, VMError> {
     })
 }
 
+pub(super) mod baseline;
+
 #[cfg(test)]
 mod tests;

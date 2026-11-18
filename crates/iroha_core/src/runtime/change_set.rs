@@ -257,6 +257,8 @@ fn check_transition_support(
             self.added.get(id).or_else(|| self.published.definition(id))
         }
     }
+    super::catalog::ivm_c10::validate_transition(previous, &applied.selection)
+        .map_err(|reason| Error::InvariantViolation(reason.into()))?;
     super::keyed_state::validate_transition(previous, &applied.selection)
         .map_err(|reason| Error::InvariantViolation(reason.into()))?;
     if change_set.transitions.iter().any(|transition| {

@@ -502,7 +502,9 @@ fn run_phases_match_the_interpreter_and_root_call_sources() {
         }
         let code = scan::read_code(phase.path);
         assert!(
-            code.contains(&format!("fn {}(", phase.function)),
+            scan::functions(&code)
+                .iter()
+                .any(|(name, _)| name == phase.function),
             "{}: {} no longer defines {}",
             phase.id,
             phase.path,

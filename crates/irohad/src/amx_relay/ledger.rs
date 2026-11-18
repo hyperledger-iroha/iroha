@@ -1332,7 +1332,7 @@ fn evidence(block: &SignedBlock, index: u32) -> Result<CommittedTransaction> {
         .ok_or_else(|| eyre!("AMX carrier input missing"))?
         .clone();
     let (output_index, _) = block
-        .network_output_at(index)
+        .network_execution_output_at(index)
         .ok_or_else(|| eyre!("AMX carrier execution missing"))?;
     let output = block
         .execution_outputs()

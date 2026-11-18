@@ -10710,6 +10710,51 @@ fn contract_manifest_response_body(
     };
     norito::json::to_json_pretty(&response)
 }
+/// Read the manifest and its captured profile from a single retained C10 registry cut.
+pub(crate) fn handle_get_c10_contract_code(
+    state: &CoreState,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+) -> Result<Response> {
+    use iroha_data_model::ivm_c10::manifest::{
+        REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1,
+    };
+    let world = state.world_view();
+    let missing = || {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    };
+    let manifest = world
+        .c10_contract_manifests()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let host_profile = *world
+        .c10_contract_profiles()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let body = norito::json::to_json_pretty(&RegisteredManifestC10V1 {
+        network_id: *state.network_id_ref(),
+        artifact_id,
+        host_profile,
+        manifest: manifest.clone(),
+    })
+    .map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to serialize the registered C10 manifest: {e}"
+        )))
+    })?;
+    let mut response = application_json_response(body);
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(REGISTERED_MANIFEST_MEDIA_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static("Accept"),
+    );
+    Ok(response)
+}
+
 /// Fetch an on-chain contract manifest by its exact dataspace-scoped identity.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -32407,22 +32452,22 @@ struct AccountHistoryTxBase {
 trait HistoryTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint;
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint>;
-    fn result(&self) -> &TransactionResult;
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_>;
 }
 impl HistoryTransaction for iroha_data_model::query::CommittedTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint { &self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result() }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result() }
 }
 struct BorrowedNetworkTransaction<'a> {
     entrypoint: &'a TransactionEntrypoint,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
-    result: &'a TransactionResult,
+    result: iroha_data_model::block::execution_output::TransactionResultRef<'a>,
 }
 impl HistoryTransaction for BorrowedNetworkTransaction<'_> {
     fn entrypoint(&self) -> &TransactionEntrypoint { self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result }
 }
 fn history_cache_anchor(height: usize, hash: Option<&str>) -> Result<Option<HashOf<BlockHeader>>> {
     if height == 0 {
@@ -32498,10 +32543,10 @@ fn project_finalized_network_range<T>(
             let entrypoint = block.network_entrypoint_at(index)
                 .ok_or_else(|| conversion_error("validated Network source disappeared".into()))?;
             let index = u32::try_from(index).map_err(|_| history_capacity_error())?;
-            let (_, output) = block.network_output_at(index)
+            let (_, output) = block.network_execution_output_at(index)
                 .ok_or_else(|| conversion_error("validated Network output disappeared".into()))?;
             let transaction = BorrowedNetworkTransaction {
-                entrypoint, entrypoint_hash: entrypoint.hash(), result: &output.result,
+                entrypoint, entrypoint_hash: entrypoint.hash(), result: output.result(),
             };
             let rows = project(height, &transaction);
             let count = projections.len().checked_add(rows.len()).ok_or_else(history_capacity_error)?;
@@ -33796,16 +33841,16 @@ pub(crate) fn output_fee_projection(
     block: &iroha_data_model::block::SignedBlock,
     output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
 ) -> Result<Option<iroha_data_model::transaction::FeePaymentIntent>, Error> {
-    let Some(network) = output.network() else {
+    let Some(input_index) = output.network_index() else {
         return Ok(None);
     };
     let entrypoint = block
-        .network_entrypoint_at(network.input_index as usize)
+        .network_entrypoint_at(input_index as usize)
         .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
     Ok(tx_fee_projection(&BorrowedNetworkTransaction {
         entrypoint,
         entrypoint_hash: entrypoint.hash(),
-        result: &network.result,
+        result: output.result(),
     }))
 }
 
@@ -46966,7 +47011,7 @@ mod contract_feed_binding_tests {
         BorrowedNetworkTransaction {
             entrypoint,
             entrypoint_hash: entrypoint.hash(),
-            result,
+            result: result.into(),
         }
     }
     routing_test! { sync non_contract_transactions_never_reach_contract_feeds
@@ -55468,7 +55513,7 @@ fn external_signed_transaction_results(
         usize,
         HashOf<TransactionEntrypoint>,
         &SignedTransaction,
-        &TransactionResult,
+        iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ),
 > + '_ {
     (0..block.network_entrypoint_count()).filter_map(move |index| {
@@ -55482,7 +55527,7 @@ fn external_signed_transaction_result_at(
 ) -> Option<(
     HashOf<TransactionEntrypoint>,
     &SignedTransaction,
-    &TransactionResult,
+    iroha_data_model::block::execution_output::TransactionResultRef<'_>,
 )> {
     // The caller owns a complete carrier validated by the finalized reader.
     // Do not repeat whole-tree validation for every projected row.
@@ -55493,9 +55538,8 @@ fn external_signed_transaction_result_at(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => return None,
     };
     let entrypoint_hash = source.hash();
-    let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
-    let result = &output.result;
-    Some((entrypoint_hash, signed, result))
+    let (_, output) = block.network_execution_output_at(u32::try_from(index).ok()?)?;
+    Some((entrypoint_hash, signed, output.result()))
 }
 fn resolve_explorer_history_entrypoint(
     block: &SignedBlock,
@@ -60368,6 +60412,7 @@ pub mod event {
     //! Events stream handler
     use super::*;
     use crate::{event, stream::WebSocketNorito};
+    include!("routing/c10_event_stream.rs");
     /// Type for any error during events streaming
     #[derive(Debug, thiserror::Error)]
     enum Error {

@@ -7,8 +7,8 @@ use super::{
 };
 use crate::{
     NetworkId,
-    block::BlockHeader,
-    transaction::{Executable, FeeChargeKind, TransactionEntrypoint, TransactionResult},
+    block::{BlockHeader, execution_output::TransactionResultRef},
+    transaction::{Executable, FeeChargeKind, TransactionEntrypoint},
 };
 
 /// A structural or semantic mismatch in unverified native payment source material.
@@ -51,19 +51,20 @@ pub enum AtomicPaymentProjectionError {
 /// # Errors
 /// Refuses unsuccessful execution, foreign network/terms, composite or contract carriers,
 /// unsupported fee kinds and inconsistent Nexus fee outcomes.
-pub fn project_atomic_payment_receipt_unverified(
+pub fn project_atomic_payment_receipt_unverified<'a>(
     expected_network: NetworkId,
     expected_intent: &SettleAtomic,
     header: &BlockHeader,
     entrypoint: &TransactionEntrypoint,
-    result: &TransactionResult,
+    result: impl Into<TransactionResultRef<'a>>,
 ) -> Result<SettlementReceipt, AtomicPaymentProjectionError> {
     use AtomicPaymentProjectionError as Error;
     if expected_intent.network_id != expected_network {
         return Err(Error::NetworkMismatch);
     }
     expected_intent.validate().map_err(Error::InvalidIntent)?;
-    if result.as_ref().is_err() {
+    let result = result.into();
+    if result.is_err() {
         return Err(Error::RejectedExecution);
     }
     let TransactionEntrypoint::External(transaction) = entrypoint else {

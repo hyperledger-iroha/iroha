@@ -199,7 +199,7 @@ pub const fn tape(tag: u8) -> [u8; 112] {
 /// The nonce `offset` from the zero nonce: `offset` little-endian in the first eight bytes.
 /// Each pinned nonce is the smallest such offset whose work digest reaches 28 bits, found
 /// once with a multi-threaded release-mode search of the same work frame.
-const fn offset_nonce(offset: u64) -> [u8; 32] {
+pub(crate) const fn offset_nonce(offset: u64) -> [u8; 32] {
     let bytes = offset.to_le_bytes();
     let mut out = [0_u8; 32];
     let mut index = 0;

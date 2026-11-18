@@ -20,6 +20,7 @@ use crate::{
 };
 use iroha_data_model::{
     ValidationFail,
+    block::execution_output::{ExecutionOutputC10V1, ExecutionSourceC10V1},
     events::{EventBox, trigger_completed::TriggerCompletedEvent},
     transaction::{TransactionResult, error::TransactionRejectionReason},
 };
@@ -424,7 +425,7 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
     admitted: Result<AcceptedTransaction<'_>, TransactionRejectionReason>,
     genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     quarantine_overflow: bool,
-    reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
+    mut reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
     cache: &mut IvmCache,
     amx_legs: Option<&'attempt mut crate::sumeragi::amx::NativeAmxLegPreparations>,
 ) -> Result<(ExecutionOutputV1, Option<lifecycle::Ledger>), ExecutionAttemptError<String>> {
@@ -535,7 +536,11 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
     transaction
         .ensure_execution_ready()
         .map_err(ExecutionAttemptError::Deferred)?;
+    let mut c10 = transaction.take_c10_execution();
     if transaction.fastpq_source_quota.intrinsic_rejected()? {
+        if let Some(capture) = &mut c10 {
+            capture.replace_failure();
+        }
         result = Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
                 crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION.into(),
@@ -596,6 +601,7 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
                 height,
                 routing,
                 reason,
+                c10,
                 work,
                 penalties,
                 block_gas_rejection,
@@ -638,6 +644,18 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
         let budget = transaction.execution_budget();
         transaction.contract_event_journal.take(call, &budget)?
     };
+    let selected_c10 = c10.is_some();
+    if selected_c10 {
+        reservation.select_c10()?;
+    }
+    let output_limit = || -> Result<ExecutionOutputV1, String> {
+        let terminal = ExecutionOutputV1::network_output_limit_rejection(input_index);
+        if selected_c10 {
+            terminal.into_c10_output_limit()
+        } else {
+            Ok(terminal)
+        }
+    };
     let (actual, journal_overflow) = match (callback_capture, event_capture) {
         (
             DrainedCallbacks::Complete { steps, completions },
@@ -648,31 +666,18 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
             result.set_nexus_fee_receipt(fee_receipt);
             result.set_contract_events(events);
             (
-                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                    input_index,
-                    result,
-                    completions,
-                }),
+                network_result_row(c10, input_index, result, completions),
                 false,
             )
         }
-        _ => (
-            ExecutionOutputV1::network_output_limit_rejection(input_index),
-            true,
-        ),
+        _ => (output_limit()?, true),
     };
     let overflow = journal_overflow || lifecycle_overflow;
     let unwrapped = actual;
     let mut custody;
     let actual;
     (actual, custody) = if overflow {
-        (
-            lifecycle::empty(
-                ExecutionOutputV1::network_output_limit_rejection(input_index),
-                lifecycle_enabled,
-            ),
-            None,
-        )
+        (lifecycle::empty(output_limit()?, lifecycle_enabled), None)
     } else {
         lifecycle::take(transaction, unwrapped)?
     };
@@ -771,6 +776,7 @@ struct RejectedNetworkAttempt<'input, 'reservation, Inputs: ?Sized> {
     height: u64,
     routing: RoutingDecision,
     reason: TransactionRejectionReason,
+    c10: Option<crate::state::c10_execution::C10Execution>,
     work: CompletedOutputWork,
     penalties: Vec<crate::state::DeferredGovernanceBallotPenaltyV1>,
     block_gas_rejection: bool,
@@ -800,11 +806,12 @@ fn complete_network_rejection<
         height,
         routing,
         reason,
+        mut c10,
         mut work,
         penalties,
         block_gas_rejection,
         effect_limit_rejection,
-        reservation,
+        mut reservation,
     } = rejected;
     // Confidential work survives every completed attempt. Actual gas/fee
     // eligibility is decided from the real rejection, never its bounded row.
@@ -818,6 +825,9 @@ fn complete_network_rejection<
         settle_rejection_penalties(state, input, execution_index, routing, &penalties)?;
     let penalty_committed = penalty_failure.is_none();
     if let Some(reason) = penalty_failure {
+        if let Some(capture) = &mut c10 {
+            capture.replace_failure();
+        }
         result = Err(reason);
     }
     if !block_gas_rejection && penalty_committed {
@@ -886,6 +896,9 @@ fn complete_network_rejection<
                 Ok(false) => drop(fee),
                 Err(error) => {
                     drop(fee);
+                    if let Some(capture) = &mut c10 {
+                        capture.replace_failure();
+                    }
                     result = Err(error);
                 }
             }
@@ -893,11 +906,10 @@ fn complete_network_rejection<
     }
     let mut result = TransactionResult::new(result);
     result.set_nexus_fee_receipt(fee_receipt);
-    let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-        input_index,
-        result,
-        completions: Vec::new(),
-    });
+    let actual = network_result_row(c10, input_index, result, Vec::new());
+    if matches!(actual, ExecutionOutputV1::C10(_)) {
+        reservation.select_c10()?;
+    }
     actual.validate_structure(height, inputs)?;
     let actual = lifecycle::empty(actual, lifecycle_enabled);
     let row = reservation.finish_network_rejection(actual)?;
@@ -906,6 +918,33 @@ fn complete_network_rejection<
         fee.apply()?;
     }
     Ok(row)
+}
+
+fn network_result_row(
+    capture: Option<crate::state::c10_execution::C10Execution>,
+    input_index: u32,
+    result: TransactionResult,
+    completions: Vec<iroha_data_model::block::execution_output::InvocationCompletionV1>,
+) -> ExecutionOutputV1 {
+    let result = match capture {
+        None => result,
+        Some(capture) => match capture.result(result) {
+            Ok(result) => {
+                return ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                    source: ExecutionSourceC10V1::Network(input_index),
+                    result,
+                    completions,
+                    trigger_lifecycle: None,
+                });
+            }
+            Err(original) => original,
+        },
+    };
+    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+        input_index,
+        result,
+        completions,
+    })
 }
 
 fn settle_rejection_penalties(

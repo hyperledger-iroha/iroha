@@ -8340,12 +8340,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .map_err(|_| ivm::VMError::PermissionDenied)?,
             code_hash,
         );
-        let manifest = state
-            .world()
-            .contract_manifests()
-            .get(&artifact)
-            .ok_or(ivm::VMError::DecodeError)?;
-        if manifest.code_hash != Some(code_hash)
+        let manifest = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            state.world(),
+            &artifact,
+        )
+        .ok_or(ivm::VMError::DecodeError)?;
+        if manifest.hashes().0 != Some(code_hash)
             || state.world().contract_code().get(&artifact).is_none()
         {
             return Err(ivm::VMError::DecodeError);

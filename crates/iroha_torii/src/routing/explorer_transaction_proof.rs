@@ -130,7 +130,9 @@ fn projection<'a>(
     if entrypoint.hash() != row.entrypoint_hash {
         return Err(invalid());
     }
-    let (output_index, _) = block.network_output_at(input_index).ok_or_else(invalid)?;
+    let (output_index, _) = block
+        .network_execution_output_at(input_index)
+        .ok_or_else(invalid)?;
     let output = block
         .execution_outputs()
         .get(output_index as usize)

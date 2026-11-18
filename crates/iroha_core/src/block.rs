@@ -8978,11 +8978,14 @@ pub(crate) mod valid {
                 map_block_err_to_reason(&BlockValidationError::InvalidGenesis(
                     InvalidGenesisError::RejectedOutput(GenesisOutputRejection {
                         output_index: 0,
-                        reason: Box::new(TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "rejected genesis mapping fixture".into()
-                            ),
-                        )),
+                        reason: Box::new(
+                            TransactionRejectionReason::Validation(
+                                iroha_data_model::ValidationFail::NotPermitted(
+                                    "rejected genesis mapping fixture".into()
+                                ),
+                            )
+                            .into()
+                        ),
                     })
                 )),
                 Some(Reason::InvalidGenesis)

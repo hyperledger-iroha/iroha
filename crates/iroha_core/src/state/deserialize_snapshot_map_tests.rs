@@ -700,6 +700,9 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
         [
             "account_signing_key_reservations",
             "account_signing_keys",
+            "c10_contract_manifests",
+            "c10_contract_profiles",
+            "c10_triggers",
             "game_partitions",
             "parliament_anonymous_attempts",
             "parliament_anonymous_boards",
@@ -744,6 +747,9 @@ fn a_serving_baseline_snapshot_restores_uninstalled_authority_tables_empty() {
     let mut added = [
         "account_signing_key_reservations",
         "account_signing_keys",
+        "c10_contract_manifests",
+        "c10_contract_profiles",
+        "c10_triggers",
         "game_partitions",
         "parliament_anonymous_attempts",
         "parliament_anonymous_boards",

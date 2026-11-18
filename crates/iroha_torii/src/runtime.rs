@@ -2920,6 +2920,65 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn runtime_drafts_c10_registration_storage_and_service_from_the_installed_root() {
+        use iroha_data_model::{
+            ivm_c10::{RegisterSmartContractCodeC10V1, RegisterTriggerC10V1},
+            runtime::lifecycle::SelectionTransitionV1,
+        };
+        let state = Arc::new(State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let catalog = iroha_core::runtime::release_catalog().unwrap();
+        let module = "iroha.runtime.ivm_c10.v1";
+        let addition = catalog
+            .additions
+            .iter()
+            .find(|a| a.module == module)
+            .unwrap();
+        let response = handle_runtime_draft_upgrade(
+            state.clone(),
+            NoritoJson(RuntimeDraftUpgradeRequest {
+                addition: module.into(),
+                effective_height: 40,
+                qualification_hex: hex::encode([0xc1; 32]),
+            }),
+        )
+        .await
+        .unwrap();
+        let change = response.change_set;
+        assert_eq!(response.id_hex, hex::encode(change.id().unwrap().0));
+        assert_eq!(change.predecessor, catalog.baseline_id);
+        assert_ne!(change.successor, change.predecessor);
+        assert_eq!(change.effective_height, 40);
+        assert_eq!(change.qualification, [0xc1; 32]);
+        for wire in [
+            RegisterSmartContractCodeC10V1::WIRE_ID,
+            RegisterTriggerC10V1::WIRE_ID,
+        ] {
+            assert!(change.transitions.iter().any(|step| matches!(step,
+                SelectionTransitionV1::Bind(binding)
+                if binding.wire_id == wire && binding.implementation == addition.implementation
+            )));
+        }
+        for id in addition.storage.values() {
+            assert!(
+                change
+                    .transitions
+                    .contains(&SelectionTransitionV1::InstallStorage(*id))
+            );
+        }
+        assert!(
+            change
+                .transitions
+                .iter()
+                .any(|step| matches!(step, SelectionTransitionV1::SetServicesProfile(_)))
+        );
+        assert_eq!(*state.view().world().runtime_selection(), catalog.baseline);
+    }
+
     /// A change set that only deprecates the baseline's native bundle, so this release
     /// executes its successor.
     fn deprecate_baseline_bundle(

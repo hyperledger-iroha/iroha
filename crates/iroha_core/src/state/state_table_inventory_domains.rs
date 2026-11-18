@@ -71,6 +71,14 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         ],
     },
     OtherDomains {
+        usage: Use::Name,
+        reason: "The C10 contract-code and trigger registration wire IDs identify instruction layouts. Each is a dispatch name and computes no State digest.",
+        literals: &[
+            r"iroha.smart_contract.code.c10.register.v1",
+            r"iroha.trigger.c10.register.v1",
+        ],
+    },
+    OtherDomains {
         usage: Use::Record,
         reason: "Immutable selected game and retirement service semantics; these bytes identify native implementation closures and do not summarize live State",
         literals: &[
@@ -773,6 +781,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:time-invocation:v1\0",
             r"iroha:time-trigger:execution:v1\0",
             r"iroha:trigger-use:action:v1\0",
+            r"iroha:trigger:c10:stored-action:v1\0",
             r"iroha:tx-gossip-target-seed:v2\0",
             r"iroha:validator-committee-beacon-session:v1",
             r"iroha:validator-election:v1",
@@ -1640,6 +1649,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.dataspace.restricted_read_delegation.v1",
             r"iroha.events.data.ironwood.v1",
             r"iroha.events.data.v1",
+            r"iroha.events.ivm_c10.v1",
             r"iroha.game_partition.v1",
             r"iroha.governance.parliament.anonymous.v1",
             r"iroha.ironwood.identity-cutover.v1",
@@ -1650,6 +1660,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.permission.content_publish.v1",
             r"iroha.runtime.deferred_consent.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
+            r"iroha.runtime.ivm_c10.v1",
+            r"iroha.runtime.ivm_c10.v1:ExecutionOutputC10V1:TransactionResultC10V1:EventBoxC10V1:profile-bound-dispatch-v1",
             r"iroha.runtime.lifecycle.v1",
             r"iroha.sorafs.authority_governance.v1",
             r"iroha.world.lthash16.v1",
@@ -1679,6 +1691,14 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:startup-floor:v1\0",
             r"iroha:runtime:support-attestation:v1\0",
             r"iroha:runtime:terminal-effect:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Media and subprotocol names for the signed C10 manifest and negotiated event stream",
+        literals: &[
+            r"application/vnd.iroha.c10-manifest.v1+json",
+            r"iroha.events.c10.norito.v1",
         ],
     },
     OtherDomains {

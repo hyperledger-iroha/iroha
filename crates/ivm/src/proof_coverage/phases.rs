@@ -101,9 +101,11 @@ pub const RUN_PHASES: &[RunPhase] = &[
             "OutOfGas",
         ],
         fallible_helpers: &[
+            "admit_observers",
             "ensure_complete_program_image",
             "fetch_instruction",
             "finish_step",
+            "invocation_trace.check",
             "prepare_trace_instruction",
             "publish_trace_cycles",
             "record_trace_prefetch",

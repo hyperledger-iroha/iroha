@@ -560,6 +560,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         InterpreterTrap: [InvalidOpcode],
     ),
     producer!(
+        "crates/ivm/src/ivm/trace_logging/change_counts/baseline.rs",
+        InterpreterTrap: [InvalidOpcode],
+    ),
+    producer!(
         "crates/ivm/src/ivm_cache.rs",
         PrepareRejection: [MemoryOutOfBounds],
     ),
@@ -853,7 +857,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm_artifact_admission/src/error.rs",
-        PrepareRejection: [ArtifactAbiHashMismatch, InvalidMetadata],
+        PrepareRejection: [ArtifactAbiHashMismatch, InvalidMetadata, MaxCyclesWithoutZk, MissingMaxCycles, UnsupportedProgramAbiVersion, UnsupportedProgramFeatureBits, UnsupportedProgramVersion],
         LocalDeferral: [AllocationDeferred, AllocatorDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
     ),
     producer!(

@@ -8,7 +8,7 @@
 
 #[cfg(test)]
 use super::zk;
-use super::{IVM, TraceMode, VMError, completed_instruction_cycles};
+use super::{IVM, IvmEngine, TraceMode, VMError, completed_instruction_cycles};
 use iroha_allocation::{AllocationBudget, AllocationRefusal, AllocationScope};
 
 mod change_counts;
@@ -22,6 +22,8 @@ mod change_counts;
 pub(super) struct InvocationTrace {
     epoch: u64,
     mode: TraceMode,
+    /// Engine of the loaded image, which fixes the register geometry of delta observations.
+    engine: IvmEngine,
     cycles: bool,
     /// Collection policy of the thread-local invocation scope at admission.
     ///
@@ -43,6 +45,7 @@ impl InvocationTrace {
     fn owns(&self, vm: &IVM) -> bool {
         self.epoch == vm.proof_state_epoch
             && self.mode == vm.trace_mode
+            && self.engine == vm.engine()
             && self.cycles == (self.collection_enabled(vm) && vm.max_cycles != 0)
             && match (&self.original, vm.memory.allocation_budget()) {
                 (Some(original), Some(current)) => original.same_pool(current),
@@ -53,7 +56,7 @@ impl InvocationTrace {
     /// Runs several times per step: build the error only on a mismatch, so the
     /// owning path never constructs and drops a `VMError`.
     #[inline]
-    fn check(&self, vm: &IVM) -> Result<(), VMError> {
+    pub(super) fn check(&self, vm: &IVM) -> Result<(), VMError> {
         if self.owns(vm) {
             Ok(())
         } else {
@@ -140,11 +143,19 @@ impl IVM {
         let mut invocation = InvocationTrace {
             epoch: self.proof_state_epoch,
             mode: self.trace_mode,
+            engine: self.engine(),
             cycles: false,
             scoped_collection: crate::zk::scoped_reg_logger_enabled(),
             original: self.memory.allocation_budget().cloned(),
         };
         invocation.cycles = invocation.collection_enabled(self) && self.max_cycles != 0;
+        if invocation.cycles && invocation.engine == IvmEngine::Baseline {
+            // Completed-cycle proof traces are C10 rows; the baseline producer is not
+            // reconstructed (`run_baseline` refuses it first), so never record C10 rows here.
+            return Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable,
+            ));
+        }
         if invocation.cycles {
             // Every completed cycle records the memory root. Allocate its Merkle
             // storage now, before root arguments or guest effects, so no step
@@ -156,10 +167,18 @@ impl IVM {
             match invocation.mode {
                 TraceMode::Off => Ok(()),
                 TraceMode::PcOnly => vm.pc_trace.prepare(1, scope),
-                TraceMode::DeltaRegisters => {
-                    vm.delta_trace
-                        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, scope)
-                }
+                TraceMode::DeltaRegisters => match invocation.engine {
+                    IvmEngine::C10 => {
+                        vm.delta_trace
+                            .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, scope)
+                    }
+                    IvmEngine::Baseline => vm.delta_trace.prepare_baseline_batch(
+                        1,
+                        crate::registers::BASELINE_REGISTER_COUNT,
+                        0,
+                        scope,
+                    ),
+                },
             }
         })?;
         Ok(invocation)
@@ -175,11 +194,18 @@ impl IVM {
         match invocation.mode {
             TraceMode::Off => {}
             TraceMode::PcOnly => self.pc_trace.record_reserved(self.pc),
-            TraceMode::DeltaRegisters => self.delta_trace.record_reserved(
-                self.pc,
-                self.registers.snapshot(),
-                self.registers.snapshot_tags(),
-            ),
+            TraceMode::DeltaRegisters => match invocation.engine {
+                IvmEngine::C10 => self.delta_trace.record_reserved(
+                    self.pc,
+                    self.registers.snapshot(),
+                    self.registers.snapshot_tags(),
+                ),
+                IvmEngine::Baseline => self.delta_trace.record_baseline_reserved(
+                    self.pc,
+                    &self.registers.baseline_snapshot(),
+                    &self.registers.baseline_snapshot_tags(),
+                ),
+            },
         }
         Ok(())
     }
@@ -207,7 +233,14 @@ impl IVM {
             return Ok(output);
         }
         let changes = if invocation.cycles || invocation.mode == TraceMode::DeltaRegisters {
-            change_counts::instruction(instruction)?
+            match invocation.engine {
+                IvmEngine::C10 => change_counts::instruction(instruction)?,
+                // The baseline refuses proof-trace cycle collection (`run_baseline`), so only
+                // its delta observations reach here.
+                IvmEngine::Baseline => {
+                    change_counts::baseline::instruction(instruction, self.baseline.vector_length)?
+                }
+            }
         } else {
             0
         };
@@ -231,9 +264,13 @@ impl IVM {
             match invocation.mode {
                 TraceMode::Off => {}
                 TraceMode::PcOnly => vm.pc_trace.prepare(1, scope)?,
-                TraceMode::DeltaRegisters => {
-                    vm.delta_trace.prepare_batch(1, changes, 0, scope)?;
-                }
+                TraceMode::DeltaRegisters => match invocation.engine {
+                    IvmEngine::C10 => vm.delta_trace.prepare_batch(1, changes, 0, scope)?,
+                    IvmEngine::Baseline => {
+                        vm.delta_trace
+                            .prepare_baseline_batch(1, changes, 0, scope)?;
+                    }
+                },
             }
             Ok(())
         })?;
@@ -348,6 +385,8 @@ fn overflow() -> VMError {
     VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
 }
 
+#[cfg(test)]
+mod baseline_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]

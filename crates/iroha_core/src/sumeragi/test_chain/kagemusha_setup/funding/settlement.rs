@@ -482,7 +482,12 @@ fn execute_actual_c_unload_with_conservation_and_permanent_replay() {
         .sign(&key(43), [changed_instruction.into()], 7_999);
     assert_eq!(setup.chain.commit_at(8_000, vec![transaction]), [false]);
     assert_eq!(
-        setup.chain.committed(8).block().output_error(0),
+        setup
+            .chain
+            .committed(8)
+            .block()
+            .output_error(0)
+            .map(|reason| reason.baseline().expect("baseline KAGEMUSHA fixture")),
         Some(
             &iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::InstructionFailed(

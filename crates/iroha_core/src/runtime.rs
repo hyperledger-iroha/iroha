@@ -67,8 +67,7 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// Activate this release's additions on `world`'s universal root, in declaration order, up to and
 /// including `through`, as their governed change sets do at block start: publish each addition's
 /// definitions, install its storage (a cell at its published initial value) and move the
-/// selection. The independent authority, restricted-read, anonymous Parliament and runtime
-/// lifecycle additions activate alone. An addition already active stays as it is.
+/// selection. Independent additions, including the C10 execution service, activate alone. An addition already active stays as it is.
 ///
 /// Fixtures only. A network activates an addition through a governed change set
 /// (`specs/runtime_upgrades.md`); no production World is founded on one.
@@ -100,6 +99,7 @@ pub fn activate_additions_for_testing(
         || through == catalog::additions::NATIVE_AMX_CAPTURE.module
         || through == catalog::additions::NATIVE_GAME_CAPTURE.module
         || through == catalog::additions::CONTRACT_LIFECYCLE.module
+        || through == catalog::additions::IVM_C10.module
         || through == catalog::additions::RUNTIME_RETIREMENT.module
     {
         &catalog.additions[last..=last]
@@ -109,6 +109,8 @@ pub fn activate_additions_for_testing(
     for addition in additions {
         let current = block.runtime_selection.get().clone();
         if current.active.contains(&addition.implementation)
+            || (addition.module == catalog::additions::IVM_C10.module
+                && catalog::ivm_c10::selected(&current))
             || (addition.module == catalog::additions::RESTRICTED_DATASPACE_READ.module
                 && addition.rebinds.keys().all(|wire| {
                     current.bindings.iter().any(|binding| {

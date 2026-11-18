@@ -654,6 +654,22 @@ impl Drop for CacheLimitsGuard {
     }
 }
 
+/// Hold the default retention limits for a test that asserts retention.
+///
+/// Every lookup folds the process byte limit into its cache and retains against the budget
+/// its thread is charged to, so a parallel test that lowers the limits would otherwise refuse
+/// the retention this test observes. The published capacity is kept, so taking the guard
+/// does not rebuild the global decode shards under other tests.
+#[cfg(test)]
+pub(crate) fn default_retention() -> CacheLimitsGuard {
+    let _configuration = lock_cache_configuration();
+    CacheLimitsGuard::new(CacheLimits {
+        max_bytes: DEFAULT_CACHE_MAX_BYTES,
+        max_decoded_ops: DEFAULT_CACHE_MAX_DECODED_OPS,
+        ..cache_limits()
+    })
+}
+
 #[cfg(test)]
 #[path = "ivm_cache/configuration_tests.rs"]
 mod configuration_tests;
@@ -661,21 +677,6 @@ mod configuration_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Hold the default retention limits for a test that asserts retention.
-    ///
-    /// Every lookup folds the process byte limit into its cache and retains against the budget
-    /// its thread is charged to, so a parallel test that lowers the limits would otherwise refuse
-    /// the retention this test observes. The published capacity is kept, so taking the guard
-    /// does not rebuild the global decode shards under other tests.
-    fn default_retention() -> CacheLimitsGuard {
-        let _configuration = lock_cache_configuration();
-        CacheLimitsGuard::new(CacheLimits {
-            max_bytes: DEFAULT_CACHE_MAX_BYTES,
-            max_decoded_ops: DEFAULT_CACHE_MAX_DECODED_OPS,
-            ..cache_limits()
-        })
-    }
 
     /// The published limits while no guard is held.
     ///

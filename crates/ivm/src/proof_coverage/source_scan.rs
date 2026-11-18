@@ -37,14 +37,19 @@ const DISPATCH: &str = "match wide_op {";
 
 /// Register-tag accessors an interpreter arm can call directly, as
 /// `(inventory name, source needle)`.
-pub(super) const TAG_ACCESSORS: [(&str, &str); 2] = [("tag", ".tag("), ("set_tag", ".set_tag(")];
+pub(super) const TAG_ACCESSORS: [(&str, &str); 3] = [
+    ("tag", ".tag("),
+    ("set_tag", ".set_tag("),
+    ("set_tag", ".set_tag_observed("),
+];
 
 /// Tokens that mark a function of the interpreter as a privacy helper: it
 /// reads or writes a privacy tag, the private-byte ranges or raises the
 /// privacy trap itself.
-const PRIVACY_MARKERS: [&str; 5] = [
+const PRIVACY_MARKERS: [&str; 6] = [
     ".tag(",
     ".set_tag(",
+    ".set_tag_observed(",
     "VMError::PrivacyViolation",
     "private_memory_bytes",
     "has_private(",
@@ -904,7 +909,7 @@ pub(super) fn privacy_functions(code: &str) -> BTreeSet<String> {
 /// `crates/ivm/src/ivm.rs`. `helpers` names the privacy helpers recorded in
 /// each arm's tag surface.
 pub(super) fn interpreter_dispatch(text: &str, helpers: &[&str]) -> InterpreterDispatch {
-    const RUN: &str = "fn run_with_host_ref(";
+    const RUN: &str = "fn run_with_host_ref";
     let lines: Vec<&str> = text.lines().collect();
     let position = |needle: &str, exact: bool| {
         let found: Vec<usize> = lines

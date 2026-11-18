@@ -730,6 +730,7 @@ fn meter_instruction_without_proof_attachment(
     if any
         .downcast_ref::<dm_isi::smart_contract_code::RegisterSmartContractCode>()
         .is_some()
+        || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>()
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }

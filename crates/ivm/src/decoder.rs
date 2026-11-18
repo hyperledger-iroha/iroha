@@ -13,6 +13,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub static DECODE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Decode the instruction at `pc` and return its raw word.
 pub fn decode(memory: &Memory, pc: u64) -> Result<u32, VMError> {
+    check_fetch(memory.code_len(), pc)?;
+    memory.load_instruction_u32(pc)
+}
+
+/// Decode through exclusive read logging while the interpreter owns the guest image.
+pub(crate) fn decode_guest(memory: &mut Memory, pc: u64) -> Result<u32, VMError> {
+    check_fetch(memory.code_len(), pc)?;
+    memory
+        .load_guest_word(
+            pc,
+            crate::execution_memory_recorder::DiagnosticMemoryAccessKind::InstructionFetch,
+        )
+        .map(u32::from_le_bytes)
+}
+
+fn check_fetch(code_len: u64, pc: u64) -> Result<(), VMError> {
     #[cfg(test)]
     {
         DECODE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -27,14 +43,13 @@ pub fn decode(memory: &Memory, pc: u64) -> Result<u32, VMError> {
         addr: pc as u32,
         perm: Perm::EXECUTE,
     })?;
-    if fetch_end > memory.code_len() {
+    if fetch_end > code_len {
         return Err(VMError::MemoryAccessViolation {
             addr: pc as u32,
             perm: Perm::EXECUTE,
         });
     }
-    let word = memory.load_instruction_u32(pc)?;
-    Ok(word)
+    Ok(())
 }
 /// Decode one instruction directly from a code slice.
 ///
@@ -71,6 +86,32 @@ pub fn decode_slice(code: &[u8], pc: u64) -> Result<u32, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_and_exclusive_fetch_keep_the_same_read_set_and_fault_order() {
+        let mut memory = Memory::new();
+        memory.load_code(&0x01234567u32.to_le_bytes()).unwrap();
+        assert_eq!(decode(&memory, 0).unwrap(), 0x01234567);
+        let expected = memory.try_read_log_snapshot().unwrap();
+        memory.clear_tracking();
+        assert!(matches!(
+            decode_guest(&mut memory, 2),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::EXECUTE,
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_guest(&mut memory, 4),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::EXECUTE,
+                ..
+            })
+        ));
+        assert!(memory.try_read_log_snapshot().unwrap().is_empty());
+        assert_eq!(decode_guest(&mut memory, 0).unwrap(), 0x01234567);
+        assert_eq!(&*memory.try_read_log_snapshot().unwrap(), &*expected);
+    }
+
     #[test]
     fn slice_decoder_matches_memory_decoder_without_vm_memory() {
         let words = [0x1122_3344_u32, 0xAABB_CCDD];

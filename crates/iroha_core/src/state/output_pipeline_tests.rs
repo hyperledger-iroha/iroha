@@ -402,3 +402,141 @@ fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
         Repeats::Exactly(1)
     );
 }
+
+#[test]
+fn c10_manual_data_and_pipeline_callbacks_keep_each_result_and_rollback() {
+    use iroha_data_model::{
+        block::execution_output::{ExecutionOutputC10V1, ExecutionSourceC10V1},
+        events::data::prelude::AccountEventFilter,
+        ivm_c10::{
+            ActionC10V1, EventFilterBoxC10V1, RegisterTriggerC10V1, TransactionEventFilterC10V1,
+            TransactionStatusC10V1, TriggerC10V1,
+        },
+    };
+    let state = Box::new(fixture(65_536, None));
+    crate::runtime::activate_additions_for_testing(
+        &state.world,
+        crate::runtime::catalog::additions::IVM_C10.module,
+    )
+    .unwrap();
+    let manual: TriggerId = "manual_write".parse().unwrap();
+    let observer: TriggerId = "data_watcher".parse().unwrap();
+    let bad: TriggerId = "bad_pipeline".parse().unwrap();
+    let ordinary = callback(
+        "ordinary_pipeline",
+        vec![write("ordinary")],
+        block_filter(),
+        1,
+    );
+    let c10 = |id: &TriggerId, body: Vec<InstructionBox>, filter: EventFilterBoxC10V1| {
+        RegisterTriggerC10V1 {
+            object: TriggerC10V1 {
+                id: id.clone(),
+                action: ActionC10V1::new(body, Repeats::Exactly(1), ALICE_ID.clone(), filter)
+                    .unwrap(),
+            },
+        }
+    };
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        let mut policy = parameters.get().block().execution_output();
+        policy.max_pipeline_triggers = 2;
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        parameters.commit();
+    }
+    {
+        let (mut setup, _recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        c10(
+            &manual,
+            vec![write("manual")],
+            EventFilterBoxC10V1::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(manual.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        c10(
+            &observer,
+            vec![Log::new(Level::INFO, "account data".into()).into()],
+            EventFilterBoxC10V1::Data(
+                AccountEventFilter::new()
+                    .for_account(ALICE_ID.clone())
+                    .into(),
+            ),
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        c10(
+            &bad,
+            vec![
+                write("revert_me"),
+                Unregister::trigger("absent".parse().unwrap()).into(),
+            ],
+            TransactionEventFilterC10V1::default()
+                .for_status(TransactionStatusC10V1::Approved)
+                .into(),
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        Register::trigger(ordinary)
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
+    }
+    let source = carrier(
+        &state,
+        vec![input(
+            &state,
+            vec![ExecuteTrigger::new(manual.clone()).into()],
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
+    let (mut block, _recording) = recorded_network_block(&state, &source);
+    execute_all(&mut block, &source);
+    let rows = &retained(&block).rows;
+    let [
+        ExecutionOutputV1::C10(network),
+        ExecutionOutputV1::C10(failure),
+        ExecutionOutputV1::Pipeline(ordinary),
+    ] = rows.as_slice()
+    else {
+        panic!("expected C10 manual invocation, C10 failure, ordinary callback: {rows:?}");
+    };
+    assert!(matches!(
+        network,
+        ExecutionOutputC10V1 {
+            source: ExecutionSourceC10V1::Network(0),
+            ..
+        }
+    ));
+    assert!(network.result.0.is_ok());
+    assert!(network.completions.iter().any(|r| r.trigger_id == manual));
+    assert!(network.completions.iter().any(|r| r.trigger_id == observer));
+    assert!(
+        matches!(&failure.source, ExecutionSourceC10V1::Pipeline { invocation, failure_root: Some(_) }
+        if invocation.event == PipelineEventPositionV1::Network(0) && invocation.trigger.trigger_id == bad)
+    );
+    assert!(failure.result.0.is_err());
+    assert!(ordinary.result.is_ok());
+    let account = block.world.account(&ALICE_ID).unwrap();
+    let attrs = account.metadata();
+    assert!(attrs.get("manual").is_some() && attrs.get("ordinary").is_some());
+    assert!(attrs.get("revert_me").is_none());
+    assert!(block.world.c10_triggers.get(&manual).is_none());
+    assert!(block.world.c10_triggers.get(&observer).is_none());
+    let quarantined = &block.world.c10_triggers.get(&bad).unwrap().trigger().action;
+    assert_eq!(quarantined.repeats(), Repeats::Exactly(1));
+    assert!(!crate::smartcontracts::isi::triggers::trigger_is_enabled(
+        quarantined.metadata()
+    ));
+}

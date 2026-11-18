@@ -236,6 +236,7 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_and_registers() {
     let mut vm = generic(&original, &[word, encode_halt()], 2);
     vm.set_register(7, 41);
     let old_log = vm.proof_register_log_handle().unwrap();
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = original.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
     let steps = 4 * size_of::<zk::StepEntry>();
@@ -576,6 +577,7 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
         vm.registers.snapshot(),
         vm.registers.snapshot_tags(),
     );
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = original.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
     let rows = event_counts::instruction(word, false, false).unwrap() * ROW;

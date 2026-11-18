@@ -32,8 +32,8 @@ fn baseline_admission_error(error: ivm::VMError) -> IvmAdmissionError {
 ///
 /// The wire enum is the baseline's. A C10 header rule it cannot name (a trace bound without the
 /// ZK bit) is carried by its text. C10's own family is [`c10_admission_error_v1`].
-// TODO(phase 5 dispatch): C10 admissions report through `c10_admission_error_v1` once their
-// results are dispatched to the C10 families; the lifecycle profile keeps this projection.
+/// This parent remains the runtime-lifecycle profile's published result. The selected C10
+/// service captures the original admission cause in the transaction before ISI projection.
 fn c10_admission_error(error: ivm::VMError) -> IvmAdmissionError {
     match error {
         ivm::VMError::UnsupportedProgramVersion { major, minor } => {
@@ -65,36 +65,34 @@ fn c10_admission_error(error: ivm::VMError) -> IvmAdmissionError {
 /// This is C10's admission rule exactly as C10 defined it: a trace bound without the ZK bit has
 /// its own structured reason, and every other failure keeps its display text.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "C10 admissions are dispatched to the C10 families with the addition's services"
-    )
-)]
-pub(crate) fn c10_admission_error_v1(error: ivm::VMError) -> IvmAdmissionErrorC10V1 {
-    match error {
+pub(crate) fn c10_admission_error_v1(
+    error: impl core::borrow::Borrow<ivm::VMError>,
+) -> IvmAdmissionErrorC10V1 {
+    match error.borrow().as_unmetered() {
         ivm::VMError::UnsupportedProgramVersion { major, minor } => {
-            IvmAdmissionErrorC10V1::UnsupportedVersion(UnsupportedVersionInfo { major, minor })
+            IvmAdmissionErrorC10V1::UnsupportedVersion(UnsupportedVersionInfo {
+                major: *major,
+                minor: *minor,
+            })
         }
         ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
-            IvmAdmissionErrorC10V1::UnsupportedFeatureBits(bits)
+            IvmAdmissionErrorC10V1::UnsupportedFeatureBits(*bits)
         }
         ivm::VMError::UnsupportedProgramAbiVersion { version } => {
-            IvmAdmissionErrorC10V1::UnsupportedAbiVersion(version)
+            IvmAdmissionErrorC10V1::UnsupportedAbiVersion(*version)
         }
         ivm::VMError::MissingMaxCycles => IvmAdmissionErrorC10V1::MissingMaxCycles,
         ivm::VMError::MaxCyclesWithoutZk { max_cycles } => {
-            IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(max_cycles)
+            IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(*max_cycles)
         }
         ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
             IvmAdmissionErrorC10V1::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
-                expected: Hash::prehashed(expected),
-                actual: Hash::prehashed(actual),
+                expected: Hash::prehashed(*expected),
+                actual: Hash::prehashed(*actual),
             })
         }
         ivm::VMError::GenericSyscallNotAllowed { syscall } => {
-            IvmAdmissionErrorC10V1::GenericSyscallNotAllowed(syscall)
+            IvmAdmissionErrorC10V1::GenericSyscallNotAllowed(*syscall)
         }
         other => IvmAdmissionErrorC10V1::BytecodeDecodingFailed(other.to_string()),
     }

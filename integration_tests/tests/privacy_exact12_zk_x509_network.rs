@@ -617,7 +617,7 @@ async fn exact_transaction_result(
 ) -> Result<Option<bool>> {
     Ok(exact_committed_transaction(client, transaction)
         .await?
-        .map(|committed| committed.result().0.is_ok()))
+        .map(|committed| committed.result().is_ok()))
 }
 async fn exact_applied_transaction_visible(
     client: &Client,

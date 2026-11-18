@@ -1144,13 +1144,20 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
     let _guard = crate::managed::native_test_guard();
     let mut fixture = Fixture::predecessor();
     fixture.wait_renewable();
-    // The body is signed under its own authorization. The short absolute request interval is
-    // selected only for the request it bounds, immediately before that request.
     let history = fixture.select(2);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
-    let utc = now_ms().unwrap() + 2_000;
+    // The journal writes the real wallet request before recovery can observe it.
+    // Allow that I/O and the first recovery to finish while the request is live.
+    let request_window = Duration::from_secs(30);
+    fixture.begin_operation();
+    let utc = now_ms().unwrap() + u64::try_from(request_window.as_millis()).unwrap();
+    let Action::Enroll { validity, .. } = &original.action else {
+        panic!("expected an enrollment body");
+    };
+    let body_expiry = validity.expires_at_unix_ms;
+    assert!(utc < body_expiry);
     journal::explicit(
         &directory,
         original,
@@ -1178,7 +1185,7 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         .unwrap();
     assert_eq!(report.transaction_status, OperationStatus::Absent);
     assert!(report.finalized.is_none() && report.current.is_none());
-    wait_until(utc, Duration::from_secs(3));
+    wait_until(utc, request_window);
     drop(fixture.owner);
     let mut owner = ManagedStreamTokenCustody::open(
         &fixture.prepared,
@@ -1190,6 +1197,7 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         .unwrap()
         .unwrap();
     assert_eq!(report.transaction_status, OperationStatus::Expired);
+    assert!(now_ms().unwrap() < body_expiry);
     assert!(report.finalized.is_none() && report.current.is_none());
     assert_eq!(
         directory

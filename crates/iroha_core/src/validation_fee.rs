@@ -91,14 +91,14 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
     pub(crate) fn from_trigger_event(
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
         code_bytes: &'a [u8],
-        event: &iroha_data_model::events::EventBox,
+        scheduled_time_trigger: bool,
         trigger_id: &'a iroha_data_model::trigger::TriggerId,
     ) -> Self {
         Self {
             runtime_context,
             code_bytes,
             trigger_id: Some(trigger_id),
-            scheduled_time_trigger: matches!(event, iroha_data_model::events::EventBox::Time(_)),
+            scheduled_time_trigger,
         }
     }
 }

@@ -6,8 +6,8 @@
 //! the corpus, the stamp, the encodings and the full-verification interface. This crate is
 //! the one implementation of those rules. Core calls it for credential registration and
 //! sealing, for the board of every sealed binding jury, for queue admission and for the
-//! block execution of signerless ballots; the CLI, the Rust client and the native bridges
-//! do not use its wallet yet.
+//! block execution of signerless ballots; the Rust SDK example `parliament_ballot_wallet`
+//! composes its wallet with the public board read and signerless submission.
 //! It sits between the data-model wire types
 //! ([`iroha_data_model::governance::anonymous_ballot`]) and the state-free proof relations
 //! ([`iroha_parliament_ballot_proof`]):
@@ -54,8 +54,7 @@
 //! [`ProofProfileIdV1::V1`]. This crate depends on the proof crate without its
 //! `diagnostics` feature, so the comparator row (integration decision 6: test and
 //! diagnostic support only) is not compiled into it, nor into any build that depends on it
-//! (the node does, for candidate registration preparation; no wallet or native-bridge build
-//! does yet).
+//! (the node and the standalone Rust wallet example use the candidate row).
 //!
 //! # Determinism and secrets
 //!
@@ -81,6 +80,7 @@ pub mod fixtures;
 pub mod inputs;
 pub mod registration;
 pub mod replay;
+pub mod selective;
 pub mod stamp;
 pub mod wallet;
 

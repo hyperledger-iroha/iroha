@@ -575,10 +575,12 @@ mod addition_tests {
                 expected.extend(prerequisite.definitions());
             }
         }
-        for composition in catalog.retirement_compositions.values() {
-            expected.insert(composition.services);
-            expected.extend(composition.replacements.values().copied());
-            expected.extend(composition.addition.definitions());
+        for composition in catalog
+            .retirement_compositions
+            .values()
+            .chain(catalog.c10_compositions.values())
+        {
+            expected.extend(composition.definitions());
         }
         for composition in catalog.contract_lifecycle_compositions.values() {
             expected.extend([composition.host, composition.registry]);

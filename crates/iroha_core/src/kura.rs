@@ -46,7 +46,7 @@ use iroha_data_model::{
     },
     kaigi::KaigiId,
     nexus::{LaneCatalog, LaneLifecycleParameterV1},
-    transaction::signed::{TransactionEntrypoint, TransactionResult},
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -558,7 +558,7 @@ impl Kura {
         for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
             let input_index = u32::try_from(input_index).expect("validated Network index range");
             let (_, output) = block
-                .network_output_at(input_index)
+                .network_execution_output_at(input_index)
                 .expect("validated complete Network output join");
             let hash = entrypoint.hash();
             let inserted = index
@@ -604,7 +604,7 @@ impl Kura {
                     .insert(height);
                 index.nested_associations.inserted(inserted);
             }
-            let status = output.result.is_ok();
+            let status = output.result().is_ok();
             let inserted = index
                 .inventories_by_height
                 .entry(height)
@@ -624,7 +624,7 @@ impl Kura {
                 block.hash(),
                 input_index,
                 entrypoint,
-                &output.result,
+                output.result(),
             ) {
                 Self::remove_transaction_entrypoint_height(index, height);
                 index.incomplete_heights.insert(height);
@@ -637,7 +637,7 @@ impl Kura {
 
     pub(crate) fn kaigi_signal_candidate_identity(
         entrypoint: &TransactionEntrypoint,
-        result: &TransactionResult,
+        result: iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ) -> Option<(KaigiId, AccountId)> {
         if result.as_ref().is_err() {
             return None;
@@ -692,7 +692,7 @@ impl Kura {
         block_hash: HashOf<BlockHeader>,
         network_input_index: u32,
         entrypoint: &TransactionEntrypoint,
-        result: &TransactionResult,
+        result: iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ) -> bool {
         let Some((call_id, authority)) = Self::kaigi_signal_candidate_identity(entrypoint, result)
         else {

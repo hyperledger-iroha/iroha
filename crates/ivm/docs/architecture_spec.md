@@ -272,27 +272,16 @@ memory root, so they are allocated by the first root or path request
 `merkle_commitment`). ZK trace collection, which records a root every cycle,
 makes that request when the invocation begins, before any guest effect.
 
-Deferring the allocation changes no admission. Every image is accounted at its
-whole committed footprint from construction: it holds the cache retention charge
-the allocated storage will carry, and a funded image also keeps the storage's
-prepaid execution credit as an unspent lease. Caches and pools therefore admit,
-retain and refuse images exactly as they did when the storage was allocated with
-the image, the allocation needs no new pool admission, and an invocation meets
-no new deferral point. A copy of an image without storage holds the same
-accounting, partitioning its credit from its own lease. The accounted bytes of
-an image exceed its resident bytes until its first root request.
-TODO: Admit and charge the storage at the first request instead of with the
-image, so idle runtimes pin neither cache budget nor pool credit for storage
-they never use. That moves the pool and retention numbers the funded trace,
-refusal, warm-reset and cache tests pin and is a separate accounting change.
+Construction charges the image and its dirty bitmaps. The first root or path request
+admits the complete leaf and node storage from the image's original execution pool.
+A deferred image and a copy of one hold no cache retention or pool credit for that tree.
+A copy of an allocated tree includes its backing in the copy plan.
 
-A refused allocation is a local execution deferral that leaves the image and its
-pending bitmap unchanged, so the request can be repeated. A refused funded
-attempt drops the charges it had already split, which refunds them to the pool;
-the image takes its whole credit back at once and stays a prepaid, reusable
-runtime. Only if another owner took that capacity in between is the image left
-short: it is then refused idle retention and re-admits its credit, as an
-ordinary pool admission that can defer, on its next root or path request.
+A pool or allocator refusal leaves the tree absent and the pending bitmap intact.
+Dropping a partially built tree refunds its backing to the original pool. A later
+request can retry after capacity returns. If a syscall already consumed gas before
+the refusal, the caller abandons that execution attempt and replays it from its
+original state.
 
 The checked Crypto geometry includes its exact retained node capacity; the actual
 allocation must match that request before the owner is published. Funded nodes

@@ -3705,7 +3705,10 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
         .enumerate()
     {
         assert_eq!(
-            committed.block().output_error(index),
+            committed
+                .block()
+                .output_error(index)
+                .map(|reason| reason.baseline().expect("baseline execution")),
             Some(&crate::tx::TransactionRejectionReason::Validation(
                 ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
                     refusal.into()

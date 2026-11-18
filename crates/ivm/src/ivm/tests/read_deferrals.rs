@@ -240,6 +240,7 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
         };
         let program_owners = cold_program_owner_bytes(load);
         let (mut vm, budget) = funded();
+        vm.memory.ensure_merkle_storage().unwrap();
         let tlv = empty_blob_tlv();
         vm.memory.preload_input(0, &tlv).unwrap();
         let generation = vm.memory.template_generation();

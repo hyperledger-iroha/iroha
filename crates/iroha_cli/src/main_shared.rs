@@ -5262,8 +5262,15 @@ mod transaction {
             let client = context.client_from_config()?;
             let details = client.get_transaction_details(self.hash)?;
             // The output keeps its encoded result; stderr says what that result means.
-            if let Err(reason) = &details.transaction.result().0 {
-                eprintln!("rejected: {}", iroha::client::rejection_summary(reason));
+            if let Err(reason) = details.transaction.result().as_ref() {
+                use iroha_data_model::block::execution_output::TransactionRejectionRef;
+                let summary = match reason {
+                    TransactionRejectionRef::Baseline(reason) => {
+                        iroha::client::rejection_summary(reason)
+                    }
+                    TransactionRejectionRef::C10(reason) => reason.to_string(),
+                };
+                eprintln!("rejected: {summary}");
             }
             context.print_data(&details.transaction)
         }

@@ -3310,7 +3310,7 @@
    "attribution": "read",
    "note": "`NotImplemented` and `UnsupportedProgramFeatureBits` in crates/ivm/src/proof_coverage/traps.rs: rows of the trap coverage table and the names of two trap kinds. `VmTrapKind::NotImplemented` is the trap a host raises for a syscall it does not serve (`HostUnavailable` and `NotImplemented` errors map to it); `UnsupportedProgramFeatureBits` rejects a program header with undefined feature bits. Both are deterministic outcomes of the VM that the table lists so the IVM proof covers every trap; neither is a switch. The trace-recorder deferrals of crates/ivm/src/zk are entry ivm.local_resource.",
    "sites": [
-    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "unsupported", 19]
+    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "unsupported", 20]
    ]
   },
   {
@@ -3352,7 +3352,7 @@
    "attribution": "path_rule",
    "note": "Canonical-layout validation of carried bytes (UnsupportedVersion, UnsupportedProofVersion and the like): the same bytes are rejected by every validator, no configuration, feature or environment is read, and nothing is unfinished. A version that becomes defined removes its arm.",
    "sites": [
-    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "version_check", 10]
+    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "version_check", 12]
    ]
   },
   {

@@ -11,11 +11,10 @@
 //! engine's wire values.
 //!
 //! Two engines exist. [`IvmEngine::Baseline`] is the frozen pre-C10 engine ([`crate::baseline`])
-//! of the installed baseline selection; [`IvmProfileId::of_policy`] binds the interface policy
-//! [`SyscallPolicy::AbiV1`] to it, so every registration, execution, trigger, replay and nested
-//! call of an ABI V1 artifact runs it. [`IvmEngine::C10`] executes the named runtime-lifecycle
-//! policy and the explicit [`IvmProfileId::C10_ABI_V1`] identity; no root selects C10's own ABI V1
-//! surface until a release publishes it as a separate host-profile definition.
+//! of the installed baseline selection. [`IvmProfileId::of_policy`] binds its interface policy
+//! [`SyscallPolicy::AbiV1`] to that engine. [`IvmEngine::C10`] executes the runtime-lifecycle
+//! policy and the separate [`IvmProfileId::C10_ABI_V1`] identity. A root admits C10 ABI V1
+//! contracts through the governed `iroha.runtime.ivm_c10.v1` addition.
 
 use crate::{
     SyscallPolicy, VMError,
@@ -108,8 +107,8 @@ impl IvmEngine {
     /// The wire enum is the baseline's (`IvmFaultKindV1`, original tags): the baseline projection
     /// is exact. C10 faults the baseline enum cannot name (`ControlFlowViolation`, the register
     /// integer overflow) have no value in it; C10's own family is [`c10_wire_fault_kind`].
-    // TODO(phase 5 dispatch): C10 executions report through `c10_wire_fault_kind` once their
-    // results are dispatched to the C10 families; the lifecycle profile keeps this projection.
+    /// The runtime-lifecycle profile retains this projection on the C10 engine. The governed
+    /// C10 ABI V1 result service uses [`c10_wire_fault_kind`] directly.
     #[must_use]
     pub fn fault_kind(self, error: &VMError) -> Option<IvmFaultKindV1> {
         match self {
@@ -356,10 +355,11 @@ pub struct IvmProfileId {
 }
 
 impl IvmProfileId {
-    /// The profile of every named host policy, in a fixed order: the profiles a root can select.
-    pub const IMPLEMENTED: [Self; 2] = [
-        Self::of_policy(SyscallPolicy::AbiV1),
-        Self::of_policy(SyscallPolicy::AbiV1RuntimeLifecycle),
+    /// Every host profile this release can select, in a fixed order.
+    pub const IMPLEMENTED: [Self; 3] = [
+        Self::BASELINE_ABI_V1,
+        Self::C10_RUNTIME_LIFECYCLE,
+        Self::C10_ABI_V1,
     ];
 
     /// The frozen baseline profile: ABI V1 on the baseline engine (ABI hash `7531b45d…`), the
@@ -371,10 +371,8 @@ impl IvmProfileId {
 
     /// C10's own ABI V1 surface on the C10 engine.
     ///
-    /// No named policy binds to it and no published host-profile definition activates it, so no
-    /// root resolves it. Tools and tests that target the C10 engine explicitly (the Kotodama
-    /// C10 target, raw code, the engine's own suites) name it.
-    // TODO: phase 5 publishes this surface as the host profile of `iroha.runtime.ivm_c10.v1`.
+    /// The governed `iroha.runtime.ivm_c10.v1` addition binds this engine and ABI together.
+    /// Tools can explicitly target it while the installed baseline still selects its own engine.
     pub const C10_ABI_V1: Self = Self {
         engine: IvmEngine::C10,
         policy: SyscallPolicy::AbiV1,
@@ -779,7 +777,8 @@ mod tests {
             IvmProfileId::IMPLEMENTED,
             [
                 IvmProfileId::BASELINE_ABI_V1,
-                IvmProfileId::C10_RUNTIME_LIFECYCLE
+                IvmProfileId::C10_RUNTIME_LIFECYCLE,
+                IvmProfileId::C10_ABI_V1
             ]
         );
         assert_eq!(
@@ -820,7 +819,7 @@ mod tests {
             );
         }
         let c10 = IvmProfileId::C10_ABI_V1;
-        assert!(!IvmProfileId::IMPLEMENTED.contains(&c10));
+        assert!(IvmProfileId::IMPLEMENTED.contains(&c10));
         assert_eq!(
             crate::syscalls::policy_for_abi_hash(&c10.abi_hash()),
             None,

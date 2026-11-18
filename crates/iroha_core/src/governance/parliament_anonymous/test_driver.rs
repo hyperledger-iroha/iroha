@@ -107,11 +107,29 @@ pub(super) fn proposal_digest() -> Digest512 {
     proposal_digest_v1(&proposal()).expect("a canonical proposal")
 }
 
-/// The network of every test attempt.
+thread_local! {
+    static SIGNED_FIXTURE_NETWORK: std::cell::Cell<Option<NetworkId>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run the same reducer driver against the original signed genesis of a service fixture.
+pub(super) fn on_signed_fixture_network<T>(id: NetworkId, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<NetworkId>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SIGNED_FIXTURE_NETWORK.set(self.0);
+        }
+    }
+    let _guard = Restore(SIGNED_FIXTURE_NETWORK.replace(Some(id)));
+    run()
+}
+
+/// The fixed component network, or the signed service network bound to this driver invocation.
 pub(super) fn network() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0x5a; Hash::LENGTH]),
-    ))
+    SIGNED_FIXTURE_NETWORK.get().unwrap_or_else(|| {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x5a; Hash::LENGTH]),
+        ))
+    })
 }
 
 /// The candidate-testing purpose of the genesis policy.

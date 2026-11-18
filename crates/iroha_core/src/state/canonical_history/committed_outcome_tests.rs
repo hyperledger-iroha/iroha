@@ -37,7 +37,12 @@ fn lifecycle_committed_outcome_joins_both_carriers_without_changing_source_check
             if applied {
                 row.result = iroha_data_model::transaction::TransactionResult::new(Ok(Vec::new()));
             }
-            let expected = row.result.0.clone().map(drop);
+            let expected = row
+                .result
+                .0
+                .clone()
+                .map(drop)
+                .map_err(ProfiledTransactionRejection::Baseline);
             if lifecycle {
                 let ExecutionOutputV1::Network(execution) = output else {
                     unreachable!()
@@ -56,6 +61,34 @@ fn lifecycle_committed_outcome_joins_both_carriers_without_changing_source_check
             );
         }
     }
+}
+
+#[test]
+fn committed_c10_outcome_keeps_its_rejection_and_refuses_another_source() {
+    use iroha_data_model::{
+        block::execution_output::ExecutionOutputC10V1,
+        ivm_c10::{
+            IvmAdmissionErrorC10V1, TransactionRejectionReasonC10V1, TransactionResultC10V1,
+            ValidationFailC10V1,
+        },
+    };
+    let reason = TransactionRejectionReasonC10V1::Validation(ValidationFailC10V1::IvmAdmission(
+        IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(17),
+    ));
+    let output = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+        source: ExecutionSourceC10V1::Network(2),
+        result: TransactionResultC10V1(Err(reason.clone()), vec![], None, Default::default()),
+        completions: vec![],
+        trigger_lifecycle: None,
+    });
+    assert_eq!(
+        matched_network_result(output.clone(), 2).unwrap(),
+        Err(ProfiledTransactionRejection::C10(reason))
+    );
+    assert_eq!(
+        conversion(matched_network_result(output, 1).unwrap_err()),
+        "matched Network output names another input"
+    );
 }
 
 fn read_budget(frames: usize, decoded: usize) -> CanonicalHistoryReadBudget {
@@ -108,7 +141,7 @@ fn full_results(
     state: &State,
     height: NonZeroUsize,
     identity: &HashOf<TransactionEntrypoint>,
-) -> Vec<Result<(), TransactionRejectionReason>> {
+) -> Vec<Result<(), iroha_data_model::block::execution_output::ProfiledTransactionRejection>> {
     let budget = generous();
     let carrier = state
         .read_executed_carrier_from_checkpoints(height, WORK, BYTES, &budget)
@@ -122,7 +155,7 @@ fn full_results(
                     if &reveal.signed_transaction().hash_as_entrypoint() == identity
             );
             if &entrypoint.hash() == identity || alias {
-                results.push(result.0.as_ref().map(drop).map_err(Clone::clone));
+                results.push(result.as_ref().map(drop).map_err(|r| r.into_owned()));
             }
         })
         .unwrap();

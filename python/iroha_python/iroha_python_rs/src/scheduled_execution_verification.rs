@@ -225,13 +225,13 @@ fn check_lifecycle(
 ) -> PyResult<usize> {
     let mut registrations = 0;
     for output in block.execution_outputs() {
-        let Ok(steps) = &output.result().0 else {
+        let Ok(steps) = output.result().as_ref() else {
             continue; // Rejected roots and callbacks rolled back their lifecycle effects.
         };
-        if let ExecutionOutputV1::Network(row) = output {
+        if let Some(input_index) = output.network_index() {
             let input = block
                 .network_entrypoints()
-                .nth(row.input_index as usize)
+                .nth(input_index as usize)
                 .ok_or_else(|| refusal("applied Network output has no authenticated input"))?;
             let TransactionEntrypoint::External(signed) = input else {
                 return Err(refusal(
@@ -252,14 +252,26 @@ fn check_lifecycle(
     Ok(registrations)
 }
 
-fn time_row(
-    output: &ExecutionOutputV1,
-) -> Option<&iroha_data_model::block::execution_output::TimeExecutionOutputV1> {
-    match output {
-        ExecutionOutputV1::Time(row) => Some(row),
-        ExecutionOutputV1::TimeWithLifecycle(row) => Some(&row.execution),
-        _ => None,
-    }
+/// Borrow the certified scheduled invocation and its original rollback diagnostic.
+struct TimeRow<'a> {
+    invocation: &'a iroha_data_model::block::execution_output::TimeInvocationV1,
+    failure_root: Option<&'a iroha_data_model::block::execution_output::TriggerFailureRootV1>,
+}
+
+fn time_row(output: &ExecutionOutputV1) -> Option<TimeRow<'_>> {
+    use iroha_data_model::block::execution_output::ExecutionSourceC10V1;
+    let row = match output {
+        ExecutionOutputV1::Time(row) => row,
+        ExecutionOutputV1::TimeWithLifecycle(row) => &row.execution,
+        ExecutionOutputV1::C10(row) => {
+            let ExecutionSourceC10V1::Time { invocation, failure_root } = &row.source else {
+                return None;
+            };
+            return Some(TimeRow { invocation, failure_root: failure_root.as_ref() });
+        }
+        _ => return None,
+    };
+    Some(TimeRow { invocation: &row.invocation, failure_root: row.failure_root.as_ref() })
 }
 
 /// The certified model distinguishes a real execution failure from a healthy
@@ -269,13 +281,13 @@ fn scheduled_disposition(output: &ExecutionOutputV1) -> PyResult<&'static str> {
     use iroha_data_model::block::execution_output::TriggerFailureRootV1;
     let row =
         time_row(output).ok_or_else(|| refusal("scheduled disposition requires a Time output"))?;
-    if row.result.is_ok() {
+    if output.result().is_ok() {
         if row.failure_root.is_some() {
             return Err(refusal("successful Time output retained a failure root"));
         }
         return Ok("applied");
     }
-    match &row.failure_root {
+    match row.failure_root {
         Some(TriggerFailureRootV1::OmittedByOutputLimit) => {
             if !output.is_output_limit_rejection() {
                 return Err(refusal("invalid native Time output-capacity terminal"));
@@ -568,13 +580,12 @@ fn authenticate_with_activation_policy(
                     "registration replay or substitution in authenticated prefix",
                 ));
             }
-            let output = block
-                .network_output_at(u32::try_from(index).map_err(refusal)?)
+            let (_, original_output) = block
+                .network_execution_output_at(u32::try_from(index).map_err(refusal)?)
                 .ok_or_else(|| refusal("registration output missing"))?;
-            if !output.1.result.is_ok() {
+            if !original_output.result().is_ok() {
                 return Err(refusal("original trigger registration did not apply"));
             }
-            let original_output = &block.execution_outputs()[output.0 as usize];
             traced = original_output.trigger_lifecycle().is_some();
             if traced {
                 let witness = activation.as_ref().ok_or_else(|| refusal(
@@ -678,8 +689,8 @@ fn authenticate_with_activation_policy(
                 )?;
             }
             progress = progress.map(|remaining| remaining.saturating_sub(1));
-            let result_ok = row.result.is_ok();
-            let reason = row.result.0.as_ref().err();
+            let rejection = output.result().as_ref().err().map(profiled_rejection);
+            let result_ok = rejection.is_none();
             outcomes.push(norito::json!({
                 "block_height": height,
                 "block_hash": (hex_encode(block.hash().as_ref())),
@@ -688,10 +699,10 @@ fn authenticate_with_activation_policy(
                 "execution_call_hash": (hex_encode(row.invocation.execution_call_hash(block.hash()).map_err(refusal)?.as_ref())),
                 "result_ok": result_ok,
                 "disposition": disposition,
-                "rejection_code": (reason.map(transaction_rejection_code)),
-                "rejection_message": (reason.map(ToString::to_string)),
-                "contract_rejection": (reason.and_then(transaction_contract_rejection_json)),
-                "ivm_fault": (reason.and_then(transaction_ivm_fault_json)),
+                "rejection_code": (rejection.as_ref().map(|(code, _, _, _)| *code)),
+                "rejection_message": (rejection.as_ref().map(|(_, message, _, _)| message)),
+                "contract_rejection": (rejection.as_ref().and_then(|(_, _, contract, _)| contract.as_ref())),
+                "ivm_fault": (rejection.as_ref().and_then(|(_, _, _, fault)| fault.as_ref())),
                 "output": (json::to_value(output).map_err(refusal)?),
             }));
             if disposition == "applied" {

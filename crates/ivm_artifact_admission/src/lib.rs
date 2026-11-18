@@ -320,6 +320,9 @@ fn parse_contract_metadata_for_profile(
         other if other.execution_deferral().is_some() => {
             ContractArtifactError::preparation("metadata parse", other)
         }
+        other if profile == ivm_abi::IvmProfileId::C10_ABI_V1 => {
+            ContractArtifactError::c10_metadata(other)
+        }
         other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
 }

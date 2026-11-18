@@ -8533,7 +8533,13 @@ _IVM_POINTER_ABI_FAULT_CODES = frozenset((
 ))
 
 
-def _normalize_ivm_fault(value: Any) -> Mapping[str, Any]:
+_IVM_C10_UNIT_FAULT_KINDS = (_IVM_UNIT_FAULT_KINDS - {
+    "InvalidVectorLength", "VectorExtensionDisabled", "ZkExtensionDisabled",
+}) | {"ControlFlowViolation"}
+_IVM_C10_NUMERIC_FAULT_CODES = _IVM_NUMERIC_FAULT_CODES | {"RegisterIntegerOverflow"}
+
+
+def _normalize_ivm_fault(value: Any, *, c10: bool = False) -> Mapping[str, Any]:
     def record(item: Any, fields: set[str], context: str) -> Mapping[str, Any]:
         if not isinstance(item, Mapping) or set(item) != fields:
             raise ValueError(f"{context} must contain exactly {', '.join(sorted(fields))}")
@@ -8553,11 +8559,11 @@ def _normalize_ivm_fault(value: Any) -> Mapping[str, Any]:
     fault = record(value, {"kind", "site"}, "IVM fault")
     kind = record(fault["kind"], {"kind", "value"}, "IVM fault.kind")
     if kind["kind"] == "Numeric":
-        kind = {"kind": "Numeric", "value": unit(kind["value"], _IVM_NUMERIC_FAULT_CODES, "IVM numeric fault")}
+        kind = {"kind": "Numeric", "value": unit(kind["value"], _IVM_C10_NUMERIC_FAULT_CODES if c10 else _IVM_NUMERIC_FAULT_CODES, "IVM numeric fault")}
     elif kind["kind"] == "PointerAbi":
         kind = {"kind": "PointerAbi", "value": unit(kind["value"], _IVM_POINTER_ABI_FAULT_CODES, "IVM pointer fault")}
     else:
-        kind = unit(kind, _IVM_UNIT_FAULT_KINDS, "IVM fault.kind")
+        kind = unit(kind, _IVM_C10_UNIT_FAULT_KINDS if c10 else _IVM_UNIT_FAULT_KINDS, "IVM fault.kind")
     site = record(fault["site"], {"code_hash", "selector", "position"}, "IVM fault.site")
     code_hash = _normalize_32_byte_hex(site["code_hash"], "IVM fault.site.code_hash")
     selector = record(site["selector"], {"kind", "value"}, "IVM fault.site.selector")
@@ -8779,7 +8785,15 @@ class VerifiedCommittedTransaction:
                 rejection_message_value,
                 "verified transaction rejection message",
             )
-        ivm_fault = None if payload["ivm_fault"] is None else _normalize_ivm_fault(payload["ivm_fault"])
+        committed = payload.get("committed_transaction")
+        if not isinstance(committed, Mapping):
+            raise TypeError("verified committed transaction record must be an object")
+        ivm_fault = None
+        if payload["ivm_fault"] is not None:
+            output = committed.get("output")
+            if not isinstance(output, Mapping) or output.get("kind") not in ("network", "network_with_lifecycle", "c10"):
+                raise ValueError("verified transaction IVM fault requires its certified Network output family")
+            ivm_fault = _normalize_ivm_fault(payload["ivm_fault"], c10=output["kind"] == "c10")
         if (rejection_code == "IvmFault") != (ivm_fault is not None):
             raise ValueError("verified transaction IvmFault rejection requires its typed fault detail")
         if ivm_fault is not None and (result_ok or payload["contract_rejection"] is not None):
@@ -8941,9 +8955,6 @@ class VerifiedCommittedTransaction:
                     "rejection_message": outcome_message,
                 }
             )
-        committed = payload.get("committed_transaction")
-        if not isinstance(committed, Mapping):
-            raise TypeError("verified committed transaction record must be an object")
         return cls(
             proof_kind="selective-v1",
             transaction_hash=transaction_hash,

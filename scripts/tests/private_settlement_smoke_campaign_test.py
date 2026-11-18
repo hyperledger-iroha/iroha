@@ -1511,7 +1511,7 @@ class SerialCampaignTests(unittest.TestCase):
         self.clock += 10
         record = {"version": 1, "command": arguments, "exit_code": exit_code, "started_ns": self.clock,
                   "finished_ns": self.clock + 1, "log": f"{name}.log", "log_sha256": M.sha(output.encode()),
-                  "worker_environment": {key: environment.get(key) for key in M.WORKER_ENVIRONMENT_KEYS}}
+                  "worker_environment": M.worker_environment_record(environment)}
         M.write_json(directory / f"{name}.json", record)
         if check:
             M.require(exit_code == 0, "synthetic failed command")
@@ -1519,6 +1519,25 @@ class SerialCampaignTests(unittest.TestCase):
 
     def run_driver(self) -> dict:
         return M.run_campaign(self.repo, self.output, self.target, COMMIT)
+
+    def test_registered_smoke_proves_both_images_use_the_scope_build_settings(self):
+        campaign = M.run_campaign(self.repo, self.output, self.target, COMMIT, kind="registered_release_smoke")
+        M.validate_campaign(self.output, expected_commit=COMMIT, kind="registered_release_smoke")
+        self.assertEqual(len(campaign["runs"]), 10)
+        for build in campaign["builds"].values():
+            cmd = build["command"]
+            self.assertEqual(cmd[cmd.index("--jobs") + 1], "1")
+            self.assertIn("profile.release.codegen-units=1", cmd)
+            self.assertIn("profile.release.build-override.codegen-units=1", cmd)
+            self.assertEqual(build["worker_environment"]["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"], "1")
+            self.assertEqual(build["worker_environment"]["CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS"], "1")
+        with self.assertRaises(M.CampaignError):
+            M.validate_campaign(self.output, expected_commit=COMMIT)
+        receipt = M.read_json(self.output / "build-validator.json")
+        receipt["worker_environment"]["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"] = "16"
+        put(self.output / "build-validator.json", receipt)
+        with self.assertRaisesRegex(M.CampaignError, "worker environment"):
+            M.validate_campaign(self.output, expected_commit=COMMIT, kind="registered_release_smoke")
 
     def test_cold_campaign_ten_serial_runs_and_explicit_readonly_selection(self):
         campaign = M.run_campaign(self.repo, self.output, self.target, COMMIT, kind="cold_one_call")

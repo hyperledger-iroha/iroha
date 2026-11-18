@@ -229,8 +229,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
 }
 ROUTE_POLICY_DECLARATIONS_SHA256 = "45e338dd13463fe9205339f9a4dca306c027781911adc469443fa2245276c3d2"
 ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'limited_unauthenticated_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
-ROUTE_ROW_COUNT = 637
-ROUTE_TUPLE_SHA256 = "8878b0e4a6d6d66420f4138280f421c542c25194c7ec2e7274b765ab1a7f26b9"
+ROUTE_ROW_COUNT = 640
+ROUTE_TUPLE_SHA256 = "26b16024b4304ef05b24d67206f95c2e7cbdfc66b29de4d5eecbf5b7ebfc3626"
 
 
 def _normalized_tokens(source: str) -> bytes:

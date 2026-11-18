@@ -433,7 +433,7 @@ async fn exact_applied_transaction_visible(
             "entrypoint hash matched different transaction bytes"
         );
         ensure!(
-            committed.result().0.is_ok(),
+            committed.result().is_ok(),
             "canonical privacy transaction is visible but finalized as rejected"
         );
         Ok(true)

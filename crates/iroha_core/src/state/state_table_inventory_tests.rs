@@ -4754,6 +4754,14 @@ const CARRIERS: &[Carrier] = &[
             (FASTPQ_MODEL, "pub struct TransferDeltaTranscript {"),
             (FASTPQ_MODEL, "pub struct TransferSmtWitness {"),
             (OUTPUT_MODEL, "pub enum ExecutionOutputV1 {"),
+            (
+                "crates/iroha_data_model/src/block/execution_output/c10.rs",
+                "pub struct ExecutionOutputC10V1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/execution_output/c10.rs",
+                "pub enum ExecutionSourceC10V1 {",
+            ),
             (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct TimeExecutionOutputV1 {"),
@@ -5069,6 +5077,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "TransactionResult",
                 "result of one executed input or invocation: its data trigger sequence or its rejection reason",
+            ),
+            (
+                "TransactionResultC10V1",
+                "complete C10 outcome of one input or trigger invocation, including its data trigger sequence or rejection, per-leg receipts, fee and contract emissions",
             ),
             (
                 "GovernanceBlockStartOutputV1",

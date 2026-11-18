@@ -3885,6 +3885,10 @@ fn contract_artifact_dataspace_target(instruction: &dyn Instruction) -> Option<D
     any.downcast_ref::<RegisterSmartContractCode>()
         .map(|value| value.artifact_id.dataspace_id)
         .or_else(|| {
+            any.downcast_ref::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
             any.downcast_ref::<RegisterSmartContractBytes>()
                 .map(|value| value.artifact_id.dataspace_id)
         })
@@ -9793,7 +9797,8 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "revoke", variant);
     }
-    if any.is::<RegisterSmartContractCode>()
+    if (any.is::<RegisterSmartContractCode>()
+        || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
         || any.is::<RegisterSmartContractBytes>()
         || any.is::<UploadSmartContractCodeChunk>()
         || any.is::<FinalizeSmartContractCodeUpload>()

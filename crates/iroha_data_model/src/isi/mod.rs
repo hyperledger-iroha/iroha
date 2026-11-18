@@ -225,6 +225,10 @@ macro_rules! impl_direct_instruction_box {
     };
 }
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
+impl_direct_instruction_box!(
+    crate::ivm_c10::RegisterSmartContractCodeC10V1,
+    crate::ivm_c10::RegisterTriggerC10V1,
+);
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);

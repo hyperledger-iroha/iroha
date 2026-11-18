@@ -105,7 +105,23 @@ pub const ADDITIONS: &[Addition] = &[
     NATIVE_GAME_CAPTURE,
     CONTRACT_LIFECYCLE,
     RUNTIME_RETIREMENT,
+    IVM_C10,
 ];
+
+/// Independently governed contract, trigger and certified output families of the C10 IVM.
+pub const IVM_C10: Addition = Addition {
+    module: "iroha.runtime.ivm_c10.v1",
+    instructions: &[
+        iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1::WIRE_ID,
+        iroha_data_model::ivm_c10::RegisterTriggerC10V1::WIRE_ID,
+    ],
+    rebinds: &[],
+    storage: &[
+        StorageAddition::Table("world.c10_contract_manifests"),
+        StorageAddition::Table("world.c10_contract_profiles"),
+        StorageAddition::Table("world.c10_triggers"),
+    ],
+};
 
 /// Permanent runtime history and certified exclusion receipts, independently governed.
 pub const RUNTIME_RETIREMENT: Addition = Addition {

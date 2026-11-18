@@ -21,6 +21,7 @@ pub struct ContractArtifactError {
 #[derive(Debug)]
 enum ArtifactFailure {
     Invalid(String),
+    C10Header(C10HeaderFailure),
     AbiHashMismatch {
         expected: [u8; 32],
         actual: [u8; 32],
@@ -47,7 +48,69 @@ enum ArtifactFailure {
     },
 }
 
+/// Deterministic failures returned by the C10 fixed-header parser.
+#[derive(Clone, Copy, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "the original 64-bit trace bound fits inline and must survive admission"
+)]
+enum C10HeaderFailure {
+    InvalidMetadata,
+    Version { major: u8, minor: u8 },
+    Features(u8),
+    Abi(u8),
+    MissingMaxCycles,
+    MaxCyclesWithoutZk(u64),
+}
+
+impl C10HeaderFailure {
+    fn vm_error(self) -> VMError {
+        match self {
+            Self::InvalidMetadata => VMError::InvalidMetadata,
+            Self::Version { major, minor } => VMError::UnsupportedProgramVersion { major, minor },
+            Self::Features(bits) => VMError::UnsupportedProgramFeatureBits { bits },
+            Self::Abi(version) => VMError::UnsupportedProgramAbiVersion { version },
+            Self::MissingMaxCycles => VMError::MissingMaxCycles,
+            Self::MaxCyclesWithoutZk(max_cycles) => VMError::MaxCyclesWithoutZk { max_cycles },
+        }
+    }
+}
+
 impl ContractArtifactError {
+    /// Retain the source parser's deterministic C10 reason without boxing a general VM error.
+    pub(crate) fn c10_metadata(error: VMError) -> Self {
+        let failure = match error {
+            VMError::InvalidMetadata => C10HeaderFailure::InvalidMetadata,
+            VMError::UnsupportedProgramVersion { major, minor } => {
+                C10HeaderFailure::Version { major, minor }
+            }
+            VMError::UnsupportedProgramFeatureBits { bits } => C10HeaderFailure::Features(bits),
+            VMError::UnsupportedProgramAbiVersion { version } => C10HeaderFailure::Abi(version),
+            VMError::MissingMaxCycles => C10HeaderFailure::MissingMaxCycles,
+            VMError::MaxCyclesWithoutZk { max_cycles } => {
+                C10HeaderFailure::MaxCyclesWithoutZk(max_cycles)
+            }
+            other => return Self::invalid(format!("metadata parse failed: {other}")),
+        };
+        Self {
+            kind: ArtifactFailure::C10Header(failure),
+        }
+    }
+
+    /// Source fixed-header reason for capture by an authenticated C10 execution attempt.
+    pub fn c10_header_error(&self) -> Option<VMError> {
+        match &self.kind {
+            ArtifactFailure::C10Header(reason) => Some(reason.vm_error()),
+            ArtifactFailure::AbiHashMismatch { expected, actual } => {
+                Some(VMError::ArtifactAbiHashMismatch {
+                    expected: *expected,
+                    actual: *actual,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Construct an ordinary admission error. Public for the native preparation
     /// adapter; artifact callers should receive errors from verification.
     #[doc(hidden)]
@@ -105,7 +168,9 @@ impl ContractArtifactError {
     pub fn is_local_deferral(&self) -> bool {
         !matches!(
             self.kind,
-            ArtifactFailure::Invalid(_) | ArtifactFailure::AbiHashMismatch { .. }
+            ArtifactFailure::Invalid(_)
+                | ArtifactFailure::C10Header(_)
+                | ArtifactFailure::AbiHashMismatch { .. }
         )
     }
 
@@ -140,6 +205,7 @@ impl ContractArtifactError {
     pub fn into_vm_error(self) -> VMError {
         match self.kind {
             ArtifactFailure::Invalid(_) => VMError::InvalidMetadata,
+            ArtifactFailure::C10Header(reason) => reason.vm_error(),
             ArtifactFailure::AbiHashMismatch { expected, actual } => {
                 VMError::ArtifactAbiHashMismatch { expected, actual }
             }
@@ -162,6 +228,7 @@ impl fmt::Display for ContractArtifactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ArtifactFailure::Invalid(message) => f.write_str(message),
+            ArtifactFailure::C10Header(reason) => write!(f, "invalid contract artifact: metadata parse failed: {}", reason.vm_error()),
             ArtifactFailure::AbiHashMismatch { .. } => f.write_str(
                 "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor",
             ),
@@ -192,7 +259,9 @@ impl Error for ContractArtifactError {
             ArtifactFailure::DecodeDeferred { original, .. } => Some(original),
             ArtifactFailure::VerificationDeferred { original, .. } => Some(original),
             ArtifactFailure::AllocatorDeferred { original, .. } => Some(original),
-            ArtifactFailure::Invalid(_) | ArtifactFailure::AbiHashMismatch { .. } => None,
+            ArtifactFailure::Invalid(_)
+            | ArtifactFailure::C10Header(_)
+            | ArtifactFailure::AbiHashMismatch { .. } => None,
         }
     }
 }
@@ -200,6 +269,21 @@ impl Error for ContractArtifactError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn c10_header_failure_keeps_the_parsers_structured_trace_bound() {
+        let error =
+            ContractArtifactError::c10_metadata(VMError::MaxCyclesWithoutZk { max_cycles: 17 });
+        assert!(!error.is_local_deferral());
+        assert!(matches!(
+            error.c10_header_error(),
+            Some(VMError::MaxCyclesWithoutZk { max_cycles: 17 })
+        ));
+        assert!(matches!(
+            error.into_vm_error(),
+            VMError::MaxCyclesWithoutZk { max_cycles: 17 }
+        ));
+    }
 
     #[test]
     fn admission_error_stays_below_large_result_threshold_without_boxing() {

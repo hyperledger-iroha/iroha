@@ -2433,7 +2433,9 @@ impl Queue {
                         contract_targets_seen = true;
                     } else {
                         let any = instruction.as_any();
-                        if any.is::<RegisterSmartContractCode>()
+                        if (any.is::<RegisterSmartContractCode>()
+                            || any
+                                .is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                             || any.is::<RegisterSmartContractBytes>()
                             || any.is::<UploadSmartContractCodeChunk>()
                             || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2468,7 +2470,7 @@ impl Queue {
                                 contract_targets_seen = true;
                             } else {
                                 let any = instruction.as_any();
-                                if any.is::<RegisterSmartContractCode>()
+                                if (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                     || any.is::<RegisterSmartContractBytes>()
                                     || any.is::<UploadSmartContractCodeChunk>()
                                     || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2663,7 +2665,7 @@ impl Queue {
                     } else {
                         let modifies_contract_code = {
                             let any = instruction.as_any();
-                            any.is::<RegisterSmartContractCode>()
+                            (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                 || any.is::<RegisterSmartContractBytes>()
                                 || any.is::<UploadSmartContractCodeChunk>()
                                 || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2705,7 +2707,7 @@ impl Queue {
                                 contract_targets.insert(deactivate.contract_address().clone());
                             } else {
                                 let any = instruction.as_any();
-                                if any.is::<RegisterSmartContractCode>()
+                                if (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                     || any.is::<RegisterSmartContractBytes>()
                                     || any.is::<UploadSmartContractCodeChunk>()
                                     || any.is::<FinalizeSmartContractCodeUpload>()

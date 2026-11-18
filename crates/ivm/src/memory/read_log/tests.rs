@@ -368,6 +368,7 @@ fn memory_template_partitions_its_nonempty_read_plan_into_the_actual_copied_owne
     let budget = AllocationBudget::new(64 * 1024 * 1024);
     let mut source = Memory::new_with_stack_limit_funded(Memory::MIN_STACK_SIZE, &budget).unwrap();
     source.load_u8(Memory::OUTPUT_START).unwrap();
+    source.ensure_merkle_storage().unwrap();
     let source_rows = source.read_log.lock().as_ptr();
     let occupied = budget.reserved_bytes();
     let plan = source.runtime_template_memory_plan().unwrap();

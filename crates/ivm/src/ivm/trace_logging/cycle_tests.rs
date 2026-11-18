@@ -33,6 +33,8 @@ fn loaded(original: Option<&AllocationBudget>, words: &[u32], max_cycles: u64) -
         .unwrap();
     vm.load_program(&program(words, max_cycles)).unwrap();
     vm.set_zk_trace_enabled(true);
+    // These tests isolate cycle-row admission after the memory tree is resident.
+    vm.memory.ensure_merkle_storage().unwrap();
     vm
 }
 // Query the canonical standalone owner so pressure assertions use its exact

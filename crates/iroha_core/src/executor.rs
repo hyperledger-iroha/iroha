@@ -2217,12 +2217,10 @@ fn ensure_contract_runtime_permission_mutation_allowed(
                 .map(|token| token.trigger)
         });
     if let Ok(trigger) = trigger {
-        use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
         if valid_contract_runtime_subject(world, authority, Some(context))
-            && world
-                .triggers()
-                .inspect_by_id(&trigger, |action| action.authority() == authority)
-                == Some(true)
+            && crate::smartcontracts::isi::triggers::isi::trigger_belongs_to(
+                world, &trigger, authority,
+            ) == Some(true)
         {
             return Ok(());
         }
@@ -7093,34 +7091,65 @@ impl Executor {
                         identity.contract_address
                     ))
                 })?;
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &identity.contract_address,
+            identity.code_hash,
+        )
+        .map_err(|_| ValidationFail::NotPermitted("invalid contract dataspace".into()))?;
+        let c10 = code::registered_manifest::RegisteredManifest::captured_c10(
+            &state_transaction.world,
+            &artifact_id,
+        )?;
+        if c10 {
+            if crate::runtime::catalog::ivm_c10::selected(
+                state_transaction.world.runtime_selection(),
+            ) {
+                state_transaction.mark_c10_execution();
+            }
+            crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+                state_transaction,
+                ivm::IvmProfileId::C10_ABI_V1,
+            )?;
+        }
         let code_bytes = state_transaction
             .world
             .contract_code()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                identity.contract_address.dataspace_id().map_err(|_| {
-                    ValidationFail::NotPermitted("invalid contract dataspace".into())
-                })?,
-                identity.code_hash,
-            ))
+            .get(&artifact_id)
             .ok_or_else(|| {
                 ValidationFail::NotPermitted(format!(
                     "contract bytecode `{}` not found in WSV",
                     identity.code_hash
                 ))
             })?;
-        let summary = if let Some(summary) = ivm_cache
-            .cached_program_summary_in_world(&state_transaction.world, identity.code_hash)
-            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
-        {
-            summary
+        let profile = if c10 {
+            ivm::IvmProfileId::C10_ABI_V1
         } else {
-            ivm_cache
-                .summarize_program_with_hash_in_world(
-                    &state_transaction.world,
-                    identity.code_hash,
-                    code_bytes.as_ref(),
-                )
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            crate::smartcontracts::ivm::profile::resolve_raw_artifact(
+                &state_transaction.world,
+                code_bytes,
+            )
+            .id()
+        };
+        let prepared = ivm_cache.summarize_program_with_hash_for_profile(
+            identity.code_hash,
+            code_bytes,
+            profile,
+        );
+        let summary = match prepared {
+            Ok(summary) => summary,
+            Err(error) => {
+                if profile == ivm::IvmProfileId::C10_ABI_V1 {
+                    state_transaction.mark_c10_execution();
+                    state_transaction.record_c10_admission_error(&error);
+                    return Err(state_transaction.vm_error_to_validation_fail(
+                        error,
+                        crate::smartcontracts::ivm::program_admission_error,
+                    ));
+                }
+                return Err(state_transaction.vm_error_to_validation_fail(error, |e| {
+                    ValidationFail::InternalError(e.to_string())
+                }));
+            }
         };
         if summary.prepared_contract().artifact() != code_bytes.as_slice() {
             return Err(ValidationFail::NotPermitted(format!(
@@ -7209,6 +7238,9 @@ impl Executor {
             state_transaction,
             summary.prepared_contract().profile_id(),
         )?;
+        if summary.prepared_contract().profile_id() == ivm::IvmProfileId::C10_ABI_V1 {
+            state_transaction.mark_c10_execution();
+        }
         let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
             state_transaction,
             summary.profile(),
@@ -7219,23 +7251,23 @@ impl Executor {
         let effective_limit = effective_cycles.map_or(effective_limit, |cycles| {
             effective_limit.min(crate::smartcontracts::ivm::gas_limit_for_cycles(cycles))
         });
-        let manifest = state_transaction
-            .world
-            .contract_manifests()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+        let manifest = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            &state_transaction.world,
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
                 identity.contract_address.dataspace_id().map_err(|_| {
                     ValidationFail::NotPermitted("invalid contract dataspace".into())
                 })?,
                 identity.code_hash,
+            ),
+        )
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "contract instance `{}` has no manifest",
+                identity.contract_address
             ))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted(format!(
-                    "contract instance `{}` has no manifest",
-                    identity.contract_address
-                ))
-            })?;
-        crate::smartcontracts::ivm::validate_manifest_hashes(
-            manifest,
+        })?;
+        crate::smartcontracts::ivm::validate_manifest_hash_fields(
+            manifest.hashes(),
             summary.code_hash,
             summary.abi_hash,
         )
@@ -7357,9 +7389,10 @@ impl Executor {
             .and_then(|()| host.finish_contract_result(&runtime));
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
+            drop(host);
+            state_transaction.record_vm_execution(&runtime, &err);
             let attempt =
                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
-            drop(host);
             let error = match attempt {
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                     return Err(state_transaction.defer_execution(reason));
@@ -8515,11 +8548,12 @@ impl Executor {
                     .and_then(|()| host.finish_contract_result(&runtime).map(|_| ()));
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 if let Err(err) = run_result {
+                    drop(host);
+                    state_transaction.record_vm_execution(&runtime, &err);
                     let attempt =
                         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
                             &runtime, err,
                         );
-                    drop(host);
                     let error = match attempt {
                         crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                             return Err(state_transaction.defer_execution(reason));
@@ -8740,9 +8774,10 @@ impl Executor {
             .and_then(|()| host.finish_contract_result(&runtime).map(|_| ()));
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
+            drop(host);
+            state_transaction.record_vm_execution(&runtime, &err);
             let attempt =
                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
-            drop(host);
             let error = match attempt {
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                     return Err(state_transaction.defer_execution(reason));

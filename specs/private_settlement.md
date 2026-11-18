@@ -1109,6 +1109,21 @@ reject a baseline captured with a different stable hardware profile,
 configuration matrix, or benchmark requirements before applying the p95/p99
 thresholds.
 
+Each registered private attempt runs the public wallet operation once for all matched
+legs, including the three legs in the primary profile. It stages the funded wallet authorizations before the ready boundary.
+The timed call opens its original authenticated context, constructs proofs and moves
+the funds. Independent auditors receive the original durable availability certificates,
+read the promoted capsules and submit approvals to each governed committee. A wallet
+refusal ends the attempt. Independent peer observers read balances and pending receipts
+without delaying the next wallet step. Timing ends when the wallet returns the SDK-verified
+financial receipt. The harness then confirms every peer serves that exact receipt. The preparation clock includes authenticated context reads, proving and
+durable publication. Availability ends at observation of all promoted capsules.
+Auditor response spans the first capsule observation through the last approval.
+Committee verification spans the independent all-member proof reads. Prepare spans
+the wallet’s durable availability checkpoint through its durable Prepare certificates. The registration
+and Commit clocks use completion of the original journal steps. Concurrent leg
+intervals and committee observations can overlap.
+
 Benchmark execution uses one mandatory V1 terminal envelope. It binds the exact
 request ID, nonce, request-byte digest, commit and participant count before the
 request moves into the Rust worker. Its outcome is either a complete successful

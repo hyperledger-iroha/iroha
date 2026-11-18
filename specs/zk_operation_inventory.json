@@ -855,6 +855,10 @@
     "scope": "out",
     "reason": "Kernel registration and completion of runtime obligations, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_obligation.rs, specs/live_runtime_upgrades.md section 7.2). An owner commits the exact instructions that complete its obligation; it verifies no proof and carries no ZK or FHE relation."
    },
+   "ivm_c10": {
+    "scope": "out",
+    "reason": "The governed C10 host addition registers signed contract provenance and trigger descriptors. The Core handlers authenticate the selected artifact, manifest and registration authority. Registration uses native signature and identity checks."
+   },
    "runtime_deferred": {
     "scope": "out",
     "reason": "Explicit current-binding consent for a new deferred trigger registration or multisig proposal, the `iroha.runtime.deferred_consent.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_deferred.rs, crates/iroha_core/src/runtime/deferred_consent.rs). The signer opts into execution-time bindings in an ordinary signed transaction; it verifies no proof and carries no ZK or FHE relation."
@@ -5015,7 +5019,8 @@
     }
    ],
    "kotodama": {"binding": "none"},
-   "routes": [],
+   "routes": ["governance.anonymous_parliament.credential.draft"],
+   "routes_note": "The credential draft takes RegisterParliamentCredentialV1 directly in its NoritoJson extractor and frames that typed input. The handler body contains the conversion to InstructionBox. The type name appears in its signature.",
    "sdk": {
     "rust": [],
     "kotlin_java_android": [
@@ -5056,7 +5061,8 @@
    },
    "owner_tasks": ["P.8"],
    "note": "Executes only as the sole instruction of a direct signed input under the network's candidate-testing selection; a certified test chain commits it through the executor, which arms the input's original, and refuses it beside another instruction. The credential record keeps `(C, auth)` and the locator of that input; the 160,148-byte proof stays in the input. Until a change set activates the addition the wire ID resolves as `definition_inactive`.",
-   "native_bridges": []
+   "native_bridges": [],
+   "torii": ["crates/iroha_torii/src/gov/anonymous_drafts.rs"]
   },
   {
    "id": "governance::CastZkBallot",
@@ -7753,6 +7759,7 @@
    "/v1/gov/ballots/",
    "/v1/gov/parliament/",
    "/v1/gov/anonymous-ballots",
+   "/v1/gov/anonymous-parliament/",
    "/v1/gov/tally/",
    "/v1/debug/axt/",
    "/v1/debug/witness",
@@ -8966,6 +8973,48 @@
      "python": [],
      "csharp": []
     }
+   },
+   {
+    "id": "governance.anonymous_parliament.attempt.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/attempts/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Frame one signed-attempt instruction for exact proposal content and a bounded retry sequence.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn attempt("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/attempts/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
+   },
+   {
+    "id": "governance.anonymous_parliament.credential.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/credentials/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Frame the candidate credential registration, including its public registration proof, for the binding seat.",
+    "operations": ["anonymous_ballot::RegisterParliamentCredentialV1"],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn credential("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/credentials/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
+   },
+   {
+    "id": "governance.anonymous_parliament.transition.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/transitions/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Validate and frame the requested signed transition against an anonymous Parliament attempt.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn transition("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/transitions/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
    },
    {
     "id": "governance.tally.read",

@@ -379,6 +379,8 @@ mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 #[cfg(test)]
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
+pub(crate) mod c10_execution;
+pub(crate) mod c10_trigger_runtime;
 pub(crate) mod governance_start;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
@@ -1278,6 +1280,10 @@ macro_rules! with_world_overlay_fields {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            c10_contract_manifests,
+            c10_contract_profiles,
+            c10_triggers,
+            c10_trigger_candidates,
             runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
@@ -4362,6 +4368,27 @@ pub struct WorldData {
     /// Native game transfers and their original completion captures, installed by its service.
     pub(crate) runtime_game_transfers:
         Storage<iroha_crypto::Hash, iroha_data_model::runtime::native_game::NativeGameTransferV1>,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: Storage<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    #[norito(skip)]
+    pub(crate) c10_trigger_candidates: Storage<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
@@ -5446,6 +5473,30 @@ pub struct WorldBlockFields<'world> {
         'world,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageField<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    pub(crate) c10_trigger_candidates: StorageField<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageField<
@@ -6724,6 +6775,10 @@ impl WorldBlock<'_> {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            c10_contract_manifests,
+            c10_contract_profiles,
+            c10_triggers,
+            c10_trigger_candidates,
             runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
@@ -7313,6 +7368,30 @@ pub struct WorldTransaction<'block, 'world> {
         'block,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageTransaction<
+        'block,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    pub(crate) c10_trigger_candidates: StorageTransaction<
+        'block,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageTransaction<
@@ -9647,6 +9726,30 @@ pub struct WorldView<'world> {
         'world,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageView<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    pub(crate) c10_trigger_candidates: StorageView<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageView<
@@ -12878,6 +12981,9 @@ mod view_lock_contention_log_tests {
 pub struct State {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: World,
+    /// Opt-in delivery of the original published block to local C10 event readers.
+    c10_event_blocks:
+        OnceLock<tokio::sync::broadcast::Sender<iroha_data_model::block::SharedSignedBlock>>,
     /// Blockchain.
     pub block_hashes: BlockHashes,
     /// Latest committed block header cached for hot paths that do not need full block bodies.
@@ -14811,6 +14917,8 @@ pub(crate) fn standalone_governance_ballot_instruction_v1(
 }
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
+    /// Result-family custody of this one disposable execution attempt.
+    c10_execution: Option<c10_execution::C10Execution>,
     /// Borrow the original genesis authentication evidence, never infer it from height.
     genesis_crypto_policy: Option<&'block crate::block::genesis_crypto_policy::GenesisCryptoPolicy>,
     /// Borrow the original authenticated staking source through the whole child attempt.
@@ -15529,13 +15637,28 @@ fn time_trigger_action_requires_clock_progress(
     action: &LoadedAction<TimeEventFilter>,
     parent_creation_time: Duration,
 ) -> bool {
-    if action.repeats.is_depleted() || !trigger_is_enabled(action.metadata()) {
+    time_action_requires_clock_progress(
+        &action.filter,
+        action.metadata(),
+        action.repeats,
+        action.retry_state.is_some(),
+        parent_creation_time,
+    )
+}
+fn time_action_requires_clock_progress(
+    filter: &TimeEventFilter,
+    metadata: &Metadata,
+    repeats: iroha_data_model::trigger::action::Repeats,
+    retry: bool,
+    parent_creation_time: Duration,
+) -> bool {
+    if repeats.is_depleted() || !trigger_is_enabled(metadata) {
         return false;
     }
-    if action.retry_state.is_some() {
+    if retry {
         return true;
     }
-    match action.filter.0 {
+    match filter.0 {
         ExecutionTime::PreCommit => true,
         ExecutionTime::Schedule(schedule) => schedule.period_ms.map_or_else(
             || u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
@@ -15617,6 +15740,13 @@ impl<'state> StateView<'state> {
                         .saturating_add(1),
                 ) && time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
+            || c10_trigger_runtime::clock_progress_required(
+                &self.world,
+                u64::try_from(self.height())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+                parent_creation_time,
+            )
     }
     #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
@@ -15652,6 +15782,14 @@ impl<'state> StateView<'state> {
                     current_block_height,
                     current_block_time_ms,
                 )
+            })
+            || c10_trigger_runtime::time_rows(&self.world).any(|(_, row)| {
+                c10_trigger_runtime::time_occurrences(
+                    row,
+                    &event,
+                    current_block_height,
+                    current_block_time_ms,
+                ) > 0
             })
     }
     /// Previous committed block hash (if any) for this snapshot.
@@ -21983,6 +22121,14 @@ macro_rules! world_ro_accessors {
             storage runtime_game_transfers:
                 iroha_crypto::Hash
                     => iroha_data_model::runtime::native_game::NativeGameTransferV1;
+            /// Authenticated manifests of C10 contract artifacts.
+            storage c10_contract_manifests: iroha_data_model::smart_contract::ContractArtifactId => iroha_data_model::ivm_c10::ContractManifestC10V1;
+            /// Captured host-profile definition of each registered C10 artifact.
+            storage c10_contract_profiles: iroha_data_model::smart_contract::ContractArtifactId => iroha_data_model::runtime::definition::DefinitionId;
+            /// Registered triggers owned by the C10 execution profile.
+            storage c10_triggers: iroha_data_model::trigger::TriggerId => iroha_data_model::ivm_c10::StoredC10TriggerV1;
+            /// Event category of each registered C10 trigger, rebuilt from the committed actions.
+            storage c10_trigger_candidates: iroha_data_model::trigger::TriggerId => iroha_data_model::events::TriggeringEventType;
             /// Permanent definition history and exclusion receipts (read-only).
             storage runtime_retirements:
                 iroha_data_model::runtime::definition::DefinitionId
@@ -25918,6 +26064,10 @@ impl WorldTransaction<'_, '_> {
             runtime_deferred_consents: _,
             runtime_amx_captures: _,
             runtime_game_transfers: _,
+            c10_contract_manifests: _,
+            c10_contract_profiles: _,
+            c10_triggers: _,
+            c10_trigger_candidates: _,
             runtime_retirements: _,
             runtime_escrow_captures: _,
             runtime_migrations: _,
@@ -26389,6 +26539,10 @@ impl WorldTransaction<'_, '_> {
         self.runtime_deferred_consents.apply();
         self.runtime_amx_captures.apply();
         self.runtime_game_transfers.apply();
+        self.c10_contract_manifests.apply();
+        self.c10_contract_profiles.apply();
+        self.c10_triggers.apply();
+        self.c10_trigger_candidates.apply();
         self.runtime_retirements.apply();
         self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();
@@ -27222,6 +27376,31 @@ mod recorded_carrier_scope;
 mod state_block_construction;
 mod uaid_dataspace_restore;
 impl State {
+    /// Receive the shared original blocks that contain newly published C10 Network outcomes.
+    /// Slow readers observe explicit lag. A subscription holds at most one buffered block.
+    pub fn subscribe_c10_event_blocks(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<iroha_data_model::block::SharedSignedBlock> {
+        self.c10_event_blocks
+            .get_or_init(|| tokio::sync::broadcast::channel(1).0)
+            .subscribe()
+    }
+
+    /// Publish only after the certified decision and its required archive writes have finished.
+    pub(crate) fn publish_c10_event_block(
+        &self,
+        block: iroha_data_model::block::SharedSignedBlock,
+    ) {
+        use iroha_data_model::block::execution_output::{ExecutionOutputV1, ExecutionSourceC10V1};
+        if let Some(sender) = self.c10_event_blocks.get()
+            && sender.receiver_count() > 0
+            && block.execution_outputs().iter().any(|row| matches!(row,
+                ExecutionOutputV1::C10(output) if matches!(output.source, ExecutionSourceC10V1::Network(_))))
+        {
+            let _ = sender.send(block);
+        }
+    }
+
     fn disable_nexus_fees_for_testing(&mut self) {
         // Fixture authoring only. Preserve an already committed/root-specific schedule.
         // Every ordinary test execution still reads the real StateParameters projection.
@@ -29104,6 +29283,7 @@ impl State {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
+            c10_event_blocks: OnceLock::new(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
                 pipeline_cache_size, PreparedContractCache::with_execution_budget(
                     pipeline_cache_size, execution_budget.clone(),
@@ -32403,7 +32583,7 @@ impl State {
         world.triggers().time_triggers().iter().any(|(id, action)| {
             crate::runtime::deferred_consent::trigger_ready(&world, id, height)
                 && time_trigger_action_requires_clock_progress(action, parent_creation_time)
-        })
+        }) || c10_trigger_runtime::clock_progress_required(&world, height, parent_creation_time)
     }
     #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
@@ -32440,6 +32620,13 @@ impl State {
                 current_block_height,
                 current_block_time_ms,
             )
+        }) || c10_trigger_runtime::time_rows(&world).any(|(_, row)| {
+            c10_trigger_runtime::time_occurrences(
+                row,
+                &event,
+                current_block_height,
+                current_block_time_ms,
+            ) > 0
         })
     }
     /// Latest committed block hash derived from the block hash journal.
@@ -40365,6 +40552,7 @@ impl<'state> StateBlock<'state> {
         );
         let axt_next_handle_counters_after_block = fields.axt_next_handle_counters.clone();
         Ok(StateTransaction {
+            c10_execution: None,
             genesis_crypto_policy: fields.genesis_crypto_policy.as_ref(),
             genesis_staking_policy: fields.genesis_staking_policy.as_ref(),
             native_epoch_boundary: fields.sumeragi_schedule.frozen_boundary(),
@@ -44737,6 +44925,13 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         callback_index: Option<u32>,
     ) -> bool {
+        if self.world.c10_triggers.get(id).is_some() {
+            return self.with_trigger_lifecycle_policy(
+                callback_index,
+                iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeRepeat,
+                |tx| tx.consume_c10_repeat(id),
+            );
+        }
         let removed = self.with_trigger_lifecycle_policy(
             callback_index,
             iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeRepeat,
@@ -44771,51 +44966,83 @@ impl StateTransaction<'_, '_> {
         let permission_granted =
             self.can_execute_trigger_for(event.authority(), event.trigger_id());
         let action_generation = self.world.triggers.registration_generation(id);
-        let (executable, action_authority) = {
-            let action = self
-                .world
+        let c10 = self.world.c10_triggers.get(id).is_some();
+        if c10 {
+            self.mark_c10_execution();
+        }
+        let missing = || ValidationFail::from(Error::from(FindError::Trigger(id.clone())));
+        let (action_authority, filter, enabled, depleted) =
+            if let Some(stored) = self.world.c10_triggers.get(id) {
+                let action = &stored.trigger().action;
+                let iroha_data_model::ivm_c10::EventFilterBoxC10V1::ExecuteTrigger(filter) =
+                    action.filter()
+                else {
+                    return Err(missing().into());
+                };
+                (
+                    action.authority(),
+                    filter,
+                    trigger_is_enabled(action.metadata()),
+                    action.repeats().is_depleted(),
+                )
+            } else {
+                let action = self
+                    .world
+                    .triggers
+                    .by_call_triggers()
+                    .get(id)
+                    .ok_or_else(missing)?;
+                (
+                    action.authority(),
+                    &action.filter,
+                    trigger_is_enabled(action.metadata()),
+                    action.repeats.is_depleted(),
+                )
+            };
+        if !enabled {
+            return Err(missing().into());
+        }
+        if depleted {
+            warn!(trigger_id = %id, "by-call trigger is depleted; removing");
+            if c10 {
+                crate::smartcontracts::isi::triggers::isi::remove_c10_trigger(self, id);
+            } else if self.world.triggers.remove(id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    self, id,
+                );
+            }
+            return Err(missing().into());
+        }
+        let mut filter_event = event.clone();
+        if permission_granted {
+            filter_event.authority = action_authority.clone();
+        }
+        if !filter.matches(&filter_event) {
+            return Err(ValidationFail::NotPermitted(
+                "trigger cannot be executed manually: filter mismatch".into(),
+            )
+            .into());
+        }
+        if action_authority != event.authority() && !permission_granted {
+            return Err(ValidationFail::NotPermitted(
+                "trigger cannot be executed manually: not permitted".into(),
+            )
+            .into());
+        }
+        let action_authority = action_authority.clone();
+        let executable = if let Some(row) = self.world.c10_triggers.get(id) {
+            crate::runtime::deferred_consent::trigger_executable_ref(
+                row.trigger().action.executable(),
+            )
+            .map_err(ValidationFail::InstructionFailed)?
+        } else {
+            self.world
                 .triggers
                 .by_call_triggers()
                 .get(id)
-                .ok_or_else(|| FindError::Trigger(id.clone()))
-                .map_err(Error::from)
-                .map_err(ValidationFail::from)?;
-            if !trigger_is_enabled(action.metadata()) {
-                return Err(
-                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
-                );
-            }
-            if action.repeats.is_depleted() {
-                warn!(
-                    trigger_id = %id,
-                    "by-call trigger is depleted; removing"
-                );
-                if self.world.triggers.remove(id) {
-                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                        self, id,
-                    );
-                }
-                return Err(
-                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
-                );
-            }
-            let mut filter_event = event.clone();
-            if permission_granted {
-                filter_event.authority = action.authority().clone();
-            }
-            if !action.filter.matches(&filter_event) {
-                return Err(ValidationFail::NotPermitted(
-                    "trigger cannot be executed manually: filter mismatch".to_owned(),
-                )
-                .into());
-            }
-            if action.authority() != event.authority() && !permission_granted {
-                return Err(ValidationFail::NotPermitted(
-                    "trigger cannot be executed manually: not permitted".to_owned(),
-                )
-                .into());
-            }
-            (action.executable().clone(), action.authority().clone())
+                .ok_or_else(missing)?
+                .executable()
+                .clone()
         };
         // Execute the trigger entrypoint and collect its step.
         let step = self.execute_trigger(
@@ -44945,7 +45172,13 @@ impl StateTransaction<'_, '_> {
         &mut self,
         first_step_index: u32,
     ) -> TransactionResultInner {
-        if self.world.triggers.data_triggers().is_empty() {
+        if self.world.triggers.data_triggers().is_empty()
+            && !self
+                .world
+                .c10_trigger_candidates
+                .iter()
+                .any(|(_, kind)| *kind == iroha_data_model::events::TriggeringEventType::Data)
+        {
             // No data triggers registered; drop buffered events to keep memory bounded.
             self.world.internal_event_buf.clear();
             return Ok(Vec::new());
@@ -44990,7 +45223,33 @@ impl StateTransaction<'_, '_> {
                 continue;
             }
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger recheck")?;
-            let (executable, trigger_authority) = {
+            let (executable, trigger_authority) = if let Some(row) =
+                self.world.c10_triggers.get(&trg_id)
+            {
+                let action = &row.trigger().action;
+                let iroha_data_model::ivm_c10::EventFilterBoxC10V1::Data(filter) = action.filter()
+                else {
+                    continue;
+                };
+                let EventBox::Data(data) = &event else {
+                    continue;
+                };
+                if !c10_trigger_runtime::data_matches(row, data)
+                    || !crate::smartcontracts::isi::triggers::isi::data_scope_is_authorized(
+                        self,
+                        action.authority(),
+                        filter,
+                        action.metadata(),
+                    )
+                {
+                    continue;
+                }
+                (
+                    crate::runtime::deferred_consent::trigger_executable_ref(action.executable())
+                        .map_err(ValidationFail::InstructionFailed)?,
+                    action.authority().clone(),
+                )
+            } else {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
                     warn!(
                         trigger_id = %trg_id,
@@ -45103,12 +45362,25 @@ impl StateTransaction<'_, '_> {
                 let scan_work = self
                     .world
                     .triggers
-                    .data_trigger_candidate_scan_work(event.as_ref());
+                    .data_trigger_candidate_scan_work(event.as_ref())
+                    .saturating_add(self.world.c10_trigger_candidates.len());
                 self.charge_trigger_work_gas(
                     u64::try_from(scan_work).unwrap_or(u64::MAX),
                     "data trigger index scan",
                 )?;
                 scan.candidates = self.world.triggers.data_trigger_candidates(event.as_ref());
+                if !self.world.c10_trigger_candidates.is_empty() {
+                    scan.candidates.extend(
+                        self.world
+                            .c10_trigger_candidates
+                            .iter()
+                            .filter(|(_, kind)| {
+                                **kind == iroha_data_model::events::TriggeringEventType::Data
+                            })
+                            .map(|(id, _)| id.clone()),
+                    );
+                    scan.candidates.sort_unstable();
+                }
                 scan.candidate_index = 0;
                 scan.event_index = scan.event_index.saturating_add(1);
                 continue;
@@ -45121,11 +45393,19 @@ impl StateTransaction<'_, '_> {
                 .expect("a candidate list always belongs to its preceding event")
                 .clone();
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger filter checks")?;
-            let Some(generation) = self.world.triggers.data_trigger_matching_generation(
-                scan.snapshot,
-                &trg_id,
-                event.as_ref(),
-            ) else {
+            let generation = if let Some(row) = self.world.c10_triggers.get(&trg_id) {
+                self.world
+                    .triggers
+                    .eligible_data_generation(scan.snapshot, &trg_id)
+                    .filter(|_| c10_trigger_runtime::data_matches(row, event.as_ref()))
+            } else {
+                self.world.triggers.data_trigger_matching_generation(
+                    scan.snapshot,
+                    &trg_id,
+                    event.as_ref(),
+                )
+            };
+            let Some(generation) = generation else {
                 continue;
             };
             return Ok(Some((
@@ -45172,21 +45452,27 @@ impl StateTransaction<'_, '_> {
     }
     fn trigger_args_from_event(
         &self,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
     ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
-            EventBox::ExecuteTrigger(ev) => Ok(ev.args().clone()),
-            EventBox::Data(shared) => self.trigger_args_from_data_event(shared.as_ref()),
+            c10_trigger_runtime::CallbackEvent::Event(EventBox::ExecuteTrigger(ev)) => {
+                Ok(ev.args().clone())
+            }
+            c10_trigger_runtime::CallbackEvent::Event(EventBox::Data(shared)) => {
+                self.trigger_args_from_data_event(shared.as_ref())
+            }
             _ => Ok(Json::default()),
         }
     }
     fn trigger_host_args(
         &self,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         fallback: Json,
     ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
-            EventBox::ExecuteTrigger(_) | EventBox::Data(_) => self.trigger_args_from_event(event),
+            c10_trigger_runtime::CallbackEvent::Event(
+                EventBox::ExecuteTrigger(_) | EventBox::Data(_),
+            ) => self.trigger_args_from_event(event),
             _ => Ok(fallback),
         }
     }
@@ -45366,7 +45652,7 @@ impl StateTransaction<'_, '_> {
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         metadata: &Metadata,
         summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
         nft_seq_base_override: Option<u64>,
@@ -45463,9 +45749,10 @@ impl StateTransaction<'_, '_> {
                 .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
+                drop(host);
+                self.record_vm_execution(&vm, &error);
                 let attempt =
                     crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
-                drop(host);
                 drop(vm);
                 let error = match attempt {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
@@ -45572,6 +45859,48 @@ impl StateTransaction<'_, '_> {
             Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)))
         }
     }
+    /// Resolve the raw executable from the registered C10 action under its exact profile.
+    fn resolve_c10_trigger_program(
+        &mut self,
+        id: &TriggerId,
+        hash: &HashOf<iroha_data_model::transaction::IvmBytecode>,
+    ) -> Result<Option<ResolvedIvmTriggerProgram>, ValidationFail> {
+        let Some(stored) = self.world.c10_triggers.get(id) else {
+            return Ok(None);
+        };
+        let iroha_data_model::transaction::Executable::Ivm(bytes) =
+            stored.trigger().action.executable()
+        else {
+            return Err(ValidationFail::NotPermitted(
+                "C10 trigger changed its executable kind".into(),
+            ));
+        };
+        if HashOf::new(bytes) != *hash {
+            return Err(ValidationFail::NotPermitted(
+                "C10 trigger executable changed after matching".into(),
+            ));
+        }
+        let profile = ivm::IvmProfileId::C10_ABI_V1;
+        crate::smartcontracts::ivm::host_profile::ensure_in_transaction(self, profile)?;
+        let summary = IvmCache::with_locked(self.ivm_cache, |cache| {
+            cache.summarize_executable_for_profile(bytes.as_ref(), profile)
+        })
+        .map_err(|error| {
+            self.record_c10_admission_error(&error);
+            match crate::execution_attempt::ExecutionDeferred::try_from_vm_error(error) {
+                Ok(reason) => self.world.defer_execution(reason),
+                Err(error) => crate::smartcontracts::ivm::program_admission_error(error),
+            }
+        })?;
+        Ok(Some(match summary {
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(program) => {
+                ResolvedIvmTriggerProgram::Contract(program.prepared_contract().clone())
+            }
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(program) => {
+                ResolvedIvmTriggerProgram::Generic(program)
+            }
+        }))
+    }
     /// Actual synchronous trigger scope, including generic and nested by-call bodies.
     pub(crate) fn execution_callback_active(&self) -> bool {
         self.active_trigger_execution_depth != 0
@@ -45589,10 +45918,38 @@ impl StateTransaction<'_, '_> {
         step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        self.execute_trigger_event(
+            id,
+            authority,
+            executable,
+            c10_trigger_runtime::CallbackEvent::Event(&event),
+            step_index,
+            nft_seq_base_override,
+        )
+    }
+
+    fn execute_trigger_event(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        if self.world.c10_triggers.get(id).is_some() {
+            self.mark_c10_execution();
+        }
         let expectation =
             crate::runtime::deferred_consent::trigger_expectation(self, id, authority, executable)
                 .map_err(ValidationFail::InstructionFailed)?;
         crate::runtime::deferred_consent::with_scope(self, expectation, |tx| {
+            if tx.world.c10_triggers.get(id).is_some() {
+                crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+                    tx,
+                    ivm::IvmProfileId::C10_ABI_V1,
+                )?;
+            }
             tx.execute_trigger_with_consent_scope(
                 id,
                 authority,
@@ -45610,7 +45967,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
-        event: EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
@@ -45634,7 +45991,14 @@ impl StateTransaction<'_, '_> {
                 callback_index: Some(lifecycle_index),
             },
             |tx| {
-                tx.world.triggers.lifecycle_invoke(id, lifecycle_index);
+                if tx.world.c10_triggers.get(id).is_some() {
+                    let snapshot = tx.c10_trigger_snapshot(id);
+                    tx.world
+                        .triggers
+                        .lifecycle_invoke_snapshot(id, lifecycle_index, snapshot);
+                } else {
+                    tx.world.triggers.lifecycle_invoke(id, lifecycle_index);
+                }
                 let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());
                 let result = if tx.active_trigger_execution_depth >= max_depth {
                     Err(TriggerExecutionFail::MaxDepthExceeded.into())
@@ -45678,7 +46042,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
-        event: EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
@@ -45910,28 +46274,21 @@ impl StateTransaction<'_, '_> {
                         summary.profile(),
                         &summary.metadata,
                     )?;
-                let manifest = self
-                    .world
-                    .contract_manifests
-                    .get(
-                        &ContractArtifactId::for_address(
-                            &identity.contract_address,
-                            identity.code_hash,
-                        )
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
-                    )
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(format!(
-                            "contract instance `{}` has no manifest",
-                            identity.contract_address
-                        ))
-                    })?;
-                crate::smartcontracts::ivm::validate_manifest_hashes(
-                    manifest,
+                if self.world.c10_triggers.get(id).is_some()
+                    || summary.prepared_contract().profile_id() == ivm::IvmProfileId::C10_ABI_V1
+                {
+                    self.mark_c10_execution();
+                    crate::executor::ensure_contract_invocation_code_hash(
+                        invocation,
+                        identity.code_hash,
+                    )?;
+                }
+                c10_trigger_runtime::validate_callback_manifest(
+                    &*self.world,
+                    &identity,
                     summary.code_hash,
                     summary.abi_hash,
-                )
-                .map_err(ValidationFail::IvmAdmission)?;
+                )?;
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
                 } else {
@@ -45972,7 +46329,7 @@ impl StateTransaction<'_, '_> {
                     ))
                 })?;
                 let trigger_args = self
-                    .trigger_args_from_event(&event)
+                    .trigger_args_from_event(event)
                     .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                 let contract_call_context =
                     crate::executor::parse_prepared_trigger_invocation_execution_context(
@@ -46065,11 +46422,13 @@ impl StateTransaction<'_, '_> {
                     .and_then(|()| vm.run_with_host(&mut host))
                     .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                let run_error = run_result.err().map(|error| {
-                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
-                });
-                if let Some(attempt) = run_error {
+                if let Err(error) = run_result {
                     drop(host);
+                    self.record_vm_execution(&vm, &error);
+                    let attempt =
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &vm, error,
+                        );
                     let error = match attempt {
                         crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                             return Err(self.defer_execution(reason).into());
@@ -46087,7 +46446,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                         context,
                         summary.prepared_contract().artifact(),
-                        &event,
+                        event.scheduled_time(),
                         id,
                     )
                 });
@@ -46112,22 +46471,34 @@ impl StateTransaction<'_, '_> {
                 (Ok(cvs.into()), None)
             }
             ExecutableRef::Ivm(blob_hash) => {
-                if let Some(admitted) = self.resolve_ivm_trigger_program(blob_hash)? {
-                    let contract_call_metadata = self
-                        .world
-                        .triggers
-                        .inspect_by_id(id, |action| action.metadata().clone())
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "IVM trigger `{id}` disappeared before callback dispatch"
-                            ))
-                        })?;
+                let c10 = self.world.c10_triggers.get(id).is_some();
+                let program = if c10 {
+                    self.resolve_c10_trigger_program(id, blob_hash)?
+                } else {
+                    self.resolve_ivm_trigger_program(blob_hash)?
+                };
+                if let Some(admitted) = program {
+                    let contract_call_metadata = if c10 {
+                        self.world
+                            .c10_triggers
+                            .get(id)
+                            .map(|row| row.trigger().action.metadata().clone())
+                    } else {
+                        self.world
+                            .triggers
+                            .inspect_by_id(id, |action| action.metadata().clone())
+                    }
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "IVM trigger `{id}` disappeared before callback dispatch"
+                        ))
+                    })?;
                     match admitted {
                         ResolvedIvmTriggerProgram::Generic(summary) => (
                             self.execute_generic_ivm_trigger_program(
                                 id,
                                 authority,
-                                &event,
+                                event,
                                 &contract_call_metadata,
                                 &summary,
                                 nft_seq_base_override,
@@ -46204,30 +46575,12 @@ impl StateTransaction<'_, '_> {
                                 ))
                                 .into());
                             }
-                            let manifest = self
-                                .world
-                                .contract_manifests
-                                .get(
-                                    &ContractArtifactId::for_address(
-                                        &runtime_identity.contract_address,
-                                        runtime_identity.code_hash,
-                                    )
-                                    .map_err(|error| {
-                                        ValidationFail::NotPermitted(error.to_string())
-                                    })?,
-                                )
-                                .ok_or_else(|| {
-                                    ValidationFail::NotPermitted(format!(
-                                        "contract instance `{}` has no manifest",
-                                        runtime_identity.contract_address
-                                    ))
-                                })?;
-                            crate::smartcontracts::ivm::validate_manifest_hashes(
-                                manifest,
+                            c10_trigger_runtime::validate_callback_manifest(
+                                &*self.world,
+                                &runtime_identity,
                                 prepared_contract.code_hash(),
                                 Hash::prehashed(prepared_contract.contract_interface().abi_hash),
-                            )
-                            .map_err(ValidationFail::IvmAdmission)?;
+                            )?;
                             let entrypoint_authorization =
                                 crate::executor::authorize_prepared_raw_contract_selector(
                                     &self.world,
@@ -46261,7 +46614,7 @@ impl StateTransaction<'_, '_> {
                                 "trigger lifecycle selectors are rejected before state validation"
                             );
                             let trigger_args = self
-                                .trigger_args_from_event(&event)
+                                .trigger_args_from_event(event)
                                 .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let mut contract_call_context =
                                 crate::executor::parse_prepared_trigger_call_execution_context(
@@ -46295,7 +46648,7 @@ impl StateTransaction<'_, '_> {
                         })?;
                             }
                             let host_args = self
-                                .trigger_host_args(&event, contract_call_context.args().clone())
+                                .trigger_host_args(event, contract_call_context.args().clone())
                                 .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let contract_runtime_context = contract_call_context.runtime_context();
                             // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
@@ -46363,13 +46716,10 @@ impl StateTransaction<'_, '_> {
                                 .and_then(|()| vm.run_with_host(&mut host))
                                 .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                            let run_error = run_result.err().map(|error| {
-                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &vm, error,
-                                )
-                            });
-                            if let Some(attempt) = run_error {
+                            if let Err(error) = run_result {
                                 drop(host);
+                                self.record_vm_execution(&vm, &error);
+                                let attempt = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
                                 let error = match attempt {
                                     crate::execution_attempt::ExecutionAttemptError::Deferred(
                                         reason,
@@ -46396,7 +46746,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                                     context,
                                     prepared_contract.artifact(),
-                                    &event,
+                                    event.scheduled_time(),
                                     id,
                                 )
                             });

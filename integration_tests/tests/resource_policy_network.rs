@@ -334,7 +334,7 @@ fn assert_identically_rejected(
     let record = identical_result(&records)?;
     let rendered = format!("{:?}", record.result());
     ensure!(
-        record.result().0.is_err() && rendered.contains(expected),
+        record.result().is_err() && rendered.contains(expected),
         "expected a rejection containing {expected:?}, got {rendered}"
     );
     ensure!(
@@ -360,7 +360,7 @@ fn assert_identically_applied(
     let records = committed_on_all(clients, transaction, deadline)?;
     let record = identical_result(&records)?;
     ensure!(
-        record.result().0.is_ok(),
+        record.result().is_ok(),
         "expected the coherent proposal to apply, got {:?}",
         record.result()
     );

@@ -21,6 +21,30 @@ use std::{
 };
 mod fixed_path;
 pub use fixed_path::REGISTER_MERKLE_PATH_DEPTH;
+/// Register-event policy selected before entering the interpreter loop.
+pub(crate) trait RegisterObserver: Copy {
+    /// Consume a lazy proof-bearing event only when this invocation owns a logger.
+    fn observe(self, build: impl FnOnce() -> RegEvent);
+}
+
+/// A register access outside the interpreter, or inside a traced invocation.
+#[derive(Clone, Copy)]
+pub(crate) struct ScopedRegisters;
+impl RegisterObserver for ScopedRegisters {
+    #[inline]
+    fn observe(self, build: impl FnOnce() -> RegEvent) {
+        record_register_event(build);
+    }
+}
+
+/// Ordinary interpreter accesses take no TLS or global event-policy reads.
+#[derive(Clone, Copy)]
+pub(crate) struct UnobservedRegisters;
+impl RegisterObserver for UnobservedRegisters {
+    #[inline]
+    fn observe(self, _build: impl FnOnce() -> RegEvent) {}
+}
+
 /// Number of general-purpose registers the frozen baseline engine addresses.
 pub const BASELINE_REGISTER_COUNT: usize = 256;
 pub struct Registers {
@@ -207,9 +231,14 @@ impl Registers {
     /// Get the value of register `idx`.
     #[inline]
     pub fn get(&self, idx: usize) -> u64 {
+        self.get_observed(ScopedRegisters, idx)
+    }
+
+    #[inline]
+    pub(crate) fn get_observed(&self, observer: impl RegisterObserver, idx: usize) -> u64 {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         let val = self.gpr[idx];
-        record_register_event(|| {
+        observer.observe(|| {
             let (root, path) = self
                 .merkle_root_and_path(idx)
                 .expect("register access already validated the index");
@@ -226,12 +255,17 @@ impl Registers {
     /// Set the value of register `idx`. Writes to x0 are ignored (x0 is always 0).
     #[inline]
     pub fn set(&mut self, idx: usize, value: u64) {
+        self.set_observed(ScopedRegisters, idx, value)
+    }
+
+    #[inline]
+    pub(crate) fn set_observed(&mut self, observer: impl RegisterObserver, idx: usize, value: u64) {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.gpr[idx] = value;
             // Exclusive access needs no atomic read-modify-write.
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
-            record_register_event(|| {
+            observer.observe(|| {
                 if !was_dirty {
                     self.tree.get_mut().update_hashed_leaf_sha256(
                         idx,
@@ -261,11 +295,21 @@ impl Registers {
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
     #[inline]
     pub fn set_tag(&mut self, idx: usize, value: bool) {
+        self.set_tag_observed(ScopedRegisters, idx, value)
+    }
+
+    #[inline]
+    pub(crate) fn set_tag_observed(
+        &mut self,
+        observer: impl RegisterObserver,
+        idx: usize,
+        value: bool,
+    ) {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.tags[idx] = value;
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
-            record_register_event(|| {
+            observer.observe(|| {
                 if !was_dirty {
                     self.tree
                         .get_mut()
@@ -639,6 +683,22 @@ mod tests {
         assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
         assert_eq!(dirty.merkle_root(), regs.merkle_root());
         assert_eq!(register_leaf_digest_count(), 2 * REGISTER_COUNT);
+    }
+    #[test]
+    fn unobserved_registers_preserve_values_and_commitments_without_spending_an_outer_quota() {
+        let mut registers = Registers::new();
+        let mut expected = Registers::new();
+        expected.set(7, 42);
+        expected.set_tag(7, true);
+        let log = crate::zk::SharedRegLog::try_new(None).unwrap();
+        let guard = crate::zk::RegLoggerGuard::install(Some(log.clone()));
+        registers.set_observed(UnobservedRegisters, 7, 42);
+        registers.set_tag_observed(UnobservedRegisters, 7, true);
+        assert_eq!(registers.get_observed(UnobservedRegisters, 7), 42);
+        assert!(registers.tag(7));
+        assert_eq!(registers.merkle_root(), expected.merkle_root());
+        drop(guard);
+        assert!(log.lock().as_slice().is_empty());
     }
     #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {

@@ -195,3 +195,40 @@ fn boundary_fault_preserves_initialization_and_local_custody_never_becomes_a_fau
     );
     assert_eq!(vm.remaining_gas(), gas);
 }
+
+#[test]
+fn c10_only_faults_keep_the_original_nested_instruction_and_deferrals_have_no_site() {
+    use iroha_data_model::ivm_c10::{IvmFaultKindC10V1, NumericFaultC10V1};
+    let mut parent = IVM::try_new(1_000).unwrap();
+    parent.load_code(&encode_halt().to_le_bytes()).unwrap();
+    let mut child = IVM::try_new(1_000).unwrap();
+    let words = [encode_halt().to_le_bytes(), encode_halt().to_le_bytes()].concat();
+    child.load_code(&words).unwrap();
+    let position = IvmFaultPositionV1::Execute { pc_offset: 4 };
+    for (error, kind) in [
+        (
+            VMError::ControlFlowViolation,
+            IvmFaultKindC10V1::ControlFlowViolation,
+        ),
+        (
+            VMError::RegisterIntegerOverflow,
+            IvmFaultKindC10V1::Numeric(NumericFaultC10V1::RegisterIntegerOverflow),
+        ),
+    ] {
+        child.record_boundary_fault(&error, position);
+        let expected = child.c10_execution_fault(&error, position).unwrap();
+        assert_eq!(expected.kind, kind);
+        assert_eq!(expected.site.position, position);
+        parent.inherit_execution_fault(&child, &error, position);
+        parent.capture_trap(&error);
+        assert_eq!(parent.last_diagnostic().unwrap().c10_fault, Some(expected));
+        assert_eq!(
+            parent.c10_execution_fault(&error, IvmFaultPositionV1::ReturnValidation),
+            Some(expected)
+        );
+    }
+    let refusal = VMError::ExecutionDeferred(crate::ExecutionDeferral::ActiveMemoryCapacity);
+    parent.capture_trap(&refusal);
+    assert!(parent.last_diagnostic().is_none());
+    assert!(parent.c10_execution_fault(&refusal, position).is_none());
+}

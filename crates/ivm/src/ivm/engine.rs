@@ -67,7 +67,15 @@ impl ProfileEngine for C10Engine {
         host: &mut dyn IVMHost,
         recorder: Option<&mut DiagnosticStepRecorder>,
     ) -> Result<(), VMError> {
-        vm.run_with_host_ref(host, recorder)
+        if recorder.is_some()
+            || vm.native_packets.is_some()
+            || vm.trace_mode != TraceMode::Off
+            || (vm.zk_mode && vm.zk_trace_enabled)
+        {
+            vm.run_with_host_ref(crate::registers::ScopedRegisters, host, recorder)
+        } else {
+            vm.run_with_host_ref(crate::registers::UnobservedRegisters, host, recorder)
+        }
     }
 
     fn metering_schedule_hash() -> iroha_crypto::Hash {

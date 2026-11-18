@@ -424,6 +424,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::RequestGameUnitExportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::ivm_c10::RegisterTriggerC10V1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::runtime_retirement::RetireRuntimeDefinitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ReserveGameUnitImportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportReservedGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],

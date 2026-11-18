@@ -1,8 +1,11 @@
 //! Tests of credential registration and the credential-aware seal (design §3.2, §3.3) with
 //! genuine registration proofs. Binding juries here seat three and keep one alternate, so
-//! the four invited seats need four proofs, made once per test binary.
+//! the four invited seats need four proofs, made once per network in each test binary.
 
-use std::{collections::BTreeSet, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -78,10 +81,12 @@ pub(super) fn jury_invitations(
     (election.id(), invited)
 }
 
-/// The genuine registration of invited seat `index`, proved once per test binary.
+/// The genuine registration of invited seat `index`, proved once per fixture network.
 pub(super) fn registration(index: usize) -> CredentialRegistrationV1 {
-    static REGISTRATIONS: OnceLock<Vec<CredentialRegistrationV1>> = OnceLock::new();
-    REGISTRATIONS.get_or_init(|| {
+    static REGISTRATIONS: Mutex<BTreeMap<NetworkId, Vec<CredentialRegistrationV1>>> =
+        Mutex::new(BTreeMap::new());
+    let mut registrations = REGISTRATIONS.lock().unwrap();
+    registrations.entry(network()).or_insert_with(|| {
         let driver = drawn_small_jury();
         let (election, invited) = jury_invitations(&driver);
         let context = driver

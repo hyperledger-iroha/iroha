@@ -124,6 +124,7 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     vm.host_trace_log_detached = true;
     vm.host_trace_invocation_log = Some(invocation.clone());
     let events = invocation.lock().as_slice().to_vec();
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = budget.reserved_bytes();
     budget.set_limit_bytes(0);
     cache_memory::with_refused_shared_allocation_for_test(|| {

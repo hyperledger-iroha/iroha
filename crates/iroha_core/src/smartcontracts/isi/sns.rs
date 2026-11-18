@@ -4640,7 +4640,11 @@ mod tests {
                     message,
                 )),
             ),
-        )) = &rejected_outputs[0].result().0
+        )) = &rejected_outputs[0]
+            .result()
+            .baseline()
+            .expect("baseline SNS execution")
+            .0
         else {
             panic!(
                 "third EnsureAlias must reach its native quote guard: {:?}",

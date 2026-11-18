@@ -16,11 +16,14 @@ use std::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, SharedSignedBlock, SignedBlock},
+    block::{
+        BlockHeader, SharedSignedBlock, SignedBlock,
+        execution_output::{TransactionRejectionRef, TransactionResultRef},
+    },
     isi::InstructionBox,
     transaction::{
-        SignedTransaction, TransactionEntrypoint, TransactionResult,
-        error::TransactionRejectionReason, executable::Executable,
+        SignedTransaction, TransactionEntrypoint, error::TransactionRejectionReason,
+        executable::Executable,
     },
 };
 use iroha_model_base::metadata::Metadata;
@@ -88,7 +91,7 @@ pub struct HistoryTransactionRow {
     pub(crate) entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 impl HistoryTransactionRow {
-    fn source(&self) -> Result<(&SignedTransaction, &TransactionResult), BoundedJsonError> {
+    fn source(&self) -> Result<(&SignedTransaction, TransactionResultRef<'_>), BoundedJsonError> {
         let source = self
             .block
             .network_entrypoint_at(self.entrypoint_index)
@@ -105,9 +108,9 @@ impl HistoryTransactionRow {
             u32::try_from(self.entrypoint_index).map_err(|_| BoundedJsonError::LengthMismatch)?;
         let (_, output) = self
             .block
-            .network_output_at(index)
+            .network_execution_output_at(index)
             .ok_or(BoundedJsonError::LengthMismatch)?;
-        Ok((transaction, &output.result))
+        Ok((transaction, output.result()))
     }
     fn projection(&self) -> Result<TransactionProjection<'_>, BoundedJsonError> {
         let (transaction, result) = self.source()?;
@@ -168,20 +171,26 @@ struct RejectionProjection<'a> {
     message: RejectionMessage<'a>,
 }
 /// Borrow the model's sole canonical reason codec without copying its graph.
-struct RejectionReason<'a>(&'a TransactionRejectionReason);
+struct RejectionReason<'a>(TransactionRejectionRef<'a>);
 impl FastJsonWrite for RejectionReason<'_> {
     fn write_json(&self, out: &mut String) {
         json::write_json_unbounded(self, out);
     }
     fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
-        self.0.json_serialize_to(out)
+        match self.0 {
+            TransactionRejectionRef::Baseline(reason) => reason.json_serialize_to(out),
+            TransactionRejectionRef::C10(reason) => reason.json_serialize_to(out),
+        }
     }
 }
-struct RejectionMessage<'a>(&'a TransactionRejectionReason);
+struct RejectionMessage<'a>(TransactionRejectionRef<'a>);
 impl fmt::Display for RejectionMessage<'_> {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         use iroha_data_model::{ValidationFail, isi::error::InstructionExecutionError};
-        match self.0 {
+        let TransactionRejectionRef::Baseline(reason) = self.0 else {
+            return fmt::Display::fmt(&self.0, out);
+        };
+        match reason {
             TransactionRejectionReason::Validation(fail) => {
                 out.write_str("Validation failed: ")?;
                 match fail {
@@ -329,7 +338,7 @@ fn executable_label(executable: &Executable) -> &'static str {
         Executable::Batch(_) => "Batch",
     }
 }
-fn status(result: &TransactionResult) -> &'static str {
+fn status(result: TransactionResultRef<'_>) -> &'static str {
     if result.as_ref().is_ok() {
         "Committed"
     } else {
@@ -484,8 +493,8 @@ impl HistoryBlockRow {
             }
             total = total.saturating_add(1);
             if block
-                .network_output_at(u32::try_from(index).unwrap_or(u32::MAX))
-                .is_some_and(|(_, output)| output.result.is_err())
+                .network_execution_output_at(u32::try_from(index).unwrap_or(u32::MAX))
+                .is_some_and(|(_, output)| output.result().is_err())
             {
                 rejected = rejected.saturating_add(1);
             }
@@ -731,8 +740,8 @@ mod tests {
         let reason =
             TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::TooComplex);
         let projected = RejectionProjection {
-            reason: RejectionReason(&reason),
-            message: RejectionMessage(&reason),
+            reason: RejectionReason(TransactionRejectionRef::Baseline(&reason)),
+            message: RejectionMessage(TransactionRejectionRef::Baseline(&reason)),
         };
         let body = json::to_json_bounded_boxed(&projected, 4096).unwrap();
         let object: json::Value = json::from_slice(&body).unwrap();

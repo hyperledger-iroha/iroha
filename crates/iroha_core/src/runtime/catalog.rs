@@ -28,6 +28,7 @@
 pub(crate) mod additions;
 mod contract_lifecycle;
 mod deferred_consent;
+pub(crate) mod ivm_c10;
 mod kernel_lifecycle;
 pub mod migrations;
 mod native_amx_capture;
@@ -35,6 +36,7 @@ mod native_escrow_capture;
 mod native_game_capture;
 pub(crate) mod parameters;
 mod retirement;
+mod service_addition;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -154,7 +156,8 @@ pub struct ReleaseCatalog {
     native_escrow_capture_compositions: BTreeMap<DefinitionId, native_escrow_capture::Composition>,
     native_amx_capture_compositions: BTreeMap<DefinitionId, native_amx_capture::Composition>,
     native_game_capture_compositions: BTreeMap<DefinitionId, native_game_capture::Composition>,
-    retirement_compositions: BTreeMap<DefinitionId, retirement::Composition>,
+    retirement_compositions: BTreeMap<DefinitionId, service_addition::Composition>,
+    c10_compositions: BTreeMap<DefinitionId, service_addition::Composition>,
     /// The typed committed parameters this release adds after the baseline, by Parameter
     /// definition ([`parameters`]); a root recognizes one only while its selection activates it.
     parameter_additions: parameters::ParameterAdditions,
@@ -589,6 +592,7 @@ impl ReleaseCatalog {
             native_amx_capture_compositions: BTreeMap::new(),
             native_game_capture_compositions: BTreeMap::new(),
             retirement_compositions: BTreeMap::new(),
+            c10_compositions: BTreeMap::new(),
             parameter_additions: BTreeMap::new(),
             ironwood: None,
         };
@@ -783,6 +787,7 @@ impl ReleaseCatalog {
                 || addition.module == additions::NATIVE_AMX_CAPTURE.module
                 || addition.module == additions::NATIVE_GAME_CAPTURE.module
                 || addition.module == additions::RUNTIME_RETIREMENT.module
+                || addition.module == additions::IVM_C10.module
                 || addition.module == additions::CONTRACT_LIFECYCLE.module;
             let (storage_dependencies, interface_dependencies) = if addition.module
                 == additions::NATIVE_GAME_CAPTURE.module
@@ -888,6 +893,7 @@ impl ReleaseCatalog {
         catalog.compile_runtime_lifecycle_after_native_game()?;
         catalog.compile_contract_lifecycle()?;
         catalog.compile_retirement()?;
+        catalog.compile_ivm_c10()?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -1295,6 +1301,23 @@ impl ReleaseCatalog {
         effective_height: u64,
         qualification: [u8; 32],
     ) -> Result<ChangeSetV1, CatalogError> {
+        if module == additions::IVM_C10.module {
+            let composition = self
+                .c10_compositions
+                .get(&current.services_profile)
+                .ok_or_else(|| CatalogError::Addition {
+                    module: module.into(),
+                    reason: "no compiled C10 successor for the selected services".into(),
+                })?;
+            return self.draft_service_addition(
+                composition,
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
         if module == additions::NATIVE_GAME_CAPTURE.module {
             return self.draft_native_game_capture(
                 current,

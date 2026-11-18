@@ -341,7 +341,7 @@ pub(super) fn evidence(
         .ok_or(PrivateSettlementError::Binding)?
         .clone();
     let (output_index, _) = block
-        .network_output_at(index)
+        .network_execution_output_at(index)
         .ok_or(PrivateSettlementError::Binding)?;
     let output = block
         .execution_outputs()

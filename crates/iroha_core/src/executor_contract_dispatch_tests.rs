@@ -1964,7 +1964,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
                 if matches!(error.as_ref(),
                     crate::block::BlockValidationError::InvalidGenesis(
                         crate::block::InvalidGenesisError::RejectedOutput(output)
-                    ) if matches!(output.reason.as_ref(),
+                    ) if matches!(output.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
                         iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                             ValidationFail::NotPermitted(reason)
                         ) if reason.contains("only be changed by an enacted SORA Parliament proposal")
@@ -2163,7 +2163,7 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                     if matches!(error.as_ref(),
                         crate::block::BlockValidationError::InvalidGenesis(
                             crate::block::InvalidGenesisError::RejectedOutput(output)
-                        ) if matches!(output.reason.as_ref(),
+                        ) if matches!(output.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
                             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                 ValidationFail::NotPermitted(reason)
                             ) if reason.contains(name) && reason.contains("Invalid permission payload")

@@ -94,6 +94,7 @@ fn exhausted_write_credit_does_not_block_private_reset_or_mode_transition() {
         let mut funded = IVM::try_new_with_memory_budget(10_000, &budget).unwrap();
         seed(&mut funded);
         let mut ordinary = local_vm();
+        funded.memory.ensure_merkle_storage().unwrap();
         let occupied = budget.reserved_bytes();
         budget.set_limit_bytes(0);
         let gas = funded.remaining_gas();

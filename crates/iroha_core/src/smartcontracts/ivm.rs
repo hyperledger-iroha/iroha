@@ -93,7 +93,9 @@ pub(crate) fn validate_generic_execution_context(
             "private roots require address-bound contract execution".into(),
         ));
     }
-    if world.contract_manifests().get(&artifact_id).is_some() {
+    if world.contract_manifests().get(&artifact_id).is_some()
+        || world.c10_contract_manifests().get(&artifact_id).is_some()
+    {
         return Err(ValidationFail::NotPermitted(
             "generic IVM program hash is bound to a contract manifest in live state".to_owned(),
         ));
@@ -135,9 +137,19 @@ pub(crate) fn validate_manifest_hashes(
     actual_code_hash: Hash,
     actual_abi_hash: Hash,
 ) -> Result<(), IvmAdmissionError> {
-    let expected_code_hash = manifest
-        .code_hash
-        .ok_or(IvmAdmissionError::ManifestCodeHashMissing)?;
+    validate_manifest_hash_fields(
+        (manifest.code_hash, manifest.abi_hash),
+        actual_code_hash,
+        actual_abi_hash,
+    )
+}
+
+pub(crate) fn validate_manifest_hash_fields(
+    (code, abi): (Option<Hash>, Option<Hash>),
+    actual_code_hash: Hash,
+    actual_abi_hash: Hash,
+) -> Result<(), IvmAdmissionError> {
+    let expected_code_hash = code.ok_or(IvmAdmissionError::ManifestCodeHashMissing)?;
     if expected_code_hash != actual_code_hash {
         return Err(IvmAdmissionError::ManifestCodeHashMismatch(
             ManifestCodeHashMismatchInfo {
@@ -146,9 +158,7 @@ pub(crate) fn validate_manifest_hashes(
             },
         ));
     }
-    let expected_abi_hash = manifest
-        .abi_hash
-        .ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
+    let expected_abi_hash = abi.ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
     if expected_abi_hash != actual_abi_hash {
         return Err(IvmAdmissionError::ManifestAbiHashMismatch(
             ManifestAbiHashMismatchInfo {

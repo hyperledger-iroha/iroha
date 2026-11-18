@@ -8,7 +8,7 @@ use crate::smartcontracts::isi::triggers::{
         SetReadOnly,
         invocation_identity::{pipeline_trigger_use_v1, time_trigger_use_v1},
     },
-    specialized::{LoadedActionTrait, TimeTriggerRetryState},
+    specialized::{LoadedActionTrait as _, TimeTriggerRetryState},
 };
 use crate::state::StateReadOnly;
 use crate::state::contract_event_journal::DrainedContractEvents;
@@ -43,6 +43,25 @@ pub(super) enum InternalOutputDisposition {
     Applied,
     OutputLimit,
     Rejected,
+}
+
+enum CallbackResult {
+    Baseline(TransactionResult),
+    C10(iroha_data_model::ivm_c10::TransactionResultC10V1),
+}
+impl CallbackResult {
+    fn capture(
+        result: TransactionResult,
+        capture: Option<crate::state::c10_execution::C10Execution>,
+    ) -> Self {
+        match capture {
+            None => Self::Baseline(result),
+            Some(capture) => match capture.result(result) {
+                Ok(c10) => Self::C10(c10),
+                Err(original) => Self::Baseline(original),
+            },
+        }
+    }
 }
 
 impl InternalInvocation {
@@ -89,6 +108,37 @@ impl InternalInvocation {
         }
     }
 
+    fn row_from_result(
+        &self,
+        result: CallbackResult,
+        failure_root: Option<TriggerFailureRootV1>,
+        completions: Vec<InvocationCompletionV1>,
+    ) -> ExecutionOutputV1 {
+        use iroha_data_model::block::execution_output::{
+            ExecutionOutputC10V1, ExecutionSourceC10V1,
+        };
+        match result {
+            CallbackResult::Baseline(result) => self.row(result, failure_root, completions),
+            CallbackResult::C10(result) => {
+                let source = match self {
+                    Self::Pipeline(invocation) => ExecutionSourceC10V1::Pipeline {
+                        invocation: invocation.clone(),
+                        failure_root,
+                    },
+                    Self::Time(invocation) => ExecutionSourceC10V1::Time {
+                        invocation: invocation.clone(),
+                        failure_root,
+                    },
+                };
+                ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                    source,
+                    result,
+                    completions,
+                    trigger_lifecycle: None,
+                })
+            }
+        }
+    }
     fn authenticate(
         &self,
         state: &mut StateBlock<'_>,
@@ -109,6 +159,8 @@ impl InternalInvocation {
                 return Err("internal policy source is unavailable".into());
             }
             source.identity().clone()
+        } else if let Some(stored) = state.world.c10_triggers.get(id) {
+            crate::state::c10_trigger_runtime::identity(stored, height)?
         } else {
             match self {
                 Self::Pipeline(_) => pipeline_trigger_use_v1(&state.world.triggers, id, height)?,
@@ -146,13 +198,17 @@ impl InternalInvocation {
         }
         self.authenticate(state, height)?;
         let id = &self.trigger().trigger_id;
-        if state
-            .world
-            .triggers
-            .time_triggers()
-            .get(id)
-            .is_none_or(|action| progress::remaining(action.metadata()) == 0)
-        {
+        let has_progress = if let Some(row) = state.world.c10_triggers.get(id) {
+            progress::remaining(row.trigger().action.metadata()) != 0
+        } else {
+            state
+                .world
+                .triggers
+                .time_triggers()
+                .get(id)
+                .is_some_and(|action| progress::remaining(action.metadata()) != 0)
+        };
+        if !has_progress {
             return Ok(None);
         }
         let enabled = state.lifecycle_output_enabled()?;
@@ -165,7 +221,7 @@ impl InternalInvocation {
         lifecycle::arm(tx, enabled, maximum)?;
         tx.with_trigger_lifecycle_policy(Some(0),
             iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
-            |tx| { tx.world.triggers.consume_time_progress(id); });
+            |tx| { tx.consume_time_progress(id); });
         Ok(Some(policy))
     }
 
@@ -245,35 +301,51 @@ impl InternalInvocation {
                     callback_index: 0,
                     policy: iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::QuarantinePipeline,
                 });
-                if tx
-                    .world
-                    .triggers
-                    .inspect_by_id_mut(id, |action| {
-                        action
-                            .metadata_mut()
-                            .insert(enabled.clone(), Json::from(false));
+                let updated = if tx.world.c10_triggers.get(id).is_some() {
+                    tx.update_c10_trigger(id, |row| {
+                        row.metadata_mut().insert(enabled, Json::from(false))
                     })
-                    .is_none()
-                {
+                    .is_some()
+                } else {
+                    tx.world
+                        .triggers
+                        .inspect_by_id_mut(id, |action| {
+                            action
+                                .metadata_mut()
+                                .insert(enabled.clone(), Json::from(false));
+                        })
+                        .is_some()
+                };
+                if !updated {
                     return Err("quarantine action disappeared".into());
                 }
                 Ok(Some(policy))
             }
             Self::Time(_) => {
-                let action = state
-                    .world
-                    .triggers
-                    .time_triggers()
-                    .get(id)
-                    .ok_or("retry action disappeared")?;
-                let retry_policy = action.retry_policy;
-                if retry_policy.is_none() && progress::remaining(action.metadata()) == 0 {
+                let (retry_policy, used, progress) =
+                    if let Some(stored) = state.world.c10_triggers.get(id) {
+                        (
+                            stored.trigger().action.retry_policy(),
+                            stored.retry_state().map_or(0, |s| s.attempt),
+                            progress::remaining(stored.trigger().action.metadata()),
+                        )
+                    } else {
+                        let action = state
+                            .world
+                            .triggers
+                            .time_triggers()
+                            .get(id)
+                            .ok_or("retry action disappeared")?;
+                        (
+                            action.retry_policy,
+                            action.retry_state.map_or(0, |s| s.retries_used),
+                            progress::remaining(action.metadata()),
+                        )
+                    };
+                if retry_policy.is_none() && progress == 0 {
                     return Ok(None);
                 }
-                let used = action
-                    .retry_state
-                    .map_or(0, |s| s.retries_used)
-                    .saturating_add(1);
+                let used = used.saturating_add(1);
                 let mut policy = OutputTransaction::new(state)?;
                 let tx = policy
                     .transaction
@@ -284,7 +356,7 @@ impl InternalInvocation {
                 let Some(retry_policy) = retry_policy else {
                     tx.with_trigger_lifecycle_policy(Some(0),
                         iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
-                        |tx| { tx.world.triggers.consume_time_progress(id); });
+                        |tx| { tx.consume_time_progress(id); });
                     return Ok(Some(policy));
                 };
                 tx.world.triggers.set_lifecycle_origin(iroha_data_model::block::execution_output::TriggerLifecycleOriginV1::InvocationPolicy {
@@ -293,7 +365,17 @@ impl InternalInvocation {
                         iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ExhaustTimeRetry
                     } else { iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::AdvanceTimeRetry },
                 });
-                if used > retry_policy.max_retries.get() {
+                if tx.world.c10_triggers.get(id).is_some() {
+                    if used > retry_policy.max_retries.get() {
+                        crate::smartcontracts::isi::triggers::isi::remove_c10_trigger(tx, id);
+                    } else {
+                        let next_time_ms = now.saturating_add(retry_policy.retry_after_ms.get());
+                        tx.update_c10_trigger(id, |row| {
+                            progress::consume(row.metadata_mut());
+                            row.set_retry_state(Some(iroha_data_model::block::execution_output::TriggerLifecycleRetryStateV1 { attempt: used, next_time_ms }))
+                        }).ok_or("C10 retry action disappeared")?.map_err(|e| e.to_string())?;
+                    }
+                } else if used > retry_policy.max_retries.get() {
                     if !tx.world.triggers.remove(id) {
                         return Err("retry action disappeared".into());
                     }
@@ -314,15 +396,12 @@ impl InternalInvocation {
 }
 
 impl ExecutionOutputProducer<'_, '_, '_> {
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Applying consumes the authenticated invocation owner exactly once"
-    )]
-    pub(super) fn try_apply_internal(
+    pub(super) fn try_apply_internal_family(
         &mut self,
         invocation: InternalInvocation,
-        event: EventBox,
-        action: &impl LoadedActionTrait,
+        event: crate::state::c10_trigger_runtime::CallbackEvent<'_>,
+        authority: &iroha_data_model::account::AccountId,
+        executable: &crate::smartcontracts::isi::triggers::set::ExecutableRef,
         mut source: Option<lifecycle::InternalSource>,
     ) -> Result<InternalOutputDisposition, ExecutionAttemptError<String>> {
         let height = self.source.header().height().get();
@@ -349,7 +428,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             return Err("internal row storage exhausted".into());
         }
         let maximum = self.state.callback_output_byte_limit();
-        let reservation = self
+        let mut reservation = self
             .budget
             .as_mut()
             .ok_or("output budget already consumed")?
@@ -360,6 +439,10 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .transaction
             .as_mut()
             .ok_or("missing internal transaction")?;
+        let owns_c10 = tx.world.c10_triggers.get(id).is_some();
+        if owns_c10 {
+            tx.mark_c10_execution();
+        }
         if let Some(source) = source.as_mut() {
             source.install(tx)?;
         }
@@ -370,7 +453,11 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         let original_source = OwnedExecutionSource::new(call, None, root_dataspace);
         tx.bind_original_fastpq_invocation_source(original_source)?;
         if source.as_ref().is_some_and(|source| !source.available()) {
-            let actual = lifecycle::empty(invocation.terminal(), true);
+            let mut actual = lifecycle::empty(invocation.terminal(), true);
+            if owns_c10 {
+                reservation.select_c10()?;
+                actual = actual.into_c10_output_limit()?;
+            }
             actual.validate_structure(height, &self.source)?;
             let row = match reservation.finish(actual)? {
                 ReservedExecutionOutput::Accepted(row)
@@ -392,7 +479,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 usize::try_from(i.schedule_index).map_err(|_| "Time index exceeds host width")?,
             )),
         };
-        let root = tx.execute_trigger(id, action.authority(), action.executable(), event, 0, nft);
+        let root = tx.execute_trigger_event(id, authority, executable, event, 0, nft);
         let mut execution = match root {
             Err(reason) => Err((reason, None)),
             Ok(step) => {
@@ -403,7 +490,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 {
                     tx.decrease_trigger_repeats_and_cleanup(id, Some(0));
                 }
-                tx.execute_data_triggers_dfs_from(action.authority(), 1)
+                tx.execute_data_triggers_dfs_from(authority, 1)
                     .map(|_| ())
                     .map_err(|reason| (reason, Some(step)))
             }
@@ -455,6 +542,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             return Err("internal callback changed its execution owner".into());
         }
         tx.require_original_fastpq_invocation_source(original_source)?;
+        let captured = tx.take_c10_execution();
         let work = CompletedOutputWork::capture(tx);
         // Resource refusal is local even if the business body also failed.
         let _ = lifecycle::output_limit(tx)?;
@@ -463,7 +551,10 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             // when execute_trigger reports an InternalError. Never quarantine it.
             tx.callback_journal.discard_rejected(call)?;
             tx.contract_event_journal.discard_rejected(call)?;
-            let actual = rejected_row(&invocation, action.executable(), root, reason, maximum)?;
+            let actual = rejected_row(&invocation, executable, root, reason, maximum, captured)?;
+            if matches!(actual, ExecutionOutputV1::C10(_)) {
+                reservation.select_c10()?;
+            }
             actual.validate_structure(height, &self.source)?;
             drop(attempt);
             work.account(self.state);
@@ -535,12 +626,12 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         {
             tx.with_trigger_lifecycle_policy(Some(0),
                 iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
-                |tx| { tx.world.triggers.consume_time_progress(id); });
+                |tx| { tx.consume_time_progress(id); });
             tx.with_trigger_lifecycle_policy(
                 Some(0),
                 iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ClearTimeRetry,
                 |tx| {
-                    let _ = tx.world.triggers.set_time_trigger_retry_state(id, None);
+                    tx.clear_time_retry(id);
                 },
             );
             tx.decrease_trigger_repeats_and_cleanup(id, Some(0));
@@ -568,6 +659,17 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             let budget = tx.execution_budget();
             tx.contract_event_journal.take(call, &budget)?
         };
+        let is_c10 = captured.is_some();
+        if is_c10 {
+            reservation.select_c10()?;
+        }
+        let terminal = || -> Result<ExecutionOutputV1, String> {
+            if is_c10 {
+                invocation.terminal().into_c10_output_limit()
+            } else {
+                Ok(invocation.terminal())
+            }
+        };
         let (actual, overflow) = match (callback_capture, event_capture) {
             (
                 DrainedCallbacks::Complete { steps, completions },
@@ -576,19 +678,23 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 let mut result = TransactionResult::new(Ok(steps));
                 result.set_batch_transfer_outcomes(owned);
                 result.set_contract_events(events);
-                (invocation.row(result, None, completions), false)
+                (
+                    invocation.row_from_result(
+                        CallbackResult::capture(result, captured),
+                        None,
+                        completions,
+                    ),
+                    false,
+                )
             }
-            _ => (invocation.terminal(), true),
+            _ => (terminal()?, true),
         };
         let overflow = overflow || lifecycle::output_limit(tx)?;
         let unwrapped = actual;
         let mut custody;
         let actual;
         (actual, custody) = if overflow {
-            (
-                lifecycle::empty(invocation.terminal(), self.lifecycle),
-                None,
-            )
+            (lifecycle::empty(terminal()?, self.lifecycle), None)
         } else {
             lifecycle::take(tx, unwrapped)?
         };
@@ -600,7 +706,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             drop(attempt);
             drop(custody);
             let mut policy = invocation.prepare_progress_policy(self.state, height)?;
-            let terminal = invocation.terminal();
+            let terminal = terminal()?;
             let (terminal, mut policy_custody) = if let Some(policy) = policy.as_mut() {
                 let tx = policy
                     .transaction
@@ -705,6 +811,7 @@ fn rejected_row(
     returned: Option<ExecutionStep>,
     reason: TransactionRejectionReason,
     maximum: u64,
+    captured: Option<crate::state::c10_execution::C10Execution>,
 ) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
     use crate::smartcontracts::isi::triggers::set::ExecutableRef;
     let limit = usize::try_from(maximum).map_err(|_| "diagnostic ceiling exceeds host width")?;
@@ -736,22 +843,44 @@ fn rejected_row(
             ExecutableRef::Ivm(_) | ExecutableRef::ContractCall(_) => true,
         }
     };
+    let result = CallbackResult::capture(TransactionResult::new(Err(reason)), captured);
     let diagnostic = if root_fits {
-        bounded_diagnostic(&reason, limit)?
+        match &result {
+            CallbackResult::Baseline(row) => {
+                bounded_diagnostic(row.as_ref().expect_err("failure row"), limit)?
+            }
+            CallbackResult::C10(row) => {
+                bounded_diagnostic(row.0.as_ref().expect_err("failure row"), limit)?
+            }
+        }
     } else {
         None
     };
-    let (reason, root, diagnostic) = diagnostic.map_or_else(
-        || {
+    let (result, root, diagnostic) = match diagnostic {
+        None => {
+            let omitted = TransactionLimitError {
+                reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
+            };
+            let bounded = match result {
+                CallbackResult::Baseline(_) => CallbackResult::Baseline(TransactionResult::new(
+                    Err(TransactionRejectionReason::LimitCheck(omitted)),
+                )),
+                CallbackResult::C10(mut row) => {
+                    row.0 = Err(
+                        iroha_data_model::ivm_c10::TransactionRejectionReasonC10V1::LimitCheck(
+                            omitted,
+                        ),
+                    );
+                    CallbackResult::C10(row)
+                }
+            };
             (
-                TransactionRejectionReason::LimitCheck(TransactionLimitError {
-                    reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
-                }),
+                bounded,
                 TriggerFailureRootV1::OmittedAfterRejection,
                 INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
             )
-        },
-        |diagnostic| {
+        }
+        Some(diagnostic) => {
             let root = returned.map_or_else(
                 || {
                     TriggerFailureRootV1::DeclaredInstructionProjection(
@@ -760,11 +889,11 @@ fn rejected_row(
                 },
                 TriggerFailureRootV1::ReturnedBeforeRollback,
             );
-            (reason, root, diagnostic)
-        },
-    );
-    Ok(invocation.row(
-        TransactionResult::new(Err(reason)),
+            (result, root, diagnostic)
+        }
+    };
+    Ok(invocation.row_from_result(
+        result,
         Some(root),
         vec![InvocationCompletionV1 {
             callback_index: 0,

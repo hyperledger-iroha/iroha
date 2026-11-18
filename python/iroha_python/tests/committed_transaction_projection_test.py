@@ -196,3 +196,26 @@ def test_original_route_refuses_missing_and_extra_fields_at_every_level():
     del payload["execution_context"]
     with pytest.raises(ValueError):
         VerifiedCommittedTransaction.from_payload(payload)
+
+@pytest.mark.parametrize(("family", "tag", "accepted"), [
+    ("c10", "ControlFlowViolation", True), ("network", "ControlFlowViolation", False),
+    ("c10", "RegisterIntegerOverflow", True), ("network_with_lifecycle", "RegisterIntegerOverflow", False),
+    ("c10", "InvalidVectorLength", False), ("network", "InvalidVectorLength", True),
+    ("pipeline", "OutOfGas", False),
+])
+def test_verified_fault_uses_certified_output_family(family, tag, accepted):
+    kind = {"kind": tag, "value": None}
+    if tag == "RegisterIntegerOverflow":
+        kind = {"kind": "Numeric", "value": kind}
+    fault = {"kind": kind, "site": {
+        "code_hash": "45" * 32, "selector": {"kind": "Generic", "value": None},
+        "position": {"kind": "Initialization", "value": None},
+    }}
+    payload = _batch_projection()
+    payload.update(result_ok=False, rejection_code="IvmFault", rejection_message="certified fault",
+                   ivm_fault=fault, batch_outcomes=[], committed_transaction={"output": {"kind": family}})
+    if accepted:
+        assert VerifiedCommittedTransaction.from_payload(payload).ivm_fault == fault
+    else:
+        with pytest.raises(ValueError):
+            VerifiedCommittedTransaction.from_payload(payload)
