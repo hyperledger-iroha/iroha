@@ -109,6 +109,10 @@ claim before item E5 measures it.
   about +200 B per Payment, and saves only about 3.8% of P's native q: P-Bootstrap is no longer 72% of it (the
   53,964 figure predates the complete relations; P-Receive's tape now dominates). E4 is being re-weighed against
   other ways to give Unload a corner before any integration.
+  *Decision record (research/E4-REWEIGH.md, Codex astra):* do not integrate E4. Bootstrap stays in the recurring
+  polynomial; Unload joins Load and RefreshTimeAnchor as a third mode of one Control program sharing one recovery
+  insertion (eight programs, four pairs); the anchor signature is checked hard against a public dummy signer in the
+  other modes. The evaluator stays as research evidence. E4 as written is withdrawn unless the owner wants it.
 - [ ] **E5. One complete Pixel 6 Receive**: retained incoming bytes to a verified, durable, releasable output, with
   phase timings, carrier bytes and peak RSS from the same run; then Send, Load and Bootstrap. The Pixel operator runs
   it only with the owner's go typed in the operator's own chat. *Done when:* the 3 s target is judged on these
