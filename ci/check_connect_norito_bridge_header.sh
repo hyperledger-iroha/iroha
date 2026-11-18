@@ -45,6 +45,8 @@ SELF_TESTS=(
   --self-test-retired-wallet-reviewed-execute-request-id
   --self-test-bad-wallet-review-jni-request-id
   --self-test-bad-wallet-observe-selector
+  --self-test-bad-spartan-account-signature-length
+  --self-test-bad-transaction-layout-selector
   --self-test-bad-wallet-account-original-length
   --self-test-bad-wallet-account-display-prefix
   --self-test-retired-offline-cash-header-symbol
@@ -122,7 +124,7 @@ wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
 rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
-for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs", "suffix.rs"):
+for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs", "spartan.rs", "suffix.rs"):
     rust += "\n" + (jni_path.parent / "kagemusha_wallet_ffi" / relative).read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
@@ -801,7 +803,7 @@ print(
     "[connect-norito-header] ABI 33 synchronized: "
     f"{len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
-    f"{len(RETAIL_EXPORTS)} retail-fee, "
+    f"{len(TRANSACTION_LAYOUT_EXPORTS)} transaction-layout, {len(RETAIL_EXPORTS)} retail-fee, "
     f"{len(PRIVATE_SETTLEMENT_EXPORTS)} private-settlement, "
     f"{len(KAGEMUSHA_WALLET_EXPORTS)} KAGEMUSHA wallet, "
     f"and {len(TRANSACTION_SIGNER_EXPORTS)} transaction-signer exports"
@@ -874,6 +876,7 @@ make_negative_workspace() {
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${PLATFORM_JNI_RUST}" "${tmp}/platform_jni.rs"
+  cp "${ROOT_DIR}/crates/connect_norito_bridge/src/transaction_layout.rs" "${tmp}/transaction_layout.rs"
   cp "${ROOT_DIR}/crates/connect_norito_bridge/src/privacy_construction.rs" "${tmp}/privacy_construction.rs"
   cp -R "${PLATFORM_JNI_RUST%.rs}" "${tmp}/platform_jni"
   cp "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs" "${tmp}/kagemusha_wallet_ffi.rs"
@@ -937,6 +940,16 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-bad-spartan-account-signature-length)
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/spartan.rs" \
+        '(fn connect_norito_kagemusha_spartan_authorize_account_v1\(.*?length: )usize' '\1u32'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_spartan_authorize_account_v1"
+      ;;
+    --self-test-bad-transaction-layout-selector)
+      replace_regex_once "${tmp}/transaction_layout.rs" \
+        '(fn connect_norito_transcode_instruction_v1\(.*?from_layout: )c_uchar' '\1c_ulong'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_transcode_instruction_v1"
+      ;;
     --self-test-bad-wallet-observe-selector)
       replace_regex_once "${tmp}/kagemusha_wallet_ffi/observation.rs" \
         '(fn connect_norito_kagemusha_wallet_observe_v1\(.*?selector: )u32' '\1u64'
@@ -1094,9 +1107,9 @@ if [[ "${MODE}" == --self-test-* ]]; then
       expected_diagnostic="Rust request-bound review layout mismatch"
       ;;
     --self-test-retired-wallet-reviewed-execute-request-id)
-      replace_once "${tmp_header}" \
-        'uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);' \
-        'uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);'
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_wallet_execute_reviewed_v1\(.*?uint64_t token, )' \
+        '\1const uint8_t *request_id32, '
       expected_diagnostic="retired execute-time reviewed request ID or parameter drift"
       ;;
     --self-test-bad-wallet-review-jni-request-id)
