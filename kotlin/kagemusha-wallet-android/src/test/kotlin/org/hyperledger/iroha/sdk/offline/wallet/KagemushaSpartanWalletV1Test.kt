@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.offline.wallet
 
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.test.*
@@ -18,6 +19,51 @@ class KagemushaSpartanWalletV1Test {
             KagemushaSpartanRetainedOutputV1.from(reply(2, byteArrayOf(1)), KagemushaSpartanOutputV1.PAYMENT)
         }
     }
+    @Test fun `Unload preview binds both accounts and conserves the face debit`() {
+        val vector = generateSequence(File(".").canonicalFile) { it.parentFile }
+            .map { File(it, "fixtures/kagemusha/spartan_unload_review_v3.bin") }.first { it.isFile }.readBytes()
+        val review = KagemushaSpartanUnloadProjectionV3(vector)
+        assertEquals(KagemushaWalletUInt128V1(4, 0), review.faceDebit)
+        assertEquals(KagemushaWalletUInt128V1(1, 0), review.onlineCharge)
+        assertEquals(KagemushaWalletUInt128V1(3, 0), review.netToAccount)
+        val account = review.credentialAccountBytes()
+        val beneficiary = assertNotNull(review.beneficiaryAccountBytes())
+        assertFalse(account.contentEquals(beneficiary))
+        assertContentEquals(account, vector.copyOfRange(421, 421 + account.size))
+        assertContentEquals(beneficiary, vector.copyOfRange(423 + account.size, vector.size))
+        review.credentialAccountBytes().fill(0)
+        assertContentEquals(account, review.credentialAccountBytes())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanReviewProjectionV1(vector) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanTimeAnchorProjectionV2(vector) }
+
+        val free = vector.copyOf(423 + account.size)
+        free.fill(0, 421 + account.size, free.size)
+        for (range in listOf(227 until 243, 259 until 291, 323 until 355)) free.fill(0, range.first, range.last + 1)
+        free[243] = 4
+        assertNull(KagemushaSpartanUnloadProjectionV3(free).beneficiaryAccountBytes())
+        val borrowed = vector.copyOf()
+        borrowed.fill(0, 211, 227); borrowed[219] = 1
+        borrowed.fill(-1, 243, 251); borrowed.fill(0, 251, 259)
+        assertEquals(KagemushaWalletUInt128V1(-1L, 0), KagemushaSpartanUnloadProjectionV3(borrowed).netToAccount)
+        val allCharged = vector.copyOf()
+        allCharged[227] = 4; allCharged[243] = 0
+        assertEquals(KagemushaWalletUInt128V1(0, 0), KagemushaSpartanUnloadProjectionV3(allCharged).netToAccount)
+
+        for (i in listOf(0, 1, 2, 211, 243, 420)) {
+            val invalid = vector.copyOf()
+            invalid[i] = (invalid[i].toInt() xor 0x80).toByte()
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanUnloadProjectionV3(invalid) }
+        }
+        for (range in listOf(163 until 195, 211 until 227, 227 until 243, 259 until 291, 323 until 355, 419 until 421)) {
+            val invalid = vector.copyOf()
+            invalid.fill(0, range.first, range.last + 1)
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanUnloadProjectionV3(invalid) }
+        }
+        for (invalid in listOf(vector.copyOf(vector.size - 1), vector + byteArrayOf(0), ByteArray(16_385))) {
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanUnloadProjectionV3(invalid) }
+        }
+    }
+
     @Test fun `admission refuses another credential profile before Native`() {
         for (count in listOf(0, 532, 595, 597)) assertFails {
             KagemushaSpartanAccountOriginalsV1(ByteArray(count), ByteArray(172), byteArrayOf(1), byteArrayOf(2))

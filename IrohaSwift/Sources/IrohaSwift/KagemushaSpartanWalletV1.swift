@@ -32,6 +32,14 @@ public final class KagemushaSpartanWalletV1: @unchecked Sendable {
     try prepare(witness: witness, predecessorHead: predecessorHead, decode: KagemushaSpartanTimeAnchorProjectionV2.init)
   }
 
+  /// Read the authenticated Unload terms and release the unconfirmed preparation.
+  public func reviewUnload(witness: Data, predecessorHead: Data) throws -> KagemushaSpartanUnloadProjectionV3 {
+    let review = try prepare(witness: witness, predecessorHead: predecessorHead,
+      decode: KagemushaSpartanUnloadProjectionV3.init)
+    try review.discard()
+    return review.projection
+  }
+
   private func prepare<Projection: Sendable>(witness: Data, predecessorHead: Data,
     decode: (Data) throws -> Projection) throws -> KagemushaSpartanPreparedReviewV1<Projection> {
     guard !witness.isEmpty, witness.count <= Self.maximumRecordBytes,
@@ -215,6 +223,54 @@ public struct KagemushaSpartanTimeAnchorProjectionV2: Sendable {
     anchorDigest = data(131); issuerTime = word(163); successorFloor = word(171)
     guard successorFloor >= issuerTime else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     beforeHead = data(179); afterHead = data(211)
+  }
+}
+
+/// Native authenticates these destination bytes against the credential and the signed charge quote.
+public struct KagemushaSpartanUnloadProjectionV3: Sendable {
+  public let schemeId, walletId, operationId, capsuleDigest, assetDigest, nullifier: Data
+  public let ordinal, faceDebit, onlineCharge, netToAccount: KagemushaWalletUInt128V1
+  public let quoteDigest, credentialAccountDigest, beneficiaryAccountDigest, beforeHead, afterHead: Data
+  public let credentialAccountBytes: Data
+  public let beneficiaryAccountBytes: Data?
+
+  init(_ original: Data) throws {
+    guard (423...16_384).contains(original.count) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    let bytes = [UInt8](original)
+    guard bytes[0] == 3, bytes[1] == 0, bytes[2] == 6 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    func digest(_ i: Int) -> Data { Data(bytes[i..<i + 32]) }
+    func word(_ i: Int) -> UInt64 {
+      (0..<8).reduce(UInt64(0)) { $0 | (UInt64(bytes[i + $1]) << ($1 * 8)) }
+    }
+    func scalar(_ i: Int) -> KagemushaWalletUInt128V1 { .init(low: word(i), high: word(i + 8)) }
+    var offset = 419
+    func address() throws -> Data {
+      guard offset + 2 <= bytes.count else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      let size = Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8)
+      offset += 2
+      guard size <= bytes.count - offset else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      let start = offset
+      offset += size
+      return Data(bytes[start..<offset])
+    }
+    schemeId = digest(3); walletId = digest(35); operationId = digest(67); capsuleDigest = digest(99)
+    assetDigest = digest(131); nullifier = digest(163); ordinal = scalar(195); faceDebit = scalar(211)
+    onlineCharge = scalar(227); netToAccount = scalar(243); quoteDigest = digest(259)
+    credentialAccountDigest = digest(291); beneficiaryAccountDigest = digest(323)
+    beforeHead = digest(355); afterHead = digest(387)
+    credentialAccountBytes = try address()
+    let beneficiary = try address()
+    let zero = KagemushaWalletUInt128V1(low: 0, high: 0)
+    let charged = onlineCharge != zero
+    guard offset == bytes.count, !credentialAccountBytes.isEmpty,
+      nullifier.contains(where: { $0 != 0 }), faceDebit > zero, onlineCharge <= faceDebit,
+      charged == !beneficiary.isEmpty, charged == quoteDigest.contains(where: { $0 != 0 }),
+      charged == beneficiaryAccountDigest.contains(where: { $0 != 0 })
+    else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    let (low, borrow) = faceDebit.low.subtractingReportingOverflow(onlineCharge.low)
+    let high = faceDebit.high - onlineCharge.high - (borrow ? 1 : 0)
+    guard netToAccount == .init(low: low, high: high) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    beneficiaryAccountBytes = charged ? beneficiary : nil
   }
 }
 

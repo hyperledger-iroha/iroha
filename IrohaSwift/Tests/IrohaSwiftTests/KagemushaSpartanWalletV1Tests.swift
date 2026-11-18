@@ -86,6 +86,56 @@ final class KagemushaSpartanWalletV1Tests: XCTestCase {
     XCTAssertEqual(try KagemushaSpartanTimeAnchorProjectionV2(bytes).successorFloor, anchor.issuerTime)
   }
 
+  private func unloadReviewOriginal() throws -> Data {
+    var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    for _ in 0..<8 {
+      let file = directory.appendingPathComponent("fixtures/kagemusha/spartan_unload_review_v3.bin")
+      if FileManager.default.fileExists(atPath: file.path) { return try Data(contentsOf: file) }
+      directory.deleteLastPathComponent()
+    }
+    throw CocoaError(.fileNoSuchFile)
+  }
+
+  func testUnloadReviewBindsBothDestinationAccountsAndCharge() throws {
+    let wire = try unloadReviewOriginal()
+    let review = try KagemushaSpartanUnloadProjectionV3(wire)
+    XCTAssertEqual(review.faceDebit, .init(low: 4, high: 0))
+    XCTAssertEqual(review.onlineCharge, .init(low: 1, high: 0))
+    XCTAssertEqual(review.netToAccount, .init(low: 3, high: 0))
+    let beneficiary = try XCTUnwrap(review.beneficiaryAccountBytes)
+    XCTAssertNotEqual(beneficiary, review.credentialAccountBytes)
+    XCTAssertEqual(try AccountAddress.fromCanonicalBytes(beneficiary).canonicalBytes(), beneficiary)
+    XCTAssertEqual(try AccountAddress.fromCanonicalBytes(review.credentialAccountBytes).canonicalBytes(),
+      review.credentialAccountBytes)
+    XCTAssertThrowsError(try KagemushaSpartanReviewProjectionV1(wire))
+    XCTAssertThrowsError(try KagemushaSpartanTimeAnchorProjectionV2(wire))
+
+    var free = Data(wire.prefix(421 + review.credentialAccountBytes.count))
+    free.append(contentsOf: [0, 0])
+    for range in [227..<243, 259..<291, 323..<355] { free.resetBytes(in: range) }
+    free[243] = 4
+    XCTAssertNil(try KagemushaSpartanUnloadProjectionV3(free).beneficiaryAccountBytes)
+    var borrowed = wire
+    borrowed.resetBytes(in: 211..<227); borrowed[219] = 1
+    borrowed.replaceSubrange(243..<259, with: [UInt8](repeating: 255, count: 8) + [UInt8](repeating: 0, count: 8))
+    XCTAssertEqual(try KagemushaSpartanUnloadProjectionV3(borrowed).netToAccount, .init(low: .max, high: 0))
+    var allCharged = wire
+    allCharged[227] = 4; allCharged[243] = 0
+    XCTAssertEqual(try KagemushaSpartanUnloadProjectionV3(allCharged).netToAccount, .init(low: 0, high: 0))
+
+    for change in [0, 1, 2, 211, 243, 420] {
+      var invalid = wire; invalid[change] ^= 0x80
+      XCTAssertThrowsError(try KagemushaSpartanUnloadProjectionV3(invalid))
+    }
+    for erase in [163..<195, 211..<227, 227..<243, 259..<291, 323..<355, 419..<421] {
+      var invalid = wire; invalid.resetBytes(in: erase)
+      XCTAssertThrowsError(try KagemushaSpartanUnloadProjectionV3(invalid))
+    }
+    for invalid in [Data(wire.dropLast()), wire + Data([0]), Data(repeating: 0, count: 16_385)] {
+      XCTAssertThrowsError(try KagemushaSpartanUnloadProjectionV3(invalid))
+    }
+  }
+
   func testExecuteValidatesNativeSequenceAndStatusSpecificReason() throws {
     func execution(_ status: Int32, low: UInt64 = 0, high: UInt64 = 0, detail: UInt32 = 0) throws -> KagemushaSpartanExecutionV1 {
       try .init(.init(status: status, sequenceLow: low, sequenceHigh: high, detail: detail,

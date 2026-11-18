@@ -44,6 +44,15 @@ class KagemushaSpartanWalletV1 internal constructor(
         }
     }
 
+    /** Read the authenticated Unload terms and release the unconfirmed preparation. */
+    fun reviewUnload(witness: ByteArray, predecessorHead: ByteArray): KagemushaSpartanUnloadProjectionV3 {
+        return prepare(witness, predecessorHead) { token, bytes ->
+            val projection = KagemushaSpartanUnloadProjectionV3(bytes)
+            discard(token)
+            projection
+        }
+    }
+
     private fun <T> prepare(witness: ByteArray, predecessorHead: ByteArray, decode: (Long, ByteArray) -> T): T {
         require(witness.isNotEmpty() && witness.size <= MAX_RECORD && predecessorHead.size <= 1_048_576)
         val identity = slot.copyOf()
@@ -222,6 +231,59 @@ class KagemushaSpartanTimeAnchorProjectionV2 internal constructor(bytes: ByteArr
     fun beforeHead(): ByteArray = original.copyOfRange(179, 211)
     fun afterHead(): ByteArray = original.copyOfRange(211, 243)
     override fun toString(): String = "KagemushaSpartanTimeAnchorProjectionV2([REDACTED])"
+}
+
+/** Native authenticates these destination bytes against the credential and the signed charge quote. */
+class KagemushaSpartanUnloadProjectionV3 internal constructor(bytes: ByteArray) {
+    private val original = if (bytes.size in 423..16_384) bytes.copyOf() else invalidSpartanOutput()
+    val ordinal: KagemushaWalletUInt128V1
+    val faceDebit: KagemushaWalletUInt128V1
+    val onlineCharge: KagemushaWalletUInt128V1
+    val netToAccount: KagemushaWalletUInt128V1
+    private val account: ByteArray
+    private val beneficiary: ByteArray?
+    init {
+        if (original[0] != 3.toByte() || original[1] != 0.toByte() || original[2] != 6.toByte()) invalidSpartanOutput()
+        val view = ByteBuffer.wrap(original).order(ByteOrder.LITTLE_ENDIAN)
+        fun scalar(i: Int) = KagemushaWalletUInt128V1(view.getLong(i), view.getLong(i + 8))
+        ordinal = scalar(195)
+        faceDebit = scalar(211)
+        onlineCharge = scalar(227)
+        netToAccount = scalar(243)
+        view.position(419)
+        fun address(): ByteArray {
+            if (view.remaining() < 2) invalidSpartanOutput()
+            val size = view.short.toInt() and 0xffff
+            if (size > view.remaining()) invalidSpartanOutput()
+            return ByteArray(size).also { view.get(it) }
+        }
+        account = address()
+        val quoted = address()
+        val zero = KagemushaWalletUInt128V1(0, 0)
+        val charged = onlineCharge != zero
+        if (view.hasRemaining() || account.isEmpty() || nullifier().all { it == 0.toByte() } ||
+            faceDebit == zero || onlineCharge > faceDebit || charged != quoted.isNotEmpty() ||
+            charged != quoteDigest().any { it != 0.toByte() } ||
+            charged != beneficiaryAccountDigest().any { it != 0.toByte() }) invalidSpartanOutput()
+        val borrow = if (faceDebit.low.toULong() < onlineCharge.low.toULong()) 1L else 0L
+        if (netToAccount != KagemushaWalletUInt128V1(faceDebit.low - onlineCharge.low,
+                faceDebit.high - onlineCharge.high - borrow)) invalidSpartanOutput()
+        beneficiary = if (charged) quoted else null
+    }
+    fun schemeId(): ByteArray = original.copyOfRange(3, 35)
+    fun walletId(): ByteArray = original.copyOfRange(35, 67)
+    fun operationId(): ByteArray = original.copyOfRange(67, 99)
+    fun capsuleDigest(): ByteArray = original.copyOfRange(99, 131)
+    fun assetDigest(): ByteArray = original.copyOfRange(131, 163)
+    fun nullifier(): ByteArray = original.copyOfRange(163, 195)
+    fun quoteDigest(): ByteArray = original.copyOfRange(259, 291)
+    fun credentialAccountDigest(): ByteArray = original.copyOfRange(291, 323)
+    fun beneficiaryAccountDigest(): ByteArray = original.copyOfRange(323, 355)
+    fun beforeHead(): ByteArray = original.copyOfRange(355, 387)
+    fun afterHead(): ByteArray = original.copyOfRange(387, 419)
+    fun credentialAccountBytes(): ByteArray = account.copyOf()
+    fun beneficiaryAccountBytes(): ByteArray? = beneficiary?.copyOf()
+    override fun toString(): String = "KagemushaSpartanUnloadProjectionV3([REDACTED])"
 }
 
 class KagemushaSpartanReviewV1 internal constructor(
