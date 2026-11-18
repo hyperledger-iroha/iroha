@@ -691,13 +691,11 @@ binary ran alone from its package directory.
 
 ## Phase 5 record (2026-11-17)
 
-Phase 5 is partly done. What is built is a coherent subset that changes no installed definition,
-selection, layout, golden or digest: the phase-4 test follow-through, profile threading, the C10
-result families and their projections, the mixed-profile call refusal, the `koto` C10 target and
-the declared C10 ABI hash. The release addition `iroha.runtime.ivm_c10.v1` itself (its storage,
-selected dispatch, catalog entry, draft route and activation tests) is not published yet; see
-"Not done in phase 5". C10's own ABI V1 surface therefore stays unselectable:
-`IvmProfileId::C10_ABI_V1` is still outside `IvmProfileId::IMPLEMENTED`.
+The November 17 candidate contained the phase-4 test follow-through, profile threading,
+C10 result families and projections, mixed-profile call refusal, the `koto` C10 target and
+its declared ABI hash. At that revision the catalog omitted `IvmProfileId::C10_ABI_V1`,
+so governance could select only the earlier host profiles. The November 18 integration
+below records publication of the dormant addition and its governed activation tests.
 
 ### As built
 
@@ -908,7 +906,7 @@ phase 5b files in the copy. The gate logs are under
   (`scripts/regenerate_current_rust_contract_artifact.py --write`, then `--check`).
 
 
-### November 18 integration
+### November 18 integration and qualification
 
 The release catalog publishes `iroha.runtime.ivm_c10.v1` as a dormant addition. Its draft
 binds the C10 host, registration interfaces, storage declarations, event family and certified
@@ -925,7 +923,6 @@ C10 manifest reads, negotiated C10 event delivery and the mixed-output proof fix
 `fixtures/sumeragi/native-finality/c10-mixed`. Decoder acceptance and governance decisions
 follow the [release transition record](../ironwood_runtime_transition.md).
 
-
 The certified Core tests in `runtime/catalog/ivm_c10/tests.rs` stage a scheduled fixture
 record with all four test validators' support for the exact change. The ordinary executor
 applies it at the certified boundary. Signed transactions then register, deploy and invoke a
@@ -935,3 +932,16 @@ the original certified suffix. With the complete-State commitment selected throu
 governed transitions, a successor authenticates the captured C10 manifests, host bindings
 and trigger repeats on snapshot restore. A tip snapshot without a certified successor is
 refused. Network governance and bootstrap authorization remain with each root's owners.
+
+On signed `c4bbbe38602f5499d0d9bcd7973b4357ebb34255`, the 18 C10 Core cases passed in
+27.469 seconds. The same library executable passed the four retained Core failures in
+26.169 seconds and the frozen selection, Ironwood, wire and State inventory checks in
+32.347 seconds (41 passed, two ignored). A separate data-model suite exercises the
+binary and JSON round trips for C10 faults, admission errors, result rows, events and
+filters in `ivm_c10.rs` and `ivm_c10/family_tests.rs`.
+
+The CLI accepts `koto test --trace` and `koto test trace`. The
+`trace_flag_and_subcommand_share_the_selected_baseline_execution` smoke test checks
+both forms. The November 18 coffee fixture yielded the same 71 rows with both spellings.
+The full Core, services, strict workspace and decoder release gates have separate
+revision-specific receipts in `artifacts/continuation-20261114/qualification-20261118.md`.

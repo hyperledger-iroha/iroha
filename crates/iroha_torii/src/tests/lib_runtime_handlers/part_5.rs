@@ -1,3 +1,5 @@
+use iroha_data_model::block::execution_output::ProfiledTransactionRejection;
+
 include!("part_5_pipeline_cache.rs");
 include!("part_5_committed_retry.rs");
 async fn pipeline_status_response(
@@ -2532,8 +2534,10 @@ async fn canonical_outcome_preserves_exact_committed_rejection() {
         .expect("indexed rejected transaction");
     assert!(matches!(
         outcome,
-        CanonicalTransactionOutcome::Rejected { height, reason: actual }
-            if height.get() == 2 && actual == reason
+        CanonicalTransactionOutcome::Rejected {
+            height,
+            reason: ProfiledTransactionRejection::Baseline(actual),
+        } if height.get() == 2 && actual == reason
     ));
 }
 #[tokio::test]
@@ -3177,7 +3181,10 @@ async fn transaction_details_http_preserves_original_receipt_after_cold_body_rea
             )
             .unwrap();
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
-        assert_eq!(details.transaction.result(), &original_result);
+        assert_eq!(
+            details.transaction.result().baseline(),
+            Some(&original_result)
+        );
         assert_eq!(details.transaction.result().is_ok(), applied);
 
         let missing = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -5039,7 +5046,7 @@ async fn pipeline_status_checkpoint_reader_preserves_exact_rejection_and_publica
                 },
                 Err(reason) => CanonicalTransactionOutcome::Rejected {
                     height: header.height(),
-                    reason: reason.clone(),
+                    reason: ProfiledTransactionRejection::Baseline(reason.clone()),
                 },
             }
         };

@@ -19,6 +19,7 @@ use iroha_data_model::{
         AliasPlanDispositionV1, AliasSetupPlanRequestV1, AliasTransactionPlanV1,
     },
     asset::AssetDefinitionId,
+    block::execution_output::TransactionRejectionRef,
     isi::{InstructionBox, SetParameter},
     nexus::{
         LaneConfig, LaneLifecycleStatusV1, NexusCatalogTransitionV1, NexusRuntimeCatalogV1,
@@ -1530,7 +1531,11 @@ fn incomplete_report_detail(report: &ReportV1) -> String {
 
 // Display/source messages expose the native cause without Debug-formatting
 // instruction or signed transaction payloads. Bound terminal diagnostic size.
-fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+fn rejection_error_chain(reason: TransactionRejectionRef<'_>) -> String {
+    let error: &(dyn std::error::Error + 'static) = match reason {
+        TransactionRejectionRef::Baseline(original) => original,
+        TransactionRejectionRef::C10(original) => original,
+    };
     let mut next = Some(error);
     let mut parts = Vec::new();
     for _ in 0..16 {
@@ -2572,8 +2577,14 @@ mod tests {
     fn saved_apply_emits_report_before_rejecting_incomplete_success() {
         use iroha_data_model::{
             ValidationFail,
-            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            block::execution_output::{
+                ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1,
+                NetworkExecutionOutputV1,
+            },
             isi::error::InstructionExecutionError,
+            ivm_c10::{
+                TransactionRejectionReasonC10V1, TransactionResultC10V1, ValidationFailC10V1,
+            },
             query::CommittedTransaction,
             transaction::{
                 DataTriggerSequence, TransactionResult,
@@ -2757,6 +2768,37 @@ mod tests {
             },
         });
         phase.committed = Some(retained);
+        let c10_marker = "C10 deploy phase source diagnostic";
+        let c10_rejection =
+            TransactionRejectionReasonC10V1::Validation(ValidationFailC10V1::InstructionFailed(
+                InstructionExecutionError::Conversion(c10_marker.into()),
+            ));
+        let mut c10_details = details.clone();
+        let output = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source: ExecutionSourceC10V1::Network(0),
+            result: TransactionResultC10V1(
+                Err(c10_rejection),
+                Vec::new(),
+                None,
+                Default::default(),
+            ),
+            completions: Vec::new(),
+            trigger_lifecycle: None,
+        });
+        c10_details.transaction.output_hash = iroha_crypto::HashOf::new(&output);
+        c10_details.transaction.output = output;
+        let mut c10_phase = phase.clone();
+        c10_phase.committed = retain_rejected_details(&transaction, Ok(c10_details)).unwrap();
+        let c10_report = phase_report(&plan, vec![c10_phase]);
+        let c10_error = print_saved_report(&c10_report, true, |_| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            c10_error
+                .contains("Validation failed: Instruction execution failed: Conversion Error:")
+        );
+        assert!(c10_error.contains(c10_marker));
+        assert!(!c10_error.contains(&prepared.signed_transaction_wire_hex));
         let report = phase_report(&plan, vec![phase]);
         let error = print_saved_report(&report, true, |_| Ok(()))
             .unwrap_err()
@@ -2779,12 +2821,12 @@ mod tests {
             .into(),
             reason: marker.into(),
         });
-        let summary = rejection_error_chain(&safe);
+        let summary = rejection_error_chain(TransactionRejectionRef::Baseline(&safe));
         assert!(summary.contains(marker));
         assert!(!summary.contains(private_payload));
         let long =
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted("é".repeat(5000)));
-        let bounded = rejection_error_chain(&long);
+        let bounded = rejection_error_chain(TransactionRejectionRef::Baseline(&long));
         assert!(bounded.ends_with(" [truncated]"));
         assert_eq!(bounded.chars().count(), 4096 + " [truncated]".len());
         let absent = iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
