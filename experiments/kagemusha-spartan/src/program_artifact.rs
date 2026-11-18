@@ -258,14 +258,7 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         let mut operations = Vec::with_capacity(operation_bytes);
         for op in &tape.ops {
-            let words = match *op {
-                Op::Add(a, b) => [0, a, b],
-                Op::Sub(a, b) => [1, a, b],
-                Op::Mul(a, b) => [2, a, b],
-                Op::Scale(a, b) => [3, a, b],
-                Op::Const(a) => [4, a, 0],
-            };
-            for word in words {
+            for word in op_words(*op) {
                 operations.extend_from_slice(&word.to_le_bytes());
             }
         }
@@ -578,6 +571,33 @@ impl<F: Scalar> UniformCircuit<F> {
             (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
             self.challenge_degrees(),
         )
+    }
+
+    /// The exact compiled matrix tape in its public-program form: the input
+    /// layout, the instruction records `export_program` writes, the constant
+    /// pool and the output slots. E4's cold-tape normalization
+    /// (`bootstrap_discharge::ColdTape::normalize`) checks it again and
+    /// derives the in-circuit evaluator from it; nothing here is trusted.
+    pub(crate) fn matrix_tape_words(&self) -> crate::bootstrap_discharge::TapeWords<F> {
+        let tape = self.plan();
+        crate::bootstrap_discharge::TapeWords {
+            layout: (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
+            inputs: tape.inputs,
+            words: tape.ops.iter().map(|op| op_words(*op)).collect(),
+            pool: tape.pool.clone(),
+            outputs: tape.out,
+        }
+    }
+}
+
+/// An instruction's public-program record: tag, then its two words.
+fn op_words(op: Op) -> [u32; 3] {
+    match op {
+        Op::Add(a, b) => [0, a, b],
+        Op::Sub(a, b) => [1, a, b],
+        Op::Mul(a, b) => [2, a, b],
+        Op::Scale(a, b) => [3, a, b],
+        Op::Const(a) => [4, a, 0],
     }
 }
 
