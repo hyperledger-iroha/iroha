@@ -1,21 +1,14 @@
-//! The one fixed Control program: Load and RefreshPolicy(TimeAnchor) behind a
-//! constrained `control_mode` selector (E4-F1-F2-DESIGN §5.6-§5.7).
+//! One fixed Control program for Load, RefreshTimeAnchor and Unload.
 //!
-//! Both operations share one layout, so every witness, mode, signer key and
-//! floor comparison compiles to the same matrices. The common part owns the
-//! two state openings, current-credential and certified-table continuity,
-//! the selected statement, the own receipt (tag `2 + 5t`, operation input
-//! `(1 - t)·receipt_digest + t·anchor_digest`) and the lineage ports. The
-//! Load branch is `load::append_branch` placed as a branch: its internal rows
-//! are exactly Load's and every Load-only join is `(1 - t)·X = 0`. The
-//! Refresh branch is `time_anchor::append_branch`: total authority
-//! predicates, the exact maximum and `t·X = 0` joins. An inactive branch
-//! proves its canonical dummy (`load::dummy_*`, `Authority::dummy()`).
+//! Two Boolean mode bits in public IO slots 62 and 63 select a single
+//! semantic operation. Their product is zero. All three modes share state
+//! openings, credential continuity, a signed receipt and a depth-32 recovery
+//! insertion. The selected monetary mode binds both roots, key and value.
+//! Refresh preserves the recovery root. Its signature check uses the fixed
+//! public dummy tuple in the two monetary modes.
 //!
-//! `t` is a Boolean witness cell here; the recursive program binds it to
-//! io63 on P and, through the pair link, on S (design §2.1), and pins it to
-//! zero in every non-Control program. Native must still verify Load finality
-//! before Advance; this relation does not prove BLS finality.
+//! Load finality before Advance and Unload verification before online payout
+//! are separate native and ledger requirements.
 // Selected by the recursive Control program in the F2 integration step
 // (full.rs kinds and programs, engine and native witness owners).
 #![cfg_attr(not(test), allow(dead_code))]
@@ -41,26 +34,62 @@ use crate::{
     uniform::{constant, plus, scaled},
 };
 
-/// The public io carrying `control_mode` on both pair sides (design §2.1).
-pub const MODE_IO: usize = 63;
-/// Fields only the Refresh branch changes: the Load branch preserves them
-/// under `1 - t` (the accepted-time floor and the held anchor digest).
-const REFRESH_ONLY_CORE: [usize; 1] = [28];
+/// The public IO offset of the Control mode pair (Unload, RefreshTimeAnchor).
+pub const MODE_IO: usize = 62;
+/// Fields preserved by Load that either Refresh or Unload may update.
+const OTHER_MODE_CORE: [usize; 4] = [10, 14, 18, 28];
 const REFRESH_ONLY_REST: [usize; 1] = [5];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Load,
     RefreshTimeAnchor,
+    Unload,
 }
 impl Mode {
-    /// The `control_mode` value: Load 0, RefreshTimeAnchor 1.
-    pub fn bit(self) -> bool {
-        self == Self::RefreshTimeAnchor
-    }
-    /// The semantic statement tag: Load 2, RefreshPolicy 7.
+    /// Wire statement tag for this semantic operation.
     pub fn tag(self) -> u64 {
-        if self.bit() { time_anchor::REFRESH_TAG } else { 2 }
+        match self {
+            Self::Load => 2,
+            Self::RefreshTimeAnchor => time_anchor::REFRESH_TAG,
+            Self::Unload => 6,
+        }
+    }
+}
+
+/// The two authenticated mode inputs, in public-input order (io62, io63).
+#[derive(Clone, Copy)]
+pub struct Modes {
+    /// Unload selector in public slot 62.
+    pub unload: Source,
+    /// RefreshTimeAnchor selector in public slot 63.
+    pub refresh: Source,
+}
+impl Modes {
+    /// Authenticated semantic tag as a linear form in the two selectors.
+    pub fn tag(self) -> crate::uniform::Lin<Fp> {
+        plus(
+            &plus(
+                &constant(vec![Fp::from(2)]),
+                &scaled(&self.refresh.linear(), Fp::from(5)),
+            ),
+            &scaled(&self.unload.linear(), Fp::from(4)),
+        )
+    }
+
+    fn load(self) -> crate::uniform::Lin<Fp> {
+        plus(
+            &constant(vec![Fp::ONE]),
+            &scaled(
+                &plus(&self.refresh.linear(), &self.unload.linear()),
+                -Fp::ONE,
+            ),
+        )
+    }
+
+    /// Mode bits in canonical public-input order.
+    pub fn inputs(self) -> [Source; 2] {
+        [self.unload, self.refresh]
     }
 }
 
@@ -97,6 +126,23 @@ impl Witness {
             authority: Authority::dummy(),
         }
     }
+    /// Unload uses its signed monetary originals and the common insertion.
+    pub fn unload(input: crate::unload::Witness) -> Self {
+        Self {
+            mode: Mode::Unload,
+            before_core: input.before_core,
+            before_rest: input.before_rest,
+            after_core: input.after_core,
+            after_rest: input.after_rest,
+            credential: input.credential,
+            statement: input.statement,
+            receipt: input.receipt,
+            ordinary: load::dummy_ordinary(),
+            recovery: input.recovery,
+            authority: Authority::dummy(),
+        }
+    }
+
     /// A RefreshTimeAnchor, with the inactive dummy Load originals.
     #[allow(clippy::too_many_arguments)]
     pub fn refresh(
@@ -126,7 +172,7 @@ impl Witness {
 }
 
 pub struct ControlOperation<R> {
-    mode: Source,
+    mode: Modes,
     before: StateCells,
     after: StateCells,
     statement: StatementCells,
@@ -140,8 +186,8 @@ pub struct ControlOperation<R> {
 pub type CompleteControl = ControlOperation<AuthenticatedReceipt>;
 pub type PreparedControl = ControlOperation<receipt::PreparedBody>;
 impl<R> ControlOperation<R> {
-    /// The constrained Boolean `control_mode` cell (bind to io63).
-    pub fn mode(&self) -> Source {
+    /// The constrained pair of mode bits in io62 and io63.
+    pub fn mode(&self) -> Modes {
         self.mode
     }
     pub fn before(&self) -> &StateCells {
@@ -257,45 +303,67 @@ fn append_with<R>(
 ) -> Result<ControlOperation<R>, &'static str> {
     let mut c = Cells::new(family);
     c.a.name = "Control mode selector";
-    let t = c.bit(input.mode.bit());
-    let selector = w.push(c.a);
-    let mode = Source {
-        array: selector,
-        cell: t,
+    let u = c.bit(input.mode == Mode::Unload);
+    let r = c.bit(input.mode == Mode::RefreshTimeAnchor);
+    c.a.rows
+        .push([crate::uniform::own(u, 1), crate::uniform::own(r, 1), vec![]]);
+    let local = w.push(c.a);
+    let port = |cell| Source {
+        array: local,
+        cell,
         instance: 0,
+    };
+    let mode = Modes {
+        unload: port(u),
+        refresh: port(r),
     };
     let before = monetary_state::append_state(w, family, &input.before_core, &input.before_rest);
     let after = monetary_state::append_state(w, family, &input.after_core, &input.after_rest);
     let credential =
         operation_auth::append_current(w, family, &input.credential, &before, predecessor)?;
     let statement = statement::append_control_statement(w, family, mode, &input.statement);
-    load::append_branch(
+    let load_entry = load::append_branch(
         w,
         family,
         &input.ordinary,
-        &input.recovery,
         [&before, &after],
         &statement,
         predecessor,
         &Placement::Branch {
-            enable: plus(&constant(vec![Fp::ONE]), &scaled(&mode.linear(), -Fp::ONE)),
-            core: &REFRESH_ONLY_CORE,
+            enable: mode.load(),
+            core: &OTHER_MODE_CORE,
             rest: &REFRESH_ONLY_REST,
         },
     );
-    // The own receipt installs the generator and wallet tables the total
-    // authority signatures reuse, so it precedes the Refresh branch.
+    let unload_entry = crate::unload::append_branch(
+        w,
+        family,
+        [&before, &after],
+        &statement,
+        predecessor,
+        Some(mode.unload),
+    );
+    let insertion = crate::indexed_map::append_insert(w, family, &input.recovery);
+    load::join_recovery(w, family, &insertion, load_entry, Some(mode.load()));
+    load::join_recovery(
+        w,
+        family,
+        &insertion,
+        unload_entry,
+        Some(mode.unload.linear()),
+    );
+    // Root-certificate authentication reuses the generator table installed by the receipt.
     let receipt = own(w, &credential, &statement, Operation::Control { mode })?;
     let refresh = time_anchor::append_branch(
         w,
         family,
-        mode,
+        mode.refresh,
         &input.authority,
         root,
         [&before, &after],
         &statement,
         &credential,
-    );
+    )?;
     let lineage = load::lineage(&after, predecessor);
     Ok(ControlOperation {
         mode,
@@ -484,10 +552,8 @@ mod tests {
         ordinary[242] = 2;
         ordinary[250..282].copy_from_slice(&boot.credential.body[98..130]);
         let digest = load::ordinary_digest(&ordinary);
-        let value = poseidon::hash_with_domain(
-            load::RECOVERY_DOMAIN,
-            &[Fp::ZERO, digest, Fp::from(2000)],
-        );
+        let value =
+            poseidon::hash_with_domain(load::RECOVERY_DOMAIN, &[Fp::ZERO, digest, Fp::from(2000)]);
         let (recovery, root) =
             indexed_map::empty_insert(Fp::from_u128(1u128 << 127).double(), value);
         let mut after = boot.core;
@@ -551,7 +617,7 @@ mod tests {
     }
     fn sign(input: &mut Witness, key: &WalletKey) {
         let st = input.statement;
-        let operand = if input.mode == Mode::Load {
+        let operand = if input.mode != Mode::RefreshTimeAnchor {
             st[17]
         } else {
             st[18]
@@ -601,7 +667,7 @@ mod tests {
         );
         harness::expose(&mut w, family, 16, &completed.context());
         harness::expose(&mut w, family, 32, &completed.lineage());
-        harness::expose(&mut w, family, MODE_IO, &[completed.mode()]);
+        harness::expose(&mut w, family, MODE_IO, &completed.mode().inputs());
         Ok(harness::finish(w, 16))
     }
     fn build(f: &Fixture) -> harness::Built {
@@ -749,6 +815,63 @@ mod tests {
     }
 
     #[test]
+    fn control_unload_materializes_lineage_and_preserves_unrelated_state() {
+        let (input, profile, key) = crate::unload::tests::control_fixture();
+        let mut f = Fixture {
+            input: Witness::unload(input),
+            profile,
+            key,
+        };
+        assert!(holds(&f));
+        for field in [9, 10, 14, 18, 19, 28] {
+            let expected = f.input.after_core[field];
+            f.input.after_core[field] += Fp::ONE;
+            reseal(&mut f);
+            assert!(!holds(&f), "Unload successor field {field}");
+            f.input.after_core[field] = expected;
+        }
+        f.input.statement[21] = Fp::ZERO;
+        reseal(&mut f);
+        assert!(!holds(&f), "charged Unload needs the quote digest");
+    }
+
+    #[test]
+    fn three_control_modes_share_exact_program_bytes() {
+        let load = load_fixture(3);
+        let reference = build(&load).0.standalone_program_bytes().unwrap();
+        let (unload, profile, key) = crate::unload::tests::control_fixture();
+        let unload = Fixture {
+            input: Witness::unload(unload),
+            profile,
+            key,
+        };
+        for f in [refresh(FLOOR + 10), unload] {
+            let candidate = build(&f);
+            assert!(harness::holds(&candidate));
+            let program = candidate.0.standalone_program_bytes().unwrap();
+            assert!(
+                reference == program,
+                "one exact Control program for all three modes"
+            );
+        }
+    }
+
+    #[test]
+    fn inactive_anchor_bytes_cannot_select_the_signer() {
+        let mut input = load_fixture(0);
+        let baseline = entries(&build(&input));
+        let mut authority = authority(FLOOR + 5, SIGNER).0;
+        authority.anchor.signature.fill(0xff);
+        input.input.authority = authority.clone();
+        let candidate = build(&input);
+        assert!(harness::holds(&candidate));
+        assert_eq!(entries(&candidate), baseline);
+        drop(candidate);
+        let (core, rest) = funded();
+        assert!(!holds(&refresh_from(core, rest, authority)));
+    }
+
+    #[test]
     fn time_anchor_digests_and_transition_match_native() {
         use iroha_data_model::kagemusha::{
             KagemushaDeviceSignatureV1, KagemushaWalletTimeAnchorBodyV1,
@@ -766,11 +889,14 @@ mod tests {
                     issuer_time_ms: time,
                     signer_certificate: body[106..138].try_into().unwrap(),
                 },
-                signature: KagemushaDeviceSignatureV1::from_raw_bytes(&a.anchor.signature)
-                    .unwrap(),
+                signature: KagemushaDeviceSignatureV1::from_raw_bytes(&a.anchor.signature).unwrap(),
             };
             model.validate().unwrap();
-            assert_eq!(model.body.transcript(), body.to_vec(), "exact 138-byte body");
+            assert_eq!(
+                model.body.transcript(),
+                body.to_vec(),
+                "exact 138-byte body"
+            );
             assert_eq!(
                 model.body.signing_message(),
                 time_anchor::message(&a.anchor).to_repr(),
@@ -781,8 +907,7 @@ mod tests {
                 time_anchor::digest(&a.anchor).to_repr(),
                 "object digest"
             );
-            let verified =
-                time_anchor::authenticate(&a, &scheme(), &wallet_id(), &root()).unwrap();
+            let verified = time_anchor::authenticate(&a, &scheme(), &wallet_id(), &root()).unwrap();
             let (core, rest) = funded();
             let (after, after_rest) =
                 time_anchor::refresh(&core, &rest, &verified, Fp::from(5151)).unwrap();
@@ -800,7 +925,7 @@ mod tests {
             assert_eq!(value(branch.digest()), verified.digest);
             assert_eq!(value(branch.time()), Fp::from(time));
             assert_eq!(value(branch.floor()), Fp::from(time.max(FLOOR)));
-            assert_eq!(value(completed.mode()), Fp::ONE);
+            assert_eq!(value(completed.mode().refresh), Fp::ONE);
             assert_eq!(value(completed.head()), f.input.statement[15]);
             assert_eq!(
                 value(Source {
@@ -830,7 +955,10 @@ mod tests {
         let mut cases: Vec<(&str, Authority)> = vec![];
         for (name, role) in [
             ("Enrollment-role certificate", Role::Enrollment as u8),
-            ("RegulatoryPolicy-role certificate", Role::RegulatoryPolicy as u8),
+            (
+                "RegulatoryPolicy-role certificate",
+                Role::RegulatoryPolicy as u8,
+            ),
             ("Artifact-role certificate", Role::Artifact as u8),
             ("invalid role 2", 2),
         ] {
@@ -857,20 +985,14 @@ mod tests {
         cases.push(("certificate for a foreign scheme", a));
         let (mut a, d) = authority(FLOOR + 1, SIGNER);
         a.certificate.body[0] = 2;
-        a.certificate.signature = bootstrap::sign(
-            certificate::message(&a.certificate),
-            &root_secret(),
-            "root",
-        );
+        a.certificate.signature =
+            bootstrap::sign(certificate::message(&a.certificate), &root_secret(), "root");
         rebind(&mut a, &d);
         cases.push(("certificate version 2", a));
         let (mut a, d) = authority(FLOOR + 1, SIGNER);
         a.certificate.body[70] ^= 1;
-        a.certificate.signature = bootstrap::sign(
-            certificate::message(&a.certificate),
-            &root_secret(),
-            "root",
-        );
+        a.certificate.signature =
+            bootstrap::sign(certificate::message(&a.certificate), &root_secret(), "root");
         rebind(&mut a, &d);
         cases.push(("certificate key off the curve", a));
         let (mut a, d) = authority(FLOOR + 1, SIGNER);
@@ -901,7 +1023,12 @@ mod tests {
         sign_anchor(&mut a, &d);
         cases.push(("noncanonical signer field", a));
         let (mut a, d) = authority(FLOOR + 1, SIGNER);
-        let other = issue(Role::TimeAnchor as u8, &signer(SIGNER).1, 10, &root_secret());
+        let other = issue(
+            Role::TimeAnchor as u8,
+            &signer(SIGNER).1,
+            10,
+            &root_secret(),
+        );
         a.anchor.body[106..138]
             .copy_from_slice(certificate::certificate_digest(&other).to_repr().as_ref());
         sign_anchor(&mut a, &d);
@@ -951,7 +1078,11 @@ mod tests {
         for (name, time, claimed) in [
             ("jump above a newer anchor", FLOOR + 5_000, FLOOR + 5_001),
             ("jump above the held floor", FLOOR - 5_000, FLOOR + 1),
-            ("regression to an older anchor", FLOOR - 5_000, FLOOR - 5_000),
+            (
+                "regression to an older anchor",
+                FLOOR - 5_000,
+                FLOOR - 5_000,
+            ),
             ("newer anchor ignored", FLOOR + 5_000, FLOOR),
             ("floor reset", FLOOR + 5_000, 0),
         ] {
@@ -968,7 +1099,10 @@ mod tests {
         let (a, _) = authority(FLOOR + 1, SIGNER);
         let (before, mut rest) = funded();
         rest[5] = time_anchor::digest(&a.anchor);
-        cases.push(("reinstalling the held anchor", refresh_from(before, rest, a)));
+        cases.push((
+            "reinstalling the held anchor",
+            refresh_from(before, rest, a),
+        ));
         let (mut before, rest) = funded();
         before[11] = Fp::from_u128(u128::MAX);
         cases.push((
@@ -1256,7 +1390,7 @@ mod tests {
             ],
         );
         harness::expose(&mut w, family, 32, &prepared.lineage());
-        harness::expose(&mut w, family, MODE_IO, &[prepared.mode()]);
+        harness::expose(&mut w, family, MODE_IO, &prepared.mode().inputs());
         harness::finish(w, 16)
     }
 
@@ -1287,7 +1421,7 @@ mod tests {
         }
     }
 
-    /// Row census of both branches and of Load alone (run with --nocapture).
+    /// Census of the three Control modes and standalone Load.
     #[test]
     fn control_relation_census() {
         type Census = Vec<(&'static str, [usize; 4])>;
@@ -1299,7 +1433,11 @@ mod tests {
             "7 partial rounds",
             "mask",
         ];
-        fn census(w: &Wiring<Fp>, start: usize, component: impl Fn(&str) -> &'static str) -> Census {
+        fn census(
+            w: &Wiring<Fp>,
+            start: usize,
+            component: impl Fn(&str) -> &'static str,
+        ) -> Census {
             let mut groups: Census = vec![];
             let mut current = "";
             for a in &w.arrays[start..] {
@@ -1345,83 +1483,114 @@ mod tests {
         // Components follow construction order; a name seen again keeps the
         // component it first belonged to only where it is unambiguous.
         fn component(phase: &std::cell::Cell<u8>, name: &str) -> &'static str {
-                match name {
-                    "Control mode selector" => "mode selector",
-                    "canonical monetary Core30 and Rest6" => "two Core30/Rest6 state openings",
-                    "operation authentication range"
-                    | "certificate bytes and integers"
-                    | "certificate issuer square"
-                    | "certificate issuer curve"
-                    | "current credential identity ports" if phase.get() == 0 => {
-                        "current credential opening and continuity"
-                    }
-                    "canonical26 field statement" => {
-                        phase.set(1);
-                        "selected statement (tag 2+5t) and digest"
-                    }
-                    "exact ordinary Load receipt" => "Load: exact ordinary receipt",
-                    "complete Load monetary and original joins" => {
-                        "Load: joins (Load-only enabled) and recovery entry"
-                    }
-                    "exact indexed-map insertion" | "complete Load recovery joins" => {
-                        "Load: depth-32 recovery insertion and joins"
-                    }
-                    "exact authenticated own receipt" | "exact unsigned prepared receipt" => {
-                        phase.set(2);
-                        "own receipt (selected op, SHA-256, comb ECDSA, wallet table)"
-                    }
-                    "signer root fixed table" | "total signer certificate opening" => {
-                        phase.set(3);
-                        "Refresh: signer certificate opening (role 4, curve, digests)"
-                    }
-                    "certificate issuer square" | "certificate issuer curve" if phase.get() == 3 => {
-                        "Refresh: signer certificate opening (role 4, curve, digests)"
-                    }
-                    "total signer-certificate root ECDSA arithmetic" => {
-                        "Refresh: total root ECDSA (fixed root table)"
-                    }
-                    "total signer certificate verdict" => "Refresh: total root ECDSA (fixed root table)",
-                    "time-anchor signer derived comb table" => {
-                        phase.set(4);
-                        "Refresh: signer comb table derived in circuit"
-                    }
-                    "total time-anchor opening" => {
-                        phase.set(5);
-                        "Refresh: anchor opening (body, m, d, T)"
-                    }
-                    "total time-anchor ECDSA arithmetic" => {
-                        phase.set(6);
-                        "Refresh: total anchor ECDSA (derived table)"
-                    }
-                    "RefreshTimeAnchor verdict, maximum and enabled joins" => {
-                        "Refresh: verdict, exact maximum, enabled joins"
-                    }
-                    _ => match phase.get() {
-                        0 => "current credential opening and continuity",
-                        2 => "own receipt (selected op, SHA-256, comb ECDSA, wallet table)",
-                        3 => "Refresh: total root ECDSA (fixed root table)",
-                        4 => "Refresh: signer comb table derived in circuit",
-                        6 => "Refresh: total anchor ECDSA (derived table)",
-                        _ => "other",
-                    },
+            match name {
+                "Control mode selector" => "mode selector",
+                "canonical monetary Core30 and Rest6" => "two Core30/Rest6 state openings",
+                "operation authentication range"
+                | "certificate bytes and integers"
+                | "certificate issuer square"
+                | "certificate issuer curve"
+                | "current credential identity ports"
+                    if phase.get() == 0 =>
+                {
+                    "current credential opening and continuity"
                 }
+                "canonical26 field statement" => {
+                    phase.set(1);
+                    "selected statement and digest"
+                }
+                "exact ordinary Load receipt" => "Load: exact ordinary receipt",
+                "complete Load monetary and original joins" => {
+                    "Load: joins (Load-only enabled) and recovery entry"
+                }
+                "exact indexed-map insertion" | "monetary recovery joins" => {
+                    "shared depth-32 recovery insertion and joins"
+                }
+                "exact authenticated own receipt" | "exact unsigned prepared receipt" => {
+                    phase.set(2);
+                    "own receipt (selected op, SHA-256, comb ECDSA, wallet table)"
+                }
+                "signer root fixed table" | "total signer certificate opening" => {
+                    phase.set(3);
+                    "Refresh: signer certificate opening (role 4, curve, digests)"
+                }
+                "certificate issuer square" | "certificate issuer curve" if phase.get() == 3 => {
+                    "Refresh: signer certificate opening (role 4, curve, digests)"
+                }
+                "total signer-certificate root ECDSA arithmetic" => {
+                    "Refresh: total root ECDSA (fixed root table)"
+                }
+                "total signer certificate verdict" => {
+                    "Refresh: total root ECDSA (fixed root table)"
+                }
+                "time-anchor signer derived comb table" => {
+                    phase.set(4);
+                    "Refresh: signer comb table derived in circuit"
+                }
+                "total time-anchor opening" => {
+                    phase.set(5);
+                    "Refresh: anchor opening (body, m, d, T)"
+                }
+                "selected time-anchor signature" => {
+                    phase.set(6);
+                    "Refresh hard anchor signature with selected inputs"
+                }
+                "RefreshTimeAnchor verdict, maximum and enabled joins" => {
+                    "Refresh: verdict, exact maximum, enabled joins"
+                }
+                _ => match phase.get() {
+                    0 => "current credential opening and continuity",
+                    2 => "own receipt (selected op, SHA-256, comb ECDSA, wallet table)",
+                    3 => "Refresh: total root ECDSA (fixed root table)",
+                    4 => "Refresh: signer comb table derived in circuit",
+                    6 => "Refresh hard anchor signature with selected inputs",
+                    _ => "other",
+                },
+            }
         }
         let mut shapes = vec![];
         let mut totals = vec![];
-        for (label, f) in [("load-mode", load_fixture(3)), ("refresh-mode", refresh(FLOOR + 1))] {
+        let (input, profile, key) = crate::unload::tests::control_fixture();
+        let unload = Fixture {
+            input: Witness::unload(input),
+            profile,
+            key,
+        };
+        for (label, f) in [
+            ("load-mode", load_fixture(3)),
+            ("refresh-mode", refresh(FLOOR + 1)),
+            ("unload-mode", unload),
+        ] {
             let mut w = Wiring::default();
             let family = w.family(0, 1);
             let predecessor = harness::predecessor(&mut w, family, f.profile);
             let start = w.arrays.len();
             append(&mut w, family, &root(), &f.input, &predecessor).unwrap();
             let phase = std::cell::Cell::new(0);
+            assert_eq!(
+                w.arrays[start..]
+                    .iter()
+                    .filter(|array| array.name == "exact indexed-map insertion")
+                    .count(),
+                1,
+                "{label} must use one recovery insertion",
+            );
             let groups = census(&w, start, |name| component(&phase, name));
             totals.push(print(label, &groups));
             let b = build(&f);
             assert!(harness::holds(&b));
-            shapes.push((label, b.0.shape.sx, b.0.shape.row_bits, b.0.shape.col_bits, b.0.shape.cols()));
+            shapes.push((
+                label,
+                b.0.shape.sx,
+                b.0.shape.row_bits,
+                b.0.shape.col_bits,
+                b.0.shape.cols(),
+            ));
         }
-        assert_eq!(totals[0], totals[1], "both modes have one layout");
+        assert!(
+            totals.iter().all(|total| total == &totals[0]),
+            "three modes have one layout"
+        );
         let (input, profile) = load_witness(3);
         let mut w = Wiring::default();
         let family = w.family(0, 1);
@@ -1429,10 +1598,19 @@ mod tests {
         let start = w.arrays.len();
         load::append(&mut w, family, &input, &predecessor).unwrap();
         let phase = std::cell::Cell::new(0);
-        let alone = print("load-alone", &census(&w, start, |name| component(&phase, name)));
+        let alone = print(
+            "load-alone",
+            &census(&w, start, |name| component(&phase, name)),
+        );
         let b = load_alone(&input, profile);
         assert!(harness::holds(&b));
-        shapes.push(("load-alone", b.0.shape.sx, b.0.shape.row_bits, b.0.shape.col_bits, b.0.shape.cols()));
+        shapes.push((
+            "load-alone",
+            b.0.shape.sx,
+            b.0.shape.row_bits,
+            b.0.shape.col_bits,
+            b.0.shape.cols(),
+        ));
         for (label, sx, row_bits, col_bits, cols) in shapes {
             println!("shape {label}: sx {sx} row_bits {row_bits} col_bits {col_bits} cols {cols}");
         }

@@ -90,16 +90,13 @@ fn hash_cells(c: &mut Cells, v: Fp) -> [usize; 3] {
     [c.cell(Fp::ZERO, 255), c.cell(v, 255), c.cell(Fp::ZERO, 255)]
 }
 
-/// The semantic operation an own receipt names: one fixed kind, or the
-/// Control program's selected operation behind its constrained Boolean
-/// `control_mode` cell `t` (Load 0, RefreshPolicy(TimeAnchor) 1): tag
-/// `2 + 5t` and operation input `(1 - t)·statement[17] + t·statement[18]`,
-/// the Load receipt digest or the applied anchor digest. Both are rows of the
-/// one fixed layout; neither is a Rust-selected matrix.
+/// Receipt semantics for a fixed kind or the three-mode Control program.
+/// The semantic tag is `2 + 5r + 4u`. Field 17 is the Load digest or
+/// Unload nullifier, and field 18 is the update digest in Refresh.
 #[derive(Clone, Copy)]
 pub enum Operation {
     Fixed(Kind),
-    Control { mode: Source },
+    Control { mode: crate::control::Modes },
 }
 impl Operation {
     fn receive(self) -> bool {
@@ -174,15 +171,15 @@ fn append_body_fields(
             op_items
         }
         Operation::Control { mode } => {
-            assert_eq!(w.arrays[mode.array].family, family, "same-family mode");
-            let t = mode.linear();
-            c.eq(
-                sf(16).linear(),
-                plus(&constant(vec![Fp::from(2)]), &scaled(&t, Fp::from(5))),
+            assert_eq!(
+                w.arrays[mode.refresh.array].family, family,
+                "same-family mode"
             );
+            let t = mode.refresh.linear();
+            c.eq(sf(16).linear(), mode.tag());
             // operation_input = (1 - t)·receipt_digest + t·update.
             let (load, update) = (sf(17).value(w), sf(18).value(w));
-            let value = load + mode.value(w) * (update - load);
+            let value = load + mode.refresh.value(w) * (update - load);
             let input = c.cell(value, 255);
             c.a.rows.push([
                 t,

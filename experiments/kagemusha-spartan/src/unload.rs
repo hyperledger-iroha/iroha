@@ -36,7 +36,7 @@ use crate::{
     receipt::{self, AuthenticatedReceipt, PaymentDigest},
     send_arithmetic::Source,
     statement::{self, Kind, StatementCells},
-    uniform::{constant, own, plus},
+    uniform::{constant, own, plus, scaled},
 };
 
 pub const NULLIFIER_DOMAIN: u64 = u64::from_le_bytes(*b"kgwnull1");
@@ -207,6 +207,30 @@ fn append_relation(
     // tag 6, nonzero nullifier, u128 ordinal/amount/charge, amount > 0,
     // charge <= amount, quote zero iff charge zero, fields 22..25 zero.
     let statement = statement::append_statement(w, family, Kind::Unload, &input.statement);
+    let entry = append_branch(w, family, [&before, &after], &statement, predecessor, None);
+    let insertion = indexed_map::append_insert(w, family, &input.recovery);
+    crate::load::join_recovery(w, family, &insertion, entry, None);
+    let lineage = crate::load::lineage(&after, predecessor);
+    Ok(UnloadOperation {
+        before,
+        after,
+        statement,
+        credential,
+        receipt: (),
+        lineage,
+        context: predecessor.context(),
+        table: predecessor.table(),
+    })
+}
+
+pub(crate) fn append_branch(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    [before, after]: [&StateCells; 2],
+    statement: &StatementCells,
+    predecessor: &VerifiedPredecessor,
+    enable: Option<Source>,
+) -> crate::load::RecoveryEntry {
     operation_auth::ensure_range(w, family);
     let prior = predecessor.lineage();
     let bf = |i| source(before.local, before.core[i]);
@@ -219,6 +243,14 @@ fn append_relation(
     let pending = prior[context::PENDING_ROOT];
     let mut c = Cells::new(family);
     c.a.name = "complete Unload monetary statement and authority joins";
+    let join = |c: &mut Cells, a: crate::uniform::Lin<Fp>, b: crate::uniform::Lin<Fp>| {
+        if let Some(mode) = enable {
+            c.a.rows
+                .push([mode.linear(), plus(&a, &scaled(&b, -Fp::ONE)), vec![]]);
+        } else {
+            c.eq(a, b);
+        }
+    };
     for (a, b) in [
         (source(before.local, before.commitment), predecessor.head()),
         (bf(0), prior[context::LIFECYCLE]),
@@ -245,14 +277,16 @@ fn append_relation(
         (af(10), burned),
         (af(18), pending),
     ] {
-        c.eq(a.linear(), b.linear());
+        join(&mut c, a.linear(), b.linear());
     }
     // Spendable bound as checked integers: C[9] = a + burned + r with a, the
     // lineage burn and r each u128 (sum < 3 * 2^128 < p), so no wraparound.
-    let remaining_value = bf(9).value(w) - amount.value(w) - burned.value(w);
+    let remaining_value = enable.map_or(Fp::ONE, |mode| mode.value(w))
+        * (bf(9).value(w) - amount.value(w) - burned.value(w));
     let remaining = c.cell(remaining_value, 255);
     range128(&mut c, remaining, remaining_value);
-    c.eq(
+    join(
+        &mut c,
         bf(9).linear(),
         plus(
             &plus(&amount.linear(), &burned.linear()),
@@ -261,20 +295,26 @@ fn append_relation(
     );
     // Debit exactly the face amount. The online charge is withheld from the
     // online payout; it is never debited a second time offline.
-    c.eq(plus(&af(9).linear(), &amount.linear()), bf(9).linear());
+    join(
+        &mut c,
+        plus(&af(9).linear(), &amount.linear()),
+        bf(9).linear(),
+    );
     for i in [11, 14] {
-        c.eq(
+        join(
+            &mut c,
             af(i).linear(),
             plus(&bf(i).linear(), &constant(vec![Fp::ONE])),
         );
     }
     for i in 0..30 {
         if !CHANGED.contains(&i) {
-            c.eq(af(i).linear(), bf(i).linear());
+            join(&mut c, af(i).linear(), bf(i).linear());
         }
     }
     for i in 0..6 {
-        c.eq(
+        join(
+            &mut c,
             source(before.local, before.rest[i]).linear(),
             source(after.local, after.rest[i]).linear(),
         );
@@ -287,7 +327,7 @@ fn append_relation(
         c.cell(nullifier_value, 255),
         c.cell(Fp::ZERO, 255),
     ];
-    c.eq(sf(17).linear(), own(nullifier_cells[1], 1));
+    join(&mut c, sf(17).linear(), own(nullifier_cells[1], 1));
     let key_offset = Fp::from(REDEEM_KIND) * two128();
     let key = c.cell(key_offset + ordinal.value(w), 255);
     c.eq(
@@ -335,43 +375,16 @@ fn append_relation(
         &mut SpikeRng::new(b"Unload redemption recovery entry"),
     );
     // Depth-32 absence under C[19], low-leaf relink, empty slot, exact C'[19].
-    let insertion = indexed_map::append_insert(w, family, &input.recovery);
-    let mut joins = Cells::new(family);
-    joins.a.name = "complete Unload recovery joins";
-    for (a, b) in [
-        (source(insertion.local, insertion.old_root), bf(19)),
-        (source(insertion.local, insertion.key), source(local, key)),
-        (
-            source(insertion.local, insertion.value),
-            source(local, value_cells[1]),
-        ),
-        (source(insertion.local, insertion.new_root), af(19)),
-    ] {
-        joins.eq(a.linear(), b.linear());
+    crate::load::RecoveryEntry {
+        old_root: bf(19),
+        key: source(local, key),
+        value: source(local, value_cells[1]),
+        new_root: af(19),
     }
-    w.push(joins.a);
-    let lineage = [
-        af(0),
-        af(27),
-        af(22),
-        burned,
-        pending,
-        prior[context::CREDIT_ROOT],
-    ];
-    Ok(UnloadOperation {
-        before,
-        after,
-        statement,
-        credential,
-        receipt: (),
-        lineage,
-        context: predecessor.context(),
-        table: predecessor.table(),
-    })
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         bootstrap,
@@ -430,6 +443,12 @@ mod tests {
         static BASE: OnceLock<(bootstrap::Context, bootstrap::Inputs)> = OnceLock::new();
         BASE.get_or_init(|| bootstrap::fixture(&wallet(), &Gens::<Vesta>::new(1 << 16)))
     }
+    /// Genuine charged Unload with adjusted burn/pending lineage and a signed receipt.
+    pub(crate) fn control_fixture() -> (Witness, [Fp; 64], WalletKey) {
+        let fixture = make(setup(terms(500, 7)));
+        (fixture.input, fixture.profile, fixture.key)
+    }
+
     fn integer(x: Fp) -> BigUint {
         BigUint::from_bytes_le(x.to_repr().as_ref())
     }

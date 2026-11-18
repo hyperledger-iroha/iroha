@@ -4,7 +4,6 @@ use crate::{
     certificate::{self, Cells, fp},
     fs::SpikeRng,
     full::Wiring,
-    send_arithmetic::Source,
     uniform::{Lin, constant, own, plus, scaled},
 };
 use ff::{Field, PrimeField};
@@ -96,13 +95,11 @@ fn identity(c: &mut Cells, f: &[usize; 26], v: &[Fp; 26], start: usize) {
 }
 
 /// The statement rules a relation applies: one fixed operation kind, or the
-/// Control program's two operations behind its constrained `control_mode`
-/// cell (Load 0, RefreshPolicy(TimeAnchor) 1; the caller constrains it
-/// Boolean and binds it to the program's public mode input).
+/// Control program with authenticated Unload and Refresh mode bits.
 #[derive(Clone, Copy)]
 pub enum Rules {
     Fixed(Kind),
-    Control { mode: Source },
+    Control { mode: crate::control::Modes },
 }
 
 /// The caller supplies a byte-range table and joins all state/effect/authority
@@ -116,20 +113,18 @@ pub fn append_statement(
     append_rules(w, family, Rules::Fixed(kind), values)
 }
 
-/// One fixed layout for both Control operations. With `t = mode`:
-/// tag `2 + 5t`; Load (`t = 0`) applies exactly the Load rules (nonzero
-/// receipt digest, u128 ordinal/amount/charge, `next_load = ordinal + 1`,
-/// fields 21..25 zero); RefreshTimeAnchor (`t = 1`) exactly the
-/// RefreshPolicy(TimeAnchor) rules (update kind 4, nonzero update, u64
-/// accepted-time floor, fields 20..25 zero). Neither consumes lineage, so
-/// fields 12 and 13 are zero in both. Every row exists in both modes.
+/// One layout for all Control operations. Unload consumes lineage and binds
+/// its quote to the charge. Load and Refresh leave those fields empty.
 pub fn append_control_statement(
     w: &mut Wiring<Fp>,
     family: usize,
-    mode: Source,
+    mode: crate::control::Modes,
     values: &[Fp; FIELDS],
 ) -> StatementCells {
-    assert_eq!(w.arrays[mode.array].family, family, "same-family mode");
+    assert_eq!(
+        w.arrays[mode.refresh.array].family, family,
+        "same-family mode"
+    );
     append_rules(w, family, Rules::Control { mode }, values)
 }
 
@@ -139,8 +134,7 @@ fn append_rules(
     rules: Rules,
     values: &[Fp; FIELDS],
 ) -> StatementCells {
-    // Load and RefreshTimeAnchor share every kind-dependent common rule:
-    // neither consumes lineage and neither is Bootstrap.
+    // Control has common non-Bootstrap fields and a mode-dependent lineage rule.
     let kind = match rules {
         Rules::Fixed(kind) => kind,
         Rules::Control { .. } => Kind::Load,
@@ -171,7 +165,15 @@ fn append_rules(
         own(f[11], 1),
         plus(&own(bits[0], 1), &scaled(&own(bits[1], 1), Fp::from(2))),
     );
-    if kind.consumes_lineage() {
+    if let Rules::Control { mode } = rules {
+        let u = mode.unload.linear();
+        let inactive = plus(&constant(vec![Fp::ONE]), &scaled(&u, -Fp::ONE));
+        for i in [12, 13] {
+            c.a.rows.push([inactive.clone(), own(f[i], 1), vec![]]);
+        }
+        let no_pending = is_zero(&mut c, f[13], values[13]);
+        c.a.rows.push([u, own(no_pending, 1), vec![]]);
+    } else if kind.consumes_lineage() {
         nonzero(&mut c, own(f[13], 1), values[13]);
     } else {
         for i in [12, 13] {
@@ -278,7 +280,12 @@ fn append_rules(
     finish(w, c, f, values)
 }
 
-fn finish(w: &mut Wiring<Fp>, mut c: Cells, f: [usize; FIELDS], values: &[Fp; FIELDS]) -> StatementCells {
+fn finish(
+    w: &mut Wiring<Fp>,
+    mut c: Cells,
+    f: [usize; FIELDS],
+    values: &[Fp; FIELDS],
+) -> StatementCells {
     let family = c.a.family;
     let dg = digest(values);
     let ds = [
@@ -304,16 +311,16 @@ fn control_rules(
     mut c: Cells,
     f: [usize; FIELDS],
     values: &[Fp; FIELDS],
-    mode: Source,
+    mode: crate::control::Modes,
 ) -> StatementCells {
-    let t = mode.linear();
-    let load = plus(&constant(vec![Fp::ONE]), &scaled(&t, -Fp::ONE));
-    let tv = mode.value(w);
+    let t = mode.refresh.linear();
+    let u = mode.unload.linear();
+    let tv = mode.refresh.value(w);
+    let uv = mode.unload.value(w);
+    let monetary = plus(&constant(vec![Fp::ONE]), &scaled(&t, -Fp::ONE));
+    let load = plus(&monetary, &scaled(&u, -Fp::ONE));
     // Semantic tag: Load 2, RefreshPolicy 7.
-    c.eq(
-        own(f[16], 1),
-        plus(&constant(vec![Fp::from(2)]), &scaled(&t, Fp::from(5))),
-    );
+    c.eq(own(f[16], 1), mode.tag());
     // Field 17: the nonzero Load receipt digest, or update kind TimeAnchor 4.
     nonzero(&mut c, own(f[17], 1), values[17]);
     c.a.rows.push([
@@ -323,7 +330,7 @@ fn control_rules(
     ]);
     // Field 18: the u128 Load ordinal, or the nonzero anchor digest.
     let gated = bounded_value(&mut c, (Fp::ONE - tv) * values[18], 16);
-    c.a.rows.push([load.clone(), own(f[18], 1), own(gated, 1)]);
+    c.a.rows.push([monetary, own(f[18], 1), own(gated, 1)]);
     let inverse = c.cell(
         Option::<Fp>::from((tv * values[18]).invert()).unwrap_or(Fp::ZERO),
         255,
@@ -347,7 +354,27 @@ fn control_rules(
     // Field 20: the u128 online charge, or zero.
     bound(&mut c, f[20], values[20], 16);
     c.a.rows.push([t, own(f[20], 1), vec![]]);
-    for i in 21..26 {
+    let no_amount = is_zero(&mut c, f[19], values[19]);
+    c.a.rows.push([u.clone(), own(no_amount, 1), vec![]]);
+    let difference = bounded_value(&mut c, uv * (values[19] - values[20]), 16);
+    c.a.rows.push([
+        u.clone(),
+        plus(&own(f[19], 1), &scaled(&own(f[20], 1), -Fp::ONE)),
+        own(difference, 1),
+    ]);
+    let no_quote = is_zero(&mut c, f[21], values[21]);
+    let no_charge = is_zero(&mut c, f[20], values[20]);
+    c.a.rows.push([
+        u.clone(),
+        plus(&own(no_quote, 1), &scaled(&own(no_charge, 1), -Fp::ONE)),
+        vec![],
+    ]);
+    c.a.rows.push([
+        plus(&constant(vec![Fp::ONE]), &scaled(&u, -Fp::ONE)),
+        own(f[21], 1),
+        vec![],
+    ]);
+    for i in 22..26 {
         c.zero(own(f[i], 1));
     }
     finish(w, c, f, values)

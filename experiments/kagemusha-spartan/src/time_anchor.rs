@@ -17,10 +17,10 @@
 //! floor. Nothing here proves genuine OS time, boot identity or response
 //! latency: that is native direct-time custody (§5.8), not this relation.
 //!
-//! All authority predicates are total, so this branch shares one fixed
-//! Control program with Load (`control.rs`): with `t = control_mode`, every
-//! Refresh-only rule is `t·X = 0` and an inactive branch proves
-//! `Authority::dummy()`.
+//! Root-certificate authentication is total. The anchor signature is hard
+//! constrained over the selected key, message and signature. Inactive modes
+//! select a public dummy tuple. Refresh selects the certified key and exact
+//! signed anchor and requires the opening and certificate to be valid.
 // Selected by the Control program in the F2 integration step (full.rs kinds
 // and programs, engine and native witness owners).
 #![cfg_attr(not(test), allow(dead_code))]
@@ -37,11 +37,10 @@ use crate::{
     monetary_state::StateCells,
     nonnative,
     operation_auth::CurrentCredential,
-    p256::Point,
+    p256::{self, Point},
     send_arithmetic::Source,
-    signature::{self, TotalKey},
     statement::StatementCells,
-    uniform::{Array, constant, own, plus, scaled},
+    uniform::{constant, own, plus, scaled},
 };
 
 pub const BODY_BYTES: usize = 138;
@@ -134,12 +133,8 @@ pub fn authenticate(
     wallet: &[u8; 32],
     root: &Point,
 ) -> Result<Verified, &'static str> {
-    let key = certificate::authenticate_signer(
-        &authority.certificate,
-        scheme,
-        root,
-        Role::TimeAnchor,
-    )?;
+    let key =
+        certificate::authenticate_signer(&authority.certificate, scheme, root, Role::TimeAnchor)?;
     let body = &authority.anchor.body;
     if body[..2] != 1u16.to_le_bytes() {
         return Err("time anchor version");
@@ -160,8 +155,12 @@ pub fn authenticate(
     if fp(&signer) != certificate::certificate_digest(&authority.certificate) {
         return Err("time anchor signer certificate");
     }
-    certificate::verify_native(&key, message(&authority.anchor), &authority.anchor.signature)
-        .map_err(|_| "time anchor signature")?;
+    certificate::verify_native(
+        &key,
+        message(&authority.anchor),
+        &authority.anchor.signature,
+    )
+    .map_err(|_| "time anchor signature")?;
     Ok(Verified {
         digest: digest(&authority.anchor),
         issuer_time: issuer_time(&authority.anchor),
@@ -239,7 +238,7 @@ pub struct RefreshBranch {
     floor: Source,
 }
 impl RefreshBranch {
-    /// Total authority verdict: certificate (role 4, root) and anchor.
+    /// Active, authenticated Refresh authority; zero in an inactive mode.
     pub fn valid(&self) -> Source {
         self.valid
     }
@@ -265,6 +264,156 @@ fn source(array: usize, cell: usize) -> Source {
     }
 }
 
+/// Fixed inactive inputs for one hard ECDSA check. The scalar is public and
+/// authorizes no transition. The active key must come from the certificate.
+fn dummy_signature() -> &'static (Point, [u8; 64]) {
+    static DUMMY: std::sync::OnceLock<(Point, [u8; 64])> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| {
+        let scalar = p256::scalar_below("KAGEMUSHA Control inactive anchor public key", &p256::n());
+        let point = p256::mul(&p256::generator(), &scalar).expect("nonzero public dummy scalar");
+        let signature = crate::bootstrap::sign(
+            Fp::ZERO,
+            &scalar,
+            "KAGEMUSHA Control inactive anchor signature",
+        );
+        (point, signature)
+    })
+}
+
+/// Bind out = inactive + enable * (active - inactive). Only the inactive
+/// value enters the matrix as a constant.
+fn select_source(
+    w: &Wiring<Fp>,
+    cells: &mut Cells,
+    enable: Source,
+    active: Source,
+    inactive: Fp,
+    width: u16,
+) -> usize {
+    let value = inactive + enable.value(w) * (active.value(w) - inactive);
+    let out = cells.cell(value, width);
+    let minus_dummy = constant(vec![-inactive]);
+    cells.a.rows.push([
+        enable.linear(),
+        plus(&active.linear(), &minus_dummy),
+        plus(&own(out, 1), &minus_dummy),
+    ]);
+    out
+}
+
+fn check_selected_signature(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    enable: Source,
+    signer: &certificate::SignerOpening,
+    opening: &Opening,
+    anchor: &TimeAnchor,
+) -> Result<(), &'static str> {
+    let (dummy_key, dummy_sig) = dummy_signature();
+    let active = enable.value(w) == Fp::ONE;
+    let (q, m, sig) = if active {
+        (signer.point(), message(anchor), &anchor.signature)
+    } else {
+        (dummy_key, Fp::ZERO, dummy_sig)
+    };
+    certificate::verify_native(q, m, sig)?;
+
+    let mut c = Cells::new(family);
+    c.a.name = "selected time-anchor signature";
+    let message_cell = select_source(
+        w,
+        &mut c,
+        enable,
+        source(opening.local, opening.message),
+        Fp::ZERO,
+        255,
+    );
+    let message_start = c.a.cells();
+    let bytes: Vec<_> = m.to_repr().iter().map(|&b| c.byte(b)).collect();
+    c.at_most(&bytes, &integer(m), &(field_modulus() - 1u32));
+    c.eq(own(message_cell, 1), c.bytes(&bytes));
+
+    let mut halves = Vec::new();
+    for (half, bound) in [(0, p256::n() - 1u32), (1, p256::n() >> 1)] {
+        let indices: Vec<_> = (32 * half..32 * (half + 1))
+            .rev()
+            .map(|i| {
+                select_source(
+                    w,
+                    &mut c,
+                    enable,
+                    source(opening.local, SIGNATURE + i),
+                    Fp::from(dummy_sig[i] as u64),
+                    8,
+                )
+            })
+            .collect();
+        // The active sources are range-checked opening bytes. Selection
+        // between a byte and a public byte preserves that range.
+        let value = BigUint::from_bytes_be(&sig[32 * half..32 * (half + 1)]);
+        c.at_most(&indices, &value, &bound);
+        let sum = indices
+            .iter()
+            .fold(vec![], |acc, &index| plus(&acc, &own(index, 1)));
+        let sum_value = indices
+            .iter()
+            .map(|&index| c.a.values[index][0])
+            .sum::<Fp>();
+        let is_zero = zero_predicate(&mut c, sum, sum_value);
+        c.zero(own(is_zero, 1));
+        halves.push((c.value(&value, &indices), value));
+    }
+
+    let cert_key = signer.key();
+    let mut select_coordinate = |limbs: [usize; 3], dummy: &BigUint| -> [usize; 3] {
+        std::array::from_fn(|i| {
+            let src = Source {
+                array: cert_key.array,
+                cell: limbs[i],
+                instance: cert_key.instance,
+            };
+            let width = if i == 2 { 80 } else { 88 };
+            select_source(
+                w,
+                &mut c,
+                enable,
+                src,
+                fp(&((dummy >> (88 * i)) % pow2(width))),
+                width as u16,
+            )
+        })
+    };
+    let x = select_coordinate(cert_key.x, &dummy_key.x);
+    let y = select_coordinate(cert_key.y, &dummy_key.y);
+    let local = w.push(c.a);
+    let selected_key = nonnative::KeyLimbSource {
+        array: local,
+        x,
+        y,
+        instance: 0,
+    };
+    let z = BigUint::from_bytes_be(&p256::sha256_one_block(m.to_repr().as_ref()));
+    let [(r_limbs, r), (s_limbs, s)]: [_; 2] = halves.try_into().expect("two signature scalars");
+    let (_, comb) = certificate::add_signature(
+        w,
+        family,
+        local,
+        message_start,
+        m,
+        (q.clone(), z, r, s),
+        [r_limbs, s_limbs],
+        nonnative::KeyTable::Witness { id: SIGNER_TABLE },
+    );
+    let table = comb + nonnative::A_WTABLE;
+    w.arrays[table].name = "time-anchor signer derived comb table";
+    let derivation = w.arrays.len();
+    let derived = nonnative::key_tables(derivation, family, q);
+    w.arrays.extend(derived.arrays);
+    w.tables.extend(derived.tables);
+    nonnative::bind_derived_key_table(&mut w.arrays, derivation, table, selected_key);
+    Ok(())
+}
+
 /// The RefreshTimeAnchor branch over already-opened states, statement and
 /// verified current credential, enabled by the constrained Boolean `enable`
 /// (`control_mode`). Authority opening, signer-table derivation and the
@@ -283,7 +432,7 @@ pub(crate) fn append_branch(
     [before, after]: [&StateCells; 2],
     statement: &StatementCells,
     credential: &CurrentCredential,
-) -> RefreshBranch {
+) -> Result<RefreshBranch, &'static str> {
     for s in [enable, credential.scheme()[0], credential.wallet()[0]] {
         assert_eq!(w.arrays[s.array].family, family, "same-family branch port");
     }
@@ -295,40 +444,8 @@ pub(crate) fn append_branch(
         Role::TimeAnchor,
         credential.scheme(),
     );
-    // The signer's comb tables, derived in circuit from the (selected)
-    // certificate key and bound row by row to the lookup table.
-    let q = signer.point().clone();
-    let table = w.push(Array {
-        name: "time-anchor signer derived comb table",
-        family,
-        rho: 9,
-        r_count: nonnative::WALLET_ROWS,
-        fixed: false,
-        lookups: vec![],
-        widths: vec![9, 88, 88, 80, 88, 88, 80],
-        rows: vec![],
-        values: nonnative::wallet_table_values(&q),
-    });
-    w.tables.push((table, SIGNER_TABLE));
-    let derivation = w.arrays.len();
-    let derived = nonnative::key_tables(derivation, family, &q);
-    w.arrays.extend(derived.arrays);
-    w.tables.extend(derived.tables);
-    nonnative::bind_derived_key_table(&mut w.arrays, derivation, table, signer.key());
     let opening = append_opening(w, family, &authority.anchor, signer.digest(), credential);
-    let signature = std::array::from_fn(|k| source(opening.local, SIGNATURE + k));
-    let anchor_signature = signature::append_signature_total(
-        w,
-        family,
-        "total time-anchor ECDSA arithmetic",
-        source(opening.local, opening.message),
-        &signature,
-        TotalKey {
-            table: SIGNER_TABLE,
-            q: &q,
-        },
-        vec![],
-    );
+    check_selected_signature(w, family, enable, &signer, &opening, &authority.anchor)?;
     let mut ids = std::collections::HashSet::new();
     w.tables.retain(|(_, id)| ids.insert(*id));
 
@@ -336,12 +453,7 @@ pub(crate) fn append_branch(
     let tv = enable.value(w);
     let mut c = Cells::new(family);
     c.a.name = "RefreshTimeAnchor verdict, maximum and enabled joins";
-    let parts = [
-        signer.valid(),
-        source(opening.local, opening.valid),
-        anchor_signature.valid(),
-    ]
-    .map(|s| {
+    let parts = [signer.valid(), source(opening.local, opening.valid), enable].map(|s| {
         let k = c.bit(s.value(w) == Fp::ONE);
         c.eq(own(k, 1), s.linear());
         k
@@ -384,7 +496,10 @@ pub(crate) fn append_branch(
     let difference = plus(&time.linear(), &scaled(&f.linear(), -Fp::ONE));
     c.a.rows.push([
         older.clone(),
-        plus(&scaled(&difference, -Fp::ONE), &scaled(&own(d0, 1), -Fp::ONE)),
+        plus(
+            &scaled(&difference, -Fp::ONE),
+            &scaled(&own(d0, 1), -Fp::ONE),
+        ),
         vec![],
     ]);
     c.a.rows.push([
@@ -416,6 +531,9 @@ pub(crate) fn append_branch(
         (af(9).linear(), bf(9).linear()),
         (af(13).linear(), bf(13).linear()),
         (af(19).linear(), bf(19).linear()),
+        (af(10).linear(), bf(10).linear()),
+        (af(14).linear(), bf(14).linear()),
+        (af(18).linear(), bf(18).linear()),
     ] {
         c.a.rows
             .push([t.clone(), plus(&a, &scaled(&b, -Fp::ONE)), vec![]]);
@@ -436,12 +554,12 @@ pub(crate) fn append_branch(
         c.a.rows.push([expression, own(inverse, 1), t.clone()]);
     }
     let verdict = w.push(c.a);
-    RefreshBranch {
+    Ok(RefreshBranch {
         valid: source(verdict, valid),
         digest: d,
         time,
         floor: source(verdict, floor),
-    }
+    })
 }
 
 struct Opening {

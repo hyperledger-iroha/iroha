@@ -246,6 +246,18 @@ impl<F: Scalar> UniformCircuit<F> {
             "S-uniform" => 2,
             _ => return Err("only monetary program labels may be installed".into()),
         };
+        self.encode_public_program(side)
+    }
+
+    /// Canonical encoding for comparing standalone relation programs in tests.
+    /// Side zero identifies a standalone fixture and is rejected by both
+    /// primary and secondary program import.
+    #[cfg(test)]
+    pub(crate) fn standalone_program_bytes(&self) -> Result<Vec<u8>, String> {
+        self.encode_public_program(0)
+    }
+
+    fn encode_public_program(&self, side: u8) -> Result<Vec<u8>, String> {
         let tape = self.plan();
         let degrees = self.challenge_degrees();
         let operation_bytes = tape

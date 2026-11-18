@@ -307,16 +307,17 @@ fn append_relation(
     let credential =
         operation_auth::append_current(w, family, &input.credential, &before, predecessor)?;
     let statement = statement::append_statement(w, family, Kind::Load, &input.statement);
-    append_branch(
+    let entry = append_branch(
         w,
         family,
         &input.ordinary,
-        &input.recovery,
         [&before, &after],
         &statement,
         predecessor,
         &Placement::Alone,
     );
+    let insertion = indexed_map::append_insert(w, family, &input.recovery);
+    join_recovery(w, family, &insertion, entry, None);
     let lineage = lineage(&after, predecessor);
     Ok(LoadOperation {
         before,
@@ -395,12 +396,11 @@ pub(crate) fn append_branch(
     w: &mut Wiring<Fp>,
     family: usize,
     ordinary_bytes: &[u8; ORDINARY_BYTES],
-    recovery: &InsertWitness<32>,
     [before, after]: [&StateCells; 2],
     statement: &StatementCells,
     predecessor: &VerifiedPredecessor,
     placement: &Placement,
-) {
+) -> RecoveryEntry {
     let ordinary = append_ordinary(w, family, ordinary_bytes);
     let prior = predecessor.lineage();
     let bf = |i| source(before.local, before.core[i]);
@@ -410,11 +410,10 @@ pub(crate) fn append_branch(
     let digest = source(ordinary.local, ordinary.digest);
     // A Load-only row `a = b`: hard alone, `enable·(a - b) = 0` as a branch.
     let join = |c: &mut Cells, a: Lin<Fp>, b: Lin<Fp>, load_only: bool| match placement {
-        Placement::Branch { enable, .. } if load_only => c.a.rows.push([
-            enable.clone(),
-            plus(&a, &scaled(&b, -Fp::ONE)),
-            vec![],
-        ]),
+        Placement::Branch { enable, .. } if load_only => {
+            c.a.rows
+                .push([enable.clone(), plus(&a, &scaled(&b, -Fp::ONE)), vec![]])
+        }
         _ => c.eq(a, b),
     };
     let (contested_core, contested_rest): (&[usize], &[usize]) = match placement {
@@ -424,7 +423,11 @@ pub(crate) fn append_branch(
     let mut c = Cells::new(family);
     c.a.name = "complete Load monetary and original joins";
     for (a, b, load_only) in [
-        (source(before.local, before.commitment), predecessor.head(), false),
+        (
+            source(before.local, before.commitment),
+            predecessor.head(),
+            false,
+        ),
         (bf(0), prior[context::LIFECYCLE], false),
         (bf(27), prior[context::POLICY_EPOCH], false),
         (bf(22), prior[context::ENABLED_CONTROLS], false),
@@ -515,22 +518,49 @@ pub(crate) fn append_branch(
         outputs,
         &mut SpikeRng::new(b"Load ordinal recovery entry"),
     );
-    let insertion = indexed_map::append_insert(w, family, recovery);
+    RecoveryEntry {
+        old_root: bf(19),
+        key: source(local, recovery_key),
+        value: source(local, outputs[1]),
+        new_root: af(19),
+    }
+}
+
+/// Authenticated state roots and the semantic entry inserted by Load or Unload.
+pub(crate) struct RecoveryEntry {
+    pub old_root: Source,
+    pub key: Source,
+    pub value: Source,
+    pub new_root: Source,
+}
+
+/// Join a previously built insertion to this mode's descriptor. A Control
+/// program shares one insertion between all modes. Refresh has no active join.
+pub(crate) fn join_recovery(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    insertion: &indexed_map::InsertCells,
+    entry: RecoveryEntry,
+    enable: Option<Lin<Fp>>,
+) {
     let mut joins = Cells::new(family);
-    joins.a.name = "complete Load recovery joins";
-    for (a, b) in [
-        (source(insertion.local, insertion.old_root), bf(19)),
-        (
-            source(insertion.local, insertion.key),
-            source(local, recovery_key),
-        ),
-        (
-            source(insertion.local, insertion.value),
-            source(local, outputs[1]),
-        ),
-        (source(insertion.local, insertion.new_root), af(19)),
+    joins.a.name = "monetary recovery joins";
+    for (cell, expected) in [
+        (insertion.old_root, entry.old_root),
+        (insertion.key, entry.key),
+        (insertion.value, entry.value),
+        (insertion.new_root, entry.new_root),
     ] {
-        join(&mut joins, a.linear(), b.linear(), true);
+        let actual = source(insertion.local, cell).linear();
+        if let Some(enable) = &enable {
+            joins.a.rows.push([
+                enable.clone(),
+                plus(&actual, &scaled(&expected.linear(), -Fp::ONE)),
+                vec![],
+            ]);
+        } else {
+            joins.eq(actual, expected.linear());
+        }
     }
     w.push(joins.a);
 }
