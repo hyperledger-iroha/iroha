@@ -87,7 +87,7 @@ use profile_peers::{Peers, configure_lifecycle};
 mod windows_unprivileged;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    time::{Instant, sleep, timeout_at},
+    time::{Instant, sleep, timeout},
 };
 
 /// Chain id of Taira, whose Kagami output is re-targeted.
@@ -173,16 +173,16 @@ fn reserve_ports() -> Result<(u16, u16, Vec<std::net::TcpListener>)> {
     Ok((api, p2p, held))
 }
 
-/// Run a child to completion, keeping its output under `evidence`.
-async fn run(mut command: ResolvedCommand, evidence: &Path, deadline: Instant) -> Result<Vec<u8>> {
+/// Give each offline admission or inspection command its own bounded phase and retain its output.
+async fn run(mut command: ResolvedCommand, evidence: &Path) -> Result<Vec<u8>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout_at(deadline, command.spawn_async()?.wait_with_output())
+    let output = timeout(PHASE, command.spawn_async()?.wait_with_output())
         .await
-        .wrap_err("child exceeded its phase deadline")??;
+        .wrap_err_with(|| format!("{} exceeded its phase deadline", evidence.display()))??;
     fs::write(evidence.with_extension("stdout"), &output.stdout)?;
     fs::write(evidence.with_extension("stderr"), &output.stderr)?;
     ensure!(
@@ -1053,7 +1053,6 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
     let workspace = workspace()?;
     let root = workspace.path().to_path_buf();
     let outcome = async {
-        let deadline = Instant::now() + PHASE;
         let (api, p2p, reservations) = reserve_ports()?;
         // 1. Today's Kagami Taira network with the qual cadence.
         let kagami_dir = root.join("kagami");
@@ -1071,7 +1070,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg(p2p.to_string())
             .arg("--out-dir")
             .arg(&kagami_dir);
-        run(generate, &root.join("kagami-localnet"), deadline).await?;
+        run(generate, &root.join("kagami-localnet")).await?;
         eprintln!("[{}] Kagami Taira network generated", elapsed(started));
         let seats = (0..PEERS)
             .map(|index| Seat::load(&kagami_dir, index))
@@ -1155,7 +1154,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg(genesis_public_key.to_string())
             .arg("--config")
             .arg(&flat);
-        run(sign, &root.join("kagami-genesis-sign"), deadline).await?;
+        run(sign, &root.join("kagami-genesis-sign")).await?;
         let network_id = {
             let _discriminant = ChainDiscriminantGuard::enter(369);
             NetworkId::from_str(
@@ -1235,7 +1234,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .args(["--check-config", "--json"]);
-            let report = run(check, &root.join(format!("check-config-{index}")), deadline).await?;
+            let report = run(check, &root.join(format!("check-config-{index}"))).await?;
             let report: Value = json::from_slice(&report)?;
             ensure!(
                 report.get("status").and_then(Value::as_str) == Some("ready"),
@@ -1409,7 +1408,6 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 11. The stopped stores pass the read-only storage check, and this build restores the
         //     real signed snapshot the qualification cadence wrote and reproduces every later
         //     block (`--check-replay`, on a copy of each store).
-        let deadline = Instant::now() + PHASE;
         for (index, node_file) in node_files.iter().enumerate() {
             let mut check = daemon.command()?;
             check
@@ -1418,7 +1416,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .arg("--check-storage");
-            let report = run(check, &root.join(format!("check-storage-{index}")), deadline).await?;
+            let report = run(check, &root.join(format!("check-storage-{index}"))).await?;
             let report: Value = json::from_slice(&report)?;
             let tip = report.get("tip_height").and_then(Value::as_u64);
             ensure!(
@@ -1433,7 +1431,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .arg("--check-replay");
-            let replayed = run(replay, &root.join(format!("check-replay-{index}")), deadline).await?;
+            let replayed = run(replay, &root.join(format!("check-replay-{index}"))).await?;
             let replayed: Value = json::from_slice(&replayed)?;
             let start = replayed.get("start");
             let start_height = start
