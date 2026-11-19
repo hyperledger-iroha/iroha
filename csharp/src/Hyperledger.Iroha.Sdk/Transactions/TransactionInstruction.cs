@@ -16,11 +16,10 @@ public abstract record class TransactionInstruction
     /// <summary>
     /// Whether this instruction's payload encoder writes every count, discriminant and byte
     /// sequence through the context's layout-aware writers, so its bare payload is valid in the
-    /// dense layout as well as the compact one.
+    /// dense layout as well as the compact one. Any other instruction (Kaigi, replication-order,
+    /// asset-lock and conviction) reaches the dense layout through the native bridge, which
+    /// transcodes its compact frame by wire ID.
     /// </summary>
-    // TODO(dense-activation): the Kaigi, replication-order, asset-lock and conviction
-    // instructions still write compact-only bytes. Enable each once a shared dense vector pins
-    // its payload.
     internal virtual bool SupportsDenseLayout => false;
 
     /// <summary>The instruction's complete compact-layout Norito frame.</summary>
@@ -44,6 +43,10 @@ public abstract record class TransactionInstruction
     /// Norito frame in the compact layout, or the bare dense payload with no nested header in
     /// the dense layout (<c>norito.md</c>, "Dense layout", rule 6).
     /// </summary>
+    /// <remarks>
+    /// An instruction without a managed dense encoder is transcoded from its compact frame by
+    /// the native bridge, which requires the ABI-33 <c>connect_norito_bridge</c>.
+    /// </remarks>
     internal byte[] EncodeEnvelopePayload(TransactionEncodingContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -52,13 +55,20 @@ public abstract record class TransactionInstruction
             return EncodeFramedPayload(context);
         }
 
-        if (!SupportsDenseLayout)
+        if (SupportsDenseLayout)
         {
-            throw new NotSupportedException(
-                $"Instruction `{WireId}` ({GetType().Name}) has no dense-layout encoder in this SDK.");
+            return EncodePayload(context);
         }
 
-        return EncodePayload(context);
+        var compact = new TransactionEncodingContext(context.AuthorityAccountId, NoritoWireLayout.Compact);
+        return NoritoInstructionLayoutNative.Transcode(
+                WireId,
+                EncodeFramedPayload(compact),
+                NoritoWireLayout.Compact,
+                NoritoWireLayout.Dense,
+                nameof(context))
+            ?? throw new NotSupportedException(
+                $"Instruction `{WireId}` ({GetType().Name}) is not registered by the native bridge, so it has no dense encoding.");
     }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)

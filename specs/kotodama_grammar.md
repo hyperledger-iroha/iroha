@@ -1533,7 +1533,7 @@ and how many instructions each executed across the selected tests, counting only
 seiyaku execution (the nested calls, or the test projection of a pure unit-test
 target). A declared function that the compiler inlined into its callers or
 omitted as unused has no code of its own; it is listed as such and never counted
-as covered. `koto test trace` prints every executed instruction,
+as covered. Register-delta tracing requires a C10 build. Select the same named host profile for the test harness and the seiyaku using `--host-profile iroha.ivm.c10.v1`. The baseline supports PC coverage. On C10, `koto test trace` prints every executed instruction,
 grouped into the test function and each seiyaku call, with the function and
 its declaration location and only the registers the instruction changed;
 `--format json` emits one object per instruction.
@@ -1912,7 +1912,7 @@ koto test seiyaku.test.ko
 koto test run --gas-report --junit report.xml seiyaku.test.ko
 koto test list --format json seiyaku.test.ko
 koto test coverage seiyaku.test.ko
-koto test trace --filter withdraw seiyaku.test.ko
+koto test trace --host-profile iroha.ivm.c10.v1 --filter withdraw seiyaku.test.ko
 koto fmt seiyaku.ko
 koto fmt --check .
 koto doc seiyaku.ko
@@ -2229,7 +2229,7 @@ koto test run --format json tests/seiyaku.test.ko
 koto test run --junit target/kotodama-tests.xml tests/seiyaku.test.ko
 koto test run --gas-report tests/seiyaku.test.ko
 koto test coverage tests/seiyaku.test.ko
-koto test trace --filter exact_test_name tests/seiyaku.test.ko
+koto test trace --host-profile iroha.ivm.c10.v1 --filter exact_test_name tests/seiyaku.test.ko
 koto test run --zk tests/zk_seiyaku.test.ko
 ```
 

@@ -79,6 +79,13 @@ fn koto_build_meta_header_smoke() {
     );
     assert_eq!(zk.mode, ivm::ivm_mode::ZK);
     assert_eq!(zk.max_cycles, 2000);
+    // On the baseline the same flag sets the header's cycle ceiling of a ZK artifact.
+    let baseline_zk = header(
+        "cli_smoke_meta_baseline_zk.to",
+        &["--zk", "--zk-trace-cycles", "2000"],
+    );
+    assert_ne!(baseline_zk.mode & ivm::baseline::mode::ZK, 0);
+    assert_eq!(baseline_zk.max_cycles, 2000);
     let status = Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())
@@ -390,6 +397,40 @@ fn test_failures_exit_eleven_and_name_the_test_file_values_and_gas() {
         "{json}"
     );
     assert!(json.contains("\"gas\": "), "{json}");
+}
+
+#[test]
+fn trace_requires_a_profile_with_register_delta_support() {
+    let root = package("trace_profile");
+    let args = ["test", "trace", "--filter", "bump_adds", "--exact"];
+    let source = "tests/counter.test.ko";
+    let baseline = koto(&root, &[args.as_slice(), &[source]].concat());
+    assert!(!baseline.status.success());
+    assert!(String::from_utf8_lossy(&baseline.stderr).contains("--host-profile iroha.ivm.c10.v1"));
+    let c10 = koto(
+        &root,
+        &[
+            args.as_slice(),
+            &[
+                "--host-profile",
+                "iroha.ivm.c10.v1",
+                "--format",
+                "json",
+                source,
+            ],
+        ]
+        .concat(),
+    );
+    assert!(
+        c10.status.success(),
+        "{}",
+        String::from_utf8_lossy(&c10.stderr)
+    );
+    let trace = String::from_utf8(c10.stdout).expect("trace output");
+    assert!(
+        trace.contains("bump_adds") && trace.contains("bump"),
+        "{trace}"
+    );
 }
 
 #[test]

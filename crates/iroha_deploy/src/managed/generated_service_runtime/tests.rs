@@ -444,7 +444,15 @@ impl Genuine {
         assert!(!retain_before_first_render || full_parent);
         let (temporary, prepared, ports) = fixture_with_ports(name);
         let mut options = options();
-        options.deadline = Instant::now() + Duration::from_secs(600);
+        // The full history builds and authenticates 29 real carriers in sequence before
+        // the material checks begin. Issue one bounded authorization for that whole history.
+        // Each child keeps the original UTC cutoff, including across recovery.
+        let setup_budget = if full_parent {
+            Duration::from_secs(29 * 120)
+        } else {
+            Duration::from_secs(600)
+        };
+        options.deadline = Instant::now() + setup_budget;
         let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
         let authorization = parent.authorize_test_startup(&options).unwrap().unwrap();
         let utc = authorization.test_terms().signing_deadline_unix_ms;

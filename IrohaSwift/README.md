@@ -2432,11 +2432,15 @@ The layout is chosen explicitly and never guessed from payload bytes:
   Each typed decoder reads a payload only in the layout it is given, and a
   signature covers the payload bytes of one layout.
 
-Instruction bodies are opaque to the Swift codec in every layout: the native
-bridge encodes and decodes them and emits current-layout frames only. A dense
-transaction therefore decodes, verifies and re-encodes in Swift down to each
-instruction's wire ID and bare payload bytes, while building a dense instruction
-from typed inputs waits for dense support in the bridge.
+Instruction bodies keep one typed form, their current-layout Norito frame, in
+every layout. A dense transaction carries each instruction's bare dense payload,
+which the native bridge (`connect_norito_transcode_instruction_v1`) decodes into
+the frame of exactly the instruction its wire ID registers and transcodes back
+when a dense payload is written. A dense transaction therefore decodes,
+verifies and re-encodes down to typed instruction frames, and a dense payload
+builds from the same frames as the current layout. Only a wire ID the bridge
+does not register stays an opaque bare payload, which encodes only in the dense
+layout it was decoded from.
 
 `NoritoDenseLayoutTests` pins every rule to the shared vectors in
 `fixtures/norito_dense/vectors.json`, and `NoritoRpcDenseFixtureTests` decodes,

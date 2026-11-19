@@ -118,12 +118,14 @@ class InstructionBox private constructor(
             InstructionBox(WireInstructionPayload(wireName, payloadBytes))
 
         /**
-         * Builds an `InstructionBox` from a wire ID and the instruction's bare dense payload
-         * (`norito.md`, "Dense layout (header minor 1)").
+         * Builds an opaque `InstructionBox` from a wire ID and the instruction's bare dense
+         * payload (`norito.md`, "Dense layout (header minor 1)").
          *
-         * The payload carries no Norito header and stays opaque: the box encodes only into a
-         * dense transaction and is refused by the current layout. The wire ID must be well
-         * formed: 1 to 192 bytes of ASCII letters, digits and `. _ : - @ /`.
+         * The payload carries no Norito header and stays uninterpreted: the box encodes only into
+         * a dense transaction, and only for a wire ID the native bridge registers no instruction
+         * under. A registered instruction is built from its typed frame ([fromWirePayload]),
+         * which encodes in either layout. The wire ID must be well formed: 1 to 192 bytes of
+         * ASCII letters, digits and `. _ : - @ /`.
          */
         @JvmStatic
         fun fromDenseWirePayload(wireName: String, payloadBytes: ByteArray): InstructionBox =

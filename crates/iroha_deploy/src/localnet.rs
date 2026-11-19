@@ -363,7 +363,8 @@ pub(crate) fn prepare_localnet_at(
 }
 
 /// Committee size of managed developer networks.
-const MANAGED_PEERS: u16 = 4;
+/// Number of validators in a managed local generation.
+pub(crate) const MANAGED_PEERS: u16 = 4;
 
 /// Where and how a generation is published.
 #[derive(Clone, Copy)]

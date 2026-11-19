@@ -6,11 +6,10 @@ import XCTest
 /// (`fixtures/norito_rpc/transaction_fixtures.dense.json`) through the SDK's
 /// typed transaction decoder and builder.
 ///
-/// Every Norito layout rule here runs in Swift. The native bridge takes part
-/// only where it already does for the current layout and where the layout does
-/// not matter: canonical account-address validation and the derivation of the
-/// fixture key from its seed. Instruction payload bodies stay opaque, exactly as
-/// they do for the current layout in Swift; see `TransactionInstructionWire`.
+/// Every transaction-level Norito layout rule here runs in Swift. The native
+/// bridge validates account addresses, derives the fixture key from its seed and
+/// transcodes each typed instruction frame to and from its bare dense payload
+/// (`connect_norito_transcode_instruction_v1`); see `TransactionInstructionWire`.
 final class NoritoRpcDenseFixtureTests: XCTestCase {
     private static let transactionPayloadType =
         "iroha_data_model::transaction::signed::model::TransactionPayload"
@@ -26,6 +25,10 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
         try requireNativeTestCapability(
             NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
             "account-address validation needs the NoritoBridge address codec"
+        )
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isInstructionTranscoderAvailable,
+            "typed dense instruction bodies need the NoritoBridge instruction transcoder"
         )
         let fixtures = try DenseTransactionFixtures.load()
         XCTAssertEqual(fixtures.cases.count, 27)
@@ -115,10 +118,7 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
                 creationTimeMs: descriptor.creationTimeMs,
                 ttlMs: descriptor.timeToLiveMs,
                 nonce: descriptor.nonce,
-                executable: try descriptor.executable.wire(
-                    layout: .dense,
-                    denseInstructionPayloads: executable.instructionPayloads
-                ),
+                executable: try descriptor.executable.wire(),
                 feePayment: descriptor.feePayment,
                 metadata: descriptor.metadata,
                 layout: .dense
@@ -181,10 +181,7 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
                     creationTimeMs: descriptor.creationTimeMs,
                     ttlMs: descriptor.timeToLiveMs,
                     nonce: descriptor.nonce,
-                    executable: try descriptor.executable.wire(
-                        layout: .compact,
-                        denseInstructionPayloads: []
-                    ),
+                    executable: try descriptor.executable.wire(),
                     feePayment: descriptor.feePayment,
                     metadata: descriptor.metadata,
                     layout: .compact
@@ -209,13 +206,11 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
                 fixture.compactSigned,
                 "\(name): the versioned envelope still carries the compact layout"
             )
-            // An uninterpreted instruction payload is never transcoded.
-            if !executable.instructionWireNames.isEmpty {
-                XCTAssertThrowsError(try executable.encode(layout: .compact), name)
-                XCTAssertThrowsError(try compactExecutable.encode(layout: .dense), name)
-            } else {
-                XCTAssertEqual(executable, compactExecutable, name)
-            }
+            // Both layouts decode to the same typed instructions, and each
+            // writes the other's bytes.
+            XCTAssertEqual(executable, compactExecutable, name)
+            XCTAssertEqual(try executable.encode(layout: .compact), compact.payload.executable, name)
+            XCTAssertEqual(try compactExecutable.encode(layout: .dense), payload.executable, name)
 
             denseTotal += fixture.denseSigned.count
             compactTotal += fixture.compactSigned.count
@@ -644,6 +639,10 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
     }
 
     func testExecutableWireRoundTripsEveryVariantInBothLayoutClasses() throws {
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isInstructionTranscoderAvailable,
+            "dense instruction pairs need the NoritoBridge instruction transcoder"
+        )
         let frame = noritoEncode(
             typeName: "test.Instruction",
             payload: Data([0x01, 0x02, 0x03]),
@@ -711,15 +710,17 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             try TransactionExecutableWire.ivm(Data("metadata-test".utf8)).encode(layout: .dense),
             Data([0x02, 0x0F, 0x0E, 0x0D]) + Data("metadata-test".utf8)
         )
+        // A wire ID the bridge does not register keeps an opaque dense payload.
         let densePair = try TransactionInstructionWire(
-            wireName: "iroha.log",
+            wireName: "test.opaque",
             payload: Data([0x07]),
             layout: .dense
         )
-        // field(10) = string(9) "iroha.log"; field(2) = count 1, the payload byte.
+        XCTAssertTrue(densePair.isDense)
+        // field(12) = string(11) "test.opaque"; field(2) = count 1, the payload byte.
         XCTAssertEqual(
             try densePair.encode(layout: .dense),
-            Data([0x0A, 0x09]) + Data("iroha.log".utf8) + Data([0x02, 0x01, 0x07])
+            Data([0x0C, 0x0B]) + Data("test.opaque".utf8) + Data([0x02, 0x01, 0x07])
         )
         XCTAssertEqual(
             try TransactionInstructionWire.decode(
@@ -734,7 +735,7 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
         let encodedDensePair = try densePair.encode(layout: .dense)
         XCTAssertEqual(
             try TransactionBatchItemWire.instruction(densePair).encode(layout: .dense),
-            Data([0x00, 0x0E]) + encodedDensePair
+            Data([0x00, 0x10]) + encodedDensePair
         )
         XCTAssertEqual(
             TransactionBatchItemWire.encodeInstruction(
@@ -767,8 +768,16 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             try TransactionInstructionWire(wireName: "iroha.test", payload: Data([1, 2]), layout: .compact),
             "a current-layout pair carries one nested Norito frame"
         )
+        // A registered wire ID admits only its instruction's canonical dense
+        // body; an unregistered one stays opaque, even when empty.
         XCTAssertThrowsError(
-            try TransactionInstructionWire(wireName: "iroha.test", payload: Data(), layout: .dense)
+            try TransactionInstructionWire(wireName: "iroha.log", payload: Data([0x07]), layout: .dense)
+        )
+        XCTAssertThrowsError(
+            try TransactionInstructionWire(wireName: "iroha.log", payload: Data(), layout: .dense)
+        )
+        XCTAssertTrue(
+            try TransactionInstructionWire(wireName: "iroha.test", payload: Data(), layout: .dense).isDense
         )
         XCTAssertTrue(TransactionInstructionWire.isWellFormedWireName("A.z_0:-@/"))
         XCTAssertFalse(TransactionInstructionWire.isWellFormedWireName("é"))
@@ -804,7 +813,7 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
         XCTAssertEqual(
             TransactionExecutableWire.batch([.instruction(densePair), .contractCall(invocation)])
                 .instructionWireNames,
-            ["iroha.log"]
+            ["test.opaque"]
         )
     }
 
@@ -813,11 +822,15 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
             "account-address validation needs the NoritoBridge address codec"
         )
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isInstructionTranscoderAvailable,
+            "dense instruction pairs need the NoritoBridge instruction transcoder"
+        )
         let fixtures = try DenseTransactionFixtures.load()
         let descriptor = try XCTUnwrap(fixtures.cases.first { $0.name == "transfer_asset" }).descriptor
         let networkId = try NetworkId(literal: descriptor.networkId)
         let pair = try TransactionInstructionWire(
-            wireName: "iroha.log",
+            wireName: "test.opaque",
             payload: Data([0x07]),
             layout: .dense
         )
@@ -873,10 +886,15 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             PrivacyExact12FixtureCodecV1.submitX509WireId,
         ] {
             XCTAssertTrue(PrivacyExact12FixtureCodecV1.isPrivacyInstructionWire(privacyWireId))
+            // The namespace is refused before any body is read, so any frame serves.
             let privacyPair = try TransactionInstructionWire(
                 wireName: privacyWireId,
-                payload: Data([0x07]),
-                layout: .dense
+                payload: noritoEncode(
+                    typeName: "test.Instruction",
+                    payload: Data([0x07]),
+                    flags: NoritoHeader.compactLen
+                ),
+                layout: .compact
             )
             for executable in [
                 TransactionExecutableWire.instructions([privacyPair]),
@@ -978,22 +996,23 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
         func assertInstruction(
             _ instruction: TransactionInstructionWire,
             _ expected: DenseTransactionFixtures.Instruction
-        ) {
+        ) throws {
+            // Every layout decodes the instruction to the descriptor's typed frame.
             XCTAssertEqual(instruction.wireName, expected.wireName, name)
-            XCTAssertEqual(instruction.isDense, layout == .dense, name)
+            XCTAssertFalse(instruction.isDense, name)
+            XCTAssertEqual(instruction.payload, expected.framedPayload, name)
             if layout == .dense {
                 // The dense pair carries the bare payload: no nested header.
-                XCTAssertNil(noritoDecodeDeclaredFrame(instruction.payload), name)
-                XCTAssertLessThan(instruction.payload.count, expected.framedPayload.count, name)
-            } else {
-                XCTAssertEqual(instruction.payload, expected.framedPayload, name)
+                let bare = try instruction.envelopePayload(layout: .dense)
+                XCTAssertNil(noritoDecodeDeclaredFrame(bare), name)
+                XCTAssertLessThan(bare.count, expected.framedPayload.count, name)
             }
         }
         switch (executable, descriptor) {
         case let (.instructions(instructions), .instructions(expected)):
             XCTAssertEqual(instructions.count, expected.count, name)
             for (instruction, expectedInstruction) in zip(instructions, expected) {
-                assertInstruction(instruction, expectedInstruction)
+                try assertInstruction(instruction, expectedInstruction)
             }
         case let (.ivm(bytecode), .ivm(expected)):
             XCTAssertEqual(bytecode, expected, name)
@@ -1004,7 +1023,7 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             for (item, expectedItem) in zip(items, expected) {
                 switch (item, expectedItem) {
                 case let (.instruction(instruction), .instruction(expectedInstruction)):
-                    assertInstruction(instruction, expectedInstruction)
+                    try assertInstruction(instruction, expectedInstruction)
                 case let (.contractCall(invocation), .contractCall(expectedCall)):
                     XCTAssertEqual(invocation, try expectedCall.invocation(), name)
                 default:
@@ -1032,23 +1051,6 @@ final class NoritoRpcDenseFixtureTests: XCTestCase {
             throw DenseTransactionFixtures.LoadError.invalidCompactFrame(name)
         }
         return frame.payload
-    }
-}
-
-private extension TransactionExecutableWire {
-    /// The opaque payloads of every instruction pair, in wire order.
-    var instructionPayloads: [Data] {
-        switch self {
-        case let .instructions(instructions):
-            return instructions.map(\.payload)
-        case .contractCall, .ivm:
-            return []
-        case let .batch(items):
-            return items.compactMap { item in
-                if case let .instruction(instruction) = item { return instruction.payload }
-                return nil
-            }
-        }
     }
 }
 
@@ -1107,29 +1109,14 @@ private struct DenseTransactionFixtures {
         case ivm(Data)
         case batch([BatchItem])
 
-        /// The typed executable in `layout`. Everything comes from the
-        /// descriptor except dense instruction payload bodies, which this SDK
-        /// cannot derive from a current-layout frame and takes as given.
-        func wire(
-            layout: NoritoWireLayout,
-            denseInstructionPayloads: [Data]
-        ) throws -> TransactionExecutableWire {
-            var remaining = denseInstructionPayloads[...]
+        /// The typed executable, entirely from the descriptor: each instruction
+        /// is its current-layout frame, which encodes in either layout.
+        func wire() throws -> TransactionExecutableWire {
             func pair(_ instruction: Instruction) throws -> TransactionInstructionWire {
-                if layout == .dense {
-                    guard let payload = remaining.popFirst() else {
-                        throw LoadError.invalidDescriptor("missing dense instruction payload")
-                    }
-                    return try TransactionInstructionWire(
-                        wireName: instruction.wireName,
-                        payload: payload,
-                        layout: layout
-                    )
-                }
-                return try TransactionInstructionWire(
+                try TransactionInstructionWire(
                     wireName: instruction.wireName,
                     payload: instruction.framedPayload,
-                    layout: layout
+                    layout: .compact
                 )
             }
             let wire: TransactionExecutableWire
@@ -1151,9 +1138,6 @@ private struct DenseTransactionFixtures {
                         }
                     }
                 )
-            }
-            guard remaining.isEmpty else {
-                throw LoadError.invalidDescriptor("unused dense instruction payload")
             }
             return wire
         }

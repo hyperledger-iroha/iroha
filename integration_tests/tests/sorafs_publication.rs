@@ -5,6 +5,7 @@
 //! use explicit software custody and bounded authenticated source transport, without State writes.
 
 use super::{
+    permissions::{account_permissions, account_role_ids},
     sorafs_network::{
         bounded_storage, prepare_transaction, submit_instruction, submit_transaction,
     },
@@ -954,17 +955,12 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     let publisher = cli_publisher();
     let publisher_id = cli_publisher_id();
     let governor = client(&published.network, 0, &ALICE_KEYPAIR);
-    let reader = governor.clone();
+    let reader = client(&published.network, 0, &publisher);
     let reader_id = publisher_id.clone();
     let (granted, roles) = read_on_dedicated_thread(move || {
-        let client = reader.client();
         Ok((
-            client
-                .query(FindPermissionsByAccountId::new(reader_id.clone()))
-                .execute_all()?,
-            client
-                .query(FindRolesByAccountId { id: reader_id })
-                .execute_all()?,
+            account_permissions(&reader, &reader_id)?,
+            account_role_ids(&reader, &reader_id)?,
         ))
     })
     .await?;

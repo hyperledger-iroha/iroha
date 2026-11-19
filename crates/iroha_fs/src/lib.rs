@@ -25,6 +25,8 @@ mod private_durability;
 #[cfg(windows)]
 pub use private_durability::PrivateDurabilityFile;
 mod build_output;
+mod snapshot_removal;
+use snapshot_removal::Removal;
 
 #[cfg(windows)]
 mod output_file;

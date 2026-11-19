@@ -36,6 +36,8 @@ What exists so far:
   profile, including numeric-loopback HTTP for a local parent network.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
+  Reset checks that every hard link to a shared tiered snapshot file is inside the
+  same stopped peer store before removing its generation metadata.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
   requires one signed transaction to be applied by every validator. Kagami and
   Mochi call this owner directly. Fresh environments use the `Standard` profile;

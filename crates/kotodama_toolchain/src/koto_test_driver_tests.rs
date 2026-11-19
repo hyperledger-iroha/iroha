@@ -358,15 +358,16 @@ fn test_runner_uses_exact_taira_chain_discriminant() {
         ),
     );
     let suite = discover_suite(&target).expect("discover Taira literal suite");
-    let compiled = compile_suite_for_chain(&suite, false, 369)
+    let compiled = compile_suite_for_chain(&suite, false, 369, ivm::IvmProfileId::BASELINE_ABI_V1)
         .expect("compile exact Taira literal under discriminant 369");
     let results = execute_suite_for_chain(&compiled, TraceMode::Off, 2, 369)
         .expect("execute exact Taira literal suite");
     assert!(results.iter().all(|result| result.passed));
-    let mismatch = match compile_suite_for_chain(&suite, false, 753) {
-        Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
-        Err(error) => error,
-    };
+    let mismatch =
+        match compile_suite_for_chain(&suite, false, 753, ivm::IvmProfileId::BASELINE_ABI_V1) {
+            Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
+            Err(error) => error,
+        };
     assert!(
         mismatch
             .to_string()
@@ -4166,6 +4167,20 @@ fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
         !covered("pair") && !covered("renew") && !covered("time"),
         "{report}"
     );
+    let Err(error) = execute_suite(&compiled, TraceMode::DeltaRegisters, 1) else {
+        panic!("baseline must refuse register-delta tracing")
+    };
+    assert!(
+        error.contains("local execution trace owner unavailable"),
+        "{error}"
+    );
+    let compiled = compile_suite_for_chain(
+        &suite,
+        false,
+        iroha_data_model::account::address::chain_discriminant(),
+        ivm::IvmProfileId::C10_ABI_V1,
+    )
+    .expect("compile C10 trace target");
     let results = execute_suite(&compiled, TraceMode::DeltaRegisters, 1).expect("trace");
     let steps = trace_steps(&compiled, &results[0]);
     assert!(

@@ -62,7 +62,9 @@ internal sealed record WireBatchExecutable(IReadOnlyList<WireBatchItem> Items) :
 /// <summary>
 /// An instruction envelope: the wire id and the payload bytes it names. In the compact layout the
 /// payload is the instruction's complete Norito frame; in the dense layout it is the bare dense
-/// payload with no nested header. The payload is never interpreted here.
+/// payload with no nested header, which the decoder admits only as the canonical payload of the
+/// instruction the native bridge registers under the wire id (an unregistered wire id stays
+/// opaque).
 /// </summary>
 internal sealed record WireInstruction(string WireId, byte[] Payload);
 

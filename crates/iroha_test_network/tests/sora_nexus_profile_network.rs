@@ -14,7 +14,8 @@
 //!
 //! Genesis is today's Kagami Taira network re-targeted to the profile (the P2 genesis builder
 //! replaces this, TODO(P2)): content of the Taira catalog the profile omits (the Digital Shekel
-//! dataspace and validator seats on lanes the profile does not define) is removed, the protocol
+//! data space and validator seats on lanes the profile does not define) is removed. The short-epoch
+//! beacon fixture also omits Taira’s optional SCCP initialization, which requires hour-long epochs. The protocol
 //! custody account becomes the profile's keyless account, the `NPoS` epoch becomes the qual
 //! profile's, and Kagami signs it against the flattened profile render of validator 0.
 //!
@@ -86,7 +87,7 @@ use profile_peers::{Peers, configure_lifecycle};
 mod windows_unprivileged;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    time::{Instant, sleep, timeout_at},
+    time::{Instant, sleep, timeout},
 };
 
 /// Chain id of Taira, whose Kagami output is re-targeted.
@@ -172,16 +173,16 @@ fn reserve_ports() -> Result<(u16, u16, Vec<std::net::TcpListener>)> {
     Ok((api, p2p, held))
 }
 
-/// Run a child to completion, keeping its output under `evidence`.
-async fn run(mut command: ResolvedCommand, evidence: &Path, deadline: Instant) -> Result<Vec<u8>> {
+/// Give each offline admission or inspection command its own bounded phase and retain its output.
+async fn run(mut command: ResolvedCommand, evidence: &Path) -> Result<Vec<u8>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout_at(deadline, command.spawn_async()?.wait_with_output())
+    let output = timeout(PHASE, command.spawn_async()?.wait_with_output())
         .await
-        .wrap_err("child exceeded its phase deadline")??;
+        .wrap_err_with(|| format!("{} exceeded its phase deadline", evidence.display()))??;
     fs::write(evidence.with_extension("stdout"), &output.stdout)?;
     fs::write(evidence.with_extension("stderr"), &output.stderr)?;
     ensure!(
@@ -283,6 +284,15 @@ fn taira_catalog_only(instruction: &Value, lanes: &BTreeSet<i64>) -> Result<bool
     Ok(false)
 }
 
+/// A short-epoch beacon network cannot initialize the Taira collateral protocol.
+fn profile_allows_instruction(profile: &Profile, instruction: &InstructionBox) -> bool {
+    use iroha_data_model::{isi::sccp::InitializeSccpV1, sccp::params::SCCP_MIN_EPOCH_MS_V1};
+    let recipe = profile.genesis_recipe();
+    !instruction.as_any().is::<InitializeSccpV1>()
+        || u128::from(recipe.epoch_length_blocks) * u128::from(recipe.block_cadence_ms)
+            >= u128::from(SCCP_MIN_EPOCH_MS_V1)
+}
+
 /// Re-target Kagami's Taira manifest to the profile (see the module documentation).
 fn profile_manifest(
     kagami: &Path,
@@ -300,15 +310,21 @@ fn profile_manifest(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| eyre!("Kagami manifest has no transactions"))?;
     let mut removed = 0;
-    for transaction in transactions.iter_mut() {
+    for (transaction, original) in transactions.iter_mut().zip(raw.transactions()) {
         if let Some(instructions) = transaction
             .get_mut("instructions")
             .and_then(Value::as_array_mut)
         {
             let before = instructions.len();
             let mut kept = Vec::with_capacity(before);
-            for instruction in instructions.drain(..) {
-                if !taira_catalog_only(&instruction, &lanes)? {
+            ensure!(
+                before == original.instructions().len(),
+                "genesis instruction count changed during serialization"
+            );
+            for (instruction, typed) in instructions.drain(..).zip(original.instructions()) {
+                if profile_allows_instruction(profile, typed)
+                    && !taira_catalog_only(&instruction, &lanes)?
+                {
                     kept.push(instruction);
                 }
             }
@@ -335,6 +351,8 @@ fn profile_manifest(
         npos.evidence_horizon_blocks = epoch;
         npos.slashing_delay_blocks = epoch;
         npos.validate().map_err(|error| eyre!(error))?;
+        // Genesis signs one epoch length: the NPoS schedule must equal Sumeragi's own.
+        typed.sumeragi.epoch_length_blocks = npos.epoch_length_blocks;
         typed.custom.insert(npos.into_custom_parameter());
         *parameters = json::value::to_value(&typed)?;
     }
@@ -702,7 +720,11 @@ async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<S
                 let status = client.get_sumeragi_status()?;
                 ensure!(
                     status.signer.as_ref() == Some(node.public_key()) && !status.is_halted(),
-                    "native diagnostic source does not report the expected running validator"
+                    "validator {node} reported signing key {:?} at height {} (halted {:?}, unanchored {})",
+                    status.signer,
+                    status.height,
+                    status.halted,
+                    status.unanchored
                 );
                 Ok::<_, color_eyre::Report>(status)
             })
@@ -984,6 +1006,21 @@ fn deep_merge_overlays_leaves_and_merges_tables() {
 }
 
 #[test]
+fn short_epoch_qual_genesis_excludes_only_sccp_initialization_from_the_beacon_fixture() {
+    use iroha_data_model::{isi::sccp::InitializeSccpV1, sccp::params::SccpParametersV1};
+    let profile = Profile::compiled(PROFILE).unwrap();
+    let initialize = InitializeSccpV1 {
+        parameters: SccpParametersV1::taira_default(),
+        reset_nonce: [1; 32],
+    };
+    assert!(!profile_allows_instruction(&profile, &initialize.into()));
+    assert!(profile_allows_instruction(
+        &profile,
+        &Log::new(Level::INFO, "beacon fixture".to_owned()).into()
+    ));
+}
+
+#[test]
 fn taira_catalog_content_is_recognized() {
     let lanes = BTreeSet::from([0, 1, 2, 3]);
     let register = |lane: i64| {
@@ -1020,7 +1057,6 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
     let workspace = workspace()?;
     let root = workspace.path().to_path_buf();
     let outcome = async {
-        let deadline = Instant::now() + PHASE;
         let (api, p2p, reservations) = reserve_ports()?;
         // 1. Today's Kagami Taira network with the qual cadence.
         let kagami_dir = root.join("kagami");
@@ -1028,7 +1064,6 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         generate
             .args(["sora-network", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
             .args(["--profile", "nexus"])
-            .args(["--seed", "sora-nexus-v1-qual-predeal"])
             .arg("--block-cadence-ms")
             .arg(profile.genesis_recipe().block_cadence_ms.to_string())
             .args(["--bind-host", "127.0.0.1", "--public-host", "127.0.0.1"])
@@ -1038,7 +1073,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg(p2p.to_string())
             .arg("--out-dir")
             .arg(&kagami_dir);
-        run(generate, &root.join("kagami-localnet"), deadline).await?;
+        run(generate, &root.join("kagami-localnet")).await?;
         eprintln!("[{}] Kagami Taira network generated", elapsed(started));
         let seats = (0..PEERS)
             .map(|index| Seat::load(&kagami_dir, index))
@@ -1078,16 +1113,26 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 3. Re-target the manifest and sign it against the flattened profile render.
         let genesis_dir = root.join("genesis");
         owner_only_dir(&genesis_dir)?;
-        let kagami_custody = seats[0].text(&["pipeline", "gas", "tech_account_id"])?;
-        let profile_custody = protocol_custody_account(ProfileId::SoraNexusV1)
-            .to_i105_for_discriminant(369)?;
-        ensure!(
+        // Fee custody is committed root fee policy, not node configuration (`pipeline.gas` is
+        // retired): Kagami's genesis gives the fee sink and the sponsor vault one account. Its
+        // account literals decode under Taira's chain discriminant.
+        let kagami_fees = {
+            let _discriminant = ChainDiscriminantGuard::enter(369);
             iroha_data_model::block::consensus::RootFeePolicy::from_parameters(
-                &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?.effective_parameters()?
-            )?.ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?
-                .fee_sink_account_id.to_i105_for_discriminant(369)? == kagami_custody,
+                &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?
+                    .effective_parameters()?,
+            )?
+        }
+        .ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?;
+        ensure!(
+            kagami_fees.fee_sink_account_id == kagami_fees.sponsor_vault_custody_account_id,
             "Kagami custody roles no longer share one account"
         );
+        let kagami_custody = kagami_fees
+            .fee_sink_account_id
+            .to_i105_for_discriminant(369)?;
+        let profile_custody = protocol_custody_account(ProfileId::SoraNexusV1)
+            .to_i105_for_discriminant(369)?;
         profile_manifest(
             &kagami_dir,
             &genesis_dir.join("genesis.json"),
@@ -1112,7 +1157,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg(genesis_public_key.to_string())
             .arg("--config")
             .arg(&flat);
-        run(sign, &root.join("kagami-genesis-sign"), deadline).await?;
+        run(sign, &root.join("kagami-genesis-sign")).await?;
         let network_id = {
             let _discriminant = ChainDiscriminantGuard::enter(369);
             NetworkId::from_str(
@@ -1192,7 +1237,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .args(["--check-config", "--json"]);
-            let report = run(check, &root.join(format!("check-config-{index}")), deadline).await?;
+            let report = run(check, &root.join(format!("check-config-{index}"))).await?;
             let report: Value = json::from_slice(&report)?;
             ensure!(
                 report.get("status").and_then(Value::as_str) == Some("ready"),
@@ -1204,7 +1249,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 6. Unprivileged first start with `beacon.cred` already in place.
         let subject = unprivileged_subject()?;
         drop(reservations);
-        let mut peers = Peers::spawn(&daemon, &root, &node_files)?;
+        let mut peers = Peers::spawn_fresh(&daemon, &root, &node_files)?;
         let network = async {
             let _discriminant = ChainDiscriminantGuard::enter(369);
             let clients = (0..PEERS)
@@ -1363,10 +1408,8 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             "[{}] pulse {pulse} verifies against the pre-dealt session on all four validators",
             elapsed(started)
         );
-        // 11. The stopped stores pass the read-only storage check, and this build restores the
-        //     real signed snapshot the qualification cadence wrote and reproduces every later
-        //     block (`--check-replay`, on a copy of each store).
-        let deadline = Instant::now() + PHASE;
+        // The World commitment on this root cannot authenticate a complete State snapshot.
+        // Replay every stopped store from its original signed genesis through the certified tip.
         for (index, node_file) in node_files.iter().enumerate() {
             let mut check = daemon.command()?;
             check
@@ -1375,7 +1418,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .arg("--check-storage");
-            let report = run(check, &root.join(format!("check-storage-{index}")), deadline).await?;
+            let report = run(check, &root.join(format!("check-storage-{index}"))).await?;
             let report: Value = json::from_slice(&report)?;
             let tip = report.get("tip_height").and_then(Value::as_u64);
             ensure!(
@@ -1390,7 +1433,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .arg("--check-replay");
-            let replayed = run(replay, &root.join(format!("check-replay-{index}")), deadline).await?;
+            let replayed = run(replay, &root.join(format!("check-replay-{index}"))).await?;
             let replayed: Value = json::from_slice(&replayed)?;
             let start = replayed.get("start");
             let start_height = start
@@ -1400,11 +1443,11 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 start
                     .and_then(|start| start.get("source"))
                     .and_then(Value::as_str)
-                    == Some("snapshot")
-                    && start_height.is_some_and(|height| height > 0 && Some(height) < tip)
+                    == Some("genesis")
+                    && start_height == Some(0)
                     && replayed.get("outcome").and_then(Value::as_str) == Some("matched")
                     && replayed.get("replayed_to").and_then(Value::as_u64) == tip,
-                "validator {index} did not restore its snapshot and reproduce every later block: \
+                "validator {index} did not reproduce every block from signed genesis: \
                  {replayed:?}"
             );
             eprintln!("check-replay validator {index}: {}", json::to_string(&replayed)?);

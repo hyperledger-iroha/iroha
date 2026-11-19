@@ -237,8 +237,9 @@ struct BuildArgs {
     /// Write the manifest to this path, or `-` for stdout (one source only).
     #[arg(long, value_name = "FILE.json")]
     manifest_out: Option<PathBuf>,
-    /// ZK trace bound recorded in the header of a `--zk` artifact; must not exceed the chain's
-    /// `ivm_max_cycles_upper_bound`. A non-ZK artifact carries no bound: gas is its only budget.
+    /// Cycle bound recorded in the header of a `--zk` artifact (the baseline header's cycle
+    /// ceiling, or the C10 header's ZK trace bound); must not exceed the chain's
+    /// `ivm_max_cycles_upper_bound`.
     #[arg(long, value_name = "COUNT", requires = "zk")]
     zk_trace_cycles: Option<std::num::NonZeroU64>,
     /// Exact named ABI V1 host profile required by the produced contract: `abi-v1`, the frozen
@@ -290,6 +291,9 @@ enum TestAction {
 /// Suite discovery and selection shared by every `koto test` action.
 #[derive(Args, Debug, Clone)]
 struct TestSuiteArgs {
+    /// IVM host profile for both the seiyaku and its test harness.
+    #[arg(long, value_name = "PROFILE", value_parser = [BASELINE_HOST_PROFILE, C10_HOST_PROFILE, ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE], default_value = BASELINE_HOST_PROFILE)]
+    host_profile: String,
     /// Run only tests whose name contains this text (or equals it with --exact).
     #[arg(long, value_name = "TEXT")]
     filter: Option<String>,
@@ -616,6 +620,7 @@ fn test_cli_options(args: TestArgs) -> kotodama_toolchain::koto_test_driver::Kot
     };
     let suite_options = |action: KotoTestAction, suite: TestSuiteArgs| {
         let TestSuiteArgs {
+            host_profile,
             filter,
             exact,
             seed,
@@ -624,6 +629,8 @@ fn test_cli_options(args: TestArgs) -> kotodama_toolchain::koto_test_driver::Kot
             source,
         } = suite;
         let mut options = KotoTestCliOptions::new(action, capabilities.chain_discriminant());
+        options.host_profile =
+            host_profile_target(&host_profile).expect("clap validates the named host profile");
         options.source = source;
         options.source_root = selection.source_root;
         options.filter = filter;
@@ -1128,7 +1135,12 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         .unwrap_or_else(|| unreachable!("clap validates the exact named host profile"));
     (compiler_options.host_policy, compiler_options.engine) = (target.policy(), target.engine());
     if let Some(zk_trace_cycles) = zk_trace_cycles {
-        compiler_options.zk_trace_cycles = zk_trace_cycles;
+        // A `--zk` artifact records this bound in its header: the baseline header's cycle
+        // ceiling, or the C10 header's ZK trace bound.
+        match compiler_options.engine {
+            ivm::IvmEngine::Baseline => compiler_options.baseline_max_cycles = zk_trace_cycles,
+            ivm::IvmEngine::C10 => compiler_options.zk_trace_cycles = zk_trace_cycles,
+        }
     }
     compiler_options.chain_discriminant = capabilities.chain_discriminant();
     compiler_options.force_zk = capabilities.zk;
@@ -2305,6 +2317,23 @@ mod tests {
             assert_eq!(options.filter.as_deref(), Some("quote"));
             assert!(options.exact);
         }
+        let Cli {
+            command: KotoCommand::Test(args),
+        } = parse_cli(&[
+            "test",
+            "trace",
+            "--host-profile",
+            C10_HOST_PROFILE,
+            "x.test.ko",
+        ])
+        .expect("C10 trace")
+        else {
+            panic!("test command")
+        };
+        assert_eq!(
+            test_cli_options(args).host_profile,
+            ivm::IvmProfileId::C10_ABI_V1
+        );
         let error =
             parse_cli(&["test", "--exact", "x.test.ko"]).expect_err("--exact needs --filter");
         assert_eq!(

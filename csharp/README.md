@@ -399,13 +399,17 @@ var fromFrame = BareSignedTransaction.DecodeFrame(dense.EncodeFrame()); // heade
 
 No ledger selects the dense layout yet and no transaction wire version names it, so a
 dense transaction has no versioned submission bytes or entrypoint hash, and Torii
-submission stays compact. Dense encoders exist for the transaction envelope and for the
-transfer, mint, burn, key-value and trigger instructions; other instruction types raise
-`NotSupportedException` in the dense layout.
+submission stays compact. Managed dense encoders exist for the transaction envelope and
+for the transfer, mint, burn, key-value and trigger instructions. Every other instruction
+type reaches the dense layout through the native bridge
+(`connect_norito_transcode_instruction_v1`), which transcodes its compact frame by wire
+id. Decoding a dense transaction likewise admits each instruction body only as the
+canonical dense payload of the instruction the bridge registers under its wire id; an
+unregistered wire id stays an opaque envelope.
 
 The shared vectors `fixtures/norito_dense/vectors.json` and
-`fixtures/norito_rpc/transaction_fixtures.dense.json` pin the bytes. The decode and
-vector suites need no native bridge; the typed dense builds do:
+`fixtures/norito_rpc/transaction_fixtures.dense.json` pin the bytes. The vector suite
+needs no native bridge; dense transaction decoding and the typed dense builds do:
 
 ```bash
 dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build -- \

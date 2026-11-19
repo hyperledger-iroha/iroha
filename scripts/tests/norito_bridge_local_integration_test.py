@@ -160,7 +160,7 @@ class LocalAppleIntegrationTests(unittest.TestCase):
         cargo = args.index('--') + 1
         self.assertEqual(args[cargo:], [
             '/fixture/cargo', 'build', '--manifest-path', '/fixture/Cargo.toml',
-            '--message-format=json-render-diagnostics',
+            '--verbose', '--message-format=json-render-diagnostics',
             '--target', 'aarch64-apple-darwin', '-p', 'connect_norito_bridge',
         ])
         for forbidden in ('-Z', '--lockfile-path', '--config', 'RUSTC_BOOTSTRAP=1'):

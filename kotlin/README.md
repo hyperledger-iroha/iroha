@@ -1183,17 +1183,20 @@ adapter produced, so a dense payload is signed over its dense hash.
 `SignedTransactionEncoder.encode(transaction, layout)` and `decode(bytes, layout)`
 carry the bare signed transaction. Bytes of one layout are refused by the other.
 
+Instructions keep one typed form in both layouts: the framed `WirePayload` that
+the typed builders produce. A dense envelope carries the instruction's bare dense
+payload, which the native bridge (`connect_norito_transcode_instruction_v1`)
+transcodes from and to that frame by wire ID, so the dense codec needs
+`IROHA_NATIVE_LIBRARY_PATH` like every other native-backed test. The SDK's typed
+checks (privacy admission, Kaigi and plain-conviction canonical frames) read the
+frame in either layout. Only a wire ID the bridge does not register stays an
+opaque `DenseWirePayload` (`InstructionBox.fromDenseWirePayload`), which encodes
+only into the dense transaction it came from.
+
 No ledger definition selects the dense layout yet (`TODO(dense-activation)` in
 `../norito.md`), so nodes accept compact transactions only. Until one does, the
 dense transaction codec has these limits:
 
-- An instruction is an opaque `DenseWirePayload` envelope: its wire ID and its
-  bare dense payload (`InstructionBox.fromDenseWirePayload`). It encodes only into
-  a dense transaction, and a framed `WirePayload` encodes only into a compact one.
-  The typed instruction builders produce framed payloads only.
-- Dense envelopes of the privacy submissions, the Kaigi instructions and
-  `UpdatePlainConviction` are refused, because the SDK's typed checks for them
-  read framed payloads.
 - Signed attachments are refused in a dense payload.
 - `encodeVersioned` and `decodeVersioned` stay compact: no version byte names the
   dense layout.

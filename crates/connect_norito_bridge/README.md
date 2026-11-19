@@ -58,6 +58,27 @@ rejected without normalization. This additive export retains ABI 33 because no
 existing calling convention or layout changes. C/JNI, C# and Apple artifact
 admission require the new symbol explicitly; ABI identity alone is insufficient.
 
+Norito layouts are explicit arguments (`norito.md`, "Dense layout"); nothing
+infers a layout from bytes, and the current layout keeps its bytes, versioned
+submission wire and hashes. `connect_norito_transcode_instruction_v1` transcodes
+one instruction envelope payload between its current-layout Norito frame and its
+bare dense payload, keyed by wire ID: the payload must be exactly the canonical
+payload of the instruction the data model registers under that ID, and an
+unregistered ID returns `CONNECT_NORITO_ERR_INSTRUCTION_UNREGISTERED` so the SDK
+keeps that envelope opaque. Swift, Kotlin (`NativeInstructionLayoutBridge`) and
+C# use it for typed dense instruction bodies.
+`connect_norito_decode_signed_transaction_json_v1` takes a layout and an
+archive format (versioned for the current layout only, bare or framed) and
+replaces the retired current-only `connect_norito_decode_signed_transaction_json`.
+`connect_norito_sign_transaction_payload_v1` signs a bare or framed payload
+through the data model's `try_sign_with_layout` after binding the expected
+network; it returns no transaction identity, because a dense one exists only
+after a governed activation. The `encode_*_signed_transaction` family keeps its
+calling convention and signs the current layout through the same path. These
+additive exports and the retirement keep ABI 33 because no existing calling
+convention changes; C/JNI and C# artifact admission require the transcoder
+explicitly.
+
 KAGEMUSHA canonical wallet objects are owned by
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge retains one native
 runtime or admitted wallet per opaque handle. Trusted embedding-app initialization

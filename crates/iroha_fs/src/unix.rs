@@ -297,7 +297,7 @@ fn validate_directory(file: &File, private: bool) -> io::Result<FileIdentity> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinkPolicy {
     Single,
-    BuildInput,
+    Counted,
 }
 
 fn validate_file(file: &File, private: bool) -> io::Result<fs::Metadata> {
@@ -1175,7 +1175,7 @@ impl Directory {
     }
 
     pub(super) fn remove_build_output_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, false, None, LinkPolicy::BuildInput)
+        self.remove_file_native(name, false, None, LinkPolicy::Counted)
     }
 
     fn remove_file_native(
@@ -1206,7 +1206,7 @@ impl Directory {
             return Err(changed());
         }
         #[cfg(test)]
-        if links == LinkPolicy::BuildInput {
+        if links == LinkPolicy::Counted {
             crate::build_output::before_named_removal(name);
         }
         self.revalidate()?;
@@ -1214,7 +1214,7 @@ impl Directory {
             return Err(changed());
         }
         rustix::fs::unlinkat(&self.current().file, name, AtFlags::empty())?;
-        if links == LinkPolicy::BuildInput {
+        if links == LinkPolicy::Counted {
             let after = FileSnapshot::from_metadata(&file.metadata()?);
             let mut expected = before;
             expected.links = before.links.checked_sub(1).ok_or_else(changed)?;
@@ -1436,11 +1436,21 @@ impl Directory {
         for name in preserved {
             validate_file(&self.open_read(name)?, true)?;
         }
-        self.clear(preserved, &mut 100_000)
+        self.clear(preserved, &mut 100_000, &mut Removal::SingleLink)
     }
 
-    fn clear(&self, preserved: &[&OsStr], remaining: &mut usize) -> io::Result<()> {
+    pub(super) fn walk_snapshot(&self, pass: &mut Removal<'_>) -> io::Result<()> {
+        self.clear(&[], &mut 100_000, pass)
+    }
+
+    fn clear(
+        &self,
+        preserved: &[&OsStr],
+        remaining: &mut usize,
+        pass: &mut Removal<'_>,
+    ) -> io::Result<()> {
         self.revalidate()?;
+        pass.visit_directory(self.current().identity)?;
         let entries = rustix::fs::Dir::read_from(&self.current().file)?;
         for entry in entries {
             let entry = entry?;
@@ -1487,21 +1497,43 @@ impl Directory {
                     access: DirectoryAccess::Read,
                 }));
                 let child = Self { links };
-                child.clear(&[], remaining)?;
+                child.clear(&[], remaining, pass)?;
+                if pass.inspecting() {
+                    continue;
+                }
                 // The removal acts on the child's name, which must denote it now.
                 custody_transaction::revalidate_name(&child)?;
                 rustix::fs::unlinkat(&self.current().file, name, AtFlags::REMOVEDIR)?;
             } else {
-                validate_file(&file, false)?;
-                let named = self.open_read(name)?;
-                if identity(&file)? != identity(&named)? {
+                if matches!(pass, Removal::SingleLink) {
+                    validate_file(&file, false)?;
+                    let named = self.open_read(name)?;
+                    if identity(&file)? != identity(&named)? {
+                        return Err(changed());
+                    }
+                    self.revalidate()?;
+                    rustix::fs::unlinkat(&self.current().file, name, AtFlags::empty())?;
+                    continue;
+                }
+                let policy = LinkPolicy::Counted;
+                let metadata = validate_file_links(&file, false, policy)?;
+                let snapshot = FileSnapshot::from_metadata(&metadata);
+                if metadata.uid() != rustix::process::geteuid().as_raw() {
+                    return Err(denied("removal entry has foreign ownership"));
+                }
+                pass.admit_file(snapshot.identity, snapshot.links)?;
+                if !pass.inspecting()
+                    && !self.remove_file_native(name, false, Some(&snapshot), policy)?
+                {
                     return Err(changed());
                 }
-                self.revalidate()?;
-                rustix::fs::unlinkat(&self.current().file, name, AtFlags::empty())?;
             }
         }
-        self.sync()
+        if pass.inspecting() {
+            self.revalidate()
+        } else {
+            self.sync()
+        }
     }
 }
 
@@ -1637,7 +1669,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     }
 
     fn open_build_input(directory: D, name: N) -> io::Result<Self> {
-        Self::open_with_links(directory, name, false, false, LinkPolicy::BuildInput)
+        Self::open_with_links(directory, name, false, false, LinkPolicy::Counted)
     }
 
     fn open_with_links(

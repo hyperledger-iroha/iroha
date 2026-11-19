@@ -368,6 +368,27 @@ fn refuse_terminal_registration(
     result
 }
 
+/// A proof or preparation read can lose its Torii work budget while the original
+/// transaction remains committed. Only read observations share this backoff.
+fn publication_read_backoff(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    remaining: Duration,
+) -> Option<Duration> {
+    if !matches!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS
+    ) {
+        return None;
+    }
+    let delay = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map_or(Duration::from_millis(500), Duration::from_secs);
+    Some(delay.max(Duration::from_millis(100)).min(remaining))
+}
+
 fn preparation(
     client: &HttpClient,
     base: &Url,
@@ -387,6 +408,15 @@ fn preparation(
                 .map_err(|_| "manifest selector encoding failed".to_owned())?,
         )?;
         let status = response.status();
+        if let Some(wait) = publication_read_backoff(
+            status,
+            response.headers(),
+            PUBLICATION_TIMEOUT.saturating_sub(started.elapsed()),
+        ) {
+            drop(response);
+            std::thread::sleep(wait);
+            continue;
+        }
         if status == StatusCode::ACCEPTED || status == StatusCode::NOT_FOUND {
             refuse_terminal_registration(client, base, registration_hash, started)?;
             std::thread::sleep(Duration::from_millis(500));
@@ -518,6 +548,15 @@ fn assert_and_verify(
             endpoint(base, "v1/sorafs/publish/proof")?,
             request_bytes.clone(),
         )?;
+        if let Some(wait) = publication_read_backoff(
+            response.status(),
+            response.headers(),
+            PUBLICATION_TIMEOUT.saturating_sub(started.elapsed()),
+        ) {
+            drop(response);
+            std::thread::sleep(wait);
+            continue;
+        }
         if response.status() == StatusCode::ACCEPTED {
             std::thread::sleep(Duration::from_millis(500));
             continue;
@@ -1063,6 +1102,7 @@ mod tests {
         let config = publication_test_config();
         for kind in ["Approved", "Applied"] {
             let (client, base, server) = status_server(vec![
+                (503, "Retry-After: 0\r\n", Vec::new()),
                 (404, "Content-Type: application/json\r\n", b"{}".to_vec()),
                 (
                     200,
@@ -1087,11 +1127,39 @@ mod tests {
             .unwrap_err();
             assert!(error.contains("not canonical bounded Norito"), "{error}");
             let requests = server.join().unwrap();
-            assert_eq!(requests.len(), 3);
+            assert_eq!(requests.len(), 4);
             assert!(requests[0].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
-            assert!(requests[1].starts_with("GET /v1/pipeline/transactions/status?"));
-            assert!(requests[2].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
+            assert!(requests[1].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
+            assert!(requests[2].starts_with("GET /v1/pipeline/transactions/status?"));
+            assert!(requests[3].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
         }
+    }
+
+    #[test]
+    fn proof_and_preparation_backoff_is_bounded_and_refusals_are_terminal() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let remaining = Duration::from_secs(2);
+        let mut headers = HeaderMap::new();
+        for status in [
+            StatusCode::FORBIDDEN,
+            StatusCode::CONFLICT,
+            StatusCode::UNAUTHORIZED,
+        ] {
+            assert_eq!(publication_read_backoff(status, &headers, remaining), None);
+        }
+        assert_eq!(
+            publication_read_backoff(StatusCode::SERVICE_UNAVAILABLE, &headers, remaining),
+            Some(Duration::from_millis(500))
+        );
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("17"));
+        assert_eq!(
+            publication_read_backoff(StatusCode::TOO_MANY_REQUESTS, &headers, remaining),
+            Some(remaining)
+        );
+        assert_eq!(
+            publication_read_backoff(StatusCode::SERVICE_UNAVAILABLE, &headers, Duration::ZERO),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
