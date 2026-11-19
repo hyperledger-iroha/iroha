@@ -2601,6 +2601,10 @@
             "role": "test"
           },
           {
+            "path": "integration_tests/tests/nexus/atomic_private_settlement_wallet_input.rs",
+            "role": "test"
+          },
+          {
             "path": "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs",
             "role": "source"
           }
