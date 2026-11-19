@@ -66,8 +66,8 @@ pub enum ParamsError {
     /// The blowup is smaller than the quotient domain the constraint degree needs.
     #[error("blowup too small for the constraint degree")]
     QuotientBlowup,
-    /// A FRI fold needs more points than its layer's codeword has.
-    #[error("FRI folding exceeds a layer's domain")]
+    /// A FRI fold would exceed the layer's remaining degree bound.
+    #[error("FRI folding exceeds a layer's degree bound")]
     FoldGeometry,
     /// Opened rows or the worst-case decoded element count exceed the proof codec's limits.
     #[error("proof dimensions exceed the codec's limits")]
@@ -249,14 +249,13 @@ impl Params {
         if quotient_log > self.log_blowup {
             return Err(ParamsError::QuotientBlowup);
         }
-        // Track the codeword size separately from the degree bound: a last fold may round the
-        // degree down to a constant but still needs `arity` codeword entries.
-        let (mut log_degree, mut log_codeword) = (circuit.log_rows, log_lde);
+        // An arity-A fold divides both the degree bound and codeword size by A. Rounding
+        // an undersized degree bound up to one would increase the rate used by the estimator.
+        let mut log_degree = circuit.log_rows;
         while log_degree > self.fri_log_final_degree {
-            log_codeword = log_codeword
+            log_degree = log_degree
                 .checked_sub(self.fri_log_arity)
                 .ok_or(ParamsError::FoldGeometry)?;
-            log_degree = log_degree.saturating_sub(self.fri_log_arity);
         }
         check_tables(circuit)?;
         let aux_width = if circuit.has_lookups() {
@@ -400,6 +399,34 @@ impl Params {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folds_must_preserve_the_configured_rate_down_to_the_last_layer() {
+        let params = Params {
+            fri_log_arity: 4,
+            fri_log_final_degree: 0,
+            ..Params::standard()
+        };
+        let circuit = |log_rows| {
+            let mut builder = crate::Builder::new("FRI geometry", log_rows);
+            builder.materialize(&crate::Expr::constant(0), "zero");
+            builder.finish()
+        };
+        // Two complete arity-16 folds reach a constant at the configured blowup.
+        assert_eq!(params.check(&circuit(8)), Ok(()));
+        // At nine bits a third fold would consume four degree bits when only one remains.
+        let partial = circuit(9);
+        assert_eq!(params.check(&partial), Err(ParamsError::FoldGeometry));
+        assert_eq!(
+            params.check_security(&partial, TARGET_SECURITY_BITS),
+            Err(ParamsError::FoldGeometry)
+        );
+        let stop_earlier = Params {
+            fri_log_final_degree: 1,
+            ..params
+        };
+        assert_eq!(stop_earlier.check(&partial), Ok(()));
+    }
 
     #[test]
     fn supported_parameters_fit_the_total_decoder_budget() {
