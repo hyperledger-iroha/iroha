@@ -2,6 +2,7 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eyre::{Result, WrapErr as _, ensure};
+use futures_util::future::try_join_all;
 use iroha::{
     blocking::Client,
     crypto::{KeyPair, Signature},
@@ -211,13 +212,26 @@ pub async fn genesis_checkpoint(
         "independently constructed genesis differs from network identity"
     );
     let deadline = Instant::now() + DEADLINE;
-    let proof = timeout_at(deadline, finality_proof(http, network, 1)).await??;
-    let authenticated = verifier.verify(&proof)?;
+    // A peer can commit genesis before its Torii listener binds. Establish each
+    // endpoint with a read-only proof before the first signed mutation.
+    let urls = network.torii_urls();
+    let proofs = timeout_at(
+        deadline,
+        try_join_all(urls.iter().map(|url| finality_proof(http, url, 1))),
+    )
+    .await??;
+    let (proof, witnesses) = proofs
+        .split_first()
+        .ok_or_else(|| eyre::eyre!("publication requires a genesis finality endpoint"))?;
+    let authenticated = verifier.verify(proof)?;
     ensure!(
         authenticated.height() == 1 && authenticated.block().hash() == genesis.expected_hash(),
         "queried checkpoint changed independent signed-genesis identity"
     );
-    let checkpoint = verifier.export_checkpoint(&proof)?;
+    for witness in witnesses {
+        verifier.verify_same_decision(proof, witness)?;
+    }
+    let checkpoint = verifier.export_checkpoint(proof)?;
     ensure!(
         Instant::now() < deadline,
         "genesis checkpoint verification exceeded its deadline"
@@ -245,7 +259,11 @@ pub async fn advance_checkpoint(
     let deadline = Instant::now() + DEADLINE;
     let mut tip = None;
     for next in from.height() + 1..=height {
-        let proof = timeout_at(deadline, finality_proof(http, network, next)).await??;
+        let proof = timeout_at(
+            deadline,
+            finality_proof(http, &network.peers()[0].torii_url(), next),
+        )
+        .await??;
         ensure!(
             verifier.verify(&proof)?.height() == next,
             "finality walk substituted a height"
@@ -300,12 +318,12 @@ fn readiness_rate_limit_honors_retry_after_only_on_429() {
 /// Read one untrusted public full finality proof, waiting until the height is served.
 async fn finality_proof(
     http: &reqwest::Client,
-    network: &Network,
+    base: &str,
     height: u64,
 ) -> Result<SumeragiFinalityProof> {
     let url = format!(
         "{}{}",
-        network.peers()[0].torii_url().trim_end_matches('/'),
+        base.trim_end_matches('/'),
         iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
             .path()
             .replace("{height}", &height.to_string())
