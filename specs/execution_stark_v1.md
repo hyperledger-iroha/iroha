@@ -168,7 +168,8 @@ four chunks. The DEEP batch has B = 1,615 entries (1,385 + 167 + 6 at z, then 56
 at ωz). The composition uses C = 1,552 identities (1,217 circuit, 168 boundary and
 167 lookup). Three folds reduce the degree bound from 8,192 to 1,024, 128 and 16. Parameter validation
 requires each full-arity fold to divide the remaining degree bound, preserving the code rate
-through the final layer.
+through the final layer. The commit estimate counts the initial stage and every actual fold,
+including a fold that takes the degree below the stopping cap.
 `Params::proven_security_bits` uses m = 128, ρ = n/N, ρ+ = (n+2)/N and a conservative
 255.99 bits for the extension field Q = p⁴. Below, costs are −log₂(error) **before**
 the one-bit compiler margin. Harbor has the largest fixed table.

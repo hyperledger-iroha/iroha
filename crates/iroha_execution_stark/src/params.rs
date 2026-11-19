@@ -361,9 +361,10 @@ impl Params {
         let query = self.bits_per_query(log_rows) * self.queries as f64;
         // Commit phase: per folding round, (m + 1/2)^7 / (2 rho^1.5) * N^2 / |F|, times arity - 1
         // for power batching, the number of rounds and the batch width.
-        let rounds = f64::from(log_rows.saturating_sub(self.fri_log_final_degree))
-            / f64::from(self.fri_log_arity.max(1))
-            + 1.0;
+        let folds = log_rows
+            .saturating_sub(self.fri_log_final_degree)
+            .div_ceil(self.fri_log_arity.max(1));
+        let rounds = f64::from(folds) + 1.0;
         let arity = 2f64.powi(i32::try_from(self.fri_log_arity).expect("small"));
         let gap_log = 7.0f64.mul_add((JOHNSON_M + 0.5).log2(), -(2.0 * rho.powf(1.5)).log2());
         let commit_log = 2.0f64.mul_add(log_lde, gap_log)
@@ -426,6 +427,29 @@ mod tests {
             ..params
         };
         assert_eq!(stop_earlier.check(&partial), Ok(()));
+    }
+
+    #[test]
+    fn equal_fold_counts_have_the_same_commit_budget() {
+        let circuit = crate::Builder::new("two folds", 8).finish();
+        // With enough queries the commit term controls the reported budget. Both caps
+        // allow exactly two arity-16 folds, going from 8 degree bits to 4 to 0.
+        let exact = Params {
+            queries: 512,
+            fri_log_arity: 4,
+            fri_log_final_degree: 0,
+            ..Params::standard()
+        };
+        let below_cap = Params {
+            fri_log_final_degree: 1,
+            ..exact
+        };
+        let shape = SecurityShape::of(&circuit);
+        assert_eq!(below_cap.check(&circuit), Ok(()));
+        assert!(
+            (exact.proven_security_bits(&shape) - below_cap.proven_security_bits(&shape)).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
