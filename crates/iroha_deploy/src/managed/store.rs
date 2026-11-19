@@ -1147,6 +1147,18 @@ pub(super) fn adopt_rebuilt_programs(
 /// Remove one stopped generation. The caller holds both ownership locks.
 fn discard_generation(directory: &PrivateDirectory) -> Result<()> {
     directory.revalidate()?;
+    // The stopped State backend hard-links immutable shards between retained heights.
+    // Check every alias within its own peer store before removing generation metadata.
+    for index in 0..crate::localnet::MANAGED_PEERS {
+        let peer = format!("peer{index}");
+        directory.clear_snapshot_subtree(&[
+            generation::DIRECTORY,
+            "nodes",
+            &peer,
+            "state",
+            "tiered_state",
+        ])?;
+    }
     transport::clear_stopped_endpoint(directory)?;
     directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
     Ok(())
