@@ -4,10 +4,25 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use iroha_deploy::managed::NativeBundleLayout;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    path::Path,
+    sync::{Mutex, MutexGuard, PoisonError},
+};
 use tempfile::TempDir;
+
+/// The bundler retains the exact Cargo executables until publication, and every Cargo build
+/// replaces those files in the shared target directory (macOS copies them into place). A
+/// bundler whose inputs a sibling's build replaced refuses them, so these tests run in turn.
+static BUNDLER: Mutex<()> = Mutex::new(());
+
+fn exclusive_bundler() -> MutexGuard<'static, ()> {
+    BUNDLER.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[test]
 fn mochi_bundle_command_generates_manifest() {
+    let _bundler = exclusive_bundler();
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
     cargo_bin_cmd!("xtask")
@@ -116,6 +131,7 @@ fn mochi_bundle_command_generates_manifest() {
 }
 #[test]
 fn mochi_bundle_matrix_and_smoke() {
+    let _bundler = exclusive_bundler();
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
     let matrix_path = temp.path().join("matrix.json");
@@ -177,6 +193,7 @@ fn mochi_bundle_matrix_and_smoke() {
 }
 #[test]
 fn mochi_bundle_stage_directory_copies_bundle() {
+    let _bundler = exclusive_bundler();
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
     let stage_dir = temp.path().join("stage-output");
