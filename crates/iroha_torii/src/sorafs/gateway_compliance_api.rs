@@ -1349,7 +1349,10 @@ mod tests {
             .await
             .expect_err("canonical verification cannot fit in this owner");
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[CACHE_CONTROL],
+            "private, no-store, max-age=0"
+        );
     }
     fn signed_catalog() -> GatewayComplianceCatalogV1 {
         let signing_key = SigningKey::from_bytes(&[0x31; 32]);
