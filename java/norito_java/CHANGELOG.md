@@ -1,6 +1,11 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Revalidated parity after the Rust Norito JSON `Value` parser now rejects
+  arrays/objects nested more than 128 levels deep instead of recursing until
+  the thread stack overflows; Java bindings required no implementation
+  changes beyond rerunning the parity suite because this is an internal
+  Rust-side safety check.
 - Revalidated parity after the Rust Norito accelerator-output hardening now
   rejects malformed Stage-1 structural tapes and invalid GPU zstd output
   lengths before consuming helper results; Java bindings required no
