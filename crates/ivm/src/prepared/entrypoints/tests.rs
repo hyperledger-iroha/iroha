@@ -24,26 +24,30 @@ fn descriptor(name: &str, entry_pc: u64) -> EmbeddedEntrypointDescriptor {
     }
 }
 
-fn decoded(words: &[u32]) -> Vec<DecodedOp> {
-    words
-        .iter()
-        .enumerate()
-        .map(|(index, inst)| DecodedOp {
-            pc: index as u64 * 4,
-            inst: *inst,
-        })
-        .collect()
+fn encoded(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+fn instruction_graph(bytes: &[u8]) -> (ValidatedInstructions<'_>, PreparedControlFlow) {
+    let instructions = ValidatedInstructions::new(bytes).unwrap();
+    let graph = PreparedControlFlow::from_decoded(
+        &instructions.iter().collect::<Vec<_>>(),
+        None,
+        crate::IvmEngine::C10,
+    )
+    .unwrap();
+    (instructions, graph)
 }
 
 #[test]
 fn sorted_indexes_borrow_original_names_and_reset_private_reachability() {
-    let decoded = decoded(&[
+    let bytes = encoded(&[
         enc::encode_branch(wide::control::BEQ, 2, 3, 2),
         enc::encode_offset24(wide::control::JMP, -1),
         enc::encode_scall(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT),
         enc::encode_halt(),
     ]);
-    let graph = PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10).unwrap();
+    let (instructions, graph) = instruction_graph(&bytes);
     let descriptors = [
         descriptor("zeta", 0),
         descriptor("alpha", 12),
@@ -53,7 +57,7 @@ fn sorted_indexes_borrow_original_names_and_reset_private_reachability() {
     for budget in [None, Some(&budget)] {
         let index = Entrypoints::prepare(
             &descriptors,
-            &decoded,
+            instructions,
             &graph,
             40,
             budget,
@@ -78,25 +82,25 @@ fn sorted_indexes_borrow_original_names_and_reset_private_reachability() {
 
 #[test]
 fn duplicate_successors_cycles_and_indirect_edges_do_not_grow_the_queue() {
-    let decoded = decoded(&[
+    let bytes = encoded(&[
         enc::encode_branch(wide::control::BEQ, 2, 3, 1),
         enc::encode_offset24(wide::control::JMP, -1),
         enc::encode_rr(wide::control::JALR, 0, 1, 0),
         enc::encode_scall(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT),
         enc::encode_halt(),
     ]);
-    let graph = PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10).unwrap();
+    let (instructions, graph) = instruction_graph(&bytes);
     let descriptors = [
         descriptor("cycle", 0),
         descriptor("indirect", 8),
         descriptor("private", 12),
     ];
     let bytes = std::mem::size_of::<EntrypointIndex>() * descriptors.len();
-    let scratch = std::mem::size_of::<Visit>() * decoded.len();
+    let scratch = std::mem::size_of::<Visit>() * instructions.len();
     let budget = AllocationBudget::new(bytes + scratch);
     let index = Entrypoints::prepare(
         &descriptors,
-        &decoded,
+        instructions,
         &graph,
         0,
         Some(&budget),
@@ -133,8 +137,8 @@ fn duplicate_successors_cycles_and_indirect_edges_do_not_grow_the_queue() {
 
 #[test]
 fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
-    let decoded = decoded(&[enc::encode_halt()]);
-    let graph = PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10).unwrap();
+    let bytes = encoded(&[enc::encode_halt()]);
+    let (instructions, graph) = instruction_graph(&bytes);
     let descriptors = [descriptor("run", 0)];
     let bytes = std::mem::size_of::<EntrypointIndex>();
     let scratch = std::mem::size_of::<Visit>();
@@ -142,7 +146,7 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
     assert!(matches!(
         Entrypoints::prepare(
             &descriptors,
-            &decoded,
+            instructions,
             &graph,
             0,
             Some(&budget),
@@ -155,7 +159,7 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(bytes + scratch - 1);
     assert!(
-        matches!(Entrypoints::prepare(&descriptors, &decoded, &graph, 0, Some(&budget), crate::IvmEngine::C10), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == scratch)
+        matches!(Entrypoints::prepare(&descriptors, instructions, &graph, 0, Some(&budget), crate::IvmEngine::C10), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == scratch)
     );
     assert_eq!(budget.peak_reserved_bytes(), bytes);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -164,7 +168,7 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
     assert!(matches!(
         Entrypoints::prepare(
             &descriptors,
-            &decoded,
+            instructions,
             &graph,
             0,
             Some(&budget),
@@ -177,7 +181,7 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
     drop(occupied);
     let index = Entrypoints::prepare(
         &descriptors,
-        &decoded,
+        instructions,
         &graph,
         0,
         Some(&budget),
@@ -193,8 +197,8 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
 
 #[test]
 fn malformed_indexes_refund_both_allocations_and_empty_index_needs_no_credit() {
-    let decoded = decoded(&[enc::encode_halt()]);
-    let graph = PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10).unwrap();
+    let bytes = encoded(&[enc::encode_halt()]);
+    let (instructions, graph) = instruction_graph(&bytes);
     let budget = AllocationBudget::new(4096);
     for (descriptors, base) in [
         (vec![descriptor("same", 0), descriptor("same", 0)], 0),
@@ -204,7 +208,7 @@ fn malformed_indexes_refund_both_allocations_and_empty_index_needs_no_credit() {
         assert!(matches!(
             Entrypoints::prepare(
                 &descriptors,
-                &decoded,
+                instructions,
                 &graph,
                 base,
                 Some(&budget),
@@ -215,8 +219,15 @@ fn malformed_indexes_refund_both_allocations_and_empty_index_needs_no_credit() {
         assert_eq!(budget.reserved_bytes(), 0);
     }
     let zero = AllocationBudget::new(0);
-    let index =
-        Entrypoints::prepare(&[], &decoded, &graph, 0, Some(&zero), crate::IvmEngine::C10).unwrap();
+    let index = Entrypoints::prepare(
+        &[],
+        instructions,
+        &graph,
+        0,
+        Some(&zero),
+        crate::IvmEngine::C10,
+    )
+    .unwrap();
     assert_eq!(index.len(), 0);
     assert_eq!(zero.peak_reserved_bytes(), 0);
 }

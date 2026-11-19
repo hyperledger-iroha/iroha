@@ -79,13 +79,6 @@ fn koto_build_meta_header_smoke() {
     );
     assert_eq!(zk.mode, ivm::ivm_mode::ZK);
     assert_eq!(zk.max_cycles, 2000);
-    // On the baseline the same flag sets the header's cycle ceiling of a ZK artifact.
-    let baseline_zk = header(
-        "cli_smoke_meta_baseline_zk.to",
-        &["--zk", "--zk-trace-cycles", "2000"],
-    );
-    assert_ne!(baseline_zk.mode & ivm::baseline::mode::ZK, 0);
-    assert_eq!(baseline_zk.max_cycles, 2000);
     let status = Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())
@@ -400,40 +393,6 @@ fn test_failures_exit_eleven_and_name_the_test_file_values_and_gas() {
 }
 
 #[test]
-fn trace_requires_a_profile_with_register_delta_support() {
-    let root = package("trace_profile");
-    let args = ["test", "trace", "--filter", "bump_adds", "--exact"];
-    let source = "tests/counter.test.ko";
-    let baseline = koto(&root, &[args.as_slice(), &[source]].concat());
-    assert!(!baseline.status.success());
-    assert!(String::from_utf8_lossy(&baseline.stderr).contains("--host-profile iroha.ivm.c10.v1"));
-    let c10 = koto(
-        &root,
-        &[
-            args.as_slice(),
-            &[
-                "--host-profile",
-                "iroha.ivm.c10.v1",
-                "--format",
-                "json",
-                source,
-            ],
-        ]
-        .concat(),
-    );
-    assert!(
-        c10.status.success(),
-        "{}",
-        String::from_utf8_lossy(&c10.stderr)
-    );
-    let trace = String::from_utf8(c10.stdout).expect("trace output");
-    assert!(
-        trace.contains("bump_adds") && trace.contains("bump"),
-        "{trace}"
-    );
-}
-
-#[test]
 fn check_treats_test_modules_as_tests_and_fmt_walks_directories() {
     let root = package("check");
     let output = koto(
@@ -674,4 +633,88 @@ fn koto_build_named_runtime_profile_smoke() {
     );
     assert_eq!(admitted.metadata.abi_version, 1);
     assert_eq!(admitted.manifest.abi_hash, Some(admitted.abi_hash));
+}
+
+#[test]
+fn tests_and_traces_execute_the_selected_profile() {
+    let directory = build_dir("trace_profiles");
+    let source = directory.join("Case.ko");
+    fs::write(
+        &source,
+        r#"誓約 Case {
+        view fn answer() authorize(anyone) -> int { 42 }
+        #[test] fn calls_answer() {
+            let value = test::invoke_kotoage(言挙げ: "answer", arguments: {});
+            test::assert_eq(actual: value, expected: 42);
+        }
+    }"#,
+    )
+    .unwrap();
+    for (name, width) in [("abi-v1", 256), ("iroha.ivm.c10.v1", 32)] {
+        let result = Command::new(env!("CARGO_BIN_EXE_koto"))
+            .args(["test", "trace", "--format", "json", "--host-profile", name])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output = String::from_utf8(result.stdout).unwrap();
+        let steps = output
+            .lines()
+            .map(|line| norito::json::from_str::<norito::json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            steps
+                .iter()
+                .flat_map(|step| step["changed_registers"].as_array().unwrap())
+                .all(|change| change["register"].as_u64().unwrap() < width),
+            "{name}"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["function"].as_str() == Some("answer")),
+            "{name}"
+        );
+    }
+    let lifecycle_source = fs::read_to_string(&source).unwrap().replace(
+        "view fn answer",
+        "言挙げ fn register(bytes request) authorize(anyone) { ledger::runtime::register_obligation(request); }
+        view fn answer",
+    );
+    fs::write(&source, lifecycle_source).unwrap();
+    let lifecycle = Command::new(env!("CARGO_BIN_EXE_koto"))
+        .args([
+            "test",
+            "run",
+            "--host-profile",
+            "iroha.ivm.runtime_lifecycle.v1",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        lifecycle.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lifecycle.stderr)
+    );
+}
+
+#[test]
+fn default_build_refuses_c10_trace_bound_before_writing_output() {
+    let directory = build_dir("refused_baseline_trace_bound");
+    let result = Command::new(env!("CARGO_BIN_EXE_koto"))
+        .args(["build", "--zk", "--zk-trace-cycles", "42", "--out"])
+        .arg(directory.join("never.to"))
+        .arg(example("10_meta_header.ko"))
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("abi-v1 uses a cycle ceiling of 1000000")
+    );
+    assert!(!directory.join("never.to").exists());
 }

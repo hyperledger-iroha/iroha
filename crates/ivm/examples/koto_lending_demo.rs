@@ -5,10 +5,10 @@ use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
-    ProgramMetadata, mock_wsv::WsvHost,
+    mock_wsv::WsvHost,
 };
 use ivm_abi::arguments::encode_argument_record_from_json;
-use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::collections::BTreeMap;
 fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
@@ -29,21 +29,16 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
     let src = include_str!("../../kotodama_lang/src/samples/lending_simple.ko");
-    let compiler = KotodamaCompiler::new();
+    let options = CompilerOptions::default();
+    let profile = options.target_profile()?;
+    let compiler = Compiler::new_with_options(options);
     let bytecode = compiler
         .compile_source(src)
         .expect("compile lending_simple");
-    let metadata = ProgramMetadata::parse(&bytecode).expect("parse lending_simple metadata");
-    let borrow = metadata
-        .contract_interface
-        .as_ref()
-        .expect("lending_simple contract interface")
-        .entrypoints
-        .iter()
-        .find(|entrypoint| entrypoint.name == "borrow")
-        .expect("borrow entrypoint descriptor");
-    let entrypoint_pc =
-        u64::try_from(metadata.prefix_len()).expect("program prefix fits u64") + borrow.entry_pc;
+    let contract = ivm::prepare_contract_for_profile(bytecode.into(), profile)?;
+    let borrow = contract
+        .entrypoint_descriptor("borrow")
+        .expect("compiled entrypoint");
     // 2) Prepare a tiny world with a user, a vault account, and a debt asset
     let user = fixture_account(
         "wonderland",
@@ -93,9 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4) Create the VM, attach the host, and select the public wrapper.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-    vm.load_program(&bytecode).expect("load program");
-    vm.set_program_counter(entrypoint_pc)
-        .expect("select borrow entrypoint");
+    vm.load_prepared(&contract)?;
+    vm.select_entrypoint("borrow")?;
     vm.run().expect("run VM");
     println!("Borrow executed. User should have 500 of {debt_asset}.");
     println!("Done.");

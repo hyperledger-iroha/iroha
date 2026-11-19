@@ -116,6 +116,8 @@ pub enum KotoTestReportFormat {
 /// Complete `koto test` invocation after command-line parsing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestCliOptions {
+    /// Deployment profile of the contract. The local test harness uses the same engine.
+    pub host_profile: ivm::IvmProfileId,
     /// Selected action.
     pub action: KotoTestAction,
     /// Seiyaku with inline tests or a standalone `*.test.ko` module.
@@ -135,8 +137,6 @@ pub struct KotoTestCliOptions {
     pub chain_discriminant: u16,
     /// Enable ZK seiyaku compilation.
     pub zk_enabled: bool,
-    /// Compiled IVM profile for the harness and its seiyaku.
-    pub host_profile: ivm::IvmProfileId,
     /// Report format written to stdout.
     pub format: KotoTestReportFormat,
     /// Additional `JUnit` XML report file.
@@ -149,6 +149,7 @@ impl KotoTestCliOptions {
     #[must_use]
     pub fn new(action: KotoTestAction, chain_discriminant: u16) -> Self {
         Self {
+            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             action,
             source: None,
             source_root: None,
@@ -158,7 +159,6 @@ impl KotoTestCliOptions {
             seed: 0,
             chain_discriminant,
             zk_enabled: false,
-            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             format: KotoTestReportFormat::Human,
             junit: None,
             gas_report: false,
@@ -616,6 +616,8 @@ fn display_path(path: &Path) -> String {
 /// of rendering, which lets them produce one structured output document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestRunRequestV1 {
+    /// Deployment profile of the contract. The local test harness uses the same engine.
+    pub host_profile: ivm::IvmProfileId,
     /// Target contract or standalone test module to discover and run.
     pub target: PathBuf,
     /// Optional test-name substring (or exact name when [`Self::exact`] is set).
@@ -636,6 +638,7 @@ impl KotoTestRunRequestV1 {
     #[must_use]
     pub fn new(target: impl Into<PathBuf>, chain_discriminant: u16) -> Self {
         Self {
+            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             target: target.into(),
             filter: None,
             exact: false,
@@ -874,7 +877,7 @@ fn run_discovered_suite_structured(
                     &suite,
                     request.zk_enabled,
                     request.chain_discriminant,
-                    ivm::IvmProfileId::BASELINE_ABI_V1,
+                    request.host_profile,
                 )
             },
             |modules| {
@@ -883,7 +886,7 @@ fn run_discovered_suite_structured(
                     modules,
                     request.zk_enabled,
                     request.chain_discriminant,
-                    ivm::IvmProfileId::BASELINE_ABI_V1,
+                    request.host_profile,
                 )
             },
         )
@@ -1097,14 +1100,6 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
                     )
                 },
             ),
-        ));
-    }
-    if options.action == KotoTestAction::Trace
-        && options.host_profile.engine() == ivm::IvmEngine::Baseline
-    {
-        return Err(KotoTestCliError::new(
-            Kind::Usage,
-            "register-delta tracing requires a C10 profile; use --host-profile iroha.ivm.c10.v1 to trace a C10 build",
         ));
     }
     let compiled = compile_suite_for_chain(
@@ -3500,7 +3495,6 @@ impl KotoTestHost {
         drop(captured_arguments);
 
         nested_vm.set_trace_mode(vm.trace_mode());
-        nested_vm.set_max_cycles(0);
         let event_checkpoint = self.events.len();
         let rollback = self
             .inner

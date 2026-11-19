@@ -1,7 +1,10 @@
 //! Unicode 15.1 terminal cell widths, generated from the workspace-pinned unicode-width 0.2.0.
 //! Ambiguous characters use one cell; no locale or terminal state participates.
 
-pub(super) fn width(character: char) -> usize {
+pub(crate) fn width(character: char) -> usize {
+    if character.is_ascii() {
+        return 1;
+    }
     let value = u32::from(character);
     for (ranges, width) in [(ZERO, 0), (WIDE, 2)] {
         let index = ranges.partition_point(|&(_, end)| end < value);
@@ -513,3 +516,14 @@ const WIDE: &[(u32, u32)] = &[
     (0x20000, 0x2fffd),
     (0x30000, 0x3fffd),
 ];
+
+/// End column after source text, using the diagnostic renderer's four-cell tab stops.
+pub(crate) fn end_column(start: usize, text: &str) -> usize {
+    text.chars().fold(start, |column, character| {
+        column.saturating_add(if character == '\t' {
+            4 - column % 4
+        } else {
+            width(character)
+        })
+    })
+}
