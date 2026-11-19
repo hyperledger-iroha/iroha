@@ -34,7 +34,6 @@ fn parts(prepared: &PreparedContract) -> PreparedContractParts {
         code_hash: prepared.code_hash(),
         contract_interface: prepared.shared_contract_interface(),
         literal_table: prepared.literal_table().clone(),
-        decoded: prepared.decoded().clone(),
         prepared_program: prepared.prepared_program().clone(),
         control_flow: prepared.inner.control_flow.clone(),
     }

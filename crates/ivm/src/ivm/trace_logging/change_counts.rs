@@ -70,5 +70,17 @@ pub(super) fn instruction(word: u32) -> Result<usize, VMError> {
     })
 }
 
+/// Baseline scalar and branch destination bounds follow the frozen byte-wide layout.
+pub(super) fn baseline_instruction(word: u32) -> usize {
+    use ivm_abi::baseline::instruction::wide::{self, arithmetic as a, control as c, memory as m};
+    match wide::opcode(word) {
+        a::ADD..=a::MEAN | m::LOAD64 | m::LDLIT | m::LDI64 | c::JAL | c::JALR => 1,
+        m::LOAD128 => 2,
+        m::STORE64 | m::STORE128 | c::BEQ..=c::BGEU | c::HALT | c::JR => 0,
+        // A host callback or a vector/parallel operation may write multiple registers.
+        _ => crate::registers::BASELINE_REGISTER_COUNT,
+    }
+}
+
 #[cfg(test)]
 mod tests;

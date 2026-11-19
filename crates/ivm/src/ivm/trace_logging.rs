@@ -97,6 +97,29 @@ pub(super) struct TraceStorageCopies {
     pub(super) pcs: zk::PcTraceLog,
 }
 
+/// Previous full register image for one baseline diagnostic invocation. The proof
+/// logger retains its independently specified C10 geometry.
+pub(super) struct BaselineTraceRegisters {
+    values: [u64; crate::registers::BASELINE_REGISTER_COUNT],
+    tags: [bool; crate::registers::BASELINE_REGISTER_COUNT],
+}
+
+impl BaselineTraceRegisters {
+    pub(super) fn capture(vm: &IVM) -> Self {
+        Self {
+            values: vm.registers.baseline_snapshot(),
+            tags: vm.registers.baseline_snapshot_tags(),
+        }
+    }
+}
+
+impl Drop for BaselineTraceRegisters {
+    fn drop(&mut self) {
+        iroha_crypto::zeroize_value_for_confidential_discard(&mut self.values);
+        iroha_crypto::zeroize_value_for_confidential_discard(&mut self.tags);
+    }
+}
+
 impl IVM {
     fn with_trace_scope<T>(
         &mut self,
@@ -157,8 +180,9 @@ impl IVM {
                 TraceMode::Off => Ok(()),
                 TraceMode::PcOnly => vm.pc_trace.prepare(1, scope),
                 TraceMode::DeltaRegisters => {
+                    let count = vm.trace_register_count();
                     vm.delta_trace
-                        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, scope)
+                        .prepare_register_batch(1, count, 0, count, scope)
                 }
             }
         })?;
@@ -184,6 +208,40 @@ impl IVM {
         Ok(())
     }
 
+    fn trace_register_count(&self) -> usize {
+        match self.profile.engine() {
+            crate::IvmEngine::Baseline => crate::registers::BASELINE_REGISTER_COUNT,
+            crate::IvmEngine::C10 => crate::parallel::REGISTER_COUNT,
+        }
+    }
+
+    pub(super) fn record_baseline_prefetch(
+        &mut self,
+        invocation: &InvocationTrace,
+        previous: &mut Option<BaselineTraceRegisters>,
+    ) -> Result<(), VMError> {
+        if invocation.mode != TraceMode::DeltaRegisters {
+            return self.record_trace_prefetch(invocation);
+        }
+        invocation.check(self)?;
+        let current = BaselineTraceRegisters::capture(self);
+        self.delta_trace.record_changes(
+            self.pc,
+            current
+                .values
+                .iter()
+                .zip(current.tags.iter())
+                .enumerate()
+                .filter_map(|(index, (&value, &tag))| {
+                    previous
+                        .as_ref()
+                        .is_none_or(|last| last.values[index] != value || last.tags[index] != tag)
+                        .then_some((index, value, tag))
+                }),
+        );
+        *previous = Some(current);
+        Ok(())
+    }
     /// Admit completed cycles and the next pre-fetch row, then all later preflight.
     ///
     /// `tail_preflight` admits register rows, syscall shells, shared cycles and
@@ -207,7 +265,10 @@ impl IVM {
             return Ok(output);
         }
         let changes = if invocation.cycles || invocation.mode == TraceMode::DeltaRegisters {
-            change_counts::instruction(instruction)?
+            match self.profile.engine() {
+                crate::IvmEngine::C10 => change_counts::instruction(instruction)?,
+                crate::IvmEngine::Baseline => change_counts::baseline_instruction(instruction),
+            }
         } else {
             0
         };
@@ -232,7 +293,9 @@ impl IVM {
                 TraceMode::Off => {}
                 TraceMode::PcOnly => vm.pc_trace.prepare(1, scope)?,
                 TraceMode::DeltaRegisters => {
-                    vm.delta_trace.prepare_batch(1, changes, 0, scope)?;
+                    let count = vm.trace_register_count();
+                    vm.delta_trace
+                        .prepare_register_batch(1, changes, 0, count, scope)?;
                 }
             }
             Ok(())

@@ -90,18 +90,30 @@ impl DeltaTraceLog {
         repeated_changes: usize,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
+        self.prepare_register_batch(rows, first_changes, repeated_changes, REGISTER_COUNT, scope)
+    }
+
+    /// Reserve rows using the selected engine's architectural register count.
+    pub(crate) fn prepare_register_batch(
+        &mut self,
+        rows: usize,
+        first_changes: usize,
+        repeated_changes: usize,
+        register_count: usize,
+        scope: Option<&AllocationScope<'_>>,
+    ) -> Result<(), VMError> {
         self.validate_scope(scope)?;
         if self.pending.is_some()
             || rows == 0
-            || first_changes > REGISTER_COUNT
-            || repeated_changes > REGISTER_COUNT
+            || first_changes > register_count
+            || repeated_changes > register_count
         {
             return Err(VMError::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
             ));
         }
-        let first = if self.last.is_none() {
-            REGISTER_COUNT
+        let first = if self.is_empty() {
+            register_count
         } else {
             first_changes
         };
@@ -183,38 +195,37 @@ impl DeltaTraceLog {
         gpr: [u64; REGISTER_COUNT],
         tags: [bool; REGISTER_COUNT],
     ) {
-        let pending = self.pending.expect("admitted delta observation batch");
-        let changed = |index: usize| {
-            self.last
-                .as_ref()
-                .is_none_or(|last| last.gpr[index] != gpr[index] || last.tags[index] != tags[index])
-        };
-        let count = (0..REGISTER_COUNT).filter(|&index| changed(index)).count();
-        assert!(
-            count <= pending.next,
-            "public delta destination bound underestimated"
+        let previous = self.last.as_ref();
+        append_reserved_row(
+            &mut self.rows,
+            &mut self.changes,
+            &mut self.pending,
+            pc,
+            (0..REGISTER_COUNT).filter_map(|index| {
+                previous
+                    .is_none_or(|last| {
+                        last.gpr[index] != gpr[index] || last.tags[index] != tags[index]
+                    })
+                    .then_some((index, gpr[index], tags[index]))
+            }),
         );
-        let start = self.changes.as_slice().len();
-        for index in 0..REGISTER_COUNT {
-            if self
-                .last
-                .as_ref()
-                .is_none_or(|last| last.gpr[index] != gpr[index] || last.tags[index] != tags[index])
-            {
-                self.changes.push_reserved((index, gpr[index], tags[index]));
-            }
-        }
-        for _ in count..pending.next {
-            self.changes.push_reserved((0, 0, false));
-        }
-        self.rows.push_reserved(Row { pc, start, count });
         self.clear_last();
         self.last = Some(RegisterState { pc, gpr, tags });
-        self.pending = (pending.rows > 1).then_some(Pending {
-            rows: pending.rows - 1,
-            next: pending.repeated,
-            repeated: pending.repeated,
-        });
+    }
+
+    /// Publish one prepaid row in ascending architectural order without allocating.
+    pub(crate) fn record_changes(
+        &mut self,
+        pc: u64,
+        changes: impl Iterator<Item = (usize, u64, bool)> + Clone,
+    ) {
+        append_reserved_row(
+            &mut self.rows,
+            &mut self.changes,
+            &mut self.pending,
+            pc,
+            changes,
+        );
     }
     /// Internal immutable capture inputs, including the full public capacities.
     pub(super) fn capture_storage(
@@ -310,6 +321,34 @@ impl DeltaTraceLog {
         copy.pending = self.pending;
         Ok(copy)
     }
+}
+// Check the complete public reservation before mutating either backing array.
+fn append_reserved_row(
+    rows: &mut TraceRows<Row>,
+    storage: &mut TraceRows<(usize, u64, bool)>,
+    credit: &mut Option<Pending>,
+    pc: u64,
+    changes: impl Iterator<Item = (usize, u64, bool)> + Clone,
+) {
+    let pending = credit.expect("admitted delta observation batch");
+    let count = changes.clone().count();
+    assert!(
+        count <= pending.next,
+        "public delta destination bound underestimated"
+    );
+    let start = storage.as_slice().len();
+    for change in changes {
+        storage.push_reserved(change);
+    }
+    for _ in count..pending.next {
+        storage.push_reserved((0, 0, false));
+    }
+    rows.push_reserved(Row { pc, start, count });
+    *credit = (pending.rows > 1).then_some(Pending {
+        rows: pending.rows - 1,
+        next: pending.repeated,
+        repeated: pending.repeated,
+    });
 }
 impl Drop for DeltaTraceLog {
     fn drop(&mut self) {

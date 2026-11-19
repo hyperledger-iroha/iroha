@@ -48,11 +48,9 @@ fn executed_child_calls(contract: &PreparedContract, ordinary: &IVM) -> usize {
         .iter()
         .filter(|pc| {
             let relative_pc = pc.checked_sub(contract.instruction_entry_pc()).unwrap();
-            let instructions = contract.decoded();
-            let index = instructions
-                .binary_search_by_key(&relative_pc, |instruction| instruction.pc)
-                .unwrap();
-            let instruction = instructions[index].inst;
+            let instructions = contract.instructions();
+            let index = instructions.index_of(relative_pc).unwrap();
+            let instruction = instructions.get(index).unwrap().inst;
             let opcode = crate::instruction::wide::opcode(instruction);
             opcode == crate::instruction::wide::control::JALS
                 || (opcode == crate::instruction::wide::control::JAL
@@ -133,7 +131,7 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
         .entry_pc;
     let root_words = output
         .artifact()
-        .decoded()
+        .instructions()
         .iter()
         .filter(|op| op.pc >= entry_pc)
         .count();
@@ -326,7 +324,7 @@ fn child_calls_are_local_component_refusal_and_do_not_change_ordinary_validity()
         64,
     );
     let child_calls = contract
-        .decoded()
+        .instructions()
         .iter()
         .filter(|op| match wide::opcode(op.inst) {
             wide::control::JAL => wide::rd(op.inst) == 1,

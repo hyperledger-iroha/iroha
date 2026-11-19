@@ -220,6 +220,25 @@ impl LintArgs {
         Ok(config)
     }
 }
+#[derive(Args, Clone, Debug)]
+struct HostProfileArgs {
+    /// Exact named ABI V1 host profile required by the produced contract: `abi-v1`, the frozen
+    /// baseline every root runs (the default); `iroha.ivm.c10.v1`, C10's own ABI V1 surface, which
+    /// a root runs only after a governed change set activates the `iroha.runtime.ivm_c10.v1`
+    /// release addition; or `iroha.ivm.runtime_lifecycle.v1`, the runtime-lifecycle profile on
+    /// the C10 engine.
+    #[arg(
+        long,
+        value_parser = [BASELINE_HOST_PROFILE, C10_HOST_PROFILE, ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE],
+        default_value = BASELINE_HOST_PROFILE
+    )]
+    host_profile: String,
+}
+impl HostProfileArgs {
+    fn profile(&self) -> ivm::IvmProfileId {
+        host_profile_target(&self.host_profile).expect("clap validates the named host profile")
+    }
+}
 #[derive(Args, Debug)]
 struct BuildArgs {
     /// Diagnostic output format.
@@ -237,21 +256,11 @@ struct BuildArgs {
     /// Write the manifest to this path, or `-` for stdout (one source only).
     #[arg(long, value_name = "FILE.json")]
     manifest_out: Option<PathBuf>,
-    /// ZK trace bound recorded in the header of a `--zk` artifact; must not exceed the chain's
-    /// `ivm_max_cycles_upper_bound`. A non-ZK artifact carries no bound: gas is its only budget.
+    /// C10-only ZK trace bound. Baseline artifacts use a cycle ceiling of 1,000,000.
     #[arg(long, value_name = "COUNT", requires = "zk")]
     zk_trace_cycles: Option<std::num::NonZeroU64>,
-    /// Exact named ABI V1 host profile required by the produced contract: `abi-v1`, the frozen
-    /// baseline every root runs (the default); `iroha.ivm.c10.v1`, C10's own ABI V1 surface, which
-    /// a root runs only after a governed change set activates the `iroha.runtime.ivm_c10.v1`
-    /// release addition; or `iroha.ivm.runtime_lifecycle.v1`, the runtime-lifecycle profile on
-    /// the C10 engine.
-    #[arg(
-        long,
-        value_parser = [BASELINE_HOST_PROFILE, C10_HOST_PROFILE, ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE],
-        default_value = BASELINE_HOST_PROFILE
-    )]
-    host_profile: String,
+    #[command(flatten)]
+    target: HostProfileArgs,
     /// Check durable-state compatibility with the previous complete `.to` artifact before
     /// publishing one replacement. Runtime migration must still initialize newly added scalars.
     #[arg(long, value_name = "PREVIOUS.to")]
@@ -290,6 +299,8 @@ enum TestAction {
 /// Suite discovery and selection shared by every `koto test` action.
 #[derive(Args, Debug, Clone)]
 struct TestSuiteArgs {
+    #[command(flatten)]
+    target: HostProfileArgs,
     /// Run only tests whose name contains this text (or equals it with --exact).
     #[arg(long, value_name = "TEXT")]
     filter: Option<String>,
@@ -616,6 +627,7 @@ fn test_cli_options(args: TestArgs) -> kotodama_toolchain::koto_test_driver::Kot
     };
     let suite_options = |action: KotoTestAction, suite: TestSuiteArgs| {
         let TestSuiteArgs {
+            target,
             filter,
             exact,
             seed,
@@ -624,6 +636,7 @@ fn test_cli_options(args: TestArgs) -> kotodama_toolchain::koto_test_driver::Kot
             source,
         } = suite;
         let mut options = KotoTestCliOptions::new(action, capabilities.chain_discriminant());
+        options.host_profile = target.profile();
         options.source = source;
         options.source_root = selection.source_root;
         options.filter = filter;
@@ -1073,13 +1086,20 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         out: explicit_output,
         manifest_out: explicit_manifest_output,
         zk_trace_cycles,
-        host_profile,
+        target,
         upgrade_from,
         verify,
         capabilities,
         selection,
         sources: inputs,
     } = args;
+    let target = target.profile();
+    if zk_trace_cycles.is_some() && target.engine() == ivm::IvmEngine::Baseline {
+        return Err(KotoError::Usage(format!(
+            "--zk-trace-cycles requires a C10 host profile; abi-v1 uses a cycle ceiling of {}",
+            kotodama_lang::compiler::DEFAULT_BASELINE_MAX_CYCLES
+        )));
+    }
     let publish_mode = if verify {
         PublishMode::Verify
     } else {
@@ -1124,8 +1144,6 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         })
         .transpose()?;
     let mut compiler_options = CompilerOptions::default();
-    let target = host_profile_target(&host_profile)
-        .unwrap_or_else(|| unreachable!("clap validates the exact named host profile"));
     (compiler_options.host_policy, compiler_options.engine) = (target.policy(), target.engine());
     if let Some(zk_trace_cycles) = zk_trace_cycles {
         compiler_options.zk_trace_cycles = zk_trace_cycles;
@@ -3248,7 +3266,10 @@ mod tests {
     }
     #[test]
     fn host_profile_names_select_their_compiled_profiles() {
-        assert_eq!(build_args(&["a.ko"]).host_profile, BASELINE_HOST_PROFILE);
+        assert_eq!(
+            build_args(&["a.ko"]).target.host_profile,
+            BASELINE_HOST_PROFILE
+        );
         for (name, profile) in [
             (BASELINE_HOST_PROFILE, ivm::IvmProfileId::BASELINE_ABI_V1),
             (C10_HOST_PROFILE, ivm::IvmProfileId::C10_ABI_V1),
@@ -3258,7 +3279,9 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                build_args(&["--host-profile", name, "a.ko"]).host_profile,
+                build_args(&["--host-profile", name, "a.ko"])
+                    .target
+                    .host_profile,
                 name
             );
             assert_eq!(host_profile_target(name), Some(profile));

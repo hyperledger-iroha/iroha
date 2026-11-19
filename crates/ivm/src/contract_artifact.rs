@@ -182,6 +182,9 @@ impl PreparedContract {
                 .map_err(|error| {
                     ContractArtifactError::preparation("control-flow preparation", error)
                 })?;
+        // All persistent instruction consumers borrow the verified artifact or share
+        // the priced operations. Release the temporary decoder before copying the artifact.
+        drop(decoded);
         PreparedContract::from_parts(PreparedContractParts {
             // Take our own byte allocation; an input Arc may have unrelated owners
             // whose lifetimes cannot be governed by this preparation reservation.
@@ -215,7 +218,6 @@ impl PreparedContract {
                 crate::prepared::shared_metadata(verified.contract_interface, exclusively_owned)
             },
             literal_table,
-            decoded,
             prepared_program,
             control_flow,
         }, budget)

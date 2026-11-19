@@ -1882,10 +1882,11 @@ The compiler rejects inputs exceeding any V1 hard limit:
 | Typed module graph | 512 sources / 16 MiB total |
 | Default ZK trace bound | 1,000,000 cycles |
 
-Gas, supplied by the caller, is the only execution budget: an ordinary artifact
-carries a zero cycle bound in its execution header. A ZK artifact embeds its
-positive trace bound there instead, so the canonical artifact hash covers it, and
-the chain's committed admission ceiling is authoritative for that bound. The
+The caller supplies gas on both engines. Baseline artifacts built by `koto` also
+carry a 1,000,000-cycle ceiling. Ordinary C10 artifacts carry a zero cycle bound.
+A C10 ZK artifact embeds its positive trace bound in the execution header, so the
+canonical artifact hash covers it. The chain's committed admission ceiling applies
+to that bound. The
 `ivm_max_cycles_upper_bound` field of the committed
 `pipeline_validity_policy_v1` parameter is a mandatory positive integer
 (default `1_000_000`); an authorized `SetParameter` changes it from the next
@@ -1907,12 +1908,13 @@ musubi build --manifest-path Musubi.toml
 koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
 koto build --zk proof_seiyaku.ko
-koto build --zk --zk-trace-cycles 250000 proof_seiyaku.ko
+koto build --host-profile iroha.ivm.c10.v1 --zk --zk-trace-cycles 250000 proof_seiyaku.ko
 koto test seiyaku.test.ko
 koto test run --gas-report --junit report.xml seiyaku.test.ko
 koto test list --format json seiyaku.test.ko
 koto test coverage seiyaku.test.ko
 koto test trace --filter withdraw seiyaku.test.ko
+koto test trace --host-profile iroha.ivm.c10.v1 --filter withdraw seiyaku.test.ko
 koto fmt seiyaku.ko
 koto fmt --check .
 koto doc seiyaku.ko
@@ -1947,6 +1949,13 @@ with its authorization, an example JSON argument record, and access analysis,
 and lists compiler-owned list and numeric errors separately from the seiyaku's
 own error enums.
 
+`koto build` and `koto test` default to the baseline host profile (`abi-v1`). A test
+run and its register trace use the selected engine for the harness and the contract.
+With `iroha.ivm.runtime_lifecycle.v1`, the deployed contract carries the lifecycle
+policy and the local harness invokes it from C10’s ordinary ABI.
+Baseline headers carry a cycle ceiling of 1,000,000. Only a C10 ZK build accepts
+`--zk-trace-cycles`.
+
 `--zk` is an explicit build capability, not source metadata. It is required for
 `Secret<T>` and the approved proof/commitment operations; ordinary builds reject
 those constructs. `koto check|build|doc|lsp` and `musubi check|build|test|lsp --zk` pass this policy to the same in-process compiler session.
@@ -1962,7 +1971,7 @@ of it (`amount /* in nanos */, fee`). A block comment that leads code on its
 line stays with that code, and an attribute stays on its own line above the
 item or error variant it annotates. Formatting canonicalizes four-space
 indentation, declaration spacing, operators, and block layout with a
-100-column target: an argument list, parameter list, tuple or list literal
+100-display-cell target (wide Japanese characters occupy two cells): an argument list, parameter list, tuple or list literal
 that does not fit is laid out one item per line, a declaration head breaks its
 parameter list first and keeps `authorize(Role) -> T` together, and a
 statement or condition that still does not fit breaks before its
@@ -2259,7 +2268,7 @@ or offline browser compiler.
 
 ABI version, execution-mode bits, and compiler features are not source
 declarations or user-selectable language metadata. Build configuration
-may request a permitted execution capability such as ZK and, for a ZK build,
+may request a permitted execution capability such as ZK and, for a C10 ZK build,
 select a positive trace bound no greater than node admission policy. Source-level
 `meta` blocks are errors. The manifest's hash-covered `features_bitmap` is
 derived from the execution header and mirrors only the ZK capability, the

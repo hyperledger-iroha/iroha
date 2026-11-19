@@ -733,12 +733,9 @@ selected dispatch, catalog entry, draft route and activation tests) is not publi
   when a cached artifact's profile was not selected by the executing root (phase 2's
   `require_prepared_policy` fallback). Fixed here (As built, "Warm and cold caches agree"); it was
   reachable only with the runtime-lifecycle profile selected in one root and not in another.
-- `koto test --trace` (`TraceMode::DeltaRegisters`) on a default (baseline) build is refused
-  locally (`ExecutionDeferred(TraceOwnerUnavailable)`): the baseline engine does not reconstruct
-  the proof-trace and step-recorder producers (phase 3). `kotodama_toolchain`'s
-  `coverage_and_trace_attribute_runtime_and_test_steps_separately` fails on this since phase 4; it
-  is left failing and visible (a fix compiles traced test runs for C10 or reconstructs the
-  baseline producers).
+- Follow-up: local `koto test trace` records the selected engine's register deltas,
+  including all 256 baseline registers. The baseline proof-trace, native packet and
+  diagnostic step-recorder producers remain separate from this diagnostic register trace.
 - The guard's artifact-map rule is stricter: a row the ABI V1 carrier leaves out must carry a
   declared profile hash. `test_artifact_map_carrier_owners_exclude_other_engine_rows` now
   declares the other engine's profile instead of leaving its row undeclared.

@@ -25,6 +25,7 @@ mod call_abi;
 mod checked_arithmetic;
 pub mod compiler;
 pub mod diagnostic;
+mod display_width;
 mod doc_consistency;
 pub mod driver;
 pub mod editor;

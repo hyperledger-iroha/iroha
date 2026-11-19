@@ -358,15 +358,16 @@ fn test_runner_uses_exact_taira_chain_discriminant() {
         ),
     );
     let suite = discover_suite(&target).expect("discover Taira literal suite");
-    let compiled = compile_suite_for_chain(&suite, false, 369)
+    let compiled = compile_suite_for_chain(&suite, false, 369, ivm::IvmProfileId::BASELINE_ABI_V1)
         .expect("compile exact Taira literal under discriminant 369");
     let results = execute_suite_for_chain(&compiled, TraceMode::Off, 2, 369)
         .expect("execute exact Taira literal suite");
     assert!(results.iter().all(|result| result.passed));
-    let mismatch = match compile_suite_for_chain(&suite, false, 753) {
-        Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
-        Err(error) => error,
-    };
+    let mismatch =
+        match compile_suite_for_chain(&suite, false, 753, ivm::IvmProfileId::BASELINE_ABI_V1) {
+            Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
+            Err(error) => error,
+        };
     assert!(
         mismatch
             .to_string()
@@ -374,8 +375,14 @@ fn test_runner_uses_exact_taira_chain_discriminant() {
     );
 }
 #[test]
-fn zk_test_option_marks_both_test_and_runtime_artifacts() {
-    let target_source = "seiyaku ZkTest { hajimari() {} #[test] fn smoke() {} }";
+fn zk_test_option_honors_the_harness_and_runtime_header_bounds() {
+    let target_source = r#"誓約 ZkTest {
+        view fn answer() authorize(anyone) -> int { 42 }
+        #[test] fn smoke() {
+            let value = test::invoke_kotoage(言挙げ: "answer", arguments: {});
+            test::assert_eq(actual: value, expected: 42);
+        }
+    }"#;
     let target_program = parser::parse(target_source).expect("parse ZK test target");
     let suite = DiscoveredSuite {
         artifacts: Vec::new(),
@@ -396,23 +403,31 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
         fixture_sites: HashMap::new(),
         fixture_consts: HashMap::new(),
     };
-    let compiled = compile_suite(&suite, true).expect("compile ZK test suite");
-    for artifact in [
-        compiled.suite.program.prepared().artifact(),
-        compiled
-            .runtime
-            .as_ref()
-            .expect("lifecycle target has a runtime artifact")
-            .program
-            .artifact(),
+    for profile in [
+        ivm::IvmProfileId::BASELINE_ABI_V1,
+        ivm::IvmProfileId::C10_ABI_V1,
     ] {
-        let metadata = ivm::ProgramMetadata::parse_for_profile(
-            artifact,
-            ivm::IvmProfileId::declared(artifact)
-                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        let compiled = compile_suite_for_chain(
+            &suite,
+            true,
+            iroha_data_model::account::address::chain_discriminant(),
+            profile,
         )
-        .expect("parse compiled metadata");
-        assert_ne!(metadata.metadata.mode & ivm::ivm_mode::ZK, 0);
+        .unwrap();
+        let (harness, runtime) = (
+            compiled.suite.program.prepared().artifact(),
+            compiled.runtime.as_ref().unwrap().program.artifact(),
+        );
+        let bound = |artifact: &[u8]| {
+            let parsed = ivm::ProgramMetadata::parse_for_profile(artifact, profile).unwrap();
+            assert_ne!(parsed.metadata.mode & ivm::ivm_mode::ZK, 0);
+            assert!(parsed.metadata.max_cycles > 0);
+            parsed.metadata.max_cycles
+        };
+        let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+        assert!(results[0].passed, "{profile:?}: {:?}", results[0].failure);
+        assert_eq!(results[0].harness_cycles, bound(harness));
+        assert_eq!(results[0].calls[0].cycles, bound(runtime));
     }
 }
 #[test]
@@ -505,6 +520,7 @@ fn structured_request_validation_is_stage_tagged() {
 #[test]
 fn structured_filter_order_is_independent_of_discovery_order() {
     let request = KotoTestRunRequestV1 {
+        host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
         target: PathBuf::from("demo.ko"),
         filter: Some("case".to_owned()),
         exact: false,
@@ -607,11 +623,18 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
         discover_declared_test_names_v1(&target).expect("declared names"),
         ["dependency_is_exact"]
     );
-    let report =
-        run_tests_structured_with_modules_v1(&KotoTestRunRequestV1::new(&target, 753), &modules)
+    for profile in [
+        ivm::IvmProfileId::BASELINE_ABI_V1,
+        ivm::IvmProfileId::C10_ABI_V1,
+        ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE,
+    ] {
+        let mut request = KotoTestRunRequestV1::new(&target, 753);
+        request.host_profile = profile;
+        let report = run_tests_structured_with_modules_v1(&request, &modules)
             .expect("run exact module graph");
-    assert_eq!(report.cases.len(), 1);
-    assert!(report.is_success());
+        assert_eq!(report.cases.len(), 1);
+        assert!(report.is_success(), "{profile:?}");
+    }
 }
 #[test]
 fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
@@ -4135,6 +4158,33 @@ fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
 "#,
     );
     let suite = discover_suite(&path).expect("discover");
+    for (profile, harness_profile) in [
+        (
+            ivm::IvmProfileId::BASELINE_ABI_V1,
+            ivm::IvmProfileId::BASELINE_ABI_V1,
+        ),
+        (ivm::IvmProfileId::C10_ABI_V1, ivm::IvmProfileId::C10_ABI_V1),
+        (
+            ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE,
+            ivm::IvmProfileId::C10_ABI_V1,
+        ),
+    ] {
+        let compiled = compile_suite_for_chain(
+            &suite,
+            false,
+            iroha_data_model::account::address::chain_discriminant(),
+            profile,
+        )
+        .unwrap();
+        assert_eq!(
+            compiled.suite.program.prepared().profile_id(),
+            harness_profile
+        );
+        assert_eq!(
+            compiled.runtime.as_ref().unwrap().program.profile_id(),
+            profile
+        );
+    }
     let compiled = compile_suite(&suite, false).expect("compile");
     let results = execute_suite(&compiled, TraceMode::PcOnly, 1).expect("execute");
     let report = render_coverage_report(&compiled, &results);

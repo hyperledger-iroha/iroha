@@ -346,7 +346,7 @@ fn analyze_prepared_in(
     aggregate::analyze(
         contract.profile_id().engine(),
         contract.metadata().clone(),
-        || contract.decoded().iter().copied(),
+        || contract.instructions().iter(),
         budget,
     )
     .map_err(ProgramAnalysisError::Decode)
@@ -946,9 +946,9 @@ seiyaku HelperMapAnalysis { permission CanWrite;
             .expect("helper_write entrypoint")
             .entry_pc;
         let helper_calls = prepared
-            .decoded()
+            .instructions()
             .iter()
-            .filter_map(|op| direct_call_edges(IvmEngine::C10, op))
+            .filter_map(|op| direct_call_edges(IvmEngine::C10, &op))
             .map(|(call_target, _)| call_target)
             .collect::<Vec<_>>();
         assert_eq!(helper_calls.len(), 2, "both helper call sites are retained");
@@ -985,12 +985,15 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             .entrypoint_descriptor("run")
             .expect("run entrypoint")
             .entry_pc;
-        let mut decoded = prepared.decoded().as_ref().to_vec();
+        let mut decoded = prepared.instructions().iter().collect::<Vec<_>>();
         let entry = decoded
             .iter_mut()
             .find(|op| op.pc == entry_pc)
             .expect("entrypoint instruction");
         entry.inst = wide_enc::encode_rr(wide::control::JALR, 0, 2, 0);
+        let offset = prepared.code_offset() + entry_pc as usize;
+        let mut artifact = prepared.artifact().to_vec();
+        artifact[offset..offset + 4].copy_from_slice(&entry.inst.to_le_bytes());
         let control_flow = crate::prepared::PreparedControlFlow::from_decoded(
             &decoded,
             None,
@@ -999,7 +1002,9 @@ seiyaku IndirectStateAnalysis { permission CanRun;
         .expect("build adversarial indirect control flow");
         let adversarial = crate::prepared::PreparedContract::from_parts(
             crate::prepared::PreparedContractParts {
-                artifact: prepared.shared_artifact(),
+                artifact: crate::cache_memory::SharedAllocation::from_boxed(
+                    artifact.into_boxed_slice(),
+                ),
                 metadata: prepared.metadata().clone(),
                 profile: prepared.profile_id(),
                 vector_length: prepared.vector_length(),
@@ -1009,9 +1014,6 @@ seiyaku IndirectStateAnalysis { permission CanRun;
                 code_hash: prepared.code_hash(),
                 contract_interface: prepared.shared_contract_interface(),
                 literal_table: prepared.literal_table().clone(),
-                decoded: crate::cache_memory::SharedAllocation::from_boxed(
-                    decoded.into_boxed_slice(),
-                ),
                 prepared_program: prepared.prepared_program().clone(),
                 control_flow,
             },

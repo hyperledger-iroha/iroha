@@ -116,6 +116,8 @@ pub enum KotoTestReportFormat {
 /// Complete `koto test` invocation after command-line parsing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestCliOptions {
+    /// Deployment profile of the contract. The local test harness uses the same engine.
+    pub host_profile: ivm::IvmProfileId,
     /// Selected action.
     pub action: KotoTestAction,
     /// Seiyaku with inline tests or a standalone `*.test.ko` module.
@@ -147,6 +149,7 @@ impl KotoTestCliOptions {
     #[must_use]
     pub fn new(action: KotoTestAction, chain_discriminant: u16) -> Self {
         Self {
+            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             action,
             source: None,
             source_root: None,
@@ -613,6 +616,8 @@ fn display_path(path: &Path) -> String {
 /// of rendering, which lets them produce one structured output document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestRunRequestV1 {
+    /// Deployment profile of the contract. The local test harness uses the same engine.
+    pub host_profile: ivm::IvmProfileId,
     /// Target contract or standalone test module to discover and run.
     pub target: PathBuf,
     /// Optional test-name substring (or exact name when [`Self::exact`] is set).
@@ -633,6 +638,7 @@ impl KotoTestRunRequestV1 {
     #[must_use]
     pub fn new(target: impl Into<PathBuf>, chain_discriminant: u16) -> Self {
         Self {
+            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             target: target.into(),
             filter: None,
             exact: false,
@@ -866,13 +872,21 @@ fn run_discovered_suite_structured(
     }
     let compiled = modules
         .map_or_else(
-            || compile_suite_for_chain(&suite, request.zk_enabled, request.chain_discriminant),
+            || {
+                compile_suite_for_chain(
+                    &suite,
+                    request.zk_enabled,
+                    request.chain_discriminant,
+                    request.host_profile,
+                )
+            },
             |modules| {
                 compile_suite_with_modules_for_chain(
                     &suite,
                     modules,
                     request.zk_enabled,
                     request.chain_discriminant,
+                    request.host_profile,
                 )
             },
         )
@@ -1088,8 +1102,13 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
             ),
         ));
     }
-    let compiled = compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)
-        .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
+    let compiled = compile_suite_for_chain(
+        &suite,
+        options.zk_enabled,
+        options.chain_discriminant,
+        options.host_profile,
+    )
+    .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
     let trace_mode = match options.action {
         KotoTestAction::Run => TraceMode::Off,
         KotoTestAction::Coverage => TraceMode::PcOnly,
@@ -1167,8 +1186,13 @@ pub fn check_test_module_v1(
         SuiteError::Diagnostics(bundle) => KotoTestCheckErrorV1::Diagnostics(bundle),
         other => KotoTestCheckErrorV1::Other(other.into_cli()),
     })?;
-    match compile_suite_for_chain(&suite, zk_enabled, chain_discriminant)
-        .map_err(|error| localize_suite_diagnostics(&suite, error))
+    match compile_suite_for_chain(
+        &suite,
+        zk_enabled,
+        chain_discriminant,
+        ivm::IvmProfileId::BASELINE_ABI_V1,
+    )
+    .map_err(|error| localize_suite_diagnostics(&suite, error))
     {
         Ok(_) => Ok(suite.target_path),
         Err(SuiteError::Diagnostics(bundle)) => Err(KotoTestCheckErrorV1::Diagnostics(bundle)),
@@ -1770,12 +1794,14 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         suite,
         zk_enabled,
         iroha_data_model::account::address::chain_discriminant(),
+        ivm::IvmProfileId::BASELINE_ABI_V1,
     )
 }
 fn compile_suite_for_chain(
     suite: &DiscoveredSuite,
     zk_enabled: bool,
     chain_discriminant: u16,
+    profile: ivm::IvmProfileId,
 ) -> Result<CompiledSuite, SuiteError> {
     if !suite.sources.is_empty() || !suite.artifacts.is_empty() {
         return compile_suite_with_modules_for_chain(
@@ -1787,10 +1813,13 @@ fn compile_suite_for_chain(
             },
             zk_enabled,
             chain_discriminant,
+            profile,
         );
     }
     let source_name = suite.target_path.display().to_string();
     let test_opts = CompilerOptions {
+        engine: profile.engine(),
+        host_policy: profile.policy(),
         force_zk: zk_enabled,
         chain_discriminant,
         mode: CompilerMode::Test,
@@ -1833,6 +1862,7 @@ fn compile_suite_with_modules_for_chain(
     modules: &KotoTestModuleGraphV1,
     zk_enabled: bool,
     chain_discriminant: u16,
+    profile: ivm::IvmProfileId,
 ) -> Result<CompiledSuite, SuiteError> {
     let source_name = if suite.target_path.is_absolute() {
         let project_root = suite
@@ -1895,6 +1925,8 @@ fn compile_suite_with_modules_for_chain(
             },
             &test_units,
             CompilerOptions {
+                engine: profile.engine(),
+                host_policy: profile.policy(),
                 force_zk: zk_enabled,
                 chain_discriminant,
                 mode: CompilerMode::Test,
@@ -3463,7 +3495,6 @@ impl KotoTestHost {
         drop(captured_arguments);
 
         nested_vm.set_trace_mode(vm.trace_mode());
-        nested_vm.set_max_cycles(0);
         let event_checkpoint = self.events.len();
         let rollback = self
             .inner
