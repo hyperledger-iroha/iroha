@@ -27,6 +27,7 @@ pub const LAPS: i64 = 3;
 pub const CONTROL_MASK: u16 = 0x3f;
 /// Trace height: 8,100 ticks plus the final state fit in 2^13 rows.
 pub const LOG_ROWS: u32 = 13;
+const SUPPORTED_LOG_ROWS: std::ops::RangeInclusive<u32> = 8..=LOG_ROWS;
 /// The guard rails' faces, either side of the centre line: no car goes beyond them.
 pub const RAIL_MM: i64 = 6_520;
 /// Beyond the road's edge, on the verge, a car loses speed every tick.
@@ -197,6 +198,9 @@ pub enum RaceError {
     /// Player count outside 1..=8.
     #[error("race requires between one and eight players")]
     PlayerCount,
+    /// Trace height outside the supported RaceV1 capacities.
+    #[error("race trace height must be between 8 and 13 (log2 rows)")]
+    Capacity,
     /// Wrong number of controls in a frame.
     #[error("race input frame does not match the participant count")]
     ControlCount,
@@ -725,7 +729,7 @@ pub fn circuit(track: Track, players: usize) -> Circuit {
 /// Panics if `players` is outside 1..=8 or `log_rows` outside 8..=13.
 pub fn circuit_with_capacity(track: Track, players: usize, log_rows: u32) -> Circuit {
     assert!((1..=MAX_PLAYERS).contains(&players));
-    assert!((8..=LOG_ROWS).contains(&log_rows));
+    assert!(SUPPORTED_LOG_ROWS.contains(&log_rows));
     let name = if log_rows == LOG_ROWS {
         format!("sora-cars RaceV1 real road {} x{players} v1", track.name())
     } else {
@@ -909,6 +913,9 @@ pub fn public_columns_with_capacity(
     replay: &Replay,
     log_rows: u32,
 ) -> Result<Vec<Vec<i64>>, RaceError> {
+    if !SUPPORTED_LOG_ROWS.contains(&log_rows) {
+        return Err(RaceError::Capacity);
+    }
     let rows = 1usize << log_rows;
     if replay.frames.len() >= rows {
         return Err(RaceError::Terminal);
@@ -1062,6 +1069,9 @@ pub enum RaceProofError {
     /// The replay is invalid.
     #[error(transparent)]
     Replay(#[from] RaceError),
+    /// The chosen parameters do not meet the RaceV1 security budget.
+    #[error(transparent)]
+    Security(#[from] crate::params::SecurityError),
     /// Proving failed.
     #[error(transparent)]
     Prove(#[from] crate::ProveError),
@@ -1073,10 +1083,23 @@ pub enum RaceProofError {
     FinalState,
 }
 
+fn proof_circuit(
+    replay: &Replay,
+    log_rows: u32,
+    params: &crate::Params,
+) -> Result<Circuit, RaceProofError> {
+    if !SUPPORTED_LOG_ROWS.contains(&log_rows) {
+        return Err(RaceError::Capacity.into());
+    }
+    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    params.check_security(&circuit, crate::params::TARGET_SECURITY_BITS)?;
+    Ok(circuit)
+}
+
 /// Proves a replay with the canonical circuit for its track and grid.
 ///
 /// # Errors
-/// Fails if the replay is invalid or proving fails.
+/// Fails if the replay or capacity is invalid, the parameters miss the RaceV1 target, or proving fails.
 pub fn prove_replay(
     replay: &Replay,
     params: &crate::Params,
@@ -1087,14 +1110,14 @@ pub fn prove_replay(
 /// [`prove_replay`] with the circuit of `2^log_rows` rows.
 ///
 /// # Errors
-/// Fails if the replay is invalid or proving fails.
+/// Fails if the replay or capacity is invalid, the parameters miss the RaceV1 target, or proving fails.
 pub fn prove_replay_with_capacity(
     replay: &Replay,
     params: &crate::Params,
     log_rows: u32,
 ) -> Result<(crate::Statement, crate::Proof), RaceProofError> {
     validate_replay(replay)?;
-    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    let circuit = proof_circuit(replay, log_rows, params)?;
     let public = public_columns_with_capacity(replay, log_rows)?;
     let states = register_states(replay)?;
     let statement = statement(replay)?;
@@ -1107,7 +1130,7 @@ pub fn prove_replay_with_capacity(
 /// whether the state must be terminal (settlement) and derives the outcome from it.
 ///
 /// # Errors
-/// Fails on an invalid replay, malformed claim or invalid proof.
+/// Fails on an invalid replay or capacity, insufficient security budget, malformed claim or invalid proof.
 pub fn verify_replay(
     replay: &Replay,
     final_registers: &[i64],
@@ -1120,7 +1143,7 @@ pub fn verify_replay(
 /// [`verify_replay`] against the circuit of `2^log_rows` rows.
 ///
 /// # Errors
-/// Fails on an invalid replay, malformed claim or invalid proof.
+/// Fails on an invalid replay or capacity, insufficient security budget, malformed claim or invalid proof.
 pub fn verify_replay_with_capacity(
     replay: &Replay,
     final_registers: &[i64],
@@ -1132,7 +1155,7 @@ pub fn verify_replay_with_capacity(
     if final_registers.len() != REGISTERS_PER_CAR * replay.players {
         return Err(RaceProofError::FinalState);
     }
-    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    let circuit = proof_circuit(replay, log_rows, params)?;
     let initial = registers(&initial_state(replay.track, replay.players)?);
     let steps = replay.frames.len();
     let statement = crate::Statement {
@@ -1510,11 +1533,44 @@ mod tests {
     fn adapter_round_trip_and_public_terminal_rule() {
         let replay = sample_replay(Track::Sakura, 4, 3, 90, 600);
         let params = Params {
-            queries: 20,
             grinding_bits: 2,
             ..Params::standard()
         };
         let (statement, proof) = prove_replay_with_capacity(&replay, &params, 10).unwrap();
+        let weak = Params {
+            queries: 20,
+            ..params
+        };
+        let insufficient =
+            RaceProofError::Security(crate::params::SecurityError::InsufficientSecurity);
+        assert_eq!(
+            prove_replay_with_capacity(&replay, &weak, 10).unwrap_err(),
+            insufficient
+        );
+        assert_eq!(
+            verify_replay_with_capacity(&replay, &statement.final_state, &proof, &weak, 10),
+            Err(insufficient)
+        );
+        for log_rows in [7, LOG_ROWS + 1, u32::MAX] {
+            assert_eq!(
+                public_columns_with_capacity(&replay, log_rows),
+                Err(RaceError::Capacity)
+            );
+            assert_eq!(
+                prove_replay_with_capacity(&replay, &params, log_rows).unwrap_err(),
+                RaceProofError::Replay(RaceError::Capacity)
+            );
+            assert_eq!(
+                verify_replay_with_capacity(
+                    &replay,
+                    &statement.final_state,
+                    &proof,
+                    &params,
+                    log_rows
+                ),
+                Err(RaceProofError::Replay(RaceError::Capacity))
+            );
+        }
         let state =
             verify_replay_with_capacity(&replay, &statement.final_state, &proof, &params, 10)
                 .unwrap();

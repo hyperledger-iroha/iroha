@@ -1,7 +1,8 @@
 //! Proof parameters and their soundness accounting.
 //!
-//! Security uses the Johnson-regime bound for DEEP-FRI, never the "up to capacity" conjecture,
-//! which Diamond–Gruen (ePrint 2025/2010) and Crites–Stewart (ePrint 2025/2046) refuted in 2025.
+//! The parameter estimator uses Johnson-regime DEEP-FRI accounting. Its interpretation as a
+//! Fiat–Shamir soundness bound depends on the round-by-round composition in section 7 of
+//! `specs/execution_stark_v1.md`, including joint lookup extraction and the shifted DEEP batch.
 //!
 //! - Query phase (BCIKS20 Thm 8.3, ethSTARK v1.2 eq. 10; Haböck ePrint 2022/1216 Thm 8): each
 //!   query lets a cheating prover through with probability at most `sqrt(rho+) * (1 + 1/(2m))`,
@@ -10,14 +11,16 @@
 //!   bound of BCHKS25, ePrint 2025/2055, is tighter). At the standard blowup 8 and `N <= 2^25`,
 //!   this base term is below `2^-153`. The estimator also accounts for DEEP batch width, folding
 //!   arity and round count; the base-term example is not a bound for every supported parameter set.
-//! - DEEP/ALI: `L+ (C + d (k+2) + k) / |F|` with list size `L+ = (m + 1/2)/sqrt(rho+)`.
+//! - DEEP/ALI: the interactive single-list estimate `L+ (C + d (k+2) + k) / |F|` with list
+//!   size `L+ = (m + 1/2)/sqrt(rho+)`. A round-by-round mapping must justify separate prefix errors.
 //! - LogUp (Haböck ePrint 2022/1530): `(lookups * rows + table) / |F|`, over the range argument and
-//!   the fixed-table argument together (each has its own challenge; the union bound adds the terms).
+//!   the fixed-table argument together for a fixed trace. Clearing the shared sum gives one
+//!   bivariate polynomial in the independent challenges.
 //!
 //! Each round must stay below `2^-(lambda+1)` for `lambda` bits after Fiat–Shamir (ethSTARK v1.2
 //! Cor. 3), so queries are sized for 129 bits. Native 384-bit BLAKE2b digests give the BCS hash
 //! term `3(T^2+1)/2^384`, imposing a 190.5-bit hash ceiling; the full budget is the minimum of
-//! that ceiling and the circuit-specific algebraic terms. This is a classical random-oracle bound.
+//! that ceiling and the circuit-specific algebraic terms, under the classical random-oracle model.
 //! Grinding is applied before query sampling but never counted.
 
 /// Proof-system parameters.
@@ -347,8 +350,9 @@ impl Params {
     /// `2^-(lambda+1)`). At the smallest trace the standard query term is 129.522 bits before
     /// this margin, so it contributes 128.522 bits; another term can lower the reported budget.
     ///
-    /// The commit term carries the DEEP batch width (Haböck 2022/1216 Thm 2: factor `L - 1/2`) and
-    /// the LogUp term counts every lookup of every row plus the table.
+    /// The commit term carries the DEEP batch width. The LogUp term counts every lookup of every
+    /// row plus the table for a fixed trace. Section 7 of `specs/execution_stark_v1.md` gives the
+    /// remaining proof obligations for interpreting this parameter budget end to end.
     #[allow(clippy::cast_precision_loss)] // counts are far below 2^52
     pub fn proven_security_bits(&self, shape: &SecurityShape) -> f64 {
         let log_rows = shape.log_rows;
@@ -376,8 +380,7 @@ impl Params {
             .log2()
             + list_log;
         let ali = EXTENSION_FIELD_BITS - ali_log;
-        // LogUp: (lookups * rows + table) / |F|, summed over the range and table arguments (each has
-        // its own challenge, so the union bound adds their terms).
+        // Total-degree estimate for the fixed trace's shared range and fixed-table lookup sum.
         let table = shape.table as f64;
         let logup = EXTENSION_FIELD_BITS - (shape.lookups as f64).mul_add(rows, table).log2();
         query.min(commit).min(ali).min(logup) - 1.0

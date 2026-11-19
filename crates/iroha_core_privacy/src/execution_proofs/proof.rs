@@ -660,8 +660,8 @@ fn verify_engine_proof(
 ) -> Result<(), ExecutionProofErrorV1> {
     let (circuit, engine_statement, public) = engine_statement(statement, payload)?;
     let params = engine_params(&circuit)?;
-    let proof =
-        Proof::from_bytes(&payload.stark_bytes).map_err(|_| ExecutionProofErrorV1::Envelope)?;
+    let proof = Proof::from_bytes_for_circuit(&payload.stark_bytes, &circuit)
+        .map_err(|_| ExecutionProofErrorV1::Envelope)?;
     if proof.to_bytes() != payload.stark_bytes {
         return Err(ExecutionProofErrorV1::Envelope);
     }

@@ -537,6 +537,15 @@ mod tests {
         verify(&circuit, &params, &statement, &[], &proof).unwrap();
         let bytes = proof.to_bytes();
         assert_eq!(Proof::from_bytes(&bytes).unwrap(), proof);
+        assert_eq!(
+            Proof::from_bytes_for_circuit(&bytes, &circuit).unwrap(),
+            proof
+        );
+        let shorter_table = table_walk(&WALK_A[1..], &WALK_B);
+        assert_eq!(
+            Proof::from_bytes_for_circuit(&bytes, &shorter_table),
+            Err(proof::DecodeError::Length)
+        );
         assert!(bytes.len() <= max_proof_bytes(&circuit, &params).unwrap());
         // Every row reads one row of each table, padding included.
         let fixed = &proof.multiplicities[1 << 16..];
