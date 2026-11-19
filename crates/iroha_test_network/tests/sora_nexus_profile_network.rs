@@ -174,13 +174,21 @@ fn reserve_ports() -> Result<(u16, u16, Vec<std::net::TcpListener>)> {
 }
 
 /// Give each offline admission or inspection command its own bounded phase and retain its output.
-async fn run(mut command: ResolvedCommand, evidence: &Path) -> Result<Vec<u8>> {
+async fn run(command: ResolvedCommand, evidence: &Path) -> Result<Vec<u8>> {
+    run_with_budget(command, evidence, PHASE).await
+}
+
+async fn run_with_budget(
+    mut command: ResolvedCommand,
+    evidence: &Path,
+    budget: Duration,
+) -> Result<Vec<u8>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(PHASE, command.spawn_async()?.wait_with_output())
+    let output = timeout(budget, command.spawn_async()?.wait_with_output())
         .await
         .wrap_err_with(|| format!("{} exceeded its phase deadline", evidence.display()))??;
     fs::write(evidence.with_extension("stdout"), &output.stdout)?;
@@ -1439,7 +1447,9 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--config")
                 .arg(node_file)
                 .arg("--check-replay");
-            let replayed = run(replay, &root.join(format!("check-replay-{index}"))).await?;
+            // Replay checks every committed height, including the native threshold pulse, from
+            // signed genesis. Give the stopped daemon the same horizon budget as live execution.
+            let replayed = run_with_budget(replay, &root.join(format!("check-replay-{index}")), PHASE * 4).await?;
             let replayed: Value = json::from_slice(&replayed)?;
             let start = replayed.get("start");
             let start_height = start
