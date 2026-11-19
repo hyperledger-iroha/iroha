@@ -6,6 +6,9 @@
 
 use super::*;
 use crate::managed::native_operation::attempts::metadata;
+use crate::managed::native_operation::test_support::{
+    request_only_expiry_ms, wait_for_original_expiry,
+};
 use crate::managed::{
     native_operation::test_support::{
         UnavailablePeers,
@@ -769,7 +772,7 @@ fn genuinely_expired_unprepared_approval_recovers_without_http_or_new_authorizat
         &coordinator,
         &directory,
         &retained,
-        now_ms().unwrap() + 500,
+        request_only_expiry_ms(),
         &options,
     );
     let original_bytes = directory
@@ -791,14 +794,7 @@ fn genuinely_expired_unprepared_approval_recovers_without_http_or_new_authorizat
         }
     };
     let request_only_bytes = retained_names.map(&retained_bytes);
-    let wait_until = Instant::now() + Duration::from_secs(2);
-    while now_ms().unwrap() < retained.terms.signing_deadline_unix_ms {
-        assert!(
-            Instant::now() < wait_until,
-            "finite real UTC expiry did not arrive"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_original_expiry(retained.terms.signing_deadline_unix_ms);
     for submit in [false, true] {
         let deadline = Instant::now() + Duration::from_secs(30);
         let result = if submit {
