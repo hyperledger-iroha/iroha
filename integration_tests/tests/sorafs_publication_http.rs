@@ -1,7 +1,7 @@
 //! Bounded canonical account transport and independent publication verification for real peers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use eyre::{Result, ensure};
+use eyre::{Result, WrapErr as _, ensure};
 use iroha::{
     blocking::Client,
     crypto::{KeyPair, Signature},
@@ -351,6 +351,31 @@ async fn finality_proof(
     }
 }
 
+fn preparation_ready(status: &ReplicationOrderStatus, require_completion: bool) -> Result<bool> {
+    match status {
+        ReplicationOrderStatus::Pending => Ok(!require_completion),
+        ReplicationOrderStatus::Completed(_) => Ok(true),
+        ReplicationOrderStatus::Expired(_) | ReplicationOrderStatus::Cancelled(_) => {
+            eyre::bail!("publication order reached terminal status {status:?}")
+        }
+    }
+}
+
+#[test]
+fn preparation_distinguishes_assignment_from_completion_and_terminal_refusal() {
+    use ReplicationOrderStatus::{Cancelled, Completed, Expired, Pending};
+    for require_completion in [false, true] {
+        assert_eq!(
+            preparation_ready(&Pending, require_completion).unwrap(),
+            !require_completion
+        );
+        assert!(preparation_ready(&Completed(2), require_completion).unwrap());
+        for terminal in [Expired(2), Cancelled(2)] {
+            assert!(preparation_ready(&terminal, require_completion).is_err());
+        }
+    }
+}
+
 pub async fn preparation(
     http: &reqwest::Client,
     network: &NetworkId,
@@ -359,7 +384,17 @@ pub async fn preparation(
     digest: ManifestDigest,
     complete: bool,
 ) -> Result<SorafsPublicationPreparationV1> {
-    timeout_at(Instant::now() + DEADLINE, async {
+    // Completion includes three native provider acknowledgements and has the same 600-second
+    // bound as CLI publication. Looking up the initial assignment retains its shorter deadline.
+    let budget = if complete {
+        Duration::from_secs(600)
+    } else {
+        DEADLINE
+    };
+    let stage = if complete { "completion" } else { "assignment" };
+    let mut last_http = None;
+    let mut last_completions = None;
+    timeout_at(Instant::now() + budget, async {
         loop {
             let response = post(
                 http,
@@ -370,6 +405,7 @@ pub async fn preparation(
                 norito::to_bytes(&digest)?,
             )
             .await?;
+            last_http = Some(response.status());
             if response.status() == reqwest::StatusCode::NOT_FOUND
                 || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
                 || response.status() == reqwest::StatusCode::ACCEPTED
@@ -393,14 +429,22 @@ pub async fn preparation(
                     && row.pin.submitted_by == AccountId::new(publisher.public_key().clone()),
                 "preparation identity substituted"
             );
-            if complete && !matches!(row.order.status, ReplicationOrderStatus::Completed(_)) {
+            let acknowledgements = row.order.provider_completions.len();
+            if last_completions != Some(acknowledgements) {
+                eprintln!("publication {stage}: order {:?}, {acknowledgements} provider completions", row.order.status);
+                last_completions = Some(acknowledgements);
+            }
+            if !preparation_ready(&row.order.status, complete)? {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
             return Ok(row);
         }
     })
-    .await?
+    .await
+    .wrap_err_with(|| format!(
+        "publication {stage} exceeded {budget:?}; last HTTP {last_http:?}, provider completions {last_completions:?}"
+    ))?
 }
 
 pub async fn prove(

@@ -13,6 +13,31 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+// Retaining native authorization, observation and request-only wallet records involves real I/O.
+const EXPIRY_FIXTURE_WINDOW_MS: u64 = 15_000;
+
+/// Select the single UTC authorization that the request-only fixture will retain and let expire.
+pub(in crate::managed) fn request_only_expiry_ms() -> u64 {
+    now_ms().expect("fixture UTC") + EXPIRY_FIXTURE_WINDOW_MS
+}
+
+/// Wait for the actual retained signing deadline before exercising unsigned recovery.
+pub(in crate::managed) fn wait_for_original_expiry(deadline_ms: u64) {
+    let maximum_wait = Duration::from_millis(EXPIRY_FIXTURE_WINDOW_MS) + Duration::from_secs(2);
+    let stop = Instant::now() + maximum_wait;
+    loop {
+        let remaining = deadline_ms.saturating_sub(now_ms().expect("fixture UTC"));
+        if remaining == 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < stop,
+            "the original signing deadline did not expire"
+        );
+        thread::sleep(Duration::from_millis(remaining.min(100)));
+    }
+}
+
 pub struct Request {
     pub(crate) peer: usize,
     pub(crate) method: String,

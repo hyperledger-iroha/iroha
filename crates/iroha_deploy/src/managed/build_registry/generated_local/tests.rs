@@ -290,7 +290,9 @@ fn managed_factory_selects_published_generated_registry_without_parent_profile_o
 
     let reached = std::rc::Rc::new(std::cell::Cell::new(false));
     let observed = reached.clone();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // Resolve and authenticate the original provider material within the same budget as the
+    // successful lookups above. The hook then expires that original deadline before return.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let _expiry = super::super::tests::on_resolution(move |kind| {
         assert_eq!(kind, super::super::tests::ResolutionKind::Some);
         observed.set(true);

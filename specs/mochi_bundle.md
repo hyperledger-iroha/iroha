@@ -111,6 +111,8 @@ extraction installs only the inventoried file content and manifest.
 
 `--smoke` first checks the exact retained profile image and packaged Kagami network-name
 projection. It then runs the packaged Kagami from an empty workspace with an empty `PATH`.
+Startup-capable smoke commands pass `--timeout 600` to packaged Kagami so the four
+validators and their storage services can initialize. Latency samples use the CLI default.
 It supplies no TOML, starts the localnet through `contract deploy hello.ko`,
 also deploys `.to` and a local Musubi package, and verifies artifact readback and
 a live contract result on each of the four peers. It checks repeated starts and
