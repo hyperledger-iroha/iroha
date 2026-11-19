@@ -1732,6 +1732,9 @@ impl Crypto for ProofCrypto {
         let Some(digest) = ConsensusDigest::from_preimage(msg) else {
             return false;
         };
+        if let Some(admitted) = self.keys.get(pk) {
+            return consensus::verify(admitted, &digest, &signature.0);
+        }
         let Ok(key) = <&[u8; 48]>::try_from(pk.as_bytes()) else {
             return false;
         };

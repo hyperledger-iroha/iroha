@@ -49,6 +49,19 @@ impl CanonicalNodes {
             MerkleTree::try_from_hashed_leaves_sha256(leaves)
         })
     }
+    pub(super) fn copy_for_template(
+        &self,
+        leaves: &[[u8; 32]],
+        lease: Option<&mut ExecutionMemoryLease>,
+    ) -> Result<Self, VMError> {
+        if self.stale {
+            return Self::from_leaves(leaves, lease);
+        }
+        Self::with_tree(leaves.len(), lease, || {
+            self.tree.try_clone_retained_allocation()
+        })
+    }
+
     fn with_tree(
         leaves: usize,
         lease: Option<&mut ExecutionMemoryLease>,

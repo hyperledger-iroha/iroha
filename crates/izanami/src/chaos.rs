@@ -1,4 +1,7 @@
 //! Orchestration layer that wires configuration, workload generation, and fault injection together.
+mod submit_latency;
+
+use self::submit_latency::SubmitLatency;
 use crate::{
     config::{ChaosConfig, WorkloadProfile},
     faults::{
@@ -5956,8 +5959,8 @@ async fn submit_prebuilt_batch(
             "prebuilt transaction batch submission failed"
         );
     }
+    metrics.record_submit_latency(elapsed, u64::try_from(batch_len).unwrap_or(u64::MAX));
     for submission in &batch {
-        metrics.record_submit_latency(elapsed);
         match (succeeded, submission.plan.expect_success) {
             (true, true) => metrics.record_success(),
             (true, false) => metrics.record_unexpected_success(),
@@ -6947,7 +6950,7 @@ where
         Ok(result) => result,
         Err(err) => Err(err.into()),
     };
-    metrics.record_submit_latency(started_at.elapsed());
+    metrics.record_submit_latency(started_at.elapsed(), 1);
     record_submission_result_metrics(
         plan_label,
         expect_success,
@@ -6969,7 +6972,7 @@ where
 {
     let started_at = Instant::now();
     let result = future.await;
-    metrics.record_submit_latency(started_at.elapsed());
+    metrics.record_submit_latency(started_at.elapsed(), 1);
     record_submission_result_metrics(
         plan_label,
         expect_success,
@@ -7044,7 +7047,7 @@ struct Metrics {
     submit_plans_started: AtomicU64,
     submit_plans_shutdown_skipped: AtomicU64,
     submit_tasks_shutdown_aborted: AtomicU64,
-    submit_latency_ms: StdMutex<Vec<u64>>,
+    submit_latency_ms: StdMutex<SubmitLatency>,
     prebuilt_tx_buffer_capacity: AtomicU64,
     prebuilt_tx_workers: AtomicU64,
     prebuilt_tx_built: AtomicU64,
@@ -7086,10 +7089,10 @@ impl Metrics {
         self.submit_tasks_shutdown_aborted
             .fetch_add(count, Ordering::Relaxed);
     }
-    fn record_submit_latency(&self, latency: Duration) {
+    fn record_submit_latency(&self, latency: Duration, transactions: u64) {
         let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
         if let Ok(mut samples) = self.submit_latency_ms.lock() {
-            samples.push(latency_ms);
+            samples.record(latency_ms, transactions);
         }
     }
     fn configure_prebuilt_tx_buffer(&self, capacity: usize, workers: usize) {
@@ -7185,7 +7188,7 @@ impl Metrics {
             .submit_latency_ms
             .lock()
             .ok()
-            .map(|samples| LatencySummary::from_samples(&samples))
+            .map(|samples| samples.summary())
             .unwrap_or_default();
         MetricsSnapshot {
             offered: self.offered.load(Ordering::Relaxed),
@@ -7282,43 +7285,6 @@ impl Drop for InflightBatchGuard {
     fn drop(&mut self) {
         self.metrics.record_inflight_released_many(self.count);
     }
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct LatencySummary {
-    samples: u64,
-    p50_ms: u64,
-    p95_ms: u64,
-    p99_ms: u64,
-    max_ms: u64,
-}
-impl LatencySummary {
-    fn from_samples(samples: &[u64]) -> Self {
-        if samples.is_empty() {
-            return Self::default();
-        }
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
-        Self {
-            samples: sorted.len() as u64,
-            p50_ms: percentile_from_sorted(&sorted, 0.50),
-            p95_ms: percentile_from_sorted(&sorted, 0.95),
-            p99_ms: percentile_from_sorted(&sorted, 0.99),
-            max_ms: *sorted.last().unwrap_or(&0),
-        }
-    }
-}
-#[expect(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "The display percentile preserves the existing floating-point nearest rank, clamped to the positive sample count before conversion."
-)]
-fn percentile_from_sorted(sorted: &[u64], percentile: f64) -> u64 {
-    debug_assert!(!sorted.is_empty());
-    debug_assert!((0.0..=1.0).contains(&percentile));
-    let len = sorted.len() as f64;
-    let rank = (len * percentile).ceil().clamp(1.0, len) as usize;
-    sorted[rank.saturating_sub(1)]
 }
 #[derive(Clone, Copy, Default)]
 struct MetricsSnapshot {
@@ -10188,9 +10154,9 @@ mod tests {
         metrics.record_submit_plan_started();
         metrics.record_submit_plan_shutdown_skipped();
         metrics.record_submit_tasks_shutdown_aborted(2);
-        metrics.record_submit_latency(Duration::from_millis(10));
-        metrics.record_submit_latency(Duration::from_millis(20));
-        metrics.record_submit_latency(Duration::from_millis(30));
+        metrics.record_submit_latency(Duration::from_millis(10), 1);
+        metrics.record_submit_latency(Duration::from_millis(20), 1);
+        metrics.record_submit_latency(Duration::from_millis(30), 1);
         metrics.configure_prebuilt_tx_buffer(128, 4);
         metrics.record_prebuilt_tx_built();
         metrics.record_prebuilt_tx_used();
@@ -10306,7 +10272,11 @@ mod tests {
     }
     #[test]
     fn latency_summary_uses_ceil_rank_percentiles() {
-        let summary = LatencySummary::from_samples(&[100, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        let mut latencies = SubmitLatency::default();
+        for ms in [100, 10, 20, 30, 40, 50, 60, 70, 80, 90] {
+            latencies.record(ms, 1);
+        }
+        let summary = latencies.summary();
         assert_eq!(summary.samples, 10);
         assert_eq!(summary.p50_ms, 50);
         assert_eq!(summary.p95_ms, 100);

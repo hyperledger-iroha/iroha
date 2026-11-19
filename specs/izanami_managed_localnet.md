@@ -547,8 +547,9 @@ Musubi and `iroha_contract_deploy`.
   flight there count as `in_flight_at_outage`.
 - **Confirmation.** Izanami polls the global transaction status until it reads
   `Applied` from state (`src/chaos.rs:6621-6773`) and records no per-transaction
-  confirmation latency; its submit latency includes retries
-  (`src/chaos.rs:6879-6884`). The engine instead
+  confirmation latency. Its submit latency includes retries. Progress reports
+  compute exact nearest-rank p50, p95 and p99 using cumulative counts for each
+  observed millisecond value. The managed engine
   matches hashes on the canonical block and event stream, as Mochi does, which gives a
   latency per transaction. Transactions not seen before their timeout fall back to one
   status read.

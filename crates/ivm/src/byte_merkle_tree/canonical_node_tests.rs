@@ -105,6 +105,62 @@ fn canonical_nodes_keep_exact_geometry_across_dense_sparse_reset_and_final_borro
 }
 
 #[test]
+fn template_copy_of_stale_nodes_uses_the_new_leaf_digests() {
+    let bytes = [0x72; 65 * 32];
+    let source = ByteMerkleTree::from_bytes(&[0x31; 65 * 32], 32).unwrap();
+    source.recompute_all_leaves_parallel(&bytes);
+    assert!(!source.nodes.lock().is_current());
+    let copied = source.try_clone_for_runtime_template(None).unwrap();
+    assert!(copied.nodes.lock().is_current());
+    assert!(!source.nodes.lock().is_current());
+    let expected = ByteMerkleTree::from_bytes(&bytes, 32).unwrap();
+    assert_eq!(
+        copied.root_and_proof(64).unwrap(),
+        expected.root_and_proof(64).unwrap()
+    );
+}
+
+#[test]
+#[ignore = "manual VM template copy timing"]
+fn benchmark_current_and_stale_runtime_template_copy() {
+    use std::{hint::black_box, time::Instant};
+
+    for count in [1_024, 8_192, 32_768] {
+        let data: Vec<u8> = (0..count * 32).map(|i| (i % 251) as u8).collect();
+        let current = ByteMerkleTree::from_bytes(&data, 32).unwrap();
+        let stale = ByteMerkleTree::from_bytes(&data, 32).unwrap();
+        stale.nodes.lock().mark_stale();
+        assert_eq!(
+            current.try_clone_for_runtime_template(None).unwrap().root(),
+            stale.try_clone_for_runtime_template(None).unwrap().root(),
+        );
+        let mut current_ns = Vec::new();
+        let mut rebuilt_ns = Vec::new();
+        for sample in 0..21 {
+            for rebuild in [sample % 2 == 0, sample % 2 != 0] {
+                let source = if rebuild { &stale } else { &current };
+                let start = Instant::now();
+                drop(black_box(
+                    source.try_clone_for_runtime_template(None).unwrap(),
+                ));
+                let elapsed = start.elapsed().as_nanos();
+                if rebuild {
+                    rebuilt_ns.push(elapsed);
+                } else {
+                    current_ns.push(elapsed);
+                }
+            }
+        }
+        current_ns.sort_unstable();
+        rebuilt_ns.sort_unstable();
+        println!(
+            "leaves={count} samples=21 rebuild_median_ns={} copy_median_ns={}",
+            rebuilt_ns[10], current_ns[10]
+        );
+    }
+}
+
+#[test]
 fn template_node_copy_spends_exact_original_plan_and_outlives_source() {
     let source = ByteMerkleTree::from_bytes(&[0xa5; 65 * 32 - 7], 32).unwrap();
     let plan = ByteMerkleTree::memory_plan(source.leaf_count()).unwrap();

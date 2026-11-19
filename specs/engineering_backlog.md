@@ -6338,6 +6338,13 @@ redistributable schemas, and official trust/revocation bundles.
   parallel execution, or both. Use the matrix runner for every optimization
   step and require the consensus liveness gate to stay green before accepting a
   higher-throughput result.
+  The Iroha 3 national service target is **20,000 independently signed,
+  committed transactions per second with p95 latency at most one second**.
+  Measure each scheduled arrival through its authenticated committed result,
+  including queueing and proof verification. Bind the offered transaction
+  hashes to the run before load starts, reconcile every offer and report
+  sustained commits across the steady window. The May campaign above measured
+  block cadence and ingress acceptance. End-to-end qualification remains open.
 - Keep hardening the actor-owned vNext round state now that the standalone
   runtime reactor boundary is gone. vNext control frames, body-backed proposal
   acceptance, DA/RBC availability handoffs, timeout ticks, validation worker
