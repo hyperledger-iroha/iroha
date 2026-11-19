@@ -701,6 +701,23 @@ async fn wait_for_mesh(
     }
 }
 
+/// A lagging validator can still publish the install. A later block invalidates the observation.
+fn all_applied_install(tips: &[(u64, u64)], installed_at: u64) -> Result<bool> {
+    ensure!(
+        tips.iter().all(|(height, _)| *height <= installed_at),
+        "a block landed before every provider reported ready at {installed_at}: {tips:?}"
+    );
+    Ok(tips.len() == PEERS && tips.iter().all(|(height, _)| *height == installed_at))
+}
+
+#[test]
+fn install_propagation_waits_for_lagging_seats_and_rejects_a_later_block() {
+    assert!(!all_applied_install(&[(5, 3), (5, 3), (4, 3), (5, 3)], 5).unwrap());
+    assert!(!all_applied_install(&[(5, 3); 3], 5).unwrap());
+    assert!(all_applied_install(&[(5, 3); 4], 5).unwrap());
+    assert!(all_applied_install(&[(6, 3), (5, 3), (4, 3), (5, 3)], 5).is_err());
+}
+
 /// Native local beacon readiness of every validator (see [`sumeragi_statuses`]).
 async fn beacon_horizons(
     clients: &[Client],
@@ -1322,11 +1339,8 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             let horizon = loop {
                 let horizons = beacon_horizons(&clients, &nodes).await?;
                 let tips = heights(&clients).await?;
-                ensure!(
-                    tips.iter().all(|(height, _)| *height == installed_at),
-                    "a block landed before every provider reported ready: {tips:?}"
-                );
-                if horizons.iter().all(|horizon| {
+                // Finality at submission can precede publication of that block on another seat.
+                if all_applied_install(&tips, installed_at)? && horizons.iter().all(|horizon| {
                     horizon.as_ref().is_some_and(|horizon| {
                         horizon.active_session_id == Some(session_id)
                             && horizon.local_provider_ready
@@ -1361,6 +1375,11 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                     sleep(Duration::from_millis(250)).await;
                 }
             }
+            let ready_tips = heights(&clients).await?;
+            ensure!(
+                all_applied_install(&ready_tips, installed_at)?,
+                "all readiness reports must describe the install height {installed_at}: {ready_tips:?}"
+            );
             eprintln!(
                 "[{}] /readyz 200 on all four after {:.2}s at the install height; earlier 503 polls: {}",
                 elapsed(started),
