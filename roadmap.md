@@ -21,7 +21,9 @@ ordinary refund controls.
    after the paid settlement, serial restart and disjoint-lane recovery controls;
    preserve original funded execution through publication and replay, qualify lane
    retirement ownership, and reclaim physical storage only after retained global
-   history releases its certified dependencies.
+   history releases its certified dependencies. The Nexus deployment and universal-root governance owners also need a
+   Parliament-authorized keyed State cutover on Nexus, followed by four positive-height
+   certified snapshot restores and replay through the tip ([P1 qualification](specs/network_deployment.md)).
 3. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
 4. Complete Sumeragi handoff H1–H6, including authenticated Linux artifacts and

@@ -720,7 +720,11 @@ async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<S
                 let status = client.get_sumeragi_status()?;
                 ensure!(
                     status.signer.as_ref() == Some(node.public_key()) && !status.is_halted(),
-                    "native diagnostic source does not report the expected running validator"
+                    "validator {node} reported signing key {:?} at height {} (halted {:?}, unanchored {})",
+                    status.signer,
+                    status.height,
+                    status.halted,
+                    status.unanchored
                 );
                 Ok::<_, color_eyre::Report>(status)
             })
@@ -1060,7 +1064,6 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         generate
             .args(["sora-network", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
             .args(["--profile", "nexus"])
-            .args(["--seed", "sora-nexus-v1-qual-predeal"])
             .arg("--block-cadence-ms")
             .arg(profile.genesis_recipe().block_cadence_ms.to_string())
             .args(["--bind-host", "127.0.0.1", "--public-host", "127.0.0.1"])
@@ -1246,7 +1249,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 6. Unprivileged first start with `beacon.cred` already in place.
         let subject = unprivileged_subject()?;
         drop(reservations);
-        let mut peers = Peers::spawn(&daemon, &root, &node_files)?;
+        let mut peers = Peers::spawn_fresh(&daemon, &root, &node_files)?;
         let network = async {
             let _discriminant = ChainDiscriminantGuard::enter(369);
             let clients = (0..PEERS)
@@ -1405,9 +1408,8 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             "[{}] pulse {pulse} verifies against the pre-dealt session on all four validators",
             elapsed(started)
         );
-        // 11. The stopped stores pass the read-only storage check, and this build restores the
-        //     real signed snapshot the qualification cadence wrote and reproduces every later
-        //     block (`--check-replay`, on a copy of each store).
+        // The World commitment on this root cannot authenticate a complete State snapshot.
+        // Replay every stopped store from its original signed genesis through the certified tip.
         for (index, node_file) in node_files.iter().enumerate() {
             let mut check = daemon.command()?;
             check
@@ -1441,11 +1443,11 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 start
                     .and_then(|start| start.get("source"))
                     .and_then(Value::as_str)
-                    == Some("snapshot")
-                    && start_height.is_some_and(|height| height > 0 && Some(height) < tip)
+                    == Some("genesis")
+                    && start_height == Some(0)
                     && replayed.get("outcome").and_then(Value::as_str) == Some("matched")
                     && replayed.get("replayed_to").and_then(Value::as_u64) == tip,
-                "validator {index} did not restore its snapshot and reproduce every later block: \
+                "validator {index} did not reproduce every block from signed genesis: \
                  {replayed:?}"
             );
             eprintln!("check-replay validator {index}: {}", json::to_string(&replayed)?);

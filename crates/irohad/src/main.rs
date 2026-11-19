@@ -5942,7 +5942,7 @@ fn ivm_stack_settings_snapshot(
     }
 }
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
-fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
+fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) -> usize {
     let stack_outcome = apply_ivm_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
@@ -5966,7 +5966,6 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         if max == 0 { None } else { Some(max) },
     );
     let (effective_min, _effective_max) = ivm::parallel::default_scheduler_limits();
-    println!("{}", scheduler_banner_line(effective_min));
     if concurrency.rayon_global_threads > 0
         && let Err(err) = ivm::init_global_rayon(concurrency.rayon_global_threads)
     {
@@ -5977,6 +5976,7 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
             "Failed to set IVM Rayon global pool with the requested stack size; using existing pool"
         );
     }
+    effective_min
 }
 /// Create the missing node-local identities, then check the custody of the `<data_dir>/secrets/`
 /// key files the configuration parser may read ([`node_secrets::create_local_identities`],
@@ -6198,15 +6198,22 @@ fn read_config_and_genesis_with_filesystem_space(
     // stdout reserved for its single result, and leave scheduler setup to the real
     // daemon startup path.
     if !args.startup.check_config && !args.startup.check_storage {
-        if config.kura.init_mode == InitMode::Fast {
+        let core_count = if config.kura.init_mode == InitMode::Fast {
             // Fast constructs one inert State VM for structural completeness. Cap
             // that VM at one minimum-stack worker and leave the global Rayon pool
             // uninitialized; no contract or proof route is available in this mode.
             let _ = apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
             ivm::set_scheduler_thread_limits(Some(1), Some(1));
-            println!("{}", scheduler_banner_line(1));
+            1
         } else {
-            apply_concurrency_config(&config.concurrency);
+            apply_concurrency_config(&config.concurrency)
+        };
+        let banner = scheduler_banner_line(core_count);
+        if args.startup.check_replay {
+            // --check-replay executes the real VM and reserves stdout for its JSON report.
+            eprintln!("{banner}");
+        } else {
+            println!("{banner}");
         }
     }
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
@@ -10579,10 +10586,10 @@ mod tests {
         ));
         assert!(
             compact_source
-                .contains("if!args.startup.check_config&&!args.startup.check_storage{ifconfig.kura.init_mode==InitMode::Fast{")
+                .contains("if!args.startup.check_config&&!args.startup.check_storage{letcore_count=ifconfig.kura.init_mode==InitMode::Fast{")
         );
         assert!(compact_source.contains(
-            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
+            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));1}else{apply_concurrency_config(&config.concurrency)};"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
