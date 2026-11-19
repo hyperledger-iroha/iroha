@@ -138,6 +138,9 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_encode_transfer_signed_transaction",
     "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
     "connect_norito_encode_transfer_instruction_box",
+    "connect_norito_decode_signed_transaction_json_v1",
+    "connect_norito_sign_transaction_payload_v1",
+    "connect_norito_transcode_instruction_v1",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
@@ -212,6 +215,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_wallet_enrollment_refusal_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
+    "connect_norito_decode_signed_transaction_json",
     "connect_norito_kagemusha_v1_payment_request_validate",
     "connect_norito_kagemusha_v1_payment_validate",
     "connect_norito_kagemusha_v1_acknowledgement_validate",

@@ -49,7 +49,11 @@ WALLET_JNI_SYMBOLS = [
 LOAD_ORIGINAL_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
 ]
-KAGEMUSHA_JNI_SYMBOLS = [*WALLET_JNI_SYMBOLS, *LOAD_ORIGINAL_JNI_SYMBOLS]
+SPARTAN_JNI_SYMBOLS = [
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_" + method
+    for method in ("install", "beginAccount", "authorizeAccount", "prepare", "execute", "output", "verifyPayment", "discard")
+]
+KAGEMUSHA_JNI_SYMBOLS = [*WALLET_JNI_SYMBOLS, *SPARTAN_JNI_SYMBOLS, *LOAD_ORIGINAL_JNI_SYMBOLS]
 PRIVACY_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_" + method
     for method in (
@@ -78,7 +82,12 @@ PRIVACY_JNI_SYMBOLS = [
         "nativeValidateExact12FixtureBundle",
     )
 ]
-REQUIRED_JNI_SYMBOLS = [*KAGEMUSHA_JNI_SYMBOLS, *PRIVACY_JNI_SYMBOLS]
+REQUIRED_JNI_SYMBOLS = [
+    *KAGEMUSHA_JNI_SYMBOLS,
+    *PRIVACY_JNI_SYMBOLS,
+    "Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeBridgeAbiVersion",
+    "Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeTranscodeInstruction",
+]
 
 
 class StrictNoritoBridgeValidatorTests(unittest.TestCase):
@@ -358,6 +367,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 result = self.check_mobile_binary_symbols(exported, mode)
                 self.assertEqual(result.returncode, 0, result.stderr)
         for missing in (
+            "connect_norito_decode_signed_transaction_json_v1",
+            "connect_norito_sign_transaction_payload_v1",
+            "connect_norito_transcode_instruction_v1",
             "connect_norito_bridge_abi_version",
             "connect_norito_domain_id_validate_v1",
             "connect_norito_name_validate_v1",
