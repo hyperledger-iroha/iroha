@@ -29,7 +29,7 @@ pub struct StagedOutputFile {
 
 /// A bounded replay of the same staging original, borrowed without writer authority.
 ///
-/// The initial snapshot and independent offset remain fixed for this replay.
+/// Seeking changes only this reader’s logical offset within the captured length.
 /// Borrowing prevents mutable access to the owner until the reader is released.
 #[derive(Debug)]
 pub struct StagedOutputReader<'a> {
@@ -226,16 +226,34 @@ impl Seek for StagedOutputFile {
     }
 }
 
+impl StagedOutputReader<'_> {
+    fn validate_snapshot(&self) -> io::Result<()> {
+        self.original.revalidate()?;
+        if self.original.inner.snapshot()? != self.snapshot {
+            return Err(crate::changed());
+        }
+        Ok(())
+    }
+}
+
+impl Seek for StagedOutputReader<'_> {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        self.validate_snapshot()?;
+        let position = match from {
+            SeekFrom::Start(position) => Some(position),
+            SeekFrom::Current(offset) => self.position.checked_add_signed(offset),
+            SeekFrom::End(offset) => self.length.checked_add_signed(offset),
+        }
+        .filter(|position| *position <= self.length)
+        .ok_or_else(|| invalid("seek outside captured output replay"))?;
+        self.position = position;
+        Ok(position)
+    }
+}
+
 impl Read for StagedOutputReader<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let check = || {
-            self.original.revalidate()?;
-            if self.original.inner.snapshot()? != self.snapshot {
-                return Err(crate::changed());
-            }
-            Ok(())
-        };
-        check()?;
+        self.validate_snapshot()?;
         let limit = usize::try_from((self.length - self.position).min(bytes.len() as u64))
             .map_err(|_| invalid("output replay length overflow"))?;
         let result = if limit == 0 {
@@ -254,7 +272,7 @@ impl Read for StagedOutputReader<'_> {
                 }
             })
         };
-        let custody = check();
+        let custody = self.validate_snapshot();
         let count = result.and_then(|count| custody.map(|()| count))?;
         self.position += count as u64;
         Ok(count)
