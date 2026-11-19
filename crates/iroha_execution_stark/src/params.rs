@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(params.check(&partial), Err(ParamsError::FoldGeometry));
         assert_eq!(
             params.check_security(&partial, TARGET_SECURITY_BITS),
-            Err(ParamsError::FoldGeometry)
+            Err(SecurityError::Parameters(ParamsError::FoldGeometry))
         );
         let stop_earlier = Params {
             fri_log_final_degree: 1,
