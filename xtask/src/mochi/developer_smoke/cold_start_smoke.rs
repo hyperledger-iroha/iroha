@@ -15,7 +15,7 @@ pub(in crate::mochi) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_input(kagami: &Path, input: Input) -> Result<(), Box<dyn Error>> {
-    let mut harness = Harness::new(kagami)?;
+    let mut harness = Harness::new(kagami)?.with_smoke_start_budget();
     let (path, expected) = match input {
         Input::Bytecode => {
             fs::write(

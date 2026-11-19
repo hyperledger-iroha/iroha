@@ -24,6 +24,8 @@ mod reset_smoke;
 
 const LOCAL_CLEANUP: [&str; 3] = ["localnet", "down", "local"];
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
+/// The installed CLI accepts up to ten minutes to start its native validators and storage services.
+const SMOKE_START_BUDGET: Duration = Duration::from_secs(600);
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const SOURCE: &str = "seiyaku BundleSmoke { view fn quote(int cups) authorize(anyone) -> int { return cups * 10; } }";
 const PACKAGE_SOURCE: &str = "seiyaku BundlePackage { view fn quote(int cups) authorize(anyone) -> int { return cups * 30; } }";
@@ -70,7 +72,7 @@ pub(super) fn require_distinct_artifacts(deployments: &[&Value]) -> Result<(), B
 
 pub(super) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
     let bytecode = prepare_distinct_bytecode()?;
-    let mut harness = Harness::new(kagami)?;
+    let mut harness = Harness::new(kagami)?.with_smoke_start_budget();
     let result = harness.exercise(&bytecode);
     // Cleanup is itself a required observation. On uncertainty retain custody and logs instead
     // of deleting a directory which an owned worker or validator could still be using.
@@ -93,6 +95,7 @@ pub(super) struct Harness {
     state: PathBuf,
     empty_path: PathBuf,
     sequence: usize,
+    start_budget: Option<Duration>,
 }
 
 impl Harness {
@@ -112,7 +115,25 @@ impl Harness {
             workspace,
             empty_path,
             sequence: 0,
+            start_budget: None,
         })
+    }
+
+    /// Pass the largest startup budget to every command that can start validators.
+    pub(super) fn with_smoke_start_budget(mut self) -> Self {
+        self.start_budget = Some(SMOKE_START_BUDGET);
+        self
+    }
+
+    fn startup_budget_for(&self, args: &[&str]) -> Option<Duration> {
+        match args {
+            ["localnet", "up", ..] | ["contract", "deploy", ..] => self.start_budget,
+            _ => None,
+        }
+    }
+
+    fn command_timeout(&self, args: &[&str]) -> Duration {
+        COMMAND_TIMEOUT + self.startup_budget_for(args).unwrap_or_default()
     }
 
     pub(super) fn command(&mut self, args: &[&str]) -> Result<Value, Box<dyn Error>> {
@@ -136,7 +157,7 @@ impl Harness {
         use super::latency::{CommandObservation, Outcome};
         let started = Instant::now();
         let result = self
-            .command_document(args, started + COMMAND_TIMEOUT, false)
+            .command_document(args, started + self.command_timeout(args), false)
             .and_then(|document| {
                 if document.exit_code == Some(0) {
                     Ok(document.value)
@@ -187,7 +208,7 @@ impl Harness {
     ) -> Result<CommandDocument, super::latency::Outcome> {
         use super::latency::Outcome;
         let started = Instant::now();
-        let deadline = deadline.min(started + COMMAND_TIMEOUT);
+        let deadline = deadline.min(started + self.command_timeout(args));
         if started >= deadline {
             return Err(Outcome::TimedOut);
         }
@@ -232,6 +253,9 @@ impl Harness {
     fn command_builder(&self, args: &[&str], include_state: bool) -> Command {
         let mut command = Command::new(&self.kagami);
         command.args(args);
+        if let Some(budget) = self.startup_budget_for(args) {
+            command.arg("--timeout").arg(budget.as_secs().to_string());
+        }
         if include_state {
             command.arg("--state").arg(&self.state);
         }
@@ -611,6 +635,7 @@ mod tests {
             state: root.path().join("state"),
             empty_path: root.path().join("empty-path"),
             sequence: 0,
+            start_budget: None,
             root,
         };
         let command = harness.command_builder(&["dataspace", "networks"], false);
@@ -781,6 +806,49 @@ mod tests {
         let mut wrong_scope = artifact;
         wrong_scope.dataspace_id = DataSpaceId::new(0);
         assert!(require_view(&response, &address, &wrong_scope, "30").is_err());
+    }
+
+    #[test]
+    fn smoke_start_budget_reaches_only_commands_that_can_start_validators() {
+        let program = std::env::current_exe().unwrap();
+        let default = Harness::new(&program).unwrap();
+        let smoke = Harness::new(&program).unwrap().with_smoke_start_budget();
+        let arguments = |harness: &Harness, args: &[&str]| -> Vec<String> {
+            harness
+                .command_builder(args, true)
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect()
+        };
+        let starts: [&[&str]; 4] = [
+            &["localnet", "up"],
+            &["localnet", "up", "local", "--with-storage"],
+            &["contract", "deploy", "hello.ko"],
+            &["contract", "deploy", "hello.ko", "--context", "local"],
+        ];
+        for start in starts {
+            assert_eq!(default.command_timeout(start), COMMAND_TIMEOUT);
+            assert_eq!(
+                smoke.command_timeout(start),
+                COMMAND_TIMEOUT + SMOKE_START_BUDGET
+            );
+            let budgeted = arguments(&smoke, start);
+            assert_eq!(budgeted[..start.len()], *start);
+            assert_eq!(budgeted[start.len()..start.len() + 2], ["--timeout", "600"]);
+            assert_eq!(budgeted[start.len() + 2], "--state");
+            assert!(!arguments(&default, start).contains(&"--timeout".to_owned()));
+        }
+        let others: [&[&str]; 5] = [
+            &["localnet", "status"],
+            &["localnet", "down", "local"],
+            &["localnet", "reset", "local"],
+            &["contract", "call", "ResetSmoke::universal"],
+            &["context", "list"],
+        ];
+        for other in others {
+            assert_eq!(smoke.command_timeout(other), COMMAND_TIMEOUT);
+            assert!(!arguments(&smoke, other).contains(&"--timeout".to_owned()));
+        }
     }
 
     /// Exercise an already-built matching runtime without invoking Cargo from the bundle.
