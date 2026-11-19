@@ -1371,19 +1371,25 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             let pulse_deadline = Instant::now() + PHASE * 4;
             let crossed =
                 drive_to(&clients[0], &clients, &mut peers, pulse + 2, pulse_deadline).await?;
-            let after = beacon_horizons(&clients, &nodes).await?;
-            ensure!(
-                after.iter().all(|horizon| horizon.as_ref().is_some_and(|horizon| {
+            // The new committed generation can be visible in status before its beacon horizon
+            // and /readyz are published. Require both from all four validators after the pulse.
+            let settle = Instant::now() + Duration::from_secs(60);
+            loop {
+                let after = beacon_horizons(&clients, &nodes).await?;
+                if after.iter().all(|horizon| horizon.as_ref().is_some_and(|horizon| {
                     horizon.local_provider_ready
                         && horizon
                             .next_required_pulse_height
                             .is_some_and(|next| next > pulse)
-                })),
-                "the horizon did not move past pulse {pulse}: {after:?}"
-            );
-            // `/readyz` is 503 between a block commit and the next height's activation, so it
-            // is polled; every validator must report ready again after the pulse.
-            let settle = Instant::now() + Duration::from_secs(60);
+                })) {
+                    break;
+                }
+                ensure!(
+                    Instant::now() < settle,
+                    "the horizon did not move past pulse {pulse} on all four validators: {after:?}"
+                );
+                sleep(Duration::from_millis(250)).await;
+            }
             for offset in 0..4 {
                 while readyz(api + offset).await? != 200 {
                     ensure!(
