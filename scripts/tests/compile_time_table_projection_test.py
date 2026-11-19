@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "f1a0db847140ebf8097d4d32a9e4db082b42a97bf90f64ae72b1d433fa77e7ba"
+    "2ae8c34996e1badac157aee8a4d0eeab2b1125c01ba686d196a26f102b2f3e81"
 )
 
 
@@ -445,7 +445,7 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             len(rows),
             inventory.count("built_in_wire_id!(") + inventory.count("governance_wire_id!("),
         )
-        self.assertEqual(len(rows), 417)
+        self.assertEqual(len(rows), 444)
         self.assertEqual(len({row[1] for row in rows}), len(rows))
         self.assertEqual(len({row[3] for row in rows}), len(rows))
         self.assertEqual(
@@ -453,9 +453,14 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             {
                 "register_slice": 374,
                 "register": 36,
-                "register_tolerant": 6,
-                "register_slice_tolerant": 1,
+                "register_tolerant": 30,
+                "register_slice_tolerant": 4,
             },
+        )
+        self.assertIn(
+            ("base", "crate::isi::taira_read_scope::ScheduleTairaReadScopeV1",
+             "register_tolerant", "iroha.runtime.taira_read_scope.schedule.v1"),
+            rows,
         )
         self.assertIn(
             ("base", "crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1",
