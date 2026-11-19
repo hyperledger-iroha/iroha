@@ -106,8 +106,9 @@ impl NativeFixture {
             return entry.state.clone();
         }
         let state = self
-            .bootstrap_custody_snapshot(authority, policy, checkpoint, None)
-            .unwrap();
+            .bootstrap_custody_captured(authority, policy, checkpoint, None)
+            .unwrap()
+            .state;
         self.proved_custody.lock().unwrap().push(
             crate::managed::native_operation::test_support::native_fixture::ProvedCustody {
                 cut,
@@ -130,16 +131,17 @@ impl NativeFixture {
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         require_deadline(deadline)?;
-        self.bootstrap_custody_snapshot(authority, policy, checkpoint, Some(deadline))
+        self.bootstrap_custody_captured(authority, policy, checkpoint, Some(deadline))
+            .map(|captured| captured.state)
     }
 
-    fn bootstrap_custody_snapshot(
+    pub(in crate::managed) fn bootstrap_custody_captured(
         &self,
         authority: &ServiceAuthority,
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
         deadline: Option<Instant>,
-    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+    ) -> Result<crate::managed::stream_token_custody::original_proof::CapturedCustody> {
         let tip = self.chain.committed(self.chain.height());
         let budget = self.chain.state().ivm_execution_budget();
         let capture = || {
@@ -175,7 +177,12 @@ impl NativeFixture {
         if let Some(deadline) = deadline {
             require_deadline(deadline)?;
         }
-        Ok(current)
+        Ok(
+            crate::managed::stream_token_custody::original_proof::CapturedCustody {
+                state: current,
+                frame: bytes,
+            },
+        )
     }
 
     pub(in crate::managed) fn bootstrap_reserve(

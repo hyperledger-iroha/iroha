@@ -194,9 +194,18 @@ fn census(
     custody: bool,
     incomplete: bool,
 ) -> Result<()> {
-    let names = directory.entries(if custody { 131 } else { 66 })?;
+    let names = directory.entries(if custody { 132 } else { 66 })?;
     for name in &names {
         if name == "operation.lock" || name == "current-checkpoint.nrt" || name == operation {
+            continue;
+        }
+        if custody && name == crate::managed::stream_token_custody::original_proof::DIRECTORY {
+            if (later && operation == "configure")
+                || directory.open_child_optional("configure")?.is_none()
+            {
+                return Err(invalid("original custody evidence precedes Configure"));
+            }
+            crate::managed::stream_token_custody::original_proof::validate_names(directory)?;
             continue;
         }
         if custody && (name == "configure" || name == "enroll" || name == "enroll-selection.nrt") {
@@ -233,7 +242,7 @@ fn census(
             invalid("later bootstrap material exists behind an incomplete prerequisite")
         })?
     }
-    if directory.entries(if custody { 131 } else { 66 })? != names {
+    if directory.entries(if custody { 132 } else { 66 })? != names {
         return Err(invalid(
             "bootstrap dependency inventory changed during inspection",
         ));
