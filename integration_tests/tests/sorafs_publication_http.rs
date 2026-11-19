@@ -455,8 +455,15 @@ pub async fn prove(
                 norito::to_bytes(&selector)?,
             )
             .await?;
-            if response.status() == reqwest::StatusCode::ACCEPTED {
+            if matches!(
+                response.status(),
+                reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            ) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            if let Some(wait) = rate_limited(response.status(), response.headers()) {
+                tokio::time::sleep(wait).await;
                 continue;
             }
             ensure!(
