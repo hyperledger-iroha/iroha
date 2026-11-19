@@ -128,7 +128,9 @@ cache. Native resource limits remain unchanged. The same smoke then creates a se
 context, with only one network running at a time. It checks context list/show/use, explicit
 `contract deploy --context` without changing workspace selection, and original-journal recovery
 after restarting the intended network. Both deployments are read and executed on all four
-validators; cleanup covers both named environments.
+validators; cleanup covers both named environments. The two-context exercise reserves that startup time for
+the secondary launch, the explicit restart of local, and journal recovery. It
+keeps a separate 600-second aggregate allowance for the remaining context work.
 
 After that workflow passes, separate fresh stores exercise `.to` and local-package
 inputs as the first deployment command. Each must start four validators, execute

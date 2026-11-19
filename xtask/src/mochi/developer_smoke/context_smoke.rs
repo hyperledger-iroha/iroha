@@ -17,14 +17,20 @@ use std::{
 };
 
 const SECONDARY: &str = "secondary";
-const CONTEXT_BUDGET: Duration = Duration::from_secs(600);
+const CONTEXT_WORK_BUDGET: Duration = Duration::from_secs(600);
+
+fn context_budget(harness: &Harness) -> Duration {
+    // Starting secondary, deploying to the stopped local context, and resuming
+    // the original deployment each start a distinct four-peer process group.
+    CONTEXT_WORK_BUDGET + harness.start_budget.unwrap_or_default() * 3
+}
 
 pub(super) fn run(
     harness: &mut Harness,
     initial: &Value,
     original_deployment: &Value,
 ) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + CONTEXT_BUDGET;
+    let deadline = Instant::now() + context_budget(harness);
     let mut secondary_attempted = false;
     let result = exercise(
         harness,
@@ -202,7 +208,14 @@ fn command(
     harness
         .command_document(args, deadline, false)
         .map(|document| document.value)
-        .map_err(|error| format!("context CLI observation failed: {}", error.as_str()).into())
+        .map_err(|error| {
+            format!(
+                "context CLI observation failed for {}: {}",
+                args.join(" "),
+                error.as_str()
+            )
+            .into()
+        })
 }
 
 fn stop(harness: &mut Harness, name: &str, deadline: Instant) -> Result<(), Box<dyn Error>> {
@@ -272,6 +285,22 @@ fn require_deployment_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aggregate_context_deadline_reserves_each_cold_start_and_the_remaining_work() {
+        let harness = Harness::new(&std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(context_budget(&harness), Duration::from_secs(600));
+        let smoke = harness.with_smoke_start_budget();
+        assert_eq!(context_budget(&smoke), Duration::from_secs(2_400));
+        assert_eq!(
+            smoke.command_timeout(&["context", "list"]),
+            super::super::COMMAND_TIMEOUT
+        );
+        assert_eq!(
+            smoke.command_timeout(&["localnet", "up", SECONDARY]),
+            super::super::COMMAND_TIMEOUT + super::super::SMOKE_START_BUDGET
+        );
+    }
 
     #[test]
     fn outer_cleanup_explicitly_names_its_original_local_environment() {
