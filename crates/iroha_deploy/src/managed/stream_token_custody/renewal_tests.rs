@@ -1513,12 +1513,15 @@ impl renewal::RenewalReads for FixtureReads<'_> {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
+    ) -> Result<(FinalityVerifier, CapturedCustody)> {
         require_deadline(deadline)?;
         let checkpoint = fixture_observe(self.native, &owner.authority, deadline)?;
-        let current = self
-            .native
-            .bootstrap_custody(&owner.authority, policy, &checkpoint);
+        let current = self.native.bootstrap_custody_captured(
+            &owner.authority,
+            policy,
+            &checkpoint,
+            Some(deadline),
+        )?;
         Ok((checkpoint, current))
     }
     fn retain_carrier(

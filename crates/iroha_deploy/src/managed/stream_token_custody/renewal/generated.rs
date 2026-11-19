@@ -28,7 +28,7 @@ pub(in crate::managed::stream_token_custody) trait RenewalReads {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)>;
+    ) -> Result<(FinalityVerifier, CapturedCustody)>;
     fn retain_carrier(
         &self,
         authority: &ServiceAuthority,
@@ -44,8 +44,8 @@ impl RenewalReads for NativeReads {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
-        owner.observe(&policy.binding, deadline)
+    ) -> Result<(FinalityVerifier, CapturedCustody)> {
+        owner.observe_captured(&policy.binding, deadline)
     }
     fn retain_carrier(
         &self,
@@ -433,7 +433,8 @@ impl ManagedStreamTokenCustody {
     ) -> Result<Reconciliation> {
         let (deadline, _) = turn.check(self, deadline)?;
         let initial_interval = self.inspect_local_initial_interval(&turn.policy)?;
-        let (verifier, current) = reads.observe(self, &turn.policy, deadline)?;
+        let (verifier, captured) = reads.observe(self, &turn.policy, deadline)?;
+        let current = &captured.state;
         match self.reconcile_generated_material(
             turn,
             initial_interval,
@@ -443,7 +444,7 @@ impl ManagedStreamTokenCustody {
         )? {
             RenewalMaterial::Current(retained) => Ok(Reconciliation::Current(retained)),
             RenewalMaterial::Pending(pending) => {
-                self.reconcile_pending_renewal(turn, &verifier, &current, pending, deadline)
+                self.reconcile_pending_renewal(turn, &verifier, &captured, pending, deadline)
             }
         }
     }
@@ -573,10 +574,11 @@ impl ManagedStreamTokenCustody {
         &mut self,
         turn: &mut GeneratedRenewalTurn,
         verifier: &FinalityVerifier,
-        current: &VerifiedStreamTokenCustodyStateV1,
+        captured: &CapturedCustody,
         pending: PendingRenewal<'_>,
         deadline: Instant,
     ) -> Result<Reconciliation> {
+        let current = &captured.state;
         let PendingRenewal {
             _retained,
             selected,
@@ -617,13 +619,14 @@ impl ManagedStreamTokenCustody {
         } else {
             let unsigned = select_fresh(self, &turn.fees)?;
             turn.check(self, deadline)?;
-            BodyHistory::initialize(
+            BodyHistory::initialize_with_witness(
                 self,
                 CustodyPurpose::Renewal(next),
                 unsigned,
                 &turn.fees,
                 &SigningTurn::RenewalSelection(turn),
                 deadline,
+                SelectionWitness::Captured(&captured.frame),
             )?
         };
         let authorization = turn.authorize_retained(self, &history, deadline)?;
@@ -640,7 +643,14 @@ impl ManagedStreamTokenCustody {
             if history.body_expired()? {
                 let unsigned = select_fresh(self, authorization.fees())?;
                 history
-                    .reserve_successor(self, unsigned, current, authorization, deadline)?
+                    .reserve_successor_with_witness(
+                        self,
+                        unsigned,
+                        current,
+                        authorization,
+                        deadline,
+                        SelectionWitness::Captured(&captured.frame),
+                    )?
                     .finish_pending(
                         self,
                         current,
