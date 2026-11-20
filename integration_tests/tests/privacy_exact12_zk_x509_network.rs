@@ -22,7 +22,7 @@ use iroha::{
     crypto::HashOf,
     data_model::{
         Level, ValidationFail,
-        block::{BlockHeader, SignedBlock},
+        block::{BlockHeader, consensus::SumeragiRootScope},
         isi::{
             Grant, InstructionBox, Log, SetParameter,
             error::{InstructionExecutionError, InvalidParameterError},
@@ -33,16 +33,16 @@ use iroha::{
         },
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
-        prelude::QueryBuilderExt,
         privacy::{
             IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
             PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
         },
-        query::{
-            CommittedTransaction, block::prelude::FindBlocks,
-            transaction::prelude::FindTransactions,
+        query::CommittedTransaction,
+        sumeragi_finality::{
+            FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier,
+            VerifiedSumeragiBlock,
         },
         transaction::{
             FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -61,12 +61,16 @@ use iroha_core::privacy_release_evidence::{
 use iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1;
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::name::Name;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
+use iroha_model_base::{name::Name, peer::PeerId};
+use iroha_test_network::{
+    Network, NetworkBuilder, init_instruction_registry, read_on_dedicated_thread,
+};
 use std::{
+    collections::BTreeMap,
     fs,
     num::{NonZeroU32, NonZeroU64},
     path::Path,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
@@ -110,16 +114,138 @@ fn require_authoritative_network_mode() -> Result<()> {
     );
     Ok(())
 }
-fn bounded_client(client: Client) -> Client {
-    rebind_blocking_client(&client, |client| {
-        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-        client.torii_request_timeout = Duration::from_secs(30);
-        client.transaction_ttl = Some(ACTION_TTL);
-    })
+#[derive(Clone)]
+struct X509Peer {
+    rpc: Client,
+    node: PeerId,
+    history: Arc<Mutex<PeerHistory>>,
 }
-async fn privacy_capabilities(client: &Client) -> Result<PrivacyExact12CapabilityManifestV1> {
+struct PeerHistory {
+    verifier: SumeragiFinalityVerifier,
+    inputs: BTreeMap<HashOf<TransactionEntrypoint>, Vec<NonZeroU64>>,
+}
+impl PeerHistory {
+    fn observe(&mut self, proof: &SumeragiFinalityProof) -> Result<VerifiedSumeragiBlock> {
+        if self
+            .verifier
+            .authenticated_height()
+            .is_some_and(|height| proof.height() <= height)
+        {
+            return Ok(self.verifier.verify_retained_decision(proof)?);
+        }
+        let block = self.verifier.verify(proof)?;
+        let height = block.header().height();
+        for input in block.block().network_input_hashes() {
+            self.inputs.entry(input).or_default().push(height);
+        }
+        Ok(block)
+    }
+}
+// The independent provisioned genesis fixes the exact network, chain and validator roster.
+// Each validator gets its own contiguous history, including fresh readers after restart.
+fn x509_peers(network: &Network) -> Result<Vec<X509Peer>> {
+    let provisioned = network.native_genesis_provisioning_bundle()?;
+    let manifest = norito::json::from_slice(&provisioned.manifest_json)?;
+    let genesis = iroha_genesis::validate_prepared_genesis_bundle(
+        &provisioned.signed_wire,
+        &manifest,
+        &provisioned.public_key,
+        provisioned.block_hash,
+    )?;
+    ensure!(
+        iroha::data_model::NetworkId::from_genesis_hash(genesis.expected_hash())
+            == network.network_id()
+            && genesis.consensus_metadata().sumeragi_context.root_scope
+                == SumeragiRootScope::Global
+            && genesis.validator_pops().len() == 4
+            && genesis.validator_pops().iter().all(|(key, _)| network
+                .validators()
+                .iter()
+                .any(|peer| peer.id().public_key() == key)),
+        "X.509 genesis differs from the provisioned four-voter Global network"
+    );
+    let roster = genesis
+        .validator_pops()
+        .iter()
+        .map(|(key, pop)| FinalityValidator {
+            public_key: key.clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let verifier =
+        SumeragiFinalityVerifier::new(genesis.block(), network.chain_id().as_ref(), roster)?;
+    Ok(network
+        .peers()
+        .iter()
+        .map(|peer| X509Peer {
+            rpc: rebind_blocking_client(&peer.client(), |client| {
+                client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+                client.torii_request_timeout = Duration::from_secs(30);
+                client.transaction_ttl = Some(ACTION_TTL);
+            }),
+            node: peer.id(),
+            history: Arc::new(Mutex::new(PeerHistory {
+                verifier: verifier.clone(),
+                inputs: BTreeMap::new(),
+            })),
+        })
+        .collect())
+}
+impl X509Peer {
+    // Authenticate each missing parent once. A reread still verifies its exact certificate.
+    fn verify_through(
+        &self,
+        reader: &iroha::client::Client,
+        proof: &SumeragiFinalityProof,
+    ) -> Result<VerifiedSumeragiBlock> {
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| eyre!("X.509 peer history poisoned"))?;
+        let first = history
+            .verifier
+            .authenticated_height()
+            .unwrap_or(0)
+            .saturating_add(1);
+        for height in first..proof.height() {
+            let parent = reader.get_sumeragi_finality_proof(
+                NonZeroU64::new(height).expect("positive height"),
+                history.verifier.root_scope(),
+            )?;
+            history.observe(&parent)?;
+        }
+        let block = history.observe(proof)?;
+        if block.height() > 1 {
+            block.verify_global_scope(*reader.network_id(), history.verifier.chain_id())?;
+        }
+        Ok(block)
+    }
+    async fn current_tip(&self) -> Result<VerifiedSumeragiBlock> {
+        // Status supplies only a locator. A fresh signature binds the actual tip to this
+        // exact validator, challenge and network; its complete proof still needs our prefix.
+        let peer = self.clone();
+        let deadline = std::time::Instant::now() + PEER_CONVERGENCE_TIMEOUT;
+        let reader = peer.rpc.client().with_request_deadline(deadline);
+        let height = NonZeroU64::new(reader.status().get().await?.blocks)
+            .ok_or_else(|| eyre!("X.509 peer reports no committed block"))?;
+        read_on_dedicated_thread(move || {
+            let attestation = reader
+                .get_sumeragi_finality_attestation(
+                    height,
+                    rand::random(),
+                    &peer.node,
+                    SumeragiRootScope::Global,
+                )?
+                .into_attestation();
+            peer.verify_through(&reader, &attestation.body.genesis_finality_proof)?;
+            peer.verify_through(&reader, &attestation.body.finality_proof)
+        })
+        .await
+    }
+}
+async fn privacy_capabilities(client: &X509Peer) -> Result<PrivacyExact12CapabilityManifestV1> {
     let client = client.clone();
-    read_on_dedicated_thread(move || client.client().get_privacy_capabilities()).await
+    read_on_dedicated_thread(move || client.rpc.client().get_privacy_capabilities()).await
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -184,22 +310,16 @@ fn authenticated_network_prover_timeout(
     );
     Ok(proof_timeout)
 }
-async fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
-    let read_client = client.clone();
-    let blocks = read_on_dedicated_thread(move || {
-        Ok(read_client.client().query(FindBlocks).execute_all()?)
-    })
-    .await
-    .wrap_err("query trusted block timestamp for native ZK-X509 action")?;
-    let latest = blocks
-        .iter()
-        .max_by_key(|block| block.header().height().get())
-        .ok_or_else(|| eyre!("native ZK-X509 action requires a committed genesis block"))?;
+async fn latest_committed_block_timestamp_ms(client: &X509Peer) -> Result<u64> {
+    let latest = client
+        .current_tip()
+        .await
+        .wrap_err("authenticate trusted block timestamp for native ZK-X509 action")?;
     u64::try_from(latest.header().creation_time().as_millis())
         .map_err(|_| eyre!("trusted block timestamp does not fit u64 milliseconds"))
 }
 async fn require_live_x509_submission_window(
-    client: &Client,
+    client: &X509Peer,
     statement: &IrohaZkX509StarkP256StatementV1,
     context: &str,
 ) -> Result<()> {
@@ -255,23 +375,24 @@ fn single_zk_x509_proof_bytes<'a>(
         )),
     }
 }
-async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let read_client = client.clone();
-    let blocks = read_on_dedicated_thread(move || {
-        Ok(read_client.client().query(FindBlocks).execute_all()?)
+async fn canonical_genesis_hash(client: &X509Peer) -> Result<[u8; 32]> {
+    let peer = client.clone();
+    let genesis = read_on_dedicated_thread(move || {
+        let reader = peer
+            .rpc
+            .client()
+            .with_request_deadline(std::time::Instant::now() + PEER_CONVERGENCE_TIMEOUT);
+        let proof =
+            reader.get_sumeragi_finality_proof(NonZeroU64::MIN, SumeragiRootScope::Global)?;
+        peer.verify_through(&reader, &proof)
     })
     .await
-    .wrap_err("query committed blocks for canonical ZK-X509 genesis binding")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
+    .wrap_err("authenticate peer genesis against independent X.509 provisioning")?;
     ensure!(
-        genesis.len() == 1,
-        "FindBlocks must contain exactly one canonical genesis block, got {}",
-        genesis.len()
+        genesis.height() == 1 && genesis.header().prev_block_hash().is_none(),
+        "X.509 reader returned a non-genesis block"
     );
-    let hash = *genesis[0].header().hash().as_ref();
+    let hash = *genesis.header().hash().as_ref();
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
@@ -298,24 +419,16 @@ struct TipObservation {
     contains_transaction: bool,
 }
 async fn query_tip(
-    client: &Client,
+    client: &X509Peer,
     transaction: Option<&SignedTransaction>,
 ) -> Result<TipObservation> {
-    let read_client = client.clone();
-    let blocks = read_on_dedicated_thread(move || {
-        Ok(read_client.client().query(FindBlocks).execute_all()?)
-    })
-    .await
-    .wrap_err_with(|| format!("query committed blocks from {}", client.client().endpoint()))?;
-    let tip = blocks
-        .iter()
-        .max_by_key(|block| block.header().height().get())
-        .ok_or_else(|| {
-            eyre!(
-                "{} returned an empty committed chain",
-                client.client().endpoint()
-            )
-        })?;
+    let certified = client.current_tip().await.wrap_err_with(|| {
+        format!(
+            "authenticate committed tip from {}",
+            client.rpc.client().endpoint()
+        )
+    })?;
+    let tip = certified.block();
     let contains_transaction = if let Some(transaction) = transaction {
         let expected = transaction.hash_as_entrypoint();
         let matches = tip
@@ -325,14 +438,14 @@ async fn query_tip(
         ensure!(
             matches <= 1,
             "{} duplicated signed transaction {} in its committed tip",
-            client.client().endpoint(),
+            client.rpc.client().endpoint(),
             transaction.hash()
         );
         if matches == 1 {
             ensure!(
                 !tip.is_empty() && tip.external_entrypoint_count() > 0,
                 "{} exposed signed transaction {} through an empty or non-external tip",
-                client.client().endpoint(),
+                client.rpc.client().endpoint(),
                 transaction.hash()
             );
         }
@@ -349,7 +462,7 @@ async fn query_tip(
                 |_| {
                     eyre!(
                         "{} tip timestamp does not fit u64",
-                        client.client().endpoint()
+                        client.rpc.client().endpoint()
                     )
                 },
             )?,
@@ -358,7 +471,7 @@ async fn query_tip(
     })
 }
 async fn wait_for_all_common_tip(
-    clients: &[Client],
+    clients: &[X509Peer],
     wait: Duration,
     context: &str,
 ) -> Result<ExactCommittedBlock> {
@@ -405,7 +518,7 @@ async fn wait_for_all_common_tip(
     }
 }
 async fn wait_for_all_signed_tip(
-    clients: &[Client],
+    clients: &[X509Peer],
     transaction: &SignedTransaction,
     required: Option<ExactCommittedBlock>,
     wait: Duration,
@@ -467,7 +580,7 @@ async fn wait_for_all_signed_tip(
     }
 }
 async fn assert_all_exact_tip(
-    clients: &[Client],
+    clients: &[X509Peer],
     expected: ExactCommittedBlock,
     context: &str,
 ) -> Result<()> {
@@ -487,7 +600,7 @@ fn tagged_metadata(tag: u64) -> Result<Metadata> {
     Ok(metadata)
 }
 fn instruction_transaction(
-    client: &Client,
+    client: &X509Peer,
     instruction: impl Into<InstructionBox>,
     tag: u64,
 ) -> Result<SignedTransaction> {
@@ -496,8 +609,8 @@ fn instruction_transaction(
         .and_then(NonZeroU32::new)
         .ok_or_else(|| eyre!("native ZK-X509 transaction tag {tag} is not a nonzero u32 nonce"))?;
     let mut builder = TransactionBuilder::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
+        *client.rpc.client().network_id(),
+        client.rpc.client().account().clone(),
         no_fee(),
     )
     .with_instructions([instruction.into()])
@@ -506,11 +619,11 @@ fn instruction_transaction(
     builder.set_ttl(ACTION_TTL);
     builder.set_nonce(nonce);
     builder
-        .try_sign(client.client().key_pair().private_key())
+        .try_sign(client.rpc.client().key_pair().private_key())
         .wrap_err("sign exact tagged native ZK-X509 transaction")
 }
 async fn submit_signed_transaction(
-    client: &Client,
+    client: &X509Peer,
     transaction: &SignedTransaction,
     context: &str,
 ) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
@@ -519,6 +632,7 @@ async fn submit_signed_transaction(
     timeout(
         SUBMISSION_TIMEOUT,
         client
+            .rpc
             .account_client()
             .submit_transaction_and_wait(&transaction),
     )
@@ -527,7 +641,7 @@ async fn submit_signed_transaction(
     .wrap_err_with(|| context.to_owned())
 }
 async fn submit_expecting_rejection(
-    client: &Client,
+    client: &X509Peer,
     transaction: &SignedTransaction,
     context: &str,
     unexpected_acceptance: &str,
@@ -538,7 +652,7 @@ async fn submit_expecting_rejection(
     }
 }
 async fn submit_instruction(
-    client: &Client,
+    client: &X509Peer,
     instruction: impl Into<InstructionBox>,
     tag: u64,
     context: &str,
@@ -552,67 +666,76 @@ async fn submit_instruction(
     Ok((transaction, hash))
 }
 async fn exact_committed_transaction(
-    client: &Client,
+    client: &X509Peer,
     transaction: &SignedTransaction,
 ) -> Result<Option<CommittedTransaction>> {
-    let client = client.clone();
+    let peer = client.clone();
     let transaction = transaction.clone();
+    let tip = peer.current_tip().await?;
     read_on_dedicated_thread(move || {
         let expected_hash = transaction.hash_as_entrypoint();
-        let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-        let expected_entrypoint_bytes = norito::encode_canonical(&expected_entrypoint)
-            .wrap_err("encode expected finalized transaction entrypoint")?;
-        let transactions = client
-            .client()
-            .query(FindTransactions::new())
-            .execute_all()
-            .wrap_err("query finalized transactions")?;
-        let mut matching = transactions
-            .iter()
-            .filter(|committed| committed.entrypoint_hash() == &expected_hash);
-        let Some(committed) = matching.next() else {
-            return Ok(None);
+        let height = {
+            let history = peer
+                .history
+                .lock()
+                .map_err(|_| eyre!("X.509 peer history poisoned"))?;
+            let observed = history
+                .inputs
+                .get(&expected_hash)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut matches = observed
+                .iter()
+                .copied()
+                .filter(|height| height.get() <= tip.height());
+            let Some(height) = matches.next() else {
+                return Ok(None);
+            };
+            ensure!(
+                matches.next().is_none(),
+                "the certified prefix repeated the signed transaction entrypoint"
+            );
+            height
         };
+        let reader = peer
+            .rpc
+            .client()
+            .with_request_deadline(std::time::Instant::now() + PEER_CONVERGENCE_TIMEOUT);
+        let committed = reader
+            .get_transaction_details(expected_hash)
+            .wrap_err("read exact signed transaction details")?
+            .transaction;
+        let expected_entrypoint = TransactionEntrypoint::External(transaction);
         ensure!(
-            matching.next().is_none(),
-            "finalized transaction query returned the same entrypoint hash more than once"
-        );
-        ensure!(
-            committed.entrypoint() == &expected_entrypoint
-                && norito::encode_canonical(committed.entrypoint())
-                    .wrap_err("encode observed finalized transaction entrypoint")?
-                    == expected_entrypoint_bytes,
-            "entrypoint hash matched transaction bytes that differ from the exact signed entrypoint"
+            committed.entrypoint_hash() == &expected_hash
+                && committed.entrypoint() == &expected_entrypoint
+                && norito::encode_canonical(committed.entrypoint())?
+                    == norito::encode_canonical(&expected_entrypoint)?,
+            "certified entrypoint differs from the exact signed transaction bytes"
         );
         ensure!(
             committed.output_hash() == &HashOf::new(committed.output()),
             "finalized transaction output hash differs from its full typed output"
         );
-        let blocks = client
-            .client()
-            .query(FindBlocks)
-            .execute_all()
-            .wrap_err("query exact finalized transaction carrier block")?;
-        let mut carriers = blocks
-            .iter()
-            .filter(|block| block.hash() == *committed.block_hash());
-        let carrier: &SignedBlock = carriers
-            .next()
-            .ok_or_else(|| eyre!("exact finalized transaction carrier block is absent"))?;
+        let carrier = if height == tip.header().height() {
+            tip
+        } else {
+            let proof = reader.get_sumeragi_finality_proof(height, SumeragiRootScope::Global)?;
+            peer.verify_through(&reader, &proof)?
+        };
         ensure!(
-            carriers.next().is_none(),
-            "finalized block query returned the exact carrier hash more than once"
+            committed.block_hash() == &carrier.header().hash(),
+            "finalized transaction carrier hash differs"
         );
-        ensure!(
-            committed.verify_inclusion_in_block(carrier),
-            "finalized transaction entrypoint/result proofs do not match its exact carrier block"
-        );
-        Ok(Some(committed.clone()))
+        // This authenticates the original network, signature, exact input index and both
+        // Merkle paths for applied and rejected results against the certified execution.
+        carrier.verify_transaction_execution(reader.network_id(), &committed)?;
+        Ok(Some(committed))
     })
     .await
 }
 async fn exact_transaction_result(
-    client: &Client,
+    client: &X509Peer,
     transaction: &SignedTransaction,
 ) -> Result<Option<bool>> {
     Ok(exact_committed_transaction(client, transaction)
@@ -620,7 +743,7 @@ async fn exact_transaction_result(
         .map(|committed| committed.result().is_ok()))
 }
 async fn exact_applied_transaction_visible(
-    client: &Client,
+    client: &X509Peer,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
     match exact_transaction_result(client, transaction).await? {
@@ -630,7 +753,7 @@ async fn exact_applied_transaction_visible(
     }
 }
 async fn wait_for_transaction_on_peers(
-    clients: &[Client],
+    clients: &[X509Peer],
     transaction: &SignedTransaction,
     context: &str,
 ) -> Result<()> {
@@ -662,7 +785,7 @@ async fn wait_for_transaction_on_peers(
     }
 }
 async fn wait_for_transaction_result_on_peers(
-    clients: &[Client],
+    clients: &[X509Peer],
     transaction: &SignedTransaction,
     expected_success: bool,
     context: &str,
@@ -699,7 +822,7 @@ async fn wait_for_transaction_result_on_peers(
     }
 }
 async fn assert_all_exact_duplicate_certificate_nullifier_results(
-    clients: &[Client],
+    clients: &[X509Peer],
     transaction: &SignedTransaction,
     context: &str,
 ) -> Result<()> {
@@ -711,8 +834,11 @@ async fn assert_all_exact_duplicate_certificate_nullifier_results(
             .ok_or_else(|| {
                 eyre!("{context}: peer {index} omitted the exact finalized transaction")
             })?;
-        let observed_hash = committed.result().hash();
-        let observed_result = committed.result().clone();
+        let result = committed.result().baseline().ok_or_else(|| {
+            eyre!("{context}: peer {index} returned a result outside the founded profile")
+        })?;
+        let observed_hash = result.hash();
+        let observed_result = result.clone();
         match &observed_result {
             TransactionResult(
                 Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
@@ -803,7 +929,7 @@ fn assert_zk_x509_capability(
     Ok(())
 }
 async fn wait_for_available_snapshots(
-    clients: &[Client],
+    clients: &[X509Peer],
     expected_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
     expected_readiness: PrivacyCapabilityReadinessV1,
@@ -871,8 +997,8 @@ async fn wait_for_available_snapshots(
     }
 }
 async fn advance_to_semantic_base_after_crl_second(
-    clients: &[Client],
-    submitter: &Client,
+    clients: &[X509Peer],
+    submitter: &X509Peer,
     mut semantic_base: ExactCommittedBlock,
     predecessor_this_update_unix_seconds: u64,
 ) -> Result<ExactCommittedBlock> {
@@ -938,6 +1064,107 @@ async fn advance_to_semantic_base_after_crl_second(
          advance beyond predecessor CRL thisUpdate second \
          {predecessor_this_update_unix_seconds}"
     ))
+}
+// Exercise the release reader itself on real voters even when the native X.509 prover is unavailable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn certified_x509_reader_binds_voter_tip_and_both_transaction_outcomes() -> Result<()> {
+    require_authoritative_network_mode()?;
+    init_instruction_registry();
+    let network = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new()
+            .with_peers(4)
+            .with_auto_populated_trusted_peers()
+            .with_block_cadence(TEST_BLOCK_CADENCE)
+            .with_permissioned_consensus(),
+        "certified_x509_reader_binds_voter_tip_and_both_transaction_outcomes",
+    )
+    .await?
+    .ok_or_else(|| eyre!("the X.509 reader regression requires four live validators"))?;
+    let result: Result<()> = async {
+        let peers = x509_peers(&network)?;
+        let peer = &peers[0];
+        ensure!(
+            canonical_genesis_hash(peer).await? == *network.network_id().as_bytes(),
+            "reader genesis differs"
+        );
+        let before =
+            wait_for_all_common_tip(&peers, PEER_CONVERGENCE_TIMEOUT, "reader startup").await?;
+        let absent = instruction_transaction(
+            peer,
+            Log::new(Level::INFO, "unsubmitted".to_owned()),
+            70_001,
+        )?;
+        ensure!(
+            exact_committed_transaction(peer, &absent).await?.is_none(),
+            "reader reported an unsubmitted transaction"
+        );
+        let (applied, _) = submit_instruction(
+            peer,
+            Log::new(Level::INFO, "reader success".to_owned()),
+            70_002,
+            "reader success",
+        )
+        .await?;
+        let applied_tip = wait_for_all_signed_tip(
+            &peers,
+            &applied,
+            None,
+            PEER_CONVERGENCE_TIMEOUT,
+            "reader applied tip",
+        )
+        .await?;
+        ensure!(
+            applied_tip.parent_hash == Some(before.hash),
+            "reader success has a different parent"
+        );
+        let rejected = instruction_transaction(
+            peer,
+            iroha::data_model::isi::Unregister::domain("x509missing".parse()?),
+            70_003,
+        )?;
+        submit_expecting_rejection(
+            peer,
+            &rejected,
+            "reader missing domain",
+            "accepted missing domain removal",
+        )
+        .await?;
+        wait_for_transaction_result_on_peers(
+            &peers,
+            &rejected,
+            false,
+            "reader certified rejection",
+        )
+        .await?;
+        let rejected_tip = wait_for_all_signed_tip(
+            &peers,
+            &rejected,
+            None,
+            PEER_CONVERGENCE_TIMEOUT,
+            "reader rejected tip",
+        )
+        .await?;
+        ensure!(
+            rejected_tip.parent_hash == Some(applied_tip.hash),
+            "reader rejection has a different parent"
+        );
+        wait_for_transaction_on_peers(
+            &x509_peers(&network)?,
+            &applied,
+            "fresh readers authenticate historical applied output",
+        )
+        .await?;
+        let mut substituted = peer.clone();
+        substituted.node = peers[1].node.clone();
+        ensure!(
+            substituted.current_tip().await.is_err(),
+            "reader authenticated a substituted voter"
+        );
+        Ok(())
+    }
+    .await;
+    network.shutdown().await;
+    result
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
@@ -1026,20 +1253,16 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             network.peers().len() == 4,
             "native ZK-X509 release gate requires exactly four trusted validators"
         );
-        let all_clients = network
-            .peers()
-            .iter()
-            .map(|peer| bounded_client(peer.client()))
-            .collect::<Vec<_>>();
+        let all_clients = x509_peers(&network)?;
         let client = all_clients[0].clone();
         let genesis_hash = canonical_genesis_hash(&client).await?;
         ensure!(
-            client.client().network_id().as_bytes() == &genesis_hash,
+            client.rpc.client().network_id().as_bytes() == &genesis_hash,
             "client network ID is not derived from the canonical genesis hash"
         );
         let (grant_transaction, _) = submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account().clone()),
+            Grant::account_permission(Permission::from(CanEnactGovernance), client.rpc.client().account().clone()),
             50_000,
             "grant CanEnactGovernance for native ZK-X509 release",
         )
@@ -1057,8 +1280,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client).await?;
         let creation_time = now_duration()?;
         let action_context = PrivacyReleaseTransactionContextV1 {
-            network_id: *client.client().network_id(),
-            authority: client.client().account().clone(),
+            network_id: *client.rpc.client().network_id(),
+            authority: client.rpc.client().account().clone(),
             creation_time,
             time_to_live: Some(ACTION_TTL),
             nonce: NonZeroU32::new(50_002),
@@ -1066,7 +1289,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             metadata: tagged_metadata(50_002)?,
             genesis_hash,
         };
-        let signing_key = client.client().key_pair().private_key().clone();
+        let signing_key = client.rpc.client().key_pair().private_key().clone();
         let initial_resource_certificate = resource_certificate.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
             build_privacy_release_zk_x509_network_actions_v1(
@@ -1090,8 +1313,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             })?
             .map_err(|error| eyre!("native ZK-X509 prover task failed: {error}"))??;
         ensure!(
-            &actions.statement.wallet_account == client.client().account()
-                && actions.statement.context.network_id == *client.client().network_id()
+            &actions.statement.wallet_account == client.rpc.client().account()
+                && actions.statement.context.network_id == *client.rpc.client().network_id()
                 && actions.statement.context.action_index == 0
                 && actions.statement.context.parameter_id == compiled.parameter_id
                 && actions.statement.context.parameter_digest == compiled.parameter_digest
@@ -1259,7 +1482,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         )
         .await?;
         for (index, replay_client) in healthy_clients.iter().enumerate() {
-            let replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("pre-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
+            let replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.rpc.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("pre-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
                 .wrap_err_with(|| {
                     format!("submit exact native ZK-X509 replay to healthy peer {index}")
                 })
@@ -1318,11 +1541,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         .await
         .map_err(|_| eyre!("native ZK-X509 peer restart exceeded {RESTART_TIMEOUT:?}"))?
         .wrap_err("restart native ZK-X509 validator from persisted state")?;
-        let recovered_clients = network
-            .peers()
-            .iter()
-            .map(|peer| bounded_client(peer.client()))
-            .collect::<Vec<_>>();
+        let recovered_clients = x509_peers(&network)?;
         let recovered_sentinel = wait_for_all_signed_tip(
             &recovered_clients,
             &catch_up_transaction,
@@ -1395,8 +1614,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             actions.crl.this_update_unix_seconds
         );
         let semantic_action_context = PrivacyReleaseTransactionContextV1 {
-            network_id: *restarted_client.client().network_id(),
-            authority: restarted_client.client().account().clone(),
+            network_id: *restarted_client.rpc.client().network_id(),
+            authority: restarted_client.rpc.client().account().clone(),
             creation_time: now_duration()?,
             time_to_live: Some(ACTION_TTL),
             nonce: NonZeroU32::new(50_008),
@@ -1404,7 +1623,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             metadata: tagged_metadata(50_008)?,
             genesis_hash,
         };
-        let semantic_signing_key = restarted_client.client().key_pair().private_key().clone();
+        let semantic_signing_key = restarted_client.rpc.client().key_pair().private_key().clone();
         let semantic_resource_certificate = resource_certificate.clone();
         let current_crl = actions.crl.clone();
         let build_semantic_replay = tokio::task::spawn_blocking(move || {
@@ -1656,7 +1875,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         )
         .await?;
         for (index, replay_client) in recovered_clients.iter().enumerate() {
-            let post_restart_replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("post-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
+            let post_restart_replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.rpc.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("post-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
                 .wrap_err_with(|| format!("submit exact native ZK-X509 replay to peer {index}"))
                 .expect_err("post-restart peer accepted exact native ZK-X509 replay");
             ensure!(

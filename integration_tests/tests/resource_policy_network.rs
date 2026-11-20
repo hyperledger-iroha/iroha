@@ -273,11 +273,12 @@ fn identical_result(records: &[CommittedTransaction]) -> Result<&CommittedTransa
     let first = records
         .first()
         .ok_or_else(|| eyre!("no validator record"))?;
+    let expected_output_hash = iroha_crypto::HashOf::new(first.output());
     for (index, record) in records.iter().enumerate() {
         ensure!(
             record.block_hash() == first.block_hash()
-                && record.result() == first.result()
-                && record.result().hash() == first.result().hash(),
+                && record.output() == first.output()
+                && record.output_hash() == &expected_output_hash,
             "validator {index} committed {:?} in {}, validator 0 {:?} in {}",
             record.result(),
             record.block_hash(),

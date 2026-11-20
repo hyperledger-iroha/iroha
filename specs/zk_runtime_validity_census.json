@@ -3308,7 +3308,7 @@
    "gates": "IVM: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`NotImplemented` and `UnsupportedProgramFeatureBits` in crates/ivm/src/proof_coverage/traps.rs: rows of the trap coverage table and the names of two trap kinds. `VmTrapKind::NotImplemented` is the trap a host raises for a syscall it does not serve (`HostUnavailable` and `NotImplemented` errors map to it); `UnsupportedProgramFeatureBits` rejects a program header with undefined feature bits. Both are deterministic outcomes of the VM that the table lists so the IVM proof covers every trap; neither is a switch. The trace-recorder deferrals of crates/ivm/src/zk are entry ivm.local_resource.",
+   "note": "`NotImplemented` and `UnsupportedProgramFeatureBits` in crates/ivm/src/proof_coverage/traps.rs: rows of the trap coverage table and the names of two trap kinds. `VmTrap::NotImplemented` and `UnsupportedProgramFeatureBits` are deterministic outcomes. The former describes an unimplemented syscall and the latter rejects undefined program-header bits. The diagnostic kind `VmTrapKind::NotImplemented` is also used for `VmDeferral::HostUnavailable`, which preserves the node-local refusal. The trace-recorder deferrals of crates/ivm/src/zk are entry ivm.local_resource.",
    "sites": [
     ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "unsupported", 20]
    ]
@@ -3324,7 +3324,7 @@
    "decided_by": "Nothing in committed State: the failure is local. In a prover, wallet or key-generation call it fails that local call and nothing is submitted. On the validation path it defers the local attempt without a rejection or a vote (resource contract behavior `missing_local_resource_defers`) and never changes an accepted effect, gas or root; a validation site that turns it into a rejection is a defect of the owner.",
    "attribution": "path_rule",
    "sites": [
-    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "local_resource", 13],
+    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "local_resource", 12],
     ["crates/ivm/src/zk.rs", "unavailable", "local_resource", 1],
     ["crates/ivm/src/zk/cycle_roots.rs", "unavailable", "local_resource", 2],
     ["crates/ivm/src/zk/cycle_roots.rs", "unavailable", "unavailable", 3],

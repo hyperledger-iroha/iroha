@@ -2924,7 +2924,7 @@ mod tests {
     async fn runtime_drafts_c10_registration_storage_and_service_from_the_installed_root() {
         use iroha_data_model::{
             ivm_c10::{RegisterSmartContractCodeC10V1, RegisterTriggerC10V1},
-            runtime::lifecycle::SelectionTransitionV1,
+            runtime::{definition::DefinitionDescriptorV1, lifecycle::SelectionTransitionV1},
         };
         let state = Arc::new(State::new_for_testing(
             iroha_core::state::World::default(),
@@ -2954,14 +2954,37 @@ mod tests {
         assert_ne!(change.successor, change.predecessor);
         assert_eq!(change.effective_height, 40);
         assert_eq!(change.qualification, [0xc1; 32]);
+        let published = catalog
+            .baseline_definitions
+            .iter()
+            .map(|id| (*id, catalog.definitions[id].clone()))
+            .collect::<BTreeMap<_, _>>();
+        let applied = change.apply(&catalog.baseline, &published).unwrap();
+        let services = applied.selection.services_profile;
+        assert_ne!(services, catalog.baseline.services_profile);
+        let DefinitionDescriptorV1::Implementation(template) =
+            &catalog.definitions[&addition.implementation]
+        else {
+            panic!("C10 registration template must be an implementation");
+        };
         for wire in [
             RegisterSmartContractCodeC10V1::WIRE_ID,
             RegisterTriggerC10V1::WIRE_ID,
         ] {
-            assert!(change.transitions.iter().any(|step| matches!(step,
-                SelectionTransitionV1::Bind(binding)
-                if binding.wire_id == wire && binding.implementation == addition.implementation
-            )));
+            let binding = applied
+                .selection
+                .bindings
+                .iter()
+                .find(|binding| binding.wire_id == wire)
+                .expect("successor must bind the C10 registration");
+            // Composition publishes the registration with the successor's services.
+            let DefinitionDescriptorV1::Implementation(implementation) =
+                &applied.published[&binding.implementation]
+            else {
+                panic!("C10 registration must bind a published implementation");
+            };
+            assert_eq!(implementation.code, template.code);
+            assert_eq!(implementation.services_profile, services);
         }
         for id in addition.storage.values() {
             assert!(
@@ -2973,8 +2996,7 @@ mod tests {
         assert!(
             change
                 .transitions
-                .iter()
-                .any(|step| matches!(step, SelectionTransitionV1::SetServicesProfile(_)))
+                .contains(&SelectionTransitionV1::SetServicesProfile(services))
         );
         assert_eq!(*state.view().world().runtime_selection(), catalog.baseline);
     }

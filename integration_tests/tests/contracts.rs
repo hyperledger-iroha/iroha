@@ -980,7 +980,7 @@ fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value
 fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
     use std::collections::BTreeMap;
 
-    use ivm::{IVM, VMError, error::VmTrapKind, numeric::NumericFaultV1};
+    use ivm::{IVM, error::VmTrapKind, numeric::NumericFaultV1};
     use ivm_abi::pointer_abi::{PointerType, encode_tlv};
 
     let artifact = typed_core_query_pager_artifact();
