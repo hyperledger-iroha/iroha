@@ -897,8 +897,8 @@ fn live_walkthrough_with_a_real_generation() {
     let approval = desktop
         .activity
         .iter()
-        .find(|line| line.contains("automatically"))
-        .cloned();
+        .find(|line| line.text.contains("automatically"))
+        .map(|line| &line.text);
     eprintln!("LIVE {approval:?}");
     assert!(
         approval.is_some(),

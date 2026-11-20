@@ -229,6 +229,31 @@ impl ManagedStore {
         Ok(self.networks.open_child(name)?)
     }
 
+    /// Prepare a fresh, stopped global generation for a test without launching or selecting it.
+    ///
+    /// # Errors
+    /// Returns an error for an existing generation, invalid custody or failed preparation.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn prepare_stopped_fixture(&self, request: &LocalnetRequest) -> Result<PreparedLocalnet> {
+        validate_name(&request.name)?;
+        let directory = self.networks.ensure_child(&request.name)?;
+        let _operation = acquire(&directory, "operation.lock", &request.name)?;
+        if generation::read_optional(&directory)?.is_some() {
+            return Err(Error::Invalid("fixture generation already exists".into()));
+        }
+        let ports = LocalnetPorts::reserve()?;
+        let (launcher, daemon) = request.admit_programs()?.pins()?;
+        Ok(generation::prepare(
+            &directory,
+            request,
+            RootKind::Global,
+            launcher,
+            daemon,
+            &ports,
+        )?
+        .prepared)
+    }
+
     /// Start or reconnect to a named network, preparing its generation only once.
     ///
     /// Canonical generation runs only for a new context, with private fixed-path seed custody

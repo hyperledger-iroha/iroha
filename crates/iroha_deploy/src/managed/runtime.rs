@@ -24,6 +24,41 @@ mod readiness;
 mod renewal;
 use owned::PeerProcesses;
 
+#[cfg(test)]
+#[derive(Default)]
+pub(in crate::managed) struct FixturePeers(PeerProcesses);
+
+#[cfg(test)]
+impl FixturePeers {
+    pub(in crate::managed) fn spawn(&mut self, command: &mut Command) -> Result<()> {
+        self.0
+            .children
+            .push(Arc::new(std::sync::Mutex::new(command.spawn()?)));
+        Ok(())
+    }
+
+    pub(in crate::managed) fn prove_ready(&self, prepared: &PreparedLocalnet) -> Result<()> {
+        if self.0.children.len() != 4 {
+            return Err(Error::Invalid(
+                "fixture requires four owned validators".into(),
+            ));
+        }
+        readiness::prove(
+            prepared,
+            Instant::now(),
+            Duration::from_secs(90),
+            &AtomicBool::new(false),
+            &readiness::Progress::default(),
+        )
+        .map(|_| ())
+        .map_err(|failure| Error::Invalid(failure.message()))
+    }
+
+    pub(in crate::managed) fn stop(&mut self) -> Result<()> {
+        self.0.stop()
+    }
+}
+
 /// Exercise the production lexical custody scope with genuine renderer fixtures.
 #[cfg(test)]
 pub(in crate::managed) fn test_with_renewal_custody<T>(

@@ -1,6 +1,6 @@
 # Kagami and Mochi developer experience
 
-Status: localnet, contract deployment and disposable parent/private attachment pass
+Status: localnet and contract deployment pass
 end-to-end checks using both the standalone CLI package and an extracted Mochi bundle
 on macOS ARM64, built unsigned with Cargo's release profile. Mochi's headless walkthrough
 and native-window local startup, source deployment, calls, views, recovery and restart
@@ -8,8 +8,11 @@ also pass against its packaged runtime. Native Torii discovery uses signed genes
 and consensus proofs without a separate publisher. Official Taira attachment
 remains unverified: its deployed account capability response includes a retired field
 and a noncanonical signing-algorithm order rejected by the current client.
-The disposable parent/private fixture uses explicit
-loopback HTTP; public remote profiles require HTTPS.
+The disposable attachment check passes against a separately generated Sora Nexus
+parent with funded faucet and account onboarding on loopback. The native macOS ARM64
+window also verifies the selected child, parent confirmation and UI-initiated stop
+after retrying the original child. Ordinary developer
+localnets remain faucet-free; public remote profiles require HTTPS.
 The wider native-platform and release gates below remain open. This first release
 requires no backward-compatible command aliases, old wire layouts, or parallel
 orchestration implementations.
@@ -252,9 +255,9 @@ Installed-runtime fixtures exercise both the local four-validator workflow and a
 disposable four-parent/four-private attachment. They check all three contract inputs,
 exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
 ownership, private execution and independently authenticated parent anchoring.
-The installed macOS attachment fixture passes with four parent and four private
-validators, including native discovery, all three deployments, execution and exact
-recovery. Restricted transaction gossip selects the independently signed private
+The installed macOS attachment check verifies a four-validator private root
+against its four-validator parent and confirms shutdown of both and the ingress.
+Restricted transaction gossip selects the independently signed private
 root's authenticated next-height committee; it does not require a parent lane record.
 The local workflow covers retained restart and fresh reset without releasing reserved
 ports during startup. Mochi’s headless walkthrough exercises genuine quickstart,
@@ -264,11 +267,14 @@ A native macOS ARM64 window walkthrough also verifies Quickstart, fee-reviewed s
 deployment, initialization and mutable calls, views, saved-journal recovery, retained
 state after Stop/Start, all five state collections and zero-peer shutdown. Its Taira
 attempt reports the current discovery failure and restores the original local selection.
-The attachment fixture also checks
-that its private canary, complete artifact bytes and listener token are absent
+The interactive loopback fixture compares the Network ID on the Endpoints page and
+the Home attachment receipt with the signed parent registration. The initial listener
+handoff timed out. Retrying the retained child from the window completed attachment.
+Stop showed zero of four validators, and teardown confirmed all 20 listeners closed.
+The CLI attachment fixture also checks that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
-does not establish universal secrecy, official Taira readiness, native desktop
-interaction, signed multi-platform release qualification or the DX7 latency targets.
+leaves universal secrecy, official Taira readiness, signed multi-platform release
+qualification and the DX7 latency targets open.
 
 Signed genesis context now selects a global or private dataspace root. A private root binds
 the exact parent network and full 64-bit dataspace identifier; its own genesis and chain label
@@ -819,8 +825,9 @@ authenticate the active lease owner and generation. Committed parent execution r
 that generation when applying registration; only its verified receipt establishes
 anchoring. Provisioning and relay turns share absolute deadlines. The native supervisor,
 Kagami command and Mochi profile picker call these shared owners. The installed CLI
-passes the disposable eight-validator attachment and execution fixture; live Taira and
-desktop attachment qualification remain separate. A retained context rejects substituted endpoints, chain labels,
+attachment and execution check and the macOS desktop attachment check pass against
+a faucet-enabled disposable parent. Live Taira qualification remains open. A retained
+context rejects substituted endpoints, chain labels,
 address prefixes and network identities without replacing its private ledger.
 
 Update source-coupled specifications as behavior lands. Public guides belong in
