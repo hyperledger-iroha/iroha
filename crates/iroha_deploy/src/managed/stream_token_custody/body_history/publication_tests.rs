@@ -378,7 +378,9 @@ fn successful_unused_retirement_matches_cold_recovery_without_wallet_or_signatur
 }
 fn successful_unused_retirement_matches_cold_recovery_without_wallet_or_signature_original() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    // Use the same real signing window as the neighboring publication controls.
+    // The predecessor must finish enrollment before the unsigned retirement can be exercised.
+    let fixture = Fixture::predecessor_with_renewal_validity(30_000);
     fixture.wait_renewable();
     let fired = Rc::new(Cell::new(false));
     let capture = Rc::clone(&fired);

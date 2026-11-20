@@ -1150,7 +1150,10 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
-    let utc = now_ms().unwrap() + 2_000;
+    // Persist the original and complete the ten-second recovery turn while the request is live.
+    // The second recovery below crosses this same signed UTC deadline.
+    let request_window_ms = 30_000;
+    let utc = now_ms().unwrap() + request_window_ms;
     journal::explicit(
         &directory,
         original,
@@ -1178,7 +1181,7 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         .unwrap();
     assert_eq!(report.transaction_status, OperationStatus::Absent);
     assert!(report.finalized.is_none() && report.current.is_none());
-    wait_until(utc, Duration::from_secs(3));
+    wait_until(utc, Duration::from_millis(request_window_ms + 1_000));
     drop(fixture.owner);
     let mut owner = ManagedStreamTokenCustody::open(
         &fixture.prepared,
