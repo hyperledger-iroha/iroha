@@ -22,7 +22,7 @@ use iroha_data_model::{
     account::address::AccountAddress,
     asset::AssetDefinitionAlias,
     prelude::{AccountId, AssetDefinitionId, AssetId, InstructionBox, TransactionBuilder},
-    transaction::{SignedTransaction, TransactionPayload, error::TransactionRejectionReason},
+    transaction::{SignedTransaction, TransactionPayload},
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
@@ -2935,14 +2935,6 @@ impl Iso20022BridgeRuntime {
     /// Mark the transaction identified by `tx_hash` as rejected.
     ///
     /// Returns `false` when no message is indexed or its exact history is exhausted.
-    pub fn mark_transaction_rejected(
-        &self,
-        tx_hash: &str,
-        reason: Option<&TransactionRejectionReason>,
-    ) -> bool {
-        self.mark_profiled_transaction_rejected(tx_hash, reason.map(Into::into))
-    }
-
     pub(crate) fn mark_profiled_transaction_rejected(
         &self,
         tx_hash: &str,

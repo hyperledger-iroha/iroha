@@ -668,9 +668,10 @@ def test_provider_ingest_uses_one_canonical_owned_completion_codec() -> None:
     scoped_decoder = _code(
         _body(norito_source, r"\bfn\s+decode_canonical_with_scopes_into_slot\s*<\s*T\s*>\s*\(")
     )
-    assert scoped_decoder.endswith("verify_exact_canonical_frame(slot.value()?,bytes)})")
+    assert slot_decoder.endswith("core::default_encode_flags(),)")
+    assert scoped_decoder.endswith("verify_exact_frame_with_layout_code(slot.value()?,bytes,layout_code)})")
     exact_frame = _code(
-        _body(norito_source, r"\bpub\s+fn\s+verify_exact_canonical_frame\s*<\s*T\s*>\s*\(")
+        _body(norito_source, r"\bfn\s+verify_exact_frame_with_layout_code\s*<\s*T\s*>\s*\(")
     )
     canonical_header = _body(
         norito_source, r"\bfn\s+checked_canonical_header\s*\("
@@ -678,17 +679,22 @@ def test_provider_ingest_uses_one_canonical_owned_completion_codec() -> None:
     assert "header.compression != Compression::None" in canonical_header
     assert "core::validate_header_flags(header.flags).is_err()" in canonical_header
     assert "returnErr(Error::NonCanonicalEncoding);" in _code(canonical_header)
-    assert _code("core::write_canonical_to_writer(value, &mut exact)") in exact_frame
-    assert "!exact.is_complete()" in exact_frame
+    assert exact_frame == _code(
+        "let (encode_result, exact) = core::compare_typed_frame::<T, T>(value, expected, layout_code);"
+        "if exact.mismatched() { return Err(Error::NonCanonicalEncoding); }"
+        "encode_result?;"
+        "if !exact.is_complete() { return Err(Error::NonCanonicalEncoding); } Ok(())"
+    )
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib
     assert ") -> FinalizedProviderIngestRuntimeResultV1<" in node_lib
 
 
 @pytest.mark.parametrize("declaration,contract", (
     ("fn checked_canonical_header(", "core::validate_header_flags(header.flags).is_err()"),
-    ("fn decode_canonical_with_scopes_into_slot<T>(", "verify_exact_canonical_frame(slot.value()?, bytes)"),
-    ("pub fn verify_exact_canonical_frame<T>(", "core::write_canonical_to_writer(value, &mut exact)"),
-    ("pub fn verify_exact_canonical_frame<T>(", "!exact.is_complete()"),
+    ("fn decode_canonical_with_scopes_into_slot<T>(", "verify_exact_frame_with_layout_code(slot.value()?, bytes, layout_code)"),
+    ("fn verify_exact_frame_with_layout_code<T>(", "core::compare_typed_frame::<T, T>(value, expected, layout_code)"),
+    ("fn verify_exact_frame_with_layout_code<T>(", "if exact.mismatched()"),
+    ("fn verify_exact_frame_with_layout_code<T>(", "!exact.is_complete()"),
 ))
 def test_completion_guard_rejects_shared_canonical_decoder_bypasses(
     monkeypatch: pytest.MonkeyPatch, declaration: str, contract: str,
