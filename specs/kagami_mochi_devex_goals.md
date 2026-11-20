@@ -416,7 +416,9 @@ all three. Each bounded maintenance turn allows only the chosen provider to publ
 an advertisement or advance a catalog. It then checks every provider's exact promoted catalog,
 owns one fresh Global cut for all three independent signer/custody reads, and revalidates the
 owned launch. The old aggregate remains authoritative until every check has returned and all
-old UTC and monotonic bounds still hold. A read-only refresh of another provider preserves
+old UTC and monotonic bounds still hold. When publication succeeds before a later proof fails,
+the next turn can recover that provider’s signed, acknowledged and currently serving descendant
+from its original catalog chain. Catalog recovery alone grants no readiness. A read-only refresh of another provider preserves
 that provider's place if its signed publication is due. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic

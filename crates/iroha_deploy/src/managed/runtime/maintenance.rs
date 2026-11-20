@@ -376,7 +376,7 @@ pub(super) fn refresh(
         .providers
         .each_ref()
         .map(|provider| provider.selection.catalog);
-    catalog::observe(prepared, &mut live, catalogs, budget)?;
+    let promoted = catalog::observe(prepared, &mut live, catalogs, budget)?;
     let floors = original
         .providers
         .each_ref()
@@ -395,7 +395,7 @@ pub(super) fn refresh(
             let mut next = ProviderObservation::new(
                 old.continuation.clone(),
                 old.terminal,
-                old.catalog,
+                promoted[index],
                 currents[index],
                 observed_at,
                 observed_utc,

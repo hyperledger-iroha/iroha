@@ -273,6 +273,29 @@ impl ManagedGatewayCompliance {
         expected: PromotedGeneratedCatalog,
         deadline: Instant,
     ) -> Result<()> {
+        self.observe_catalog(live, expected, deadline, false)
+            .map(|_| ())
+    }
+
+    /// Recover a promotion durably selected by this same original gateway during an earlier
+    /// incomplete turn. The old signed catalog must be in the validated chain, and its latest
+    /// original must independently be acknowledged, serving and current. This grants no lease.
+    pub(super) fn recover_promoted(
+        &self,
+        live: &mut impl LiveGatewayProcess,
+        previous: PromotedGeneratedCatalog,
+        deadline: Instant,
+    ) -> Result<PromotedGeneratedCatalog> {
+        self.observe_catalog(live, previous, deadline, true)
+    }
+
+    fn observe_catalog(
+        &self,
+        live: &mut impl LiveGatewayProcess,
+        previous: PromotedGeneratedCatalog,
+        deadline: Instant,
+        allow_successor: bool,
+    ) -> Result<PromotedGeneratedCatalog> {
         self.validate(live, deadline)?;
         let directory = self.authority.directory.open_child("catalogs")?;
         let inventory = directory.entries(MAX_CATALOGS)?;
@@ -280,8 +303,14 @@ impl ManagedGatewayCompliance {
         let selected = chain
             .last()
             .ok_or_else(|| invalid("original promoted catalog is absent"))?;
-        if report(selected)? != expected {
-            return Err(invalid("promoted catalog differs from original activation"));
+        let promoted = report(selected)?;
+        if promoted != previous {
+            let anchor = chain
+                .iter()
+                .find(|item| item.payload.sequence == previous.sequence);
+            if !allow_successor || anchor.map(report).transpose()? != Some(previous) {
+                return Err(invalid("promoted catalog differs from original activation"));
+            }
         }
         let child = directory.open_child(catalog_name(selected.payload.sequence))?;
         let acknowledgement = self
@@ -306,7 +335,8 @@ impl ManagedGatewayCompliance {
         }
         self.validate_retained(&child, selected, Some(&acknowledgement))?;
         self.require_fresh_promoted(&status, selected, now_ms()? / 1_000)?;
-        self.validate(live, deadline)
+        self.validate(live, deadline)?;
+        Ok(promoted)
     }
 
     fn validate(&self, live: &mut impl LiveGatewayProcess, deadline: Instant) -> Result<()> {

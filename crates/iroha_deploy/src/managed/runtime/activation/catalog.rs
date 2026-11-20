@@ -51,7 +51,7 @@ pub(in crate::managed::runtime) fn observe(
     live: &mut [OwnedGateway; 3],
     expected: [PromotedGeneratedCatalog; 3],
     budget: &Budget,
-) -> std::result::Result<(), Failure> {
+) -> std::result::Result<[PromotedGeneratedCatalog; 3], Failure> {
     budget.check()?;
     let validation = Mutex::new(());
     let [first, second, third] = live;
@@ -71,12 +71,12 @@ pub(in crate::managed::runtime) fn observe(
                 validation: &validation,
                 budget,
             };
-            budget.call(|deadline| publisher.observe_promoted(&mut gateway, catalog, deadline))
+            budget.call(|deadline| publisher.recover_promoted(&mut gateway, catalog, deadline))
         },
         || budget.progress.unconfirmed(),
     );
     budget.check()?;
-    result.map(|_| ())
+    result
 }
 
 struct GuardedGateway<'a, G> {
