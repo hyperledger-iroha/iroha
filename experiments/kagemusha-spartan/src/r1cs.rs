@@ -245,6 +245,14 @@ pub trait Circuit<F: Scalar>: Sync {
         let cols = shape.cols();
         self.fixed_values(shape)[k * cols..(k + 1) * cols].to_vec()
     }
+    /// The committed public columns of fixed row `k`. A missing suffix
+    /// represents zero scalars. Other circuits retain their full row check.
+    fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let mut row = self.fixed_row(shape, k);
+        assert_eq!(row.len(), shape.cols(), "fixed rows are whole rows");
+        row.truncate(shape.active_cols());
+        row
+    }
     /// The first of the fixed rows, holding one wallet's own constants (its
     /// key's comb tables): committed with blind 0 like the others and left out
     /// of proofs, but their commitments come from the instance (`wallet_io`)

@@ -1,17 +1,14 @@
-//! Table allocation is an optimization, not a larger memory allowance.
+//! A kernel memory budget bounds the constant-time column MSM's plan, never
+//! its sums: a small budget commits exactly what the default one does, and a
+//! budget below the single-base plan or a cancelled token is an error, never
+//! an identity or partial sum. Private commitments build no fixed-base table,
+//! so there is no table allowance or cache to account for.
 use super::*;
 
 fn check<C: PastaCurve>() {
     let n = 64;
     let gens = Gens::<C>::new(n);
-    let budget = MemoryBudget::new(32 << 10);
-    let refused = gens
-        .table_with_budget(n, table_window::<C>(), budget)
-        .unwrap_err();
-    assert!(refused.required > budget.bytes());
-    assert_eq!(refused.budget, budget.bytes());
-    assert!(gens.tables.lock().unwrap().is_empty());
-
+    let small = MemoryBudget::new(32 << 10);
     let mut rng = SpikeRng::new(b"bounded commitment table refusal");
     let bounds = [0usize, 1, 11, 88, 255];
     let rows: Vec<Vec<F<C>>> = bounds
@@ -31,21 +28,11 @@ fn check<C: PastaCurve>() {
         .zip(bounds)
         .map(|(row, bits)| BoundedSecretScalars::new(row, bits, None).unwrap())
         .collect();
-    let bounded = column_sums_with_budget(&gens, n, &columns, true, budget, None).unwrap();
-    assert!(
-        gens.tables.lock().unwrap().is_empty(),
-        "refused tables are not cached"
-    );
-    let variable = column_sums_with_budget(&gens, n, &columns, false, budget, None).unwrap();
-    let table =
-        column_sums_with_budget(&gens, n, &columns, true, MemoryBudget::DEFAULT, None).unwrap();
-    assert!(
-        !gens.tables.lock().unwrap().is_empty(),
-        "reference actually uses a table"
-    );
-    for ((actual, variable), (table, scalars)) in
-        bounded.iter().zip(variable).zip(table.iter().zip(&rows))
-    {
+    let bounded = column_sums_with_budget(&gens, n, &columns, small, None).unwrap();
+    let default =
+        column_sums_with_budget(&gens, n, &columns, MemoryBudget::DEFAULT, None).unwrap();
+    assert_eq!(bounded, default, "the budget changes the plan only");
+    for (actual, scalars) in bounded.iter().zip(&rows) {
         let reference = scalars
             .iter()
             .zip(&gens.g)
@@ -53,84 +40,21 @@ fn check<C: PastaCurve>() {
                 sum + C::from(*base) * scalar
             });
         assert_eq!(*actual, reference);
-        assert_eq!(variable, reference);
-        assert_eq!(*table, reference);
     }
-    // A cached table must not bypass a later smaller budget.
-    assert!(
-        gens.table_with_budget(n, table_window::<C>(), budget)
-            .is_err()
-    );
-    assert_eq!(
-        column_sums_with_budget(&gens, n, &columns, true, budget, None).unwrap(),
-        bounded
-    );
     assert!(matches!(
-        column_sums_with_budget(&gens, n, &columns, true, MemoryBudget::new(0), None),
+        column_sums_with_budget(&gens, n, &columns, MemoryBudget::new(0), None),
         Err(MsmError::Budget(_))
     ));
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     assert!(matches!(
-        column_sums_with_budget(&gens, n, &columns, true, budget, Some(&cancellation)),
+        column_sums_with_budget(&gens, n, &columns, small, Some(&cancellation)),
         Err(MsmError::Cancelled)
     ));
 }
 
 #[test]
-fn oversized_table_uses_bounded_secret_commitments_on_both_curves() {
+fn small_budget_bounded_secret_commitments_on_both_curves() {
     check::<iroha_pasta::Ep>();
     check::<iroha_pasta::Eq>();
-}
-
-fn cache_accounting<C: PastaCurve>() {
-    let shape = Shape {
-        label: "cold commitment cache",
-        sx: 8,
-        row_bits: 2,
-        col_bits: 10,
-        k: 2,
-    };
-    shape.check();
-    let gens = Gens::<C>::new(shape.cols());
-    let row_bytes = gens.commitment_cache_bytes(&shape, false);
-    let all_bytes = gens.commitment_cache_bytes(&shape, true);
-    assert!(all_bytes > row_bytes && row_bytes > 0);
-    assert!(gens.tables.lock().unwrap().is_empty());
-    assert!(gens.round_tables.lock().unwrap().is_empty());
-    let (table, _) = gens
-        .table(shape.active_cols(), table_window::<C>())
-        .unwrap();
-    assert_eq!(row_bytes, (table.table_bytes() + table.len()) as u64);
-    assert_eq!(gens.commitment_cache_bytes(&shape, false), 0);
-    assert_eq!(
-        gens.commitment_cache_bytes(&shape, true),
-        all_bytes - row_bytes
-    );
-    warm_table(&gens, &shape);
-    assert_eq!(gens.commitment_cache_bytes(&shape, true), 0);
-    let actual = gens
-        .tables
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(_, _, t)| (t.table_bytes() + t.len()) as u64)
-        .sum::<u64>()
-        + gens
-            .round_tables
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(_, _, t)| (t.table_bytes() + t.len()) as u64)
-            .sum::<u64>();
-    assert_eq!(
-        all_bytes, actual,
-        "exact newly retained canonical table storage"
-    );
-}
-
-#[test]
-fn cold_commitment_cache_accounting_matches_both_curve_allocations() {
-    cache_accounting::<iroha_pasta::Ep>();
-    cache_accounting::<iroha_pasta::Eq>();
 }

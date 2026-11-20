@@ -788,18 +788,20 @@ where
         Ok(Some((phases[&id], [client, accepted, selection])))
     }
 
-    /// Check an intent's exact retained phase and originals for inventory only. For a foreign
-    /// intent, verify the permit under the retained Client's scheme and certificate; this does
-    /// not select an old trusted runtime or grant authority to reconcile, sign or replace
-    /// custody. Selected-slot APIs still require this provider's scheme.
+    /// Check the intent against the retained phase and originals. Inventory authenticates
+    /// foreign permits under the retained Client's scheme. Account admission also requires
+    /// the signed Fresh permit to name the installed scheme and exact producer manifest.
+    /// Both checks are read-only.
     ///
     /// # Errors
     /// Missing, malformed, changed or inconsistent Phase/Slot/Client/Accepted/intent records,
-    /// an invalid retained permit signature, or any unavailable storage read.
-    pub(super) fn require_enrollment_search_intent(
+    /// an invalid retained permit signature, an unselected installed manifest, or any
+    /// unavailable storage read.
+    pub(crate) fn require_enrollment_intent_originals(
         &self,
         slot: &KagemushaWalletSlotIdV1,
         intent: &KagemushaWalletIntentV1,
+        installed_manifest: Option<&[u8; 32]>,
     ) -> Result<(), KagemushaWalletProviderErrorV1> {
         use crate::kagemusha_wallet_enrollment_v1::PreKeyDispatchV1;
         use iroha_data_model::kagemusha::{
@@ -814,7 +816,7 @@ where
         {
             return Err(corrupt());
         }
-        if intent.challenge.scheme_id != self.scheme_id {
+        if intent.challenge.scheme_id != self.scheme_id || installed_manifest.is_some() {
             let dispatch = PreKeyDispatchV1::decode(&client).map_err(|_| corrupt())?;
             let permit = KagemushaEnrollmentPermitV1::decode_canonical(
                 &accepted,
@@ -840,6 +842,14 @@ where
                 || permit.body.expires_at_ms != intent.dates.expires_at_ms
             {
                 return Err(corrupt());
+            }
+            if let Some(manifest) = installed_manifest
+                && (dispatch.scheme.scheme_id() != self.scheme_id
+                    || permit.body.manifest_digest != *manifest)
+            {
+                return Err(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "enrolled producer manifest",
+                });
             }
         }
         // Storage availability and unchanged originals bracket this read-only classification.

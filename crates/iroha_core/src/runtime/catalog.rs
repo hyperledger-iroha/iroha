@@ -29,6 +29,7 @@ pub(crate) mod additions;
 mod contract_lifecycle;
 mod deferred_consent;
 pub(crate) mod ivm_c10;
+mod kagemusha_spartan;
 mod kernel_lifecycle;
 pub mod migrations;
 mod native_amx_capture;
@@ -147,6 +148,8 @@ pub struct ReleaseCatalog {
     migrations: BTreeMap<DefinitionId, MigrationAddition>,
     /// Exact compiled predecessor implementations and their restricted-read successors.
     pub(super) restricted_read_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
+    /// Reviewed predecessor ledger owner to its unique compiled Spartan composition.
+    pub(crate) spartan_predecessors: BTreeMap<DefinitionId, DefinitionId>,
     /// The kernel lifecycle addition composed over each compiled predecessor family, by the
     /// family's services profile (`kernel_lifecycle`).
     pub(super) runtime_lifecycle_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
@@ -585,6 +588,7 @@ impl ReleaseCatalog {
             cell_installers: BTreeMap::new(),
             migrations: BTreeMap::new(),
             restricted_read_compositions: BTreeMap::new(),
+            spartan_predecessors: BTreeMap::new(),
             runtime_lifecycle_compositions: BTreeMap::new(),
             deferred_consent_compositions: BTreeMap::new(),
             contract_lifecycle_compositions: BTreeMap::new(),
@@ -788,6 +792,7 @@ impl ReleaseCatalog {
                 || addition.module == additions::NATIVE_GAME_CAPTURE.module
                 || addition.module == additions::RUNTIME_RETIREMENT.module
                 || addition.module == additions::IVM_C10.module
+                || addition.module == additions::KAGEMUSHA_SPARTAN.module
                 || addition.module == additions::CONTRACT_LIFECYCLE.module;
             let (storage_dependencies, interface_dependencies) = if addition.module
                 == additions::NATIVE_GAME_CAPTURE.module
@@ -894,6 +899,7 @@ impl ReleaseCatalog {
         catalog.compile_contract_lifecycle()?;
         catalog.compile_retirement()?;
         catalog.compile_ivm_c10()?;
+        catalog.compile_kagemusha_spartan()?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -1392,7 +1398,10 @@ impl ReleaseCatalog {
             .iter()
             .find(|addition| addition.module == module)
             .ok_or_else(|| fail("not an addition of this release".to_owned()))?;
-        let addition = if module == additions::RESTRICTED_DATASPACE_READ.module {
+        let addition = if module == additions::KAGEMUSHA_SPARTAN.module {
+            selected_addition = self.spartan_for_selection(addition, current)?;
+            &selected_addition
+        } else if module == additions::RESTRICTED_DATASPACE_READ.module {
             selected_addition = super::restricted_dataspace_read::for_selection(self, current)?;
             &selected_addition
         } else if module == additions::RUNTIME_LIFECYCLE.module {
@@ -1456,9 +1465,20 @@ impl ReleaseCatalog {
             .bindings
             .sort_by(|left, right| left.wire_id.cmp(&right.wire_id));
 
-        if module == additions::RESTRICTED_DATASPACE_READ.module
-            && let Some(restriction) =
-                super::restricted_dataspace_read::inherited_restriction(current, effective_height)?
+        let predecessor_wire = if module == additions::RESTRICTED_DATASPACE_READ.module {
+            Some("iroha.grant")
+        } else if module == additions::KAGEMUSHA_SPARTAN.module {
+            Some(iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID)
+        } else {
+            None
+        };
+        if let Some(wire) = predecessor_wire
+            && let Some(restriction) = super::restricted_dataspace_read::inherited_restriction(
+                current,
+                effective_height,
+                wire,
+                module,
+            )?
         {
             transitions.push(SelectionTransitionV1::Restrict {
                 definition: addition.implementation,

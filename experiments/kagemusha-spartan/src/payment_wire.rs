@@ -11,6 +11,7 @@
 //! original fields and all 128 ordinary proof inputs are reconstructed exactly;
 //! encoding refuses discrepancies instead of normalizing signed originals.
 
+use crate::carrier::payment_words;
 use blake2::{Blake2b, Digest, digest::consts::U32};
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp, Fq, poseidon};
@@ -29,10 +30,11 @@ use crate::{
 };
 
 pub const PEER_PROFILE: u16 = 0x8001;
-pub const PEER_SCHEMA: u16 = 2;
+pub const PEER_SCHEMA: u16 = 3;
 pub const QR_BUDGET: usize = 12_000;
 pub const HEADER_BYTES: usize = 84;
-const MAX_BYTES: usize = 65_536;
+const MAX_BYTES: usize = 12_182;
+const MAX_ENVELOPE_BYTES: usize = 10_034;
 const REQUEST_BYTES: usize = 304;
 const RECEIPT_BYTES: usize = 128;
 const CREDENTIAL_BYTES: usize = 530;
@@ -41,6 +43,65 @@ const CERTIFICATE_BYTES: usize = 137;
 // reconstructed from the authenticated profile and the carried originals.
 const STATEMENT_FIELDS: [usize; 15] = [8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 24, 25];
 const STATEMENT_BYTES: usize = STATEMENT_FIELDS.len() * 32;
+const STATEMENT_WIDTHS: [usize; 15] = [1, 16, 16, 1, 16, 32, 32, 32, 16, 16, 16, 16, 16, 8, 8];
+
+fn statement_positions() -> payment_words::Positions {
+    STATEMENT_WIDTHS
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, width)| {
+            (width < 32).then_some((32 * i, payment_words::Encoding::Low(width)))
+        })
+        .collect()
+}
+fn statement_min_bytes() -> usize {
+    statement_positions().len().div_ceil(8) + STATEMENT_WIDTHS.iter().sum::<usize>()
+}
+
+/// Check the genuine Send transport before an installed wallet can prepare a debit.
+/// The Send relation bounds all statement integers and generator limbs. The fold
+/// transcript supplies two short endoscalar coefficients for every challenge.
+pub(crate) fn admit_send_profile(pair: &TrustedProfile) -> Result<Sizes, String> {
+    let (total, positions) = pair.payment_generator_words()?;
+    let pair_bytes = payment_words::all_short_size(total, &positions)?;
+    genuine_sizes(pair_bytes)
+}
+
+fn genuine_sizes(pair: usize) -> Result<Sizes, String> {
+    if pair > MAX_ENVELOPE_BYTES {
+        return Err("installed Send exceeds Payment envelope limit".into());
+    }
+    // Use the actual fixed-layout Norito and IPM1 serializers. Only the vector
+    // lengths affect sizing. This also counts the header and companion exactly.
+    let envelope = encode_norito(&Envelope {
+        version: 2,
+        statement: vec![0; statement_min_bytes()],
+        request: vec![0; REQUEST_BYTES],
+        receipt: vec![0; RECEIPT_BYTES],
+        policy_epoch: u64::MAX,
+        pending_root: vec![0; 32],
+        credit_root: vec![0; 32],
+        pair: vec![0; pair],
+    })?;
+    let companion = encode_norito(&Companion {
+        version: 1,
+        credential: vec![0; CREDENTIAL_BYTES],
+        certificate: vec![0; CERTIFICATE_BYTES],
+    })?;
+    let peer = peer_encode(&envelope, &companion)?;
+    Ok(Sizes {
+        peer: peer.len(),
+        envelope: envelope.len(),
+        companion: companion.len(),
+        pair,
+    })
+}
+
+fn compact_pair(profile: &TrustedProfile, pair: &[u8]) -> Result<Vec<u8>, String> {
+    carrier::frame_projected_pair(profile, pair)?;
+    let (_, positions) = profile.payment_generator_words()?;
+    payment_words::pack(pair, &positions)
+}
 const COMPANION_LIMIT: usize = 2048;
 const PAYLOAD_DOMAIN: &[u8] = b"IROHA-PEER-PAYLOAD-V1\0";
 const MESSAGE_DOMAIN: &[u8] = b"IROHA-PEER-MESSAGE-V1\0";
@@ -66,7 +127,7 @@ const REQUEST_RANGES: [(usize, usize); 9] = [
     norito::NoritoDeserialize,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.payment.CompleteSend.v1")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.payment.CompleteSend.v2")]
 struct Envelope {
     version: u16,
     statement: Vec<u8>,
@@ -128,7 +189,8 @@ pub struct Decoded {
 
 /// Canonical, bounded transport with exact original proof bytes. Proof-word
 /// parsing and proof acceptance belong to the total recursive relation. A
-/// same-profile malformed point/scalar remains available for a derived Burn.
+/// same-profile malformed point/scalar inside the admitted envelope remains
+/// available for a derived Burn. Oversized transports are refused before custody.
 pub struct Candidate {
     pub originals: Originals,
     pub projection: ProjectedInputs,
@@ -165,7 +227,7 @@ fn identity(values: &[Fp]) -> Result<[u8; 32], String> {
     out[16..].copy_from_slice(&short(values[1], 16)?);
     Ok(out)
 }
-fn limbs(bytes: &[u8]) -> [Fp; 2] {
+pub(super) fn limbs(bytes: &[u8]) -> [Fp; 2] {
     [fp(&bytes[..16]), fp(&bytes[16..])]
 }
 
@@ -187,14 +249,16 @@ fn limits(max: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(max, max, 4 * max, 8 * max, 16)
 }
 fn read_envelope(bytes: &[u8]) -> Result<Envelope, String> {
-    norito_flags(bytes, MAX_BYTES)?;
-    let value: Envelope = norito::decode_from_bytes_with_limits(bytes, limits(MAX_BYTES))
+    norito_flags(bytes, MAX_ENVELOPE_BYTES)?;
+    let value: Envelope = norito::decode_from_bytes_with_limits(bytes, limits(MAX_ENVELOPE_BYTES))
         .map_err(|e| format!("Payment Norito: {e}"))?;
     if encode_norito(&value)? != bytes {
         return Err("noncanonical Payment envelope".into());
     }
-    if value.version != 1
-        || value.statement.len() != STATEMENT_BYTES
+    let bitmap = statement_positions().len().div_ceil(8);
+    let statement_min = statement_min_bytes();
+    if value.version != 2
+        || !(statement_min..=bitmap + STATEMENT_BYTES).contains(&value.statement.len())
         || value.request.len() != REQUEST_BYTES
         || value.receipt.len() != RECEIPT_BYTES
         || value.pending_root.len() != 32
@@ -328,9 +392,7 @@ fn statement_restore(
     compact: &[u8],
     request: &[u8],
 ) -> Result<([Fp; 26], CompletedRequest), String> {
-    if compact.len() != STATEMENT_BYTES {
-        return Err("compact statement length".into());
-    }
+    let compact = payment_words::unpack(compact, STATEMENT_BYTES, &statement_positions())?;
     let mut s = [Fp::ZERO; 26];
     s[0] = Fp::ONE;
     s[1..3].copy_from_slice(&limbs(&profile.relation));
@@ -420,6 +482,7 @@ fn compact(
         .iter()
         .flat_map(|i| o.statement[*i].to_repr())
         .collect();
+    let statement = payment_words::pack(&statement, &statement_positions())?;
     let (restored_statement, restored) =
         statement_restore(profile, &o.payer, &statement, &request)?;
     if restored_statement != o.statement {
@@ -435,7 +498,7 @@ fn compact(
         return Err("receipt original differs from compact reconstruction".into());
     }
     let envelope = Envelope {
-        version: 1,
+        version: 2,
         statement,
         request,
         receipt,
@@ -454,52 +517,94 @@ fn hash(parts: &[&[u8]]) -> [u8; 32] {
     }
     h.finalize().into()
 }
-fn peer_encode(envelope: &[u8], companion: &[u8]) -> Result<Vec<u8>, String> {
-    if envelope.is_empty()
-        || companion.is_empty()
-        || companion.len() > COMPANION_LIMIT
-        || envelope
-            .len()
-            .saturating_add(companion.len())
-            .saturating_add(100)
-            > MAX_BYTES
-    {
-        return Err("peer payload resource limit".into());
+#[derive(Copy, Clone)]
+pub(super) enum PeerOriginals {
+    Payment,
+    OpenRequest,
+}
+impl PeerOriginals {
+    fn fields(self) -> (u8, &'static [u8; 8], usize, usize) {
+        match self {
+            Self::Payment => (3, PAYMENT_MAGIC, MAX_ENVELOPE_BYTES, COMPANION_LIMIT),
+            Self::OpenRequest => (2, b"KWRQAC1\0", 1677, 4096),
+        }
     }
-    let mut payload = Vec::new();
-    payload.extend_from_slice(PAYMENT_MAGIC);
-    payload.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
-    payload.extend_from_slice(&(companion.len() as u32).to_be_bytes());
-    payload.extend_from_slice(envelope);
-    payload.extend_from_slice(companion);
+    pub(super) fn encode(self, envelope: &[u8], companion: &[u8]) -> Result<Vec<u8>, String> {
+        let (kind, magic, envelope_max, companion_max) = self.fields();
+        if envelope.is_empty()
+            || envelope.len() > envelope_max
+            || companion.is_empty()
+            || companion.len() > companion_max
+            || envelope
+                .len()
+                .saturating_add(companion.len())
+                .saturating_add(100)
+                > MAX_BYTES
+        {
+            return Err("peer payload resource limit".into());
+        }
+        let mut payload = Vec::new();
+        payload.extend_from_slice(magic);
+        payload.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&(companion.len() as u32).to_be_bytes());
+        payload.extend_from_slice(envelope);
+        payload.extend_from_slice(companion);
+        Ok(encode_peer_payload(kind, &payload))
+    }
+    pub(super) fn decode(self, bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
+        let (kind, magic, envelope_max, companion_max) = self.fields();
+        if bytes.len() < HEADER_BYTES + 16
+            || bytes.len() > HEADER_BYTES + 16 + envelope_max + companion_max
+        {
+            return Err("peer message length".into());
+        }
+        let payload = decode_peer_payload(kind, bytes, 16 + envelope_max + companion_max)?;
+        if &payload[..8] != magic {
+            return Err("peer companion wrapper magic".into());
+        }
+        let elen = u32::from_be_bytes(payload[8..12].try_into().unwrap()) as usize;
+        let clen = u32::from_be_bytes(payload[12..16].try_into().unwrap()) as usize;
+        if elen == 0
+            || elen > envelope_max
+            || clen == 0
+            || clen > companion_max
+            || elen.checked_add(clen).and_then(|n| n.checked_add(16)) != Some(payload.len())
+        {
+            return Err("peer companion wrapper lengths".into());
+        }
+        Ok((&payload[16..16 + elen], &payload[16 + elen..]))
+    }
+}
+/// IPM1 framing shared by signed Request, proven Payment and credit-membership evidence.
+pub(super) fn encode_peer_payload(kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut prefix = Vec::new();
     prefix.extend_from_slice(b"IPM1");
     prefix.extend_from_slice(&[1, 0]);
     prefix.extend_from_slice(&PEER_PROFILE.to_be_bytes());
-    prefix.extend_from_slice(&[3, 0]);
+    prefix.extend_from_slice(&[kind, 0]);
     prefix.extend_from_slice(&PEER_SCHEMA.to_be_bytes());
     prefix.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     prefix.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     prefix.extend_from_slice(&hash(&[
         PAYLOAD_DOMAIN,
         &PEER_PROFILE.to_be_bytes(),
-        &[3],
+        &[kind],
         &PEER_SCHEMA.to_be_bytes(),
-        &payload,
+        payload,
     ]));
-    let wire_hash = hash(&[MESSAGE_DOMAIN, &prefix, &payload]);
+    let wire_hash = hash(&[MESSAGE_DOMAIN, &prefix, payload]);
     prefix.extend_from_slice(&wire_hash);
-    prefix.extend_from_slice(&payload);
-    Ok(prefix)
+    prefix.extend_from_slice(payload);
+    prefix
 }
-fn peer_decode(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
-    if bytes.len() < HEADER_BYTES + 16 || bytes.len() > MAX_BYTES {
+pub(super) fn decode_peer_payload(kind: u8, bytes: &[u8], maximum: usize) -> Result<&[u8], String> {
+    if bytes.len() <= HEADER_BYTES || bytes.len() > HEADER_BYTES + maximum {
         return Err("peer message length".into());
     }
     if &bytes[..4] != b"IPM1"
         || bytes[4..6] != [1, 0]
         || bytes[6..8] != PEER_PROFILE.to_be_bytes()
-        || bytes[8..10] != [3, 0]
+        || bytes[8..10] != [kind, 0]
         || bytes[10..12] != PEER_SCHEMA.to_be_bytes()
     {
         return Err("future IPM1 profile/schema/header required".into());
@@ -514,7 +619,7 @@ fn peer_decode(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
         != hash(&[
             PAYLOAD_DOMAIN,
             &PEER_PROFILE.to_be_bytes(),
-            &[3],
+            &[kind],
             &PEER_SCHEMA.to_be_bytes(),
             payload,
         ])
@@ -522,19 +627,13 @@ fn peer_decode(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
     {
         return Err("peer payload/message hash mismatch".into());
     }
-    if &payload[..8] != PAYMENT_MAGIC {
-        return Err("Payment companion wrapper magic".into());
-    }
-    let elen = u32::from_be_bytes(payload[8..12].try_into().unwrap()) as usize;
-    let clen = u32::from_be_bytes(payload[12..16].try_into().unwrap()) as usize;
-    if elen == 0
-        || clen == 0
-        || clen > COMPANION_LIMIT
-        || elen.checked_add(clen).and_then(|n| n.checked_add(16)) != Some(payload.len())
-    {
-        return Err("Payment companion wrapper lengths".into());
-    }
-    Ok((&payload[16..16 + elen], &payload[16 + elen..]))
+    Ok(payload)
+}
+fn peer_encode(envelope: &[u8], companion: &[u8]) -> Result<Vec<u8>, String> {
+    PeerOriginals::Payment.encode(envelope, companion)
+}
+fn peer_decode(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
+    PeerOriginals::Payment.decode(bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -549,7 +648,7 @@ pub fn encode(
 ) -> Result<Vec<u8>, String> {
     let projection = projection(profile, originals)?;
     let pair = carrier::encode_projected_pair(profile.pair, ip, is, pp, ps, r, &projection)?;
-    let (envelope, companion) = compact(profile, originals, pair)?;
+    let (envelope, companion) = compact(profile, originals, compact_pair(profile.pair, &pair)?)?;
     peer_encode(&encode_norito(&envelope)?, &encode_norito(&companion)?)
 }
 
@@ -572,6 +671,15 @@ pub fn decode(profile: &Profile<'_>, bytes: &[u8]) -> Result<Decoded, String> {
     })
 }
 
+/// The account named by the canonical Payment companion and restored signed Request.
+pub(crate) fn payer_policy_accounts(profile: &Profile<'_>, bytes: &[u8]) -> Result<[[u8;32];2],String> {
+    let (envelope, companion) = peer_decode(bytes)?;
+    let envelope = read_envelope(envelope)?;
+    let (payer, _) = companion_restore(profile, &read_companion(companion)?)?;
+    let (_, request) = statement_restore(profile, &payer, &envelope.statement, &envelope.request)?;
+    Ok([request.body[98..130].try_into().expect("fixed Request account"),payer.body[98..130].try_into().expect("fixed payer account")])
+}
+
 pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate, String> {
     let (ebytes, cbytes) = peer_decode(bytes)?;
     let envelope = read_envelope(ebytes)?;
@@ -590,13 +698,15 @@ pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate
         credit_root: field(&envelope.credit_root)?,
     };
     let projection = projection(profile, &originals)?;
-    carrier::frame_projected_pair(profile.pair, &envelope.pair)?;
+    let (total, positions) = profile.pair.payment_generator_words()?;
+    let pair_bytes = payment_words::unpack(&envelope.pair, total, &positions)?;
+    carrier::frame_projected_pair(profile.pair, &pair_bytes)?;
     let digests = payment::digests(
         &originals.request,
         &originals.payer,
         &originals.statement,
         &originals.receipt,
-        &envelope.pair,
+        &pair_bytes,
     )
     .map_err(str::to_string)?;
     let size = Sizes {
@@ -608,7 +718,7 @@ pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate
     Ok(Candidate {
         originals,
         projection,
-        pair_bytes: envelope.pair,
+        pair_bytes,
         digests,
         size,
     })
@@ -636,8 +746,16 @@ pub(crate) fn test_reframe_originals(
 ) -> Result<Vec<u8>, String> {
     let _ = projection(profile, originals)?;
     carrier::frame_projected_pair(profile.pair, &pair)?;
-    let (envelope, companion) = compact(profile, originals, pair)?;
+    let (envelope, companion) = compact(profile, originals, compact_pair(profile.pair, &pair)?)?;
     peer_encode(&encode_norito(&envelope)?, &encode_norito(&companion)?)
+}
+
+#[cfg(test)]
+#[path = "payment_transport_fixture_tests.rs"]
+mod transport_fixture;
+#[cfg(test)]
+pub(crate) fn check_historical_payment_transport(profile: &Profile<'_>, old: &[u8]) {
+    transport_fixture::check(profile, old);
 }
 
 #[cfg(test)]
@@ -649,6 +767,23 @@ mod tests {
         r1cs::{self, Shape, ToyCircuit},
         verifier,
     };
+
+    #[test]
+    fn installed_send_must_fit_all_wire_limits_before_debit() {
+        // The fixed framing is shared with the real encoder; derive the exact
+        // last admitted pair for this schema, then exercise its next byte.
+        let overhead = genuine_sizes(1).unwrap().envelope - 1;
+        let last = MAX_ENVELOPE_BYTES - overhead;
+        let sizes = genuine_sizes(last).unwrap();
+        assert_eq!(sizes.envelope, MAX_ENVELOPE_BYTES);
+        assert_eq!(
+            sizes.peer,
+            sizes.envelope + sizes.companion + HEADER_BYTES + 16
+        );
+        assert!(sizes.peer <= MAX_BYTES && sizes.companion <= COMPANION_LIMIT);
+        assert!(genuine_sizes(last + 1).is_err());
+        assert!(genuine_sizes(usize::MAX).is_err());
+    }
 
     struct Harness {
         trusted: TrustedProfile,
@@ -889,7 +1024,7 @@ mod tests {
             HEADER_BYTES + 16 + restored.size.envelope + restored.size.companion
         );
         println!(
-            "complete Payment codec with actual toy linked proofs: {} B IPM1 =84 header+16 wrapper+{} Norito envelope+{} Norito credential/certificate companion; pair{} B; compact originals480+304+128+72+530+137 (eleven statement fields and101 companion bytes reconstructed exactly); fixed-point monetary proof size still requires integrated backend measurement",
+            "complete Payment codec with actual toy linked proofs: {} B IPM1 =84 header+16 wrapper+{} Norito envelope+{} Norito credential/certificate companion; pair{} B; compact originals244+304+128+72+530+137 (eleven statement fields and101 companion bytes reconstructed exactly); fixed-point monetary proof size still requires integrated backend measurement",
             restored.size.peer, restored.size.envelope, restored.size.companion, restored.size.pair
         );
         // These are small genuine linked proofs for codec/verification coverage,
@@ -933,7 +1068,7 @@ mod tests {
                 c.credential.len(),
                 c.certificate.len()
             ),
-            (480, 304, 128, 530, 137)
+            (244, 304, 128, 530, 137)
         );
         assert_eq!(encode_norito(&c).unwrap().len(), 749);
         let (payer, certificate) = companion_restore(&h.profile(), &c).unwrap();
@@ -1026,7 +1161,7 @@ mod tests {
     fn peer_hashes_match_independent_golden_and_reject_every_corruption() {
         // Python hashlib.blake2b(digest_size=32), same domains/header ordering
         // as IrohaSwift and Kotlin IrohaPeerWireV1. No SDK schema1 fallback.
-        let golden = "49504d3101008001030000020000001c0000001c181d6516c6519c9368c5c09d2886180cb041d9b7646d0b4e9c3737d5eb35a28ce4c5707e53f361f526149b37ae030fe2418cc9ad4fb2150fbdb20de6768d97704b575059504331000000000300000009656e76636f6d70616e696f6e";
+        let golden = "49504d3101008001030000030000001c0000001cf83aa04c53de28fe0dc2f08b7bde07f0c91bc10e06eafb5a2659a6a88d4fa5f5d2e9b15458e1fffb6df98f1955617a6865376ee955ecabc03f61c64dc5f8dc684b575059504331000000000300000009656e76636f6d70616e696f6e";
         let bytes = peer_encode(b"env", b"companion").unwrap();
         let expected: Vec<_> = golden
             .as_bytes()
@@ -1051,6 +1186,27 @@ mod tests {
         assert!(peer_decode(&trailing).is_err());
         assert!(peer_decode(&vec![0; MAX_BYTES + 1]).is_err());
         assert!(peer_encode(&vec![1; MAX_BYTES], b"x").is_err());
+        let max = peer_encode(&vec![7; MAX_ENVELOPE_BYTES], &vec![8; COMPANION_LIMIT]).unwrap();
+        assert_eq!(max.len(), MAX_BYTES);
+        assert!(peer_decode(&max).is_ok());
+        assert!(peer_encode(&vec![7; MAX_ENVELOPE_BYTES + 1], b"x").is_err());
+        // Correct IPM1 hashes with one byte moved from companion to envelope.
+        let mut over = max;
+        over[HEADER_BYTES + 8..HEADER_BYTES + 12]
+            .copy_from_slice(&((MAX_ENVELOPE_BYTES + 1) as u32).to_be_bytes());
+        over[HEADER_BYTES + 12..HEADER_BYTES + 16]
+            .copy_from_slice(&((COMPANION_LIMIT - 1) as u32).to_be_bytes());
+        let digest = hash(&[
+            PAYLOAD_DOMAIN,
+            &PEER_PROFILE.to_be_bytes(),
+            &[3],
+            &PEER_SCHEMA.to_be_bytes(),
+            &over[HEADER_BYTES..],
+        ]);
+        over[20..52].copy_from_slice(&digest);
+        let digest = hash(&[MESSAGE_DOMAIN, &over[..52], &over[HEADER_BYTES..]]);
+        over[52..84].copy_from_slice(&digest);
+        assert!(peer_decode(&over).is_err());
         assert!(peer_encode(b"x", &vec![1; COMPANION_LIMIT + 1]).is_err());
     }
 
@@ -1065,7 +1221,7 @@ mod tests {
         for which in 0..8 {
             let mut e = e.clone();
             match which {
-                0 => e.version = 2,
+                0 => e.version = 1,
                 1 => {
                     e.statement.pop();
                 }
@@ -1087,7 +1243,7 @@ mod tests {
             let encoded = encode_norito(&e).unwrap();
             let result = read_envelope(&encoded);
             if which < 7 {
-                assert!(result.is_err());
+                assert!(result.is_err(), "accepted corrupt envelope field {which}");
             } else {
                 let peer = peer_encode(&encoded, &cb).unwrap();
                 assert!(decode(&h.profile(), &peer).is_err());

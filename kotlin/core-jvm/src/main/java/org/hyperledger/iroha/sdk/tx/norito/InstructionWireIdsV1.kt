@@ -284,6 +284,7 @@ internal object InstructionWireIdsV1 {
         "iroha.instruction.v1::zk::SubmitBallot",
         "iroha.instruction.v1::zk::VerifyProof",
         "iroha.invalid_instruction",
+        "iroha.kagemusha.spartan.unload.v1",
         "iroha.kagemusha.wallet.ledger.v1",
         "iroha.log",
         "iroha.mint",

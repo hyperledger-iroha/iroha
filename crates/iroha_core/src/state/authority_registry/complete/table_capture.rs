@@ -302,6 +302,11 @@ capture_world_table_once!(
     "world.c10_triggers"
 );
 capture_world_table_once!(
+    capture_kagemusha_spartan_programs_once,
+    kagemusha_spartan_programs,
+    "world.kagemusha_spartan_programs"
+);
+capture_world_table_once!(
     capture_runtime_retirements_once,
     runtime_retirements,
     "world.runtime_retirements"
@@ -978,6 +983,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_c10_contract_manifests_once::MATERIALIZER,
     capture_c10_contract_profiles_once::MATERIALIZER,
     capture_c10_triggers_once::MATERIALIZER,
+    capture_kagemusha_spartan_programs_once::MATERIALIZER,
     capture_runtime_retirements_once::MATERIALIZER,
     capture_runtime_escrow_captures_once::MATERIALIZER,
     capture_runtime_migrations_once::MATERIALIZER,
@@ -1452,6 +1458,7 @@ mod tests {
             "world.c10_contract_manifests",
             "world.c10_contract_profiles",
             "world.c10_triggers",
+            "world.kagemusha_spartan_programs",
             "world.runtime_retirements",
             "world.runtime_escrow_captures",
             "world.runtime_migrations",

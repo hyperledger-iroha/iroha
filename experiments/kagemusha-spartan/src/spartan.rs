@@ -15,9 +15,10 @@ use std::time::Instant;
 use ff::{Field, PrimeField};
 use group::GroupEncoding;
 use iroha_pasta::msm::{
-    BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public, msm_secret,
-    msm_secret_bounded_cancellable,
+    BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public,
+    msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
 };
+use zeroize::Zeroizing;
 use iroha_pasta::{CancellationToken, PastaCurve};
 use rayon::prelude::*;
 
@@ -646,25 +647,20 @@ fn round_values<S: Field>(
         .reduce(|| vec![S::ZERO; grid], add_into)
 }
 
-/// A round's grid values committed at its slot's base-4 positions.
+/// A round's grid values committed at its slot's base-4 positions, with the
+/// blind on `H`: one constant-time secret MSM over the slot's grid generators
+/// then `H`. The round values and the blind are private, so no digit-bucketed
+/// table MSM.
 fn commit_values<C: PastaCurve>(gens: &Gens<C>, offset: usize, values: &[F<C>], blind: F<C>) -> C {
-    if ipa::old_kernels() {
-        let bases: Vec<Aff<C>> = slot_positions(grid_vars(values.len()))
-            .iter()
-            .map(|p| gens.g[offset + p])
-            .collect();
-        return msm_secret::<C>(values, &bases, MemoryBudget::DEFAULT).expect("msm")
-            + C::from(gens.h) * blind;
-    }
-    // The slot's fixed-base table holds its grid generators and H: one table
-    // MSM gives the same group element.
-    let table = gens.round_table(offset, values.len());
-    let mut scalars = Vec::with_capacity(values.len() + 1);
+    let mut bases: Vec<Aff<C>> = slot_positions(grid_vars(values.len()))
+        .iter()
+        .map(|p| gens.g[offset + p])
+        .collect();
+    bases.push(gens.h);
+    let mut scalars = Zeroizing::new(Vec::with_capacity(values.len() + 1));
     scalars.extend_from_slice(values);
     scalars.push(blind);
-    table
-        .msm_secret(&scalars, MemoryBudget::DEFAULT)
-        .expect("table msm")
+    ipa::secret_msm::<C>(&scalars, &bases)
 }
 
 fn commit_row<C: PastaCurve>(
@@ -675,30 +671,24 @@ fn commit_row<C: PastaCurve>(
     blind: F<C>,
 ) -> C {
     let split = values.len() - shape.row_full_tail(row);
-    let shared = SharedMemoryBudget::process_default();
-    // The width class is a prover-side speedup only; a value outside it (a
-    // cheating prover in the tamper suite) is committed at full width.
-    let mut sum =
-        match BoundedSecretScalars::new(&values[..split], shape.row_bits_class(row), None) {
-            Ok(bounded) => msm_secret_bounded_cancellable::<C>(
-                &bounded,
-                &gens.g[..split],
-                MemoryBudget::DEFAULT,
-                &shared,
-                None,
-            ),
-            Err(_) => msm_secret::<C>(&values[..split], &gens.g[..split], MemoryBudget::DEFAULT),
-        }
-        .expect("msm");
-    if split < values.len() {
-        sum += msm_secret::<C>(
-            &values[split..],
-            &gens.g[split..values.len()],
+    // The public width class bounds the head; the masking tail is full width.
+    // Both go through the constant-time secret MSM (see `bounded_row` for a
+    // head outside its class). The unblinded sum is wiped once blinded.
+    let head = bounded_row::<C>(&values[..split], shape.row_bits_class(row));
+    let mut sum = Zeroizing::new(
+        msm_secret_ct_bounded_cancellable::<C>(
+            &head,
+            &gens.g[..split],
             MemoryBudget::DEFAULT,
+            &SharedMemoryBudget::process_default(),
+            None,
         )
-        .expect("msm");
+        .expect("constant-time row commitment"),
+    );
+    if split < values.len() {
+        *sum += ipa::secret_msm::<C>(&values[split..], &gens.g[split..values.len()]);
     }
-    sum + C::from(gens.h) * blind
+    *sum + C::from(gens.h) * blind
 }
 
 /// Seconds the row commits spent since the prover's last reset: checking each
@@ -706,170 +696,50 @@ fn commit_row<C: PastaCurve>(
 /// affine conversion.
 pub static COMMIT_SPLIT: std::sync::Mutex<[f64; 3]> = std::sync::Mutex::new([0.0; 3]);
 
-/// Commits rows `range` of `w` in lanes (one single-threaded plan per row,
-/// iroha_pasta's bounded columns API), each at its public bit bound.
-/// Table windows (Pixel 6, b04a57 11-09): c14 for P on Vesta, c13 for S on
-/// Pallas. A table that does not fit the hard budget is not constructed.
-pub fn table_window<C: PastaCurve>() -> usize {
-    let p = std::any::type_name::<C>() == std::any::type_name::<iroha_pasta::Eq>();
-    if p { 14 } else { 13 }
-}
+/// The prover's private commitment kernels, for measurement lines. Every
+/// private commitment (witness rows, round values, the opening's L and R)
+/// runs a constant-time secret MSM over public bases; no fixed-base table is
+/// built or read, so a shape has no commitment setup to warm or account.
+pub const COMMIT_KERNELS: &str = "commits: constant-time secret MSMs (bounded columns for rows, full width for rounds and the opening), no fixed-base table";
 
-/// Row commitments first attempt the generators' fixed-base table and use
-/// the bounded secret variable-base MSM when that table does not fit.
-pub fn table_commits() -> bool {
-    true
-}
-
-/// Table build time spent inside commits (first use per shape), seconds.
-pub static TABLE_BUILD: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
-
-/// Builds (or finds) the commitment table for `shape` before timing, and
-/// returns its build time; zero when tables are off.
-pub fn warm_table<C: PastaCurve>(gens: &Gens<C>, shape: &Shape) -> f64 {
-    if !ipa::old_kernels() {
-        // The round slots' tables are per-shape setup too.
-        for slot in slots(shape) {
-            let _ = gens.round_table(slot.offset, pow3(slot.k));
-        }
-    }
-    if !table_commits() {
-        return 0.0;
-    }
-    gens.table(shape.active_cols(), table_window::<C>())
-        .map_or(0.0, |(_, build)| build)
-}
-
-/// `sum_j col[j] G_j` per bounded column, through the fixed-base table or the
-/// variable-base column MSM; both give the exact same group elements.
+/// `sum_j col[j] G_j` per bounded column through the constant-time secret
+/// column MSM: one window plan from the columns' public bounds, tables of
+/// public generator multiples shared by every column, whole-table
+/// constant-time selection, and no digit-indexed bucket or value-based skip.
 pub(crate) fn column_sums<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
     columns: &[BoundedSecretScalars<F<C>>],
-    table: bool,
 ) -> Vec<C> {
-    column_sums_with_budget(gens, active, columns, table, MemoryBudget::DEFAULT, None)
-        .expect("bounded row commitment")
+    column_sums_with_budget(gens, active, columns, MemoryBudget::DEFAULT, None)
+        .expect("constant-time bounded row commitment")
 }
 
+/// [`column_sums`] within an explicit per-kernel `budget`, cancellable.
+///
+/// A budget below the kernel's single-base plan is [`MsmError::Budget`];
+/// shared contention only changes the plan.
 fn column_sums_with_budget<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
     columns: &[BoundedSecretScalars<F<C>>],
-    table: bool,
     budget: MemoryBudget,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<C>, MsmError> {
-    use iroha_pasta::msm::msm_secret_bounded_columns_cancellable;
-    CancellationToken::checkpoint(cancellation)?;
-    let shared = SharedMemoryBudget::process_default();
-    if table {
-        if let Ok((t, build)) = gens.table_with_budget(active, table_window::<C>(), budget) {
-            *TABLE_BUILD.lock().unwrap() += build;
-            return t.msm_secret_bounded_columns_cancellable(
-                columns,
-                budget,
-                &shared,
-                cancellation,
-            );
-        }
-    }
-    // Table refusal depends only on public geometry and budget. Preserve
-    // every scalar's checked public bound and use the canonical secret API,
-    // including its scratch ceiling, clearing and cancellation behavior.
-    msm_secret_bounded_columns_cancellable::<C>(
+    msm_secret_ct_bounded_columns_cancellable::<C>(
         columns,
         &gens.g[..active],
         budget,
-        &shared,
+        &SharedMemoryBudget::process_default(),
         cancellation,
     )
 }
 
-/// `sum_j row[j] G_j` for a row whose nonzero cells take few distinct values,
-/// or `None` when they do not (fewer than three cells per value).
-///
-/// A LogUp helper row holds one value per table entry looked up
-/// (`1 / (alpha - t)`), so thousands of cells share a few thousand values:
-/// the real Receive's helper rows have 15,488 cells and 2,046 to 3,532
-/// values. The generators of each value are summed first (one addition per
-/// cell), then one variable-base MSM runs over the sums with the distinct
-/// values. The result is the same group element as the direct sum, for about
-/// half the work of the table commit (Mac: 28.0 to 14.5 ms for P-recv's five
-/// helper rows).
-///
-/// Grouping depends on which cells are equal, as the bucket method's indices
-/// depend on which digits are equal: it is as variable-time as the MSM. The
-/// spike wipes none of its scratch; a wallet wipes the value index, too.
-pub(crate) fn grouped_row_sum<C: PastaCurve>(gens: &Gens<C>, row: &[F<C>]) -> Option<C> {
-    use std::collections::HashMap;
-    let g_clock = Instant::now();
-    let mut index: HashMap<[u8; 32], u32> = HashMap::new();
-    let mut values: Vec<F<C>> = Vec::new();
-    let mut members: Vec<(u32, u32)> = Vec::new();
-    for (col, value) in row.iter().enumerate() {
-        if bool::from(value.is_zero()) {
-            continue;
-        }
-        let group = *index.entry(value.to_repr()).or_insert_with(|| {
-            values.push(*value);
-            (values.len() - 1) as u32
-        });
-        members.push((group, col as u32));
-    }
-    if std::env::var("ZKS_GROUPED").as_deref() == Ok("stats") {
-        eprintln!(
-            "grouped row: {} nonzero cells, {} distinct values",
-            members.len(),
-            values.len()
-        );
-    }
-    // A value costs about 45 additions in the MSM over the sums and a cell
-    // one, against about 21 per cell in the table commit: grouping pays from
-    // about 2.3 cells per value; 3 leaves a margin.
-    if members.len() < 256 || values.len() * 3 > members.len() {
-        return None;
-    }
-    // Cells by value (a counting sort), then one sum per value.
-    let mut starts = vec![0u32; values.len() + 1];
-    for (group, _) in &members {
-        starts[*group as usize + 1] += 1;
-    }
-    for g in 0..values.len() {
-        starts[g + 1] += starts[g];
-    }
-    let mut next = starts.clone();
-    let mut order = vec![0u32; members.len()];
-    for (group, col) in &members {
-        order[next[*group as usize] as usize] = *col;
-        next[*group as usize] += 1;
-    }
-    crate::prof::add("g.hash", g_clock.elapsed().as_secs_f64());
-    let g_clock = Instant::now();
-    let sums: Vec<C> = (0..values.len())
-        .into_par_iter()
-        .with_min_len(16)
-        .with_max_len(256)
-        .map(|g| {
-            let cells = &order[starts[g] as usize..starts[g + 1] as usize];
-            cells[1..]
-                .iter()
-                .fold(C::from(gens.g[cells[0] as usize]), |acc, col| {
-                    acc + gens.g[*col as usize]
-                })
-        })
-        .collect();
-    let points = iroha_pasta::curve::batch_normalize(&sums);
-    crate::prof::add("g.sums", g_clock.elapsed().as_secs_f64());
-    let g_clock = Instant::now();
-    let sum = msm_secret::<C>(&values, &points, MemoryBudget::DEFAULT).expect("msm");
-    crate::prof::add("g.msm", g_clock.elapsed().as_secs_f64());
-    Some(sum)
-}
-
-/// A row at its public bit bound. The width class is a prover-side speedup: a
-/// row outside its class (a cheating prover in the refusal tests) commits at
-/// full width.
+/// A row at its public bit bound, checked in constant time without a
+/// value-derived width. The bound is a prover-side speedup: a row outside it
+/// (a cheating prover in the refusal tests) commits at full width. That
+/// whole-row validity bit is the only value-derived decision; an honest
+/// witness always passes, so it reveals nothing about an honest row.
 fn bounded_row<'a, C: PastaCurve>(row: &'a [F<C>], bits: usize) -> BoundedSecretScalars<'a, F<C>> {
     BoundedSecretScalars::new(row, bits.clamp(1, 255), None)
         .or_else(|_| BoundedSecretScalars::new(row, 255, None))
@@ -901,19 +771,13 @@ fn commit_row_slices<C: PastaCurve>(
 ) -> Vec<Aff<C>> {
     let active = shape.active_cols();
     let clock = Instant::now();
-    // A row given empty is one the caller never wrote (`kern::Rows`): zero,
-    // its sum the identity. Every other native row follows the bounded
-    // secret-scalar API, including LogUp rows.
-    let grouped: Vec<Option<C>> = range
-        .clone()
-        .map(|r| w[r].is_empty().then(C::identity))
-        .collect();
-    crate::prof::add("c.grouped", clock.elapsed().as_secs_f64());
+    // A row given empty is one the caller never wrote (`kern::Rows`, public
+    // build structure): zero, its sum the identity. Every other row, LogUp
+    // helper rows included, is a constant-time bounded secret column.
     let lanes: Vec<(usize, &[F<C>])> = range
         .clone()
-        .zip(&grouped)
-        .filter(|(_, g)| g.is_none())
-        .map(|(r, _)| (r, &w[r][..active]))
+        .filter(|&r| !w[r].is_empty())
+        .map(|r| (r, &w[r][..active]))
         .collect();
     let old = ipa::old_kernels();
     // The new kernels check the rows' bounds, and blind and normalise the
@@ -931,17 +795,29 @@ fn commit_row_slices<C: PastaCurve>(
             .collect()
     };
     let checked = clock.elapsed().as_secs_f64();
-    let lane_sums = column_sums(gens, active, &columns, table_commits());
-    let mut sums: Vec<C> = grouped.iter().map(|g| g.unwrap_or(C::identity())).collect();
-    for ((r, _), sum) in lanes.iter().zip(lane_sums) {
-        sums[r - range.start] = sum;
-    }
+    // Unblinded sums are private until blinded: wiped on every exit.
+    let lane_sums = Zeroizing::new(column_sums(gens, active, &columns));
+    assert_eq!(lane_sums.len(), lanes.len(), "one sum per committed row");
+    let mut lane_sum = lane_sums.iter();
+    let sums: Zeroizing<Vec<C>> = Zeroizing::new(
+        range
+            .clone()
+            .map(|r| {
+                if w[r].is_empty() {
+                    C::identity()
+                } else {
+                    *lane_sum.next().expect("one sum per committed row")
+                }
+            })
+            .collect(),
+    );
     let summed = clock.elapsed().as_secs_f64();
-    let blinded = |(sum, r): (C, usize)| (sum + C::from(gens.h) * blinds[r]).to_affine();
+    let blinded = |(sum, r): (&C, usize)| (*sum + C::from(gens.h) * blinds[r]).to_affine();
     let out = if old {
-        sums.into_iter().zip(range).map(blinded).collect()
+        sums.iter().zip(range).map(blinded).collect()
     } else {
-        sums.into_par_iter()
+        sums.as_slice()
+            .par_iter()
             .zip(range.into_par_iter())
             .with_max_len(1)
             .map(blinded)
@@ -1112,15 +988,21 @@ pub fn fixed_commitments<C: PastaCurve>(
     if nf == 0 {
         return Vec::new();
     }
-    let active = shape.active_cols();
-    // One row at a time: the fixed tail is never expanded whole.
+    // Only public fixed rows may omit zero suffixes. A padding row is the
+    // first generator itself, including when the other columns are absent.
     (0..nf)
         .map(|k| {
-            let row = circuit.fixed_row(shape, k);
-            assert_eq!(row.len(), shape.cols(), "fixed rows are whole rows");
+            let row = circuit.fixed_commitment_prefix(shape, k);
+            assert!(row.len() <= shape.active_cols());
+            if row.is_empty() {
+                return C::identity().to_affine();
+            }
+            if row.len() == 1 && row[0] == F::<C>::ONE {
+                return gens.g[0];
+            }
             iroha_pasta::msm::msm_public::<C>(
-                &row[..active],
-                &gens.g[..active],
+                &row,
+                &gens.g[..row.len()],
                 MemoryBudget::DEFAULT,
             )
             .expect("msm")
@@ -1352,6 +1234,27 @@ fn gamma_challenge<C: PastaCurve>(t: &mut Transcript<C>, separated: bool) -> F<C
     if separated { gamma } else { F::<C>::ONE }
 }
 
+/// The first phase's row blinds, in row order: one draw per non-fixed row and
+/// zero for the fixed tail. Mask randomization precedes it. This is the first
+/// phase's whole draw from `rng`, whether or not the rows are committed by the
+/// caller, so a proof that reuses its own commitments draws exactly the same.
+fn first_phase_blinds<C: PastaCurve>(
+    shape: &Shape,
+    rng: &mut SpikeRng,
+    circuit: &dyn Circuit<F<C>>,
+) -> Vec<F<C>> {
+    let rows_c = shape.rows() - circuit.fixed_rows(shape);
+    (0..shape.rows())
+        .map(|r| {
+            if r < rows_c {
+                rng.scalar()
+            } else {
+                F::<C>::ZERO
+            }
+        })
+        .collect()
+}
+
 /// Shared first-phase schedule. Mask randomization precedes this function; every
 /// non-fixed row's blind is drawn even when only the first rows are committed.
 fn commit_first_phase<C: PastaCurve>(
@@ -1362,15 +1265,7 @@ fn commit_first_phase<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
 ) -> (Vec<F<C>>, Option<Vec<usize>>, Vec<Aff<C>>) {
     let rows_c = shape.rows() - circuit.fixed_rows(shape);
-    let blinds: Vec<_> = (0..shape.rows())
-        .map(|r| {
-            if r < rows_c {
-                rng.scalar()
-            } else {
-                F::<C>::ZERO
-            }
-        })
-        .collect();
+    let blinds = first_phase_blinds::<C>(shape, rng, circuit);
     let bounds = circuit.row_bounds(shape);
     let p1 = circuit.phase1_rows(shape);
     assert!(p1 <= rows_c, "first-phase rows precede the fixed tail");
@@ -1413,6 +1308,23 @@ pub fn prepare_linked_phase1_built<C: PastaCurve>(
     rng: &mut SpikeRng,
     circuit: &dyn Circuit<F<C>>,
 ) -> [u8; 32] {
+    linked_phase1_rows(shape, gens, inst, wit, fill, rng, circuit).1
+}
+
+/// The first linked proof's first phase over a witness as its build wrote
+/// it: the masked, blinded first-phase row commitments and the digest d they
+/// give. The prover's copies of the mask rows and the row blinds are wiped
+/// before the transcript is touched; the commitments are public (a proof
+/// carries them unchanged).
+fn linked_phase1_rows<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    wit: &Witness<F<C>>,
+    fill: &[r1cs::RowFill],
+    rng: &mut SpikeRng,
+    circuit: &dyn Circuit<F<C>>,
+) -> (Vec<Aff<C>>, [u8; 32]) {
     use zeroize::Zeroize as _;
     shape.check();
     // Only the rows holding product masks are copied (and zeroized).
@@ -1427,7 +1339,128 @@ pub fn prepare_linked_phase1_built<C: PastaCurve>(
         transcript.point(b"row", row);
     }
     let _ = transcript.challenge_full(b"pair/d");
-    transcript.last_word().to_repr()
+    let d = transcript.last_word().to_repr();
+    (rows, d)
+}
+
+/// The first linked proof's first phase, committed once and owned until its
+/// proof is made ([`prepare_linked_phase1_retained`]).
+///
+/// It borrows the generators, instance, witness, row account and circuit it
+/// was prepared over, and keeps its own copy of the entropy stream as the
+/// caller's stood before the preparation drew from it.
+/// [`LinkedPhase1::prove_first`] consumes it and proves over exactly those
+/// borrows and that stream. No argument of either call can pair the retained
+/// commitments with other masks, blinds, rows or generators, and they serve
+/// at most one proof. Only the preparation constructs this value.
+///
+/// Held between the two calls: the first-phase row commitments and the digest
+/// d, which are public, and the stream's reader, which is private and wiped
+/// when this value is consumed, dropped or unwound. The prover's copies of the
+/// mask rows and the row blinds are not held: the preparation wipes them as
+/// [`prepare_linked_phase1_built`] does, and the proof regenerates them from
+/// the stream, in the same order and before any later draw.
+///
+/// Memory: [`LinkedPhase1::retained_bytes`] is one point per first-phase row
+/// and the reader, never a witness row. A caller allocates it before its next
+/// stage's availability query, which therefore already charges it, as it does
+/// the caller's witness and retained circuit. The proof's own workspace is
+/// unchanged, less the first phase's commitment scratch.
+#[must_use = "a retained first phase is only useful to the proof it prepares"]
+pub struct LinkedPhase1<'a, C: PastaCurve> {
+    shape: Shape,
+    gens: &'a Gens<C>,
+    inst: &'a Instance<F<C>>,
+    wit: &'a Witness<F<C>>,
+    fill: &'a [r1cs::RowFill],
+    circuit: &'a dyn Circuit<F<C>>,
+    /// The entropy stream at the position the preparation started from. Boxed:
+    /// it stays at one address from the preparation to its wipe, and moving
+    /// this value moves only the pointer.
+    replay: Box<SpikeRng>,
+    /// The first-phase row commitments, in row order.
+    rows: Vec<Aff<C>>,
+    d: [u8; 32],
+}
+
+/// [`prepare_linked_phase1_built`] that keeps its row commitments for the
+/// proof: the same digest and the same draw from `rng`, which the caller's
+/// stream is advanced by as before. The returned value proves once, over the
+/// same arguments and the stream as it stood on entry, without committing the
+/// first-phase rows again.
+pub fn prepare_linked_phase1_retained<'a, C: PastaCurve>(
+    shape: &Shape,
+    gens: &'a Gens<C>,
+    inst: &'a Instance<F<C>>,
+    wit: &'a Witness<F<C>>,
+    fill: &'a [r1cs::RowFill],
+    rng: &mut SpikeRng,
+    circuit: &'a dyn Circuit<F<C>>,
+) -> LinkedPhase1<'a, C> {
+    // The stream as the proof replays it, taken before anything is drawn.
+    let replay = Box::new(rng.clone());
+    let (rows, d) = linked_phase1_rows(shape, gens, inst, wit, fill, rng, circuit);
+    LinkedPhase1 {
+        shape: *shape,
+        gens,
+        inst,
+        wit,
+        fill,
+        circuit,
+        replay,
+        rows,
+        d,
+    }
+}
+
+impl<C: PastaCurve> LinkedPhase1<'_, C> {
+    /// The first proof's phase-1 digest d, exactly
+    /// [`prepare_linked_phase1_built`]'s.
+    pub fn digest(&self) -> [u8; 32] {
+        self.d
+    }
+
+    /// Bytes held from the preparation to the proof: this value, its stream
+    /// reader and its row commitments' storage.
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of::<SpikeRng>()
+            + self.rows.capacity() * std::mem::size_of::<Aff<C>>()
+    }
+
+    /// The first linked proof, given the second proof's `rho` and `R`: byte
+    /// for byte [`prove_linked_built`]'s over the prepared arguments, the
+    /// replayed stream and `Link::First { rho, r }`, with the first-phase
+    /// rows committed once. Returns the proof, the squeezed d and R.
+    pub fn prove_first(mut self, rho: [u8; 32], r: [u8; 32]) -> (Proof<C>, [u8; 32], [u8; 32]) {
+        if crate::prof::memory_enabled() {
+            println!(
+                "prover retained first phase {}: {} row commitments, {} B held since its preparation",
+                self.shape.label,
+                self.rows.len(),
+                self.retained_bytes()
+            );
+        }
+        let fixed = fixed_for(&self.shape, self.gens, self.circuit, &self.inst.io);
+        let rows = std::mem::take(&mut self.rows);
+        let (proof, _, out) = prove_rows(
+            &self.shape,
+            self.gens,
+            self.inst,
+            self.wit,
+            Some(self.fill),
+            &mut self.replay,
+            Cheat::Honest,
+            true,
+            &[],
+            &Link::First { rho, r },
+            self.circuit,
+            &fixed,
+            Some(rows),
+        );
+        let (word, r) = out.expect("linked proof");
+        (proof, word, r)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1445,13 +1478,19 @@ fn prove_inner<C: PastaCurve>(
     fixed: &[Aff<C>],
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     prove_rows(
-        shape, gens, inst, wit, None, rng, cheat, separated, claims, link, circuit, fixed,
+        shape, gens, inst, wit, None, rng, cheat, separated, claims, link, circuit, fixed, None,
     )
 }
 
 /// [`prove_inner`] of a witness in which `fill` (when given) names the rows
 /// its build never wrote: the prover never reads those rows. Without it every
 /// row is read, so a witness changed after its build is proved as it is.
+///
+/// `phase1` (only [`LinkedPhase1::prove_first`] gives it) holds this proof's
+/// own first-phase row commitments, made by its preparation over this
+/// witness, row account, generators and circuit from `rng`'s stream at this
+/// position. The masks and blinds are then regenerated in the same order and
+/// the first-phase rows are not committed again.
 #[allow(clippy::too_many_arguments)]
 fn prove_rows<C: PastaCurve>(
     shape: &Shape,
@@ -1466,6 +1505,7 @@ fn prove_rows<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
+    phase1: Option<Vec<Aff<C>>>,
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     shape.check();
     let fill: Vec<r1cs::RowFill> = match fill {
@@ -1473,27 +1513,19 @@ fn prove_rows<C: PastaCurve>(
         None => vec![r1cs::RowFill::Values; shape.rows()],
     };
     if crate::prof::memory_enabled() {
-        // Nonzero witness entries per Hyrax row (rows the caller never wrote
-        // are not read).
-        let per_row: Vec<usize> = wit
-            .w
-            .par_chunks(shape.cols())
-            .zip(&fill)
-            .map(|(row, f)| match f {
-                r1cs::RowFill::Values => row.iter().filter(|x| !bool::from(x.is_zero())).count(),
-                r1cs::RowFill::Zero => 0,
-                r1cs::RowFill::Unit => 1,
-            })
-            .collect();
+        // The witness rows by the build's public account only; no private
+        // value is read or counted.
+        let rows_of = |kind: r1cs::RowFill| fill.iter().filter(|f| **f == kind).count();
         println!(
-            "prover accounting {} sx {} sw {}: {}; nonzero witness {} of {} by row {:?}",
+            "prover accounting {} sx {} sw {}: {}; witness rows: values {}, never written {}, padding {}, of {}",
             shape.label,
             shape.sx,
             shape.sw(),
             circuit.memory_note(),
-            per_row.iter().sum::<usize>(),
-            wit.w.len(),
-            per_row
+            rows_of(r1cs::RowFill::Values),
+            rows_of(r1cs::RowFill::Zero),
+            rows_of(r1cs::RowFill::Unit),
+            fill.len()
         );
     }
     let mem = crate::prof::MemTrace::start();
@@ -1529,8 +1561,21 @@ fn prove_rows<C: PastaCurve>(
     let clock = Instant::now();
     *COMMIT_SPLIT.lock().unwrap() = [0.0; 3];
     assert_eq!(fixed.len(), circuit.fixed_rows(shape));
-    let (row_blinds, bounds, mut rows) =
-        commit_first_phase(shape, gens, &zw.slices(), rng, circuit);
+    let (row_blinds, bounds, mut rows) = match phase1 {
+        // This proof's preparation committed these rows over the same masked
+        // witness and blinds: the blinds are drawn again in order (the masks
+        // were, just above) and the commitments are not recomputed.
+        Some(rows) => {
+            let blinds = first_phase_blinds::<C>(shape, rng, circuit);
+            assert_eq!(
+                rows.len(),
+                circuit.phase1_rows(shape),
+                "one retained commitment per first-phase row"
+            );
+            (blinds, circuit.row_bounds(shape), rows)
+        }
+        None => commit_first_phase(shape, gens, &zw.slices(), rng, circuit),
+    };
     mark("phase1");
     let commit = |w: &[&[F<C>]], range: std::ops::Range<usize>, helpers: bool| -> Vec<Aff<C>> {
         match &bounds {
@@ -1572,7 +1617,7 @@ fn prove_rows<C: PastaCurve>(
     }
     mark("link");
     let ch2: Vec<F<C>> = (0..circuit.phase2_challenges())
-        .map(|_| t.challenge(b"phase2"))
+        .map(|_| t.challenge_full(b"phase2"))
         .collect();
     *crate::sparse::LAST_BUILD.lock().unwrap() = (0.0, 0.0);
     let clock_rel = Instant::now();
@@ -1739,6 +1784,10 @@ fn prove_rows<C: PastaCurve>(
         m = m_first.take().expect("first M table").to_full();
         z = (0..2 * half).map(|i| zv.get(i)).collect();
     }
+    // After a fold: which runs of the folded z may hold anything, by its
+    // public layout (rows the build never wrote, the public half beyond the
+    // io). The folded M is public; a private value is never tested for zero.
+    let mut z_live: Option<crate::kern::Live> = None;
     let mut inner = Vec::new();
     let mut ry = Vec::new();
     let mut start = 0;
@@ -1752,7 +1801,13 @@ fn prove_rows<C: PastaCurve>(
         } else if let Some(m_split) = &m_first {
             inner_values(&basis, k, m_split, &zv)
         } else {
-            inner_values(&basis, k, &m, &z)
+            let live = z_live.as_ref().expect("the folded witness's live runs");
+            inner_values(
+                &basis,
+                k,
+                &crate::kern::Public(&m),
+                &crate::kern::Masked::new(&z, live),
+            )
         };
         let blind: F<C> = rng.scalar();
         let commitment = crate::prof::time("i.commit", || {
@@ -1772,6 +1827,12 @@ fn prove_rows<C: PastaCurve>(
         } else {
             m = crate::kern::fold_top(&m, &r, support.as_ref());
             z = crate::kern::fold_top(&z, &r, support.as_ref());
+        }
+        if !old_kernels {
+            z_live = Some(support.as_ref().map_or_else(
+                || crate::kern::Live::dense(z.len()),
+                crate::kern::Support::folded_live,
+            ));
         }
         crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
         inner.push(commitment);
@@ -1898,8 +1959,10 @@ fn prove_rows<C: PastaCurve>(
 }
 
 /// One inner round over `(m, z)`: its values, and the support (which corners
-/// of the round's variables hold anything) its fold reuses. The public half of
-/// z is zero beyond the public inputs, and a padded witness has empty rows.
+/// of the round's variables may hold anything, from public information only)
+/// its fold reuses. The public half of z is zero beyond the public inputs,
+/// rows the build never wrote are empty, and M is public; the witness's
+/// values never decide the schedule.
 fn inner_values<S: Field, M: crate::kern::Table<S> + ?Sized, Z: crate::kern::Table<S> + ?Sized>(
     basis: &crate::kern::Basis,
     k: usize,
@@ -1995,6 +2058,7 @@ pub fn prove_linked_built<C: PastaCurve>(
         link,
         circuit,
         &fixed,
+        None,
     );
     let (word, r) = out.expect("linked proof");
     (proof, word, r)
@@ -2131,7 +2195,7 @@ fn verify_inner<C: PastaCurve>(
         t.point(b"row", row);
     }
     let ch2: Vec<F<C>> = (0..circuit.phase2_challenges())
-        .map(|_| t.challenge(b"phase2"))
+        .map(|_| t.challenge_full(b"phase2"))
         .collect();
     let rel = circuit.instantiate(shape, &ch2, None);
     if !proof.late.is_empty() {
@@ -2419,8 +2483,30 @@ mod table_tests {
     use super::*;
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
 
-    /// Table commits equal variable-base commits on rows of every width
-    /// class, including a full-width row and an all-zero row.
+    /// A shape with four width classes and full-width masking tails.
+    fn small_shape(label: &'static str) -> Shape {
+        let shape = Shape {
+            label,
+            sx: 8,
+            row_bits: 2,
+            col_bits: 10,
+            k: 2,
+        };
+        shape.check();
+        shape
+    }
+
+    /// The fixed-base table window the retired bucket-table commits used
+    /// (Pixel 6, b04a57 11-09: c14 for P on Vesta, c13 for S on Pallas); a
+    /// reference for the algebra only.
+    fn reference_window<C: PastaCurve>() -> usize {
+        let p = std::any::type_name::<C>() == std::any::type_name::<iroha_pasta::Eq>();
+        if p { 14 } else { 13 }
+    }
+
+    /// Constant-time column sums equal the public MSM and the bucket table
+    /// they replaced, on rows of every width class, including full-width and
+    /// all-zero rows.
     fn same<C: PastaCurve>(cols: usize, label: &[u8]) {
         let gens = Gens::<C>::new(cols);
         let active = cols - 37;
@@ -2443,21 +2529,328 @@ mod table_tests {
             .zip(&bounds)
             .map(|(r, b)| BoundedSecretScalars::new(r, *b, None).unwrap())
             .collect();
-        let a = column_sums(&gens, active, &columns, true);
-        let b = column_sums(&gens, active, &columns, false);
-        assert_eq!(a.len(), b.len());
-        for (x, y) in a.iter().zip(&b) {
+        let sums = column_sums(&gens, active, &columns);
+        let table = iroha_pasta::msm::FixedBaseTable::<C>::with_window(
+            &gens.g[..active],
+            reference_window::<C>(),
+            MemoryBudget::DEFAULT,
+        )
+        .unwrap();
+        let buckets = table
+            .msm_secret_bounded_columns_cancellable(
+                &columns,
+                MemoryBudget::DEFAULT,
+                &SharedMemoryBudget::process_default(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(sums.len(), rows.len());
+        for ((sum, bucket), row) in sums.iter().zip(&buckets).zip(&rows) {
+            let public = msm_public::<C>(row, &gens.g[..active], MemoryBudget::DEFAULT).unwrap();
+            assert_eq!(sum.to_affine(), public.to_affine(), "public MSM agrees");
+            assert_eq!(*sum, *bucket, "bucket table agrees");
+        }
+    }
+
+    #[test]
+    fn constant_time_column_sums_equal_public_and_table_sums() {
+        same::<Vesta>(1 << 12, b"table vesta");
+        same::<Pallas>(1 << 11, b"table pallas");
+    }
+
+    /// Round commitments over the slot's grid generators and `H` equal the
+    /// retired round-slot table's public MSM (window 9) and the plain public
+    /// MSM over the same bases.
+    fn rounds<C: PastaCurve>(label: &[u8]) {
+        let shape = small_shape("constant-time rounds");
+        let gens = Gens::<C>::new(shape.cols());
+        let mut rng = SpikeRng::new(label);
+        for slot in slots(&shape) {
+            let values: Vec<F<C>> = (0..pow3(slot.k)).map(|_| rng.scalar()).collect();
+            let blind: F<C> = rng.scalar();
+            let actual = commit_values(&gens, slot.offset, &values, blind);
+            let mut scalars = values.clone();
+            scalars.push(blind);
+            let mut bases: Vec<Aff<C>> = slot_positions(grid_vars(values.len()))
+                .iter()
+                .map(|p| gens.g[slot.offset + p])
+                .collect();
+            bases.push(gens.h);
+            let table =
+                iroha_pasta::msm::FixedBaseTable::<C>::with_window(&bases, 9, MemoryBudget::DEFAULT)
+                    .unwrap();
             assert_eq!(
-                x.to_affine(),
-                y.to_affine(),
-                "table and variable-base sums agree"
+                actual,
+                table.msm_public(&scalars, MemoryBudget::DEFAULT).unwrap()
+            );
+            assert_eq!(
+                actual,
+                msm_public::<C>(&scalars, &bases, MemoryBudget::DEFAULT).unwrap()
             );
         }
     }
 
     #[test]
-    fn table_commits_equal_variable_base() {
-        same::<Vesta>(1 << 12, b"table vesta");
-        same::<Pallas>(1 << 11, b"table pallas");
+    fn constant_time_round_commitments_equal_the_table_algebra() {
+        rounds::<Vesta>(b"rounds vesta");
+        rounds::<Pallas>(b"rounds pallas");
+    }
+
+    /// Single-row commitments (circuits without row bounds): the class-bounded
+    /// head, the full-width masking tail and the blind, for honest rows and for
+    /// a row with a value outside its class, which commits at full width.
+    fn rows_without_bounds<C: PastaCurve>(label: &[u8]) {
+        let shape = small_shape("constant-time single rows");
+        let gens = Gens::<C>::new(shape.cols());
+        let active = shape.active_cols();
+        let mut rng = SpikeRng::new(label);
+        for row in 0..shape.rows() {
+            let bits = shape.row_bits_class(row) as u32;
+            let honest: Vec<F<C>> = (0..active).map(|_| rng.below::<F<C>>(bits)).collect();
+            let mut cheating = honest.clone();
+            cheating[0] = -F::<C>::ONE;
+            for values in [honest, cheating] {
+                let blind: F<C> = rng.scalar();
+                let expected = msm_public::<C>(&values, &gens.g[..active], MemoryBudget::DEFAULT)
+                    .unwrap()
+                    + C::from(gens.h) * blind;
+                assert_eq!(
+                    commit_row(&gens, &shape, row, &values, blind),
+                    expected,
+                    "row {row}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn constant_time_single_row_commitments_on_both_curves() {
+        rows_without_bounds::<Vesta>(b"single rows vesta");
+        rows_without_bounds::<Pallas>(b"single rows pallas");
+    }
+
+    /// Bounded row lanes: every written row gets exactly its own sum and an
+    /// unwritten row the blinded identity.
+    fn lanes<C: PastaCurve>(label: &[u8]) {
+        let shape = small_shape("constant-time lanes");
+        let gens = Gens::<C>::new(shape.cols());
+        let (cols, active) = (shape.cols(), shape.active_cols());
+        let mut rng = SpikeRng::new(label);
+        let bounds: Vec<usize> = (0..shape.rows())
+            .map(|r| shape.row_bits_class(r))
+            .collect();
+        let written: Vec<Vec<F<C>>> = bounds
+            .iter()
+            .map(|&bits| {
+                (0..cols)
+                    .map(|c| {
+                        if c < active {
+                            rng.below::<F<C>>(bits as u32)
+                        } else {
+                            F::<C>::ZERO
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let unwritten: &[F<C>] = &[];
+        let rows: Vec<&[F<C>]> = written
+            .iter()
+            .enumerate()
+            .map(|(r, row)| if r == 1 { unwritten } else { row.as_slice() })
+            .collect();
+        let blinds: Vec<F<C>> = (0..shape.rows()).map(|_| rng.scalar()).collect();
+        let actual = commit_row_slices(&gens, &shape, &rows, 0..shape.rows(), &bounds, &blinds, false);
+        assert_eq!(actual.len(), shape.rows());
+        for (r, point) in actual.iter().enumerate() {
+            let sum = if r == 1 {
+                C::identity()
+            } else {
+                msm_public::<C>(&written[r][..active], &gens.g[..active], MemoryBudget::DEFAULT)
+                    .unwrap()
+            };
+            assert_eq!(
+                *point,
+                (sum + C::from(gens.h) * blinds[r]).to_affine(),
+                "row {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn constant_time_row_lanes_on_both_curves() {
+        lanes::<Vesta>(b"lanes vesta");
+        lanes::<Pallas>(b"lanes pallas");
+    }
+
+    /// The opening's private sums equal the public MSM.
+    #[test]
+    fn constant_time_opening_sums_equal_the_public_msm() {
+        let gens = Gens::<Vesta>::new(64);
+        let mut rng = SpikeRng::new(b"constant-time opening");
+        let scalars: Vec<F<Vesta>> = (0..64).map(|_| rng.scalar()).collect();
+        assert_eq!(
+            ipa::secret_msm::<Vesta>(&scalars, &gens.g),
+            msm_public::<Vesta>(&scalars, &gens.g, MemoryBudget::DEFAULT).unwrap()
+        );
+    }
+
+    /// Budget refusal, cancellation and malformed lengths are errors, never
+    /// identity sums.
+    fn refusals<C: PastaCurve>() {
+        let gens = Gens::<C>::new(64);
+        let zeros = vec![F::<C>::ZERO; 64];
+        let ones = vec![F::<C>::ONE; 64];
+        let columns = [
+            BoundedSecretScalars::new(&ones, 1, None).unwrap(),
+            BoundedSecretScalars::new(&zeros, 0, None).unwrap(),
+        ];
+        assert!(matches!(
+            column_sums_with_budget(&gens, 64, &columns, MemoryBudget::new(0), None),
+            Err(MsmError::Budget(_))
+        ));
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            column_sums_with_budget(&gens, 64, &columns, MemoryBudget::DEFAULT, Some(&cancelled)),
+            Err(MsmError::Cancelled)
+        ));
+        assert!(matches!(
+            column_sums_with_budget(&gens, 63, &columns, MemoryBudget::DEFAULT, None),
+            Err(MsmError::LengthMismatch(_))
+        ));
+        assert_eq!(
+            column_sums(&gens, 64, &columns),
+            vec![
+                msm_public::<C>(&ones, &gens.g, MemoryBudget::DEFAULT).unwrap(),
+                C::identity()
+            ]
+        );
+    }
+
+    #[test]
+    fn constant_time_commitment_refusals_on_both_curves() {
+        refusals::<Vesta>();
+        refusals::<Pallas>();
+    }
+}
+
+#[cfg(test)]
+mod retained_phase1_tests {
+    use super::*;
+
+    /// A witness's rows as their content shows them: all zero, or (in the
+    /// fixed tail) a padding row's single 1 in column 0. A prover told so
+    /// never reads those rows.
+    fn content_fill<S: Scalar>(shape: &Shape, fixed_rows: usize, w: &[S]) -> Vec<r1cs::RowFill> {
+        let first_fixed = shape.rows() - fixed_rows;
+        w.chunks(shape.cols())
+            .enumerate()
+            .map(|(r, row)| {
+                if row.iter().all(|v| *v == S::ZERO) {
+                    r1cs::RowFill::Zero
+                } else if r >= first_fixed
+                    && row[0] == S::ONE
+                    && row[1..].iter().all(|v| *v == S::ZERO)
+                {
+                    r1cs::RowFill::Unit
+                } else {
+                    r1cs::RowFill::Values
+                }
+            })
+            .collect()
+    }
+
+    /// The retained first phase against the two-pass prover it replaces, on a
+    /// relation with product masks, a link phase, lookups (second-phase rows)
+    /// and a fixed tail. Every later draw (round blinds, the opening's blinds)
+    /// enters the proof bytes, so equal bytes also show the stream was
+    /// consumed in the same order to its end.
+    fn check<C: PastaCurve>(account: bool) {
+        let (c, inst, wit) = phase1_tests::phased_fixture::<F<C>>(15);
+        let shape = c.shape;
+        let gens = Gens::<C>::new(shape.cols());
+        let fill = if account {
+            content_fill(&shape, c.fixed_rows(&shape), &wit.w)
+        } else {
+            vec![r1cs::RowFill::Values; shape.rows()]
+        };
+        let seed: &[u8] = b"retained first phase";
+        let original = wit.w.clone();
+
+        // The digest-only preparation, as the engine used it before.
+        let mut two_pass = SpikeRng::new(seed);
+        let d = prepare_linked_phase1_built(&shape, &gens, &inst, &wit, &fill, &mut two_pass, &c);
+        let mut rng = SpikeRng::new(seed);
+        let retained =
+            prepare_linked_phase1_retained(&shape, &gens, &inst, &wit, &fill, &mut rng, &c);
+        assert_eq!(retained.digest(), d, "the same first-phase digest");
+        assert_eq!(
+            rng.scalar::<F<C>>(),
+            two_pass.scalar::<F<C>>(),
+            "the caller's stream advances by the same prefix"
+        );
+        assert_eq!(wit.w, original, "the preparation leaves the witness");
+        assert!(
+            retained.retained_bytes() < shape.cols() * std::mem::size_of::<F<C>>(),
+            "commitments and a stream reader, never a witness row"
+        );
+
+        // The second proof's rho and R, as the first proof is given them.
+        let fallback = |_: &[u8; 32]| panic!("the actual link circuit supplies R");
+        let (_, rho, r) = prove_linked_circuit(
+            &shape,
+            &gens,
+            &inst,
+            &wit,
+            &mut SpikeRng::new(b"retained first phase, secondary"),
+            &Link::Second { d, rlc: &fallback },
+            &c,
+        );
+        let link = Link::First { rho, r };
+
+        // Two passes over the first-phase rows, then one.
+        let (reference, reference_d, reference_r) = prove_linked_built(
+            &shape,
+            &gens,
+            &inst,
+            &wit,
+            &fill,
+            &mut SpikeRng::new(seed),
+            &link,
+            &c,
+        );
+        let (proof, actual_d, actual_r) = retained.prove_first(rho, r);
+        let bytes = proof.to_bytes();
+        assert_eq!(bytes, reference.to_bytes(), "byte-identical proof");
+        assert_eq!((actual_d, actual_r), (reference_d, reference_r));
+        assert_eq!((actual_d, actual_r), (d, r), "the prepared digest and R");
+        assert_eq!(wit.w, original, "the proof leaves the witness");
+        assert_eq!(
+            verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(),
+            d
+        );
+
+        // Other entropy gives other commitments, and a preparation that is
+        // never proved is simply dropped (its stream reader wiped).
+        let other = prepare_linked_phase1_retained(
+            &shape,
+            &gens,
+            &inst,
+            &wit,
+            &fill,
+            &mut SpikeRng::new(b"retained first phase, other entropy"),
+            &c,
+        );
+        assert_ne!(other.digest(), d, "fresh hiding masks and blinds");
+        drop(other);
+    }
+
+    #[test]
+    fn retained_first_phase_proves_the_same_bytes_on_both_curves() {
+        for account in [false, true] {
+            check::<iroha_pasta::Ep>(account);
+            check::<iroha_pasta::Eq>(account);
+        }
     }
 }

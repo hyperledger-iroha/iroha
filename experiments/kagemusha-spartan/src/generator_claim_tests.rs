@@ -27,18 +27,38 @@ where
     let gens = Gens::<C>::new(16);
     let relation = [23; 32];
     let input = sources(&gens, 4);
+    for change_point in [false, true] {
+        let mut repeated = input.clone();
+        repeated[2] = repeated[0].clone();
+        if change_point {
+            repeated[2].g = repeated[1].g;
+        } else {
+            repeated[2].us = repeated[1].us.clone();
+        }
+        assert!(matches!(
+            prove_with_rng(
+                &gens,
+                relation,
+                repeated,
+                &mut SpikeRng::new(b"distinct claim")
+            ),
+            Err("wallet predecessor generator claim")
+        ));
+    }
     let (a, ta) = prove_with_rng(
         &gens,
         relation,
         input.clone(),
         &mut SpikeRng::new(b"generator private mask A"),
-    );
+    )
+    .unwrap();
     let (b, _) = prove_with_rng(
         &gens,
         relation,
         input,
         &mut SpikeRng::new(b"generator private mask B"),
-    );
+    )
+    .unwrap();
     assert!(verify(&gens, relation, &a));
     assert!(verify(&gens, relation, &b));
     assert_ne!(
@@ -152,7 +172,8 @@ where
         [23; 32],
         sources(&gens, 4),
         &mut SpikeRng::new(b"generator scalar circuit"),
-    );
+    )
+    .unwrap();
     let mut w = Wiring::<F<C>>::default();
     let f = w.family(0, 1);
     let shared = shared_array(&mut w, f, &tr.shared);
@@ -208,7 +229,8 @@ where
         [23; 32],
         sources(&gens, 3),
         &mut SpikeRng::new(b"generator points circuit"),
-    );
+    )
+    .unwrap();
     // The private fold needs the native identity rule; a builder that chose
     // hard-slot strictness cannot host it.
     let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -388,7 +410,8 @@ where
         relation,
         sources(&gens, 3),
         &mut SpikeRng::new(b"generator independent decision"),
-    );
+    )
+    .unwrap();
     assert!(verify(&gens, relation, &honest));
     // Preserve every committed input, mask, point and Fiat-Shamir challenge.
     // The final output G is deferred, so an adversary can solve the last group

@@ -15,27 +15,51 @@ const ROOT_SECRET: [u8; 32] = [0x11; 32];
 /// certifies and which signs parameter manifests.
 const ARTIFACT_SECRET: [u8; 32] = [0x15; 32];
 
-/// Exact public scheme from the canonical wallet vectors, under test root 0x11.
+/// Isolated future scheme on the same deterministic signed genesis used to
+/// finalize fixture Loads. Its relation is an explicit fixture identity.
 pub fn scheme() -> KagemushaWalletSchemeV1 {
-    let root = p256::mul(&p256::generator(), &BigUint::from_bytes_be(&ROOT_SECRET)).unwrap();
-    let mut q = [0u8; 65];
-    q[0] = 4;
-    for (offset, value) in [(1, root.x), (33, root.y)] {
-        let bytes = value.to_bytes_be();
-        q[offset + 32 - bytes.len()..offset + 32].copy_from_slice(&bytes);
-    }
-    KagemushaWalletSchemeV1 {
-        version: 1,
-        network_id: [0x0b; 32],
-        scheme_root_key: KagemushaDevicePublicKeyV1::try_from(q.as_slice()).unwrap(),
-        relation_id: [
-            0x91, 0xb6, 0x44, 0xa7, 0xaa, 0x99, 0xff, 0xf2, 0x44, 0x9f, 0x09, 0xa5, 0x3d, 0xf3,
-            0x3d, 0x0d, 0xcd, 0xd6, 0x7b, 0x65, 0x2f, 0x73, 0x47, 0x27, 0x0f, 0x7d, 0xed, 0x6d,
-            0x93, 0x9a, 0x73, 0xd6,
-        ],
-        provider_contract: kagemusha_wallet_provider_contract_v1(),
-    }
+    static SCHEME: std::sync::OnceLock<KagemushaWalletSchemeV1> = std::sync::OnceLock::new();
+    SCHEME
+        .get_or_init(|| {
+            let fixture =
+                NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
+            let root =
+                p256::mul(&p256::generator(), &BigUint::from_bytes_be(&ROOT_SECRET)).unwrap();
+            let mut key = [0; 65];
+            key[0] = 4;
+            key[1..33].copy_from_slice(&crate::certificate::scalar_bytes(&root.x));
+            key[33..65].copy_from_slice(&crate::certificate::scalar_bytes(&root.y));
+            KagemushaWalletSchemeV1 {
+                version: 1,
+                network_id: *fixture.network_id().as_bytes(),
+                scheme_root_key: KagemushaDevicePublicKeyV1::try_from(key.as_slice()).unwrap(),
+                relation_id: [0x33; 32],
+                provider_contract: kagemusha_wallet_provider_contract_v1(),
+            }
+        })
+        .clone()
 }
+
+pub(crate) fn enrollment_certificate() -> crate::certificate::Certificate {
+    static CERT: std::sync::OnceLock<crate::certificate::Certificate> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| {
+        let issuer = p256::mul(&p256::generator(), &BigUint::from_bytes_be(&[0x26; 32])).unwrap();
+        crate::certificate::issue_fixture(
+            &scheme().scheme_id(),
+            crate::certificate::Role::Enrollment as u8,
+            &issuer,
+            1,
+            &BigUint::from_bytes_be(&ROOT_SECRET),
+        )
+    })
+    .clone()
+}
+
+#[cfg(test)]
+pub(crate) fn chain(generators: &crate::ipa::Gens<iroha_pasta::Eq>) -> crate::chain_fixture::Chain {
+    crate::chain_fixture::for_scope(generators, enrollment_certificate(), scheme().relation_id)
+}
+
 /// Authenticate the complete real program bundle under the independent fixture root.
 pub fn install(
     bundle: &[u8],
@@ -45,7 +69,10 @@ pub fn install(
     let fixture = NativeFinalityFixture::new_with_explicit_parameters();
     let finality = SumeragiCommitVerifierV1::new(&fixture.verifier())
         .map_err(|e| Error::Rejected(e.to_string()))?;
-    AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)
+    let mut parameters =
+        AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?;
+    parameters.confirmation = ConfirmationScope::FixtureSend;
+    Ok(parameters)
 }
 
 /// Re-issue an authenticated device bundle whose root-signed manifest is in
@@ -85,6 +112,69 @@ pub fn reissue_bundle(source: &std::path::Path, destination: &std::path::Path) -
     }
     Ok(())
 }
+fn enrollment_marker(
+    challenge: &KagemushaWalletEnrollmentChallengeV1,
+    key: &KagemushaDevicePublicKeyV1,
+) -> Result<[u8; 32]> {
+    KagemushaWalletMarkerV1::enrollment(challenge, *key)
+        .and_then(|marker| marker.marker_digest())
+        .map_err(|_| Error::AuthorityMismatch("fixture enrollment marker"))
+}
+
+fn device_key(q: &p256::Point) -> KagemushaDevicePublicKeyV1 {
+    let mut sec1 = [0u8; 65];
+    sec1[0] = 4;
+    sec1[1..33].copy_from_slice(&crate::certificate::scalar_bytes(&q.x));
+    sec1[33..].copy_from_slice(&crate::certificate::scalar_bytes(&q.y));
+    KagemushaDevicePublicKeyV1::try_from(sec1.as_slice()).expect("fixture P-256 public point")
+}
+
+/// The shared wallet vectors' canonical asset scope.
+#[cfg(test)]
+pub(crate) fn vector_asset() -> KagemushaWalletAssetScopeV1 {
+    let vectors: norito::json::Value = norito::json::from_str(include_str!(
+        "../../../fixtures/kagemusha/wallet_v1_vectors.json"
+    ))
+    .unwrap();
+    let hex = vectors["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["type"].as_str() == Some("KagemushaWalletAssetScopeV1"))
+        .unwrap()["canonical_hex"]
+        .as_str()
+        .unwrap();
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
+        .unwrap()
+}
+
+/// Issue the same enrolled fixture wallet to the governed Activation and Unload tests.
+#[cfg(test)]
+pub(crate) fn registered_bootstrap(
+    parameters: &AuthenticatedParameters,
+    scope: &KagemushaWalletAssetScopeV1,
+    account: &iroha_data_model::account::AccountId,
+) -> (crate::full::WalletKey, ExactOperationWitness, [u8; 32]) {
+    let key = crate::full::WalletKey::labelled("installed Activation fixture wallet");
+    let public = device_key(&key.q);
+    let challenge = KagemushaWalletEnrollmentChallengeV1 {
+        version: 1,
+        scheme_id: scheme().scheme_id(),
+        asset_digest: scope.asset_digest(),
+        account_digest: kagemusha_wallet_account_digest_v1(account).unwrap(),
+        app_policy: [0x61; 32],
+        enrollment_policy: [0x62; 32],
+        issuer_nonce: [0x63; 32],
+    };
+    let operation = bootstrap(parameters, &challenge, &public).unwrap();
+    let marker = enrollment_marker(&challenge, &public).unwrap();
+    (key, operation, marker)
+}
+
 /// Issue only fixture-root-authorized future credential bytes for the actual
 /// provider's enrolled intent and actual nonexportable public key. The receipt
 /// remains unsigned until the provider durably selects its complete capsule.
@@ -105,6 +195,7 @@ pub fn bootstrap(
     issue(
         parameters,
         &hardware,
+        enrollment_marker(challenge, key)?,
         &[
             (34, challenge.asset_digest),
             (66, challenge.wallet_id(key)),
@@ -122,9 +213,15 @@ pub fn bootstrap(
 fn issue(
     parameters: &AuthenticatedParameters,
     key: &crate::full::WalletKey,
+    marker: [u8; 32],
     fields: &[(usize, [u8; 32])],
 ) -> Result<ExactOperationWitness> {
-    let (context, mut input) = crate::bootstrap::fixture(key, &parameters.inner.generators.p);
+    let (context, mut input) = crate::bootstrap::fixture_with_certificate(
+        key,
+        &parameters.inner.generators.p,
+        enrollment_certificate(),
+        scheme().relation_id,
+    );
     if context.relation != parameters.id {
         return Err(Error::AuthorityMismatch("fixture relation"));
     }
@@ -152,6 +249,7 @@ fn issue(
     input.statement[7] = input.core[7];
     input.statement[15] = head;
     input.statement[17..19].copy_from_slice(&limbs(&c.body[448..480]));
+    input.statement[19..21].copy_from_slice(&limbs(&marker));
     let operation = iroha_pasta::poseidon::hash_with_domain(
         u64::from_le_bytes(*b"kgwopid1"),
         &[
@@ -375,8 +473,72 @@ mod tests {
     use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
 
     #[test]
+    #[ignore = "compares every public fixed-row commitment of the signed device bundle"]
+    fn signed_fixed_row_prefixes_match_dense_commitments() {
+        use crate::ipa::{Aff, F, Gens};
+        use crate::r1cs::Circuit;
+        use crate::uniform::UniformCircuit;
+        use group::Curve;
+        use iroha_pasta::PastaCurve;
+        use iroha_pasta::msm::{MemoryBudget, msm_public};
+
+        fn check<C: PastaCurve>(program: &UniformCircuit<F<C>>, gens: &Gens<C>, kind: usize) {
+            let shape = &program.shape;
+            let count = program.fixed_rows(shape) - program.wallet_rows();
+            let active = shape.active_cols();
+            let expanded = program.fixed_values(shape);
+            assert_eq!(expanded.len(), count * shape.cols());
+            let lengths: Vec<_> = (0..count)
+                .map(|k| program.fixed_commitment_prefix(shape, k).len())
+                .collect();
+            let dense = || -> Vec<Aff<C>> {
+                expanded
+                    .chunks_exact(shape.cols())
+                    .map(|row| {
+                        msm_public::<C>(&row[..active], &gens.g[..active], MemoryBudget::DEFAULT)
+                            .unwrap()
+                            .to_affine()
+                    })
+                    .collect()
+            };
+            let prefix = || crate::spartan::fixed_commitments(shape, gens, program);
+            let time = |f: &dyn Fn() -> Vec<Aff<C>>| {
+                let start = std::time::Instant::now();
+                let result = f();
+                (result, start.elapsed().as_micros())
+            };
+            for prefix_first in [false, true] {
+                let (reference, actual) = if prefix_first {
+                    let actual = time(&prefix);
+                    (time(&dense), actual)
+                } else {
+                    (time(&dense), time(&prefix))
+                };
+                assert_eq!(reference.0, actual.0);
+                eprintln!("signed fixed rows {} kind={kind} rows={count} cols={} active={active} prefix_lengths={lengths:?} prefix_first={prefix_first} dense_us={} prefix_us={}",
+                    shape.label, shape.cols(), reference.1, actual.1);
+            }
+        }
+
+        let path = std::path::PathBuf::from(
+            std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+        );
+        let read = |name: &str| std::fs::read(path.join(name)).unwrap();
+        let parameters = install(
+            &read("program-bundle.norito"),
+            &read("parameter-manifest.norito"),
+            read("parameter-signature.bin").try_into().unwrap(),
+        )
+        .unwrap();
+        for (k, program) in parameters.inner.programs.iter().enumerate() {
+            check(&program.primary, &parameters.inner.generators.p, k);
+            check(&program.secondary, &parameters.inner.generators.s, k);
+        }
+    }
+
+    #[test]
     fn load_fixture_verifies_exact_receipt_height_and_event() {
-        let chain = crate::chain_fixture::new(&crate::ipa::Gens::<iroha_pasta::Eq>::new(4096));
+        let chain = chain(&crate::ipa::Gens::<iroha_pasta::Eq>::new(4096));
         let bootstrap = ExactOperationWitness::Bootstrap(Box::new(BootstrapWitness {
             scheme: chain.sender_context.root.scheme,
             root: chain.sender_context.root.root.clone(),
@@ -424,7 +586,7 @@ mod tests {
     /// name the Request's receiver wallet, not the payer's.
     #[test]
     fn send10_to_another_wallet_matches_the_independent_chain_fixture() {
-        let chain = crate::chain_fixture::new(&crate::ipa::Gens::<iroha_pasta::Eq>::new(4096));
+        let chain = chain(&crate::ipa::Gens::<iroha_pasta::Eq>::new(4096));
         let bootstrap = ExactOperationWitness::Bootstrap(Box::new(BootstrapWitness {
             scheme: chain.sender_context.root.scheme,
             root: chain.sender_context.root.root.clone(),
@@ -453,16 +615,6 @@ mod tests {
         assert_ne!(step.statement[18..20], step.before_core[5..7]);
     }
 
-    fn device_key(q: &p256::Point) -> KagemushaDevicePublicKeyV1 {
-        let mut sec1 = [0u8; 65];
-        sec1[0] = 4;
-        for (offset, value) in [(1, &q.x), (33, &q.y)] {
-            let bytes = value.to_bytes_be();
-            sec1[offset + 32 - bytes.len()..offset + 32].copy_from_slice(&bytes);
-        }
-        KagemushaDevicePublicKeyV1::try_from(sec1.as_slice()).unwrap()
-    }
-
     #[test]
     #[ignore = "requires the three-mode fixed-point signed program bundle"]
     fn signed_time_anchor_review_from_bundle() {
@@ -477,20 +629,16 @@ mod tests {
         )
         .unwrap();
         let engine = NativeEngine::default();
-        let key = crate::full::WalletKey::labelled("signed time floor test wallet");
         let account = iroha_data_model::account::AccountId::new(
             "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
                 .parse()
                 .unwrap(),
         );
-        let account_digest = kagemusha_wallet_account_digest_v1(&account).unwrap();
-        let boot = issue(&parameters, &key, &[(98, account_digest)]).unwrap();
+        let (key, boot, marker) = registered_bootstrap(&parameters, &vector_asset(), &account);
         let ExactOperationWitness::Bootstrap(b) = &boot else {
             unreachable!()
         };
-        let origin = engine
-            .enrollment_origin(b, [0x57; 32], &parameters)
-            .unwrap();
+        let origin = engine.enrollment_origin(b, marker, &parameters).unwrap();
         let prepared = engine.prepare(&boot, &origin, &parameters).unwrap();
         let signed = sign_selected(&prepared, &key.d, "signed floor test bootstrap").unwrap();
         let enrolled = engine.finalize(prepared, &signed, &parameters).unwrap();
@@ -690,7 +838,11 @@ mod tests {
             let ExactOperationWitness::Bootstrap(a_input) = &a_bootstrap else {
                 unreachable!()
             };
-            let a_origin = engine.enrollment_origin(a_input, [0x41; 32], &parameters)?;
+            let a_origin = engine.enrollment_origin(
+                a_input,
+                enrollment_marker(&challenge, &device_key(&a_key.q))?,
+                &parameters,
+            )?;
             let a_enrolled = advance("A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
             let a_load = load100(&a_bootstrap)?;
             let a_loaded = advance("A Load100", &a_sign, a_enrolled.head(), &a_load)?;
@@ -963,7 +1115,12 @@ pub fn request_from(origin: &SendOrigin<'_>, receiver: &crate::credential::Crede
     body[306..314].copy_from_slice(&origin.core[27].to_repr()[..8]);
     body[314..346].copy_from_slice(&origin.rest[1].to_repr());
     body[346..354].copy_from_slice(&110u64.to_le_bytes());
-    body[354] = 1;
+    body[354..386].copy_from_slice(
+        &crate::request::certificate_set_digest(&[crate::certificate::certificate_digest(
+            &enrollment_certificate(),
+        )])
+        .to_repr(),
+    );
     body[386..418].fill(0x66);
     body.to_vec()
 }
@@ -994,6 +1151,35 @@ pub fn send10_from(
         body: request_from(origin, receiver).try_into().unwrap(),
         signature: request_signature,
     };
+    send10_with_request(origin, receiver, request)
+}
+
+/// Complete the independently issued open Request with the payer's actual wallet,
+/// account and next send ordinal. Only the isolated no-fee ten-unit scenario is admitted.
+pub fn send10_from_open(
+    origin: &SendOrigin<'_>,
+    receiver: &crate::credential::Credential,
+    wire: &[u8],
+) -> Result<ExactOperationWitness> {
+    let open = super::decode_open_request_peer(wire)?;
+    if open.receiver_credential[..532] != receiver.body
+        || open.receiver_credential[532..] != receiver.signature
+        || !open.fee_schedule.is_empty()
+        || open.request[242..258] != 10u128.to_le_bytes()
+    {
+        return Err(Error::AuthorityMismatch("fixture return Request terms"));
+    }
+    let mut request = CompletedRequest::from_tape(open.request).map_err(Error::Malformed)?;
+    request.body[66..130].copy_from_slice(&origin.credential.body[66..130]);
+    request.body[194..210].copy_from_slice(&origin.core[12].to_repr()[..16]);
+    send10_with_request(origin, receiver, request)
+}
+
+fn send10_with_request(
+    origin: &SendOrigin<'_>,
+    receiver: &crate::credential::Credential,
+    request: CompletedRequest,
+) -> Result<ExactOperationWitness> {
     let terms = crate::request::commitments(&request).map_err(Error::Malformed)?;
     let receiver_wallet = crate::request::word::RECEIVER_WALLET.map(|word| terms.words[word]);
     let before = *origin.core;
@@ -1060,6 +1246,10 @@ pub fn send10_from(
             after_rest: rest,
             credential: origin.credential.clone(),
             request,
+            request_originals: crate::request::Originals {
+                receiver: receiver.clone(),
+                certificates: vec![enrollment_certificate()],
+            },
             fee_schedule: crate::fee_schedule::SignedFeeSchedule {
                 body: [0; 191],
                 signature: [0; 64],
@@ -1134,6 +1324,10 @@ pub fn receive_from(
         after_rest: [Fp::ZERO; 6],
         credential: payment.payer().clone(),
         request: payment.request().clone(),
+        request_originals: crate::request::Originals {
+            receiver: boot.input.credential.clone(),
+            certificates: vec![boot.input.certificate.clone()],
+        },
         fee_schedule: crate::fee_schedule::SignedFeeSchedule {
             body: [0; 191],
             signature: [0; 64],
@@ -1162,11 +1356,10 @@ pub fn receive_from(
 
 /// Check that a completed Receive credited its incoming Payment instead of
 /// burning it. `before` is the public profile of the Receive's predecessor
-/// head and `after` that of the head the Receive produced. Native admission
-/// burns a Payment the receiver cannot accept (a bad Request signature, a
-/// foreign asset) rather than refusing the Receive, so a runner that counts a
-/// completed Receive as a credit must check this: the adjusted burned total is
-/// unchanged and the credit root moved.
+/// head and `after` that of the head the Receive produced. Fresh Native admission
+/// checks the incoming Payment before selection. A previously selected Receive
+/// can carry the relation's Burn outcome. This fixture checks that the adjusted
+/// burned total is unchanged and the credit root moved.
 pub fn require_credited(before: &[Fp; 64], after: &[Fp; 64]) -> Result<()> {
     use crate::bootstrap_context::{BURNED_TOTAL, CREDIT_ROOT, LINEAGE_IO};
     if after[LINEAGE_IO + BURNED_TOTAL] != before[LINEAGE_IO + BURNED_TOTAL] {
@@ -1193,8 +1386,28 @@ fn sign_selected(
     HardwareAdvanceReceipt::verify_selected(prepared, prepared.receipt_body(), signature)
 }
 
-/// Enrollment marker of the software counterparty wallet's Bootstrap.
-const COUNTERPARTY_MARKER: [u8; 32] = [0x42; 32];
+fn software_bootstrap(
+    parameters: &AuthenticatedParameters,
+    key: &crate::full::WalletKey,
+    asset_digest: [u8; 32],
+    account_digest: [u8; 32],
+    salt: u8,
+) -> Result<(ExactOperationWitness, [u8; 32])> {
+    let public = device_key(&key.q);
+    let challenge = KagemushaWalletEnrollmentChallengeV1 {
+        version: 1,
+        scheme_id: scheme().scheme_id(),
+        asset_digest,
+        account_digest,
+        app_policy: [salt; 32],
+        enrollment_policy: [salt + 1; 32],
+        issuer_nonce: [salt + 2; 32],
+    };
+    Ok((
+        bootstrap(parameters, &challenge, &public)?,
+        enrollment_marker(&challenge, &public)?,
+    ))
+}
 
 /// Second wallet (B) of the isolated two-wallet flow:
 /// A Bootstrap, A Load100, B Bootstrap, B-signed Request, A Send10 to B,
@@ -1205,10 +1418,19 @@ const COUNTERPARTY_MARKER: [u8; 32] = [0x42; 32];
 /// proved and verified by the real engine under the installed programs, and
 /// each receiver's Request signature is checked inside its Receive relation.
 pub struct Counterparty {
+    marker: [u8; 32],
     key: crate::full::WalletKey,
     bootstrap: ExactOperationWitness,
 }
 impl Counterparty {
+    fn software_account() -> iroha_data_model::account::AccountId {
+        // RFC 8032 public test vector, separate from the phone fixture's account and payment key.
+        iroha_data_model::account::AccountId::new(
+            "ed01203D4017C3E843895A92B70AA74D1B7EBC9C982CCF2EC4968CC0CD55F12AF4660C"
+                .parse()
+                .expect("fixture account public key"),
+        )
+    }
     /// Wallet B, enrolled by the fixture issuer under the payer's scheme and
     /// asset. A Payment between wallets of different assets is burned.
     pub fn new(
@@ -1220,8 +1442,14 @@ impl Counterparty {
         }
         let key = crate::full::WalletKey::labelled("isolated fixture counterparty wallet B");
         let asset: [u8; 32] = payer.body[34..66].try_into().unwrap();
-        let bootstrap = issue(parameters, &key, &[(34, asset)])?;
-        Ok(Self { key, bootstrap })
+        let account = kagemusha_wallet_account_digest_v1(&Self::software_account())
+            .map_err(|_| Error::Malformed("fixture counterparty account"))?;
+        let (bootstrap, marker) = software_bootstrap(parameters, &key, asset, account, 0x42)?;
+        Ok(Self {
+            key,
+            bootstrap,
+            marker,
+        })
     }
     /// B's unsigned Bootstrap witness; also the state its first Receive spends from.
     pub fn bootstrap(&self) -> &ExactOperationWitness {
@@ -1239,7 +1467,27 @@ impl Counterparty {
         let ExactOperationWitness::Bootstrap(input) = &self.bootstrap else {
             return Err(Error::Malformed("fixture Bootstrap kind"));
         };
-        engine.enrollment_origin(input, COUNTERPARTY_MARKER, parameters)
+        engine.enrollment_origin(input, self.marker, parameters)
+    }
+    /// The receiver's wire for an ordinary wallet-owned Send. The original open
+    /// signature binds the same terms that appear in the completed fixture witness.
+    pub fn open_request_wire(&self, completed: &[u8], signature: [u8; 64]) -> Result<Vec<u8>> {
+        let mut body: [u8; 418] = completed
+            .try_into()
+            .map_err(|_| Error::Malformed("fixture open Request body"))?;
+        body[66..130].fill(0);
+        body[194..210].fill(0);
+        let cert = enrollment_certificate();
+        let credential = self.credential();
+        let account = norito::encode_canonical(&Self::software_account())
+            .map_err(|_| Error::Malformed("fixture counterparty account"))?;
+        encode_open_request_peer(
+            &[body.as_slice(), &signature].concat(),
+            &[credential.body.as_slice(), &credential.signature].concat(),
+            &[cert.body.as_slice(), &cert.signature].concat(),
+            &[],
+            &account,
+        )
     }
     /// B makes the Request: its payment key signs the exact body that
     /// [`request_to`] or [`request_from`] built for B's credential.

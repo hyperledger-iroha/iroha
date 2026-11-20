@@ -522,7 +522,7 @@ pub struct UniformCircuit<F> {
     moved: Vec<Vec<Option<(usize, usize, usize)>>>,
     /// Arrays of split families: (the clone with the instances p >= 2^k, the
     /// slot shift).
-    split_of: Vec<Option<(usize, usize)>>,
+    pub(crate) split_of: Vec<Option<(usize, usize)>>,
     /// The prover's gather of `Az, Bz, Cz`, built on first use.
     gather: OnceLock<Vec<GatherJob>>,
     /// The kind of every template row (LogUp rows over their challenge
@@ -544,6 +544,8 @@ pub struct UniformCircuit<F> {
 
 #[path = "logup_phases.rs"]
 mod logup_phases;
+#[path = "oblivious_histogram.rs"]
+mod oblivious_histogram;
 
 #[path = "fixed_values.rs"]
 mod fixed_values;
@@ -586,6 +588,41 @@ fn field_present(f: (usize, usize, usize), r: usize) -> bool {
     (r & ((1 << sigma) - 1)) < inner && (r >> sigma) < outer
 }
 
+/// The lookup arrays that read table `tid` (in lookup order) and how many
+/// lookups they make into it over their present instances (`instances(a)`
+/// for array `a`): public structure. Panics, naming the array, when one of
+/// its tuples into the table is not `cells` wide, as it does when a tuple is
+/// in no entry.
+fn table_readers<F>(
+    arrays: &[Array<F>],
+    lookup_arrays: &[(usize, usize, usize)],
+    instances: impl Fn(usize) -> usize,
+    tid: u32,
+    cells: usize,
+    what: &str,
+) -> (Vec<usize>, usize) {
+    let mut readers = Vec::new();
+    let mut lookups = 0;
+    for &(a, _, _) in lookup_arrays {
+        let arities: Vec<usize> = arrays[a]
+            .lookups
+            .iter()
+            .filter(|(t, _)| *t == tid)
+            .map(|(_, tuple)| tuple.len())
+            .collect();
+        if arities.is_empty() {
+            continue;
+        }
+        let n = instances(a);
+        if n > 0 && arities.iter().any(|&k| k != cells) {
+            panic!("{}: a {what} tuple is in table {tid}", arrays[a].name);
+        }
+        readers.push(a);
+        lookups += n * arities.len();
+    }
+    (readers, lookups)
+}
+
 /// Splits each family whose instance count `n` sits just past a power of
 /// two (`2^k < n < 1.5 2^k`, `2^k >= 8`) at `2^k`: its arrays keep the
 /// instances `p < 2^k`, and clones in a new family take the rest, shifted down
@@ -601,12 +638,34 @@ fn split_families<F: Scalar>(
     pi: &mut Vec<usize>,
     counts: &mut Vec<usize>,
     copies: &mut Copies<F>,
+    table_specs: &[(usize, u32)],
 ) -> Vec<Option<(usize, usize)>> {
     let mut split_of: Vec<Option<(usize, usize)>> = vec![None; arrays.len()];
     let mut export_split: HashMap<usize, (usize, usize)> = HashMap::new();
+    // These declarations bind an exact array to its table, transcript phase
+    // or fill callback. Keep that family intact when splitting would create
+    // a second array not named by the declaration.
+    let intact: HashSet<usize> = copies
+        .challenge
+        .cells
+        .iter()
+        .map(|&(a, _)| a)
+        .chain(copies.link.arrays.iter().copied())
+        .chain(copies.late_io.iter().map(|&(_, a, _, _)| a))
+        .chain(
+            copies
+                .link
+                .binding
+                .iter()
+                .flat_map(|(cells, _)| cells.iter().map(|&(a, _, _)| a)),
+        )
+        .chain(copies.wallet.iter().map(|&(a, _)| a))
+        .chain(table_specs.iter().map(|&(a, _)| a))
+        .map(|a| arrays[a].family)
+        .collect();
     for f in 0..pi.len() {
         let n = counts[f];
-        if pi[f] == 0 {
+        if pi[f] == 0 || intact.contains(&f) {
             continue;
         }
         let k = pi[f] - 1;
@@ -668,9 +727,8 @@ fn split_families<F: Scalar>(
                 .iter()
                 .map(|(t, tuple)| (*t, tuple.iter().map(&remap).collect()))
                 .collect();
-            let name: &'static str = Box::leak(format!("{} (rest)", arr.name).into_boxed_str());
             let clone = Array {
-                name,
+                name: "split family remainder",
                 family: f2,
                 rho: arr.rho,
                 r_count: arr.r_count,
@@ -777,6 +835,7 @@ fn chunk_arrays<F: Scalar>(
     arrays: &mut Vec<Array<F>>,
     rfield: &mut Vec<(usize, usize, usize)>,
     moved: &mut Vec<Vec<Option<(usize, usize, usize)>>>,
+    challenge: &mut ChallengeRows<F>,
 ) {
     let n_user = arrays.len();
     let single = |lin: &Lin<F>| -> Option<usize> {
@@ -842,10 +901,9 @@ fn chunk_arrays<F: Scalar>(
                         .unwrap()
                 })
                 .collect();
-            let name: &'static str = Box::leak(format!("{} chunks", src.name).into_boxed_str());
             let n = 1usize << rho;
             let chunk = Array {
-                name,
+                name: "lookup chunks",
                 family: src.family,
                 rho,
                 r_count: members.len(),
@@ -867,46 +925,58 @@ fn chunk_arrays<F: Scalar>(
     }
     // References to moved cells become links into their chunk arrays.
     let rhos: Vec<usize> = arrays.iter().map(|a| a.rho).collect();
-    let fields = rfield.clone();
-    let moved_ro = moved.clone();
-    let relink = |a: usize, lin: &mut Lin<F>| {
-        for t in lin.iter_mut() {
-            let new = match &t.src {
-                Src::Own(k) => moved_ro[a][*k].map(|(ca, kc, j)| {
-                    let sigma = rhos[a];
-                    Src::Link {
-                        array: ca,
-                        cell: kc,
-                        map: (0..1usize << sigma)
-                            .map(|r| field_present(fields[a], r).then_some((j << sigma) | r))
-                            .collect(),
-                    }
-                }),
-                Src::Link { array, cell, map } => moved_ro[*array][*cell].map(|(ca, kc, j)| {
-                    let sigma = rhos[*array];
-                    Src::Link {
-                        array: ca,
-                        cell: kc,
-                        map: map.iter().map(|m| m.map(|t| (j << sigma) | t)).collect(),
-                    }
-                }),
-                _ => None,
-            };
-            if let Some(s) = new {
-                t.src = s;
+    let relink = |a: usize, t: &mut Term<F>| {
+        let new = match &t.src {
+            Src::Own(k) => moved[a][*k].map(|(ca, kc, j)| {
+                let sigma = rhos[a];
+                Src::Link {
+                    array: ca,
+                    cell: kc,
+                    map: (0..1usize << sigma)
+                        .map(|r| field_present(rfield[a], r).then_some((j << sigma) | r))
+                        .collect(),
+                }
+            }),
+            Src::Link { array, cell, map } => moved[*array][*cell].map(|(ca, kc, j)| {
+                let sigma = rhos[*array];
+                Src::Link {
+                    array: ca,
+                    cell: kc,
+                    map: map.iter().map(|m| m.map(|t| (j << sigma) | t)).collect(),
+                }
+            }),
+            Src::All { array, cell } => {
+                assert!(
+                    moved[*array][*cell].is_none(),
+                    "sum over a moved chunk column"
+                );
+                None
             }
+            Src::One => None,
+        };
+        if let Some(s) = new {
+            t.src = s;
         }
     };
     for (a, arr) in arrays.iter_mut().enumerate() {
         for row in &mut arr.rows {
             for lin in row.iter_mut() {
-                relink(a, lin);
+                for term in lin {
+                    relink(a, term);
+                }
             }
         }
         for (_, tuple) in &mut arr.lookups {
             for lin in tuple.iter_mut() {
-                relink(a, lin);
+                for term in lin {
+                    relink(a, term);
+                }
             }
+        }
+    }
+    for (a, row) in &mut challenge.rows {
+        for (term, _) in row.iter_mut().flatten() {
+            relink(*a, term);
         }
     }
 }
@@ -1078,10 +1148,9 @@ fn copy_layout<F: Scalar>(
     for (a, cols) in columns {
         let x = arrays.len();
         let (family, rho, r_count) = (arrays[a].family, arrays[a].rho, arrays[a].r_count);
-        let name: &'static str = Box::leak(format!("{} index", arrays[a].name).into_boxed_str());
         let k = cols.len();
         arrays.push(Array {
-            name,
+            name: "copy index",
             family,
             rho,
             r_count,
@@ -1151,6 +1220,8 @@ fn copy_layout<F: Scalar>(
                     arrays[ex.array].name
                 );
             }
+            // Public: the entry a read names is the program's source map (its
+            // address sits in a constant index column), never a value.
             mult[e][j] += 1;
         }
         let mut tuple = vec![addr_term(idx_of[&a], im_cell[s], n)];
@@ -1193,10 +1264,9 @@ fn copy_layout<F: Scalar>(
         tuple.extend(ex.tuple.iter().map(reframe));
         let mbits = (64 - mult[e].iter().max().copied().unwrap_or(0).leading_zeros()).max(1) as u16;
         let wa = arrays.len();
-        let name: &'static str = Box::leak(format!("{} entries", arrays[a].name).into_boxed_str());
         let total = slots(arrays, a);
         arrays.push(Array {
-            name,
+            name: "copy entries",
             family,
             rho,
             r_count,
@@ -1206,7 +1276,7 @@ fn copy_layout<F: Scalar>(
             rows: vec![[Vec::new(), Vec::new(), Vec::new()]],
             values: vec![
                 mult[e].iter().map(|m| F::from(*m)).collect(),
-                vec![F::ZERO; total],
+                crate::kern::zeroed(total),
             ],
         });
         let f = rfield[a];
@@ -1596,13 +1666,44 @@ impl<F: Scalar> UniformCircuit<F> {
     }
 
     /// [`Self::build_with_copies_at`], and what the build wrote in each row
-    /// of the witness ([`RowFill`]): rows with a nonzero value, rows it never
-    /// wrote (zero) and padding fixed rows (a 1 in column 0). Exact for this
+    /// of the witness ([`RowFill`]): rows holding declared cells, rows the layout
+    /// leaves empty, and padding fixed rows (a 1 in column 0). Exact for this
     /// witness as built: a caller that proves it unchanged may give the
     /// prover these rows, which it then never reads (their pages are never
     /// allocated); any changed witness must be proved without them.
     #[allow(clippy::too_many_arguments)]
     pub fn build_rows(
+        label: &'static str,
+        arrays: Vec<Array<F>>,
+        pi: Vec<usize>,
+        counts: Vec<usize>,
+        table_specs: Vec<(usize, u32)>,
+        copies: Copies<F>,
+        col_bits: usize,
+        io_len: usize,
+        seed: &[u8],
+        target: Option<Layout>,
+    ) -> (Self, Instance<F>, Witness<F>, Vec<RowFill>) {
+        Self::build_rows_with_release(
+            label,
+            arrays,
+            pi,
+            counts,
+            table_specs,
+            copies,
+            col_bits,
+            io_len,
+            seed,
+            target,
+            |_| {},
+        )
+    }
+
+    /// Native proving can erase each nonpublic array as soon as its values
+    /// have been placed in the witness. Public IO and fixed rows are still
+    /// available to the subsequent reconstruction and authentication steps.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_rows_with_release(
         label: &'static str,
         mut arrays: Vec<Array<F>>,
         mut pi: Vec<usize>,
@@ -1613,6 +1714,7 @@ impl<F: Scalar> UniformCircuit<F> {
         io_len: usize,
         seed: &[u8],
         target: Option<Layout>,
+        release: impl Fn(&mut Vec<Vec<F>>),
     ) -> (Self, Instance<F>, Witness<F>, Vec<RowFill>) {
         // Measurement: the allocator's live bytes at each build stage.
         let heap_marks = crate::prof::memory_enabled()
@@ -1697,8 +1799,8 @@ impl<F: Scalar> UniformCircuit<F> {
             product_masks.len() >= 2,
             "two independent private product masks"
         );
-        let split_of = split_families(&mut arrays, &mut pi, &mut counts, &mut copies);
-        let challenge = std::mem::take(&mut copies.challenge);
+        let split_of = split_families(&mut arrays, &mut pi, &mut counts, &mut copies, &table_specs);
+        let mut challenge = std::mem::take(&mut copies.challenge);
         let mut io_arrays = std::mem::take(&mut copies.io_arrays);
         let late_io = std::mem::take(&mut copies.late_io);
         let wallet = copies.wallet.take();
@@ -1742,7 +1844,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let mut moved: Vec<Vec<Option<(usize, usize, usize)>>> =
             arrays.iter().map(|a| vec![None; a.cells()]).collect();
         let before_chunks = arrays.len();
-        chunk_arrays(&mut arrays, &mut rfield, &mut moved);
+        chunk_arrays(&mut arrays, &mut rfield, &mut moved, &mut challenge);
         // A link array's chunks move into chunk arrays of the link phase.
         link_array.resize(arrays.len(), false);
         for a in 0..before_chunks {
@@ -1774,7 +1876,7 @@ impl<F: Scalar> UniformCircuit<F> {
             let (first_cell, first_row) = (arrays[a].cells(), arrays[a].rows.len());
             for _ in 0..lk {
                 arrays[a].widths.push(255);
-                arrays[a].values.push(vec![F::ZERO; slots]);
+                arrays[a].values.push(crate::kern::zeroed(slots));
                 arrays[a].rows.push([Vec::new(), Vec::new(), Vec::new()]);
                 phase2[a].push(true);
                 moved[a].push(None);
@@ -1806,51 +1908,65 @@ impl<F: Scalar> UniformCircuit<F> {
             let (fam, rho, r_count) = (arrays[va].family, arrays[va].rho, arrays[va].r_count);
             let slots = 1usize << (pi[fam] + rho);
             let fva = rfield[va];
-            // Index the entries, then count every lookup into this table.
             let present =
                 |i: usize| (i >> rho) < counts[fam] && field_present(fva, i & ((1 << rho) - 1));
-            let key = |vals: &[F]| -> Vec<u8> {
-                vals.iter()
-                    .flat_map(|v| v.to_repr().as_ref().to_vec())
-                    .collect()
-            };
-            let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
-            for i in (0..slots).filter(|i| present(*i)) {
-                let entry: Vec<F> = arrays[va].values.iter().map(|col| col[i]).collect();
-                index.insert(key(&entry), i);
-            }
-            let mut mult = vec![0u64; slots];
-            for &(a, _, _) in &lookup_arrays {
+            // Count every lookup into this table obliviously: looked-up tuples
+            // and a witness table's entries are private, so no memory access or
+            // branch follows their values (`oblivious_histogram`). The entries'
+            // slots, the readers' instances and a fixed table's values are
+            // public structure.
+            let entries: Vec<usize> = (0..slots).filter(|i| present(*i)).collect();
+            let (cells, fixed) = (arrays[va].cells(), arrays[va].fixed);
+            let table = oblivious_histogram::Table::gather(cells, &entries, fixed, |k, i| {
+                arrays[va].values[k][i]
+            });
+            let reads = |a: usize, i: usize| {
                 let arr = &arrays[a];
-                let (arho, afam) = (arr.rho, arr.family);
-                for i in 0..1usize << (pi[afam] + arho) {
-                    if (i >> arho) >= counts[afam]
-                        || !field_present(rfield[a], i & ((1 << arho) - 1))
-                    {
-                        continue;
-                    }
-                    for (t, tuple) in &arr.lookups {
-                        if *t != tid {
-                            continue;
+                (i >> arr.rho) < counts[arr.family]
+                    && field_present(rfield[a], i & ((1 << arr.rho) - 1))
+            };
+            let slots_of = |a: usize| 1usize << (pi[arrays[a].family] + arrays[a].rho);
+            let (readers, lookup_count) = table_readers(
+                &arrays,
+                &lookup_arrays,
+                |a| (0..slots_of(a)).filter(|&i| reads(a, i)).count(),
+                tid,
+                cells,
+                "looked-up",
+            );
+            let found = oblivious_histogram::count(&table, readers.len(), lookup_count, |sink| {
+                let mut key = Vec::with_capacity(cells * oblivious_histogram::FIELD_WORDS);
+                for (g, &a) in readers.iter().enumerate() {
+                    for i in (0..slots_of(a)).filter(|&i| reads(a, i)) {
+                        for (t, tuple) in &arrays[a].lookups {
+                            if *t != tid {
+                                continue;
+                            }
+                            key.clear();
+                            for lin in tuple {
+                                let v = eval_lin(&arrays, &pi, a, lin, i);
+                                oblivious_histogram::push_field(&mut key, v);
+                            }
+                            sink(g, key.as_slice());
                         }
-                        let vals: Vec<F> = tuple
-                            .iter()
-                            .map(|lin| eval_lin(&arrays, &pi, a, lin, i))
-                            .collect();
-                        let slot = *index.get(&key(&vals)).unwrap_or_else(|| {
-                            panic!("{}: a looked-up tuple is in table {tid}", arr.name)
-                        });
-                        mult[slot] += 1;
                     }
                 }
+            });
+            if let Some(g) = found.missing.iter().position(|m| *m) {
+                panic!("{}: a looked-up tuple is in table {tid}", arrays[readers[g]].name);
+            }
+            let mut mult = vec![0u64; slots];
+            for (&i, &m) in entries.iter().zip(&found.counts) {
+                mult[i] = m;
             }
             // The multiplicities' width class from the lookup count, not from
             // the largest multiplicity: which entries the values hit is data,
             // and a width taken from it would move the column between width
             // classes (so the placement and the matrices) from one witness to
             // the next. A verifier slot taking either of two circuits relies
-            // on one layout per circuit.
-            let lookups_n: u64 = mult.iter().sum();
+            // on one layout per circuit. Every lookup is in an entry here, so
+            // this is the multiplicities' sum.
+            let lookups_n = lookup_count as u64;
             let mbits = (64 - lookups_n.leading_zeros()).max(1) as u16;
             let wa = arrays.len();
             arrays.push(Array {
@@ -1864,7 +1980,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 rows: vec![[Vec::new(), Vec::new(), Vec::new()]],
                 values: vec![
                     mult.iter().map(|m| F::from(*m)).collect(),
-                    vec![F::ZERO; slots],
+                    crate::kern::zeroed(slots),
                 ],
             });
             phase2.push(vec![false, true]);
@@ -1934,7 +2050,6 @@ impl<F: Scalar> UniformCircuit<F> {
                 lin.shrink_to_fit();
             }
         });
-        let arrays = arrays;
         let (pi, counts) = (pi, counts);
         let m_of = |a: usize| pi[arrays[a].family] + arrays[a].rho;
         for (a, arr) in arrays.iter().enumerate() {
@@ -2418,6 +2533,18 @@ impl<F: Scalar> UniformCircuit<F> {
                 };
             }
         }
+        // Check the actual row placement that commitment and transcript replay use.
+        // Copy entries and lookup tables both put multiplicity in column 0 and
+        // the rational-function helper in column 1.
+        let second_phase =
+            (p1_rows + pl_rows) * shape.cols()..(p1_rows + pl_rows + p2_rows) * shape.cols();
+        for a in tables
+            .iter()
+            .map(|&(_, _, a)| a)
+            .chain(exports.iter().map(|&(_, a, _, _)| a))
+        {
+            logup_phases::check_committed_columns(&blocks[a], &present_rows[a], &second_phase);
+        }
         // Every block is aligned: its base has no bit where an instance bit
         // lands (the matrix evaluation factors on exactly that).
         for (a, arr) in arrays.iter().enumerate() {
@@ -2484,15 +2611,25 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         heap_mark("layout");
         let cols = shape.cols();
-        // Zero pages until written: only nonzero values are written, so a
-        // row without one (and the never-read tail of a padding row) holds no
-        // memory.
+        // Only the public layout decides which pages to touch and which rows
+        // the prover may skip. A present private zero is written just like any
+        // other scalar. Structural holes can keep their demand-zero pages.
         let mut w = crate::kern::zeroed(shape.rows() * cols);
         let mut written = vec![false; shape.rows()];
         // Every present cell has a position of its own.
         let mut taken = vec![0u64; (shape.rows() * cols).div_ceil(64)];
+        // LogUp creates these columns as public zero placeholders. Instantiate
+        // computes their first values after the verifier challenges exist.
+        // Keep the placement check for each cell without dirtying its original
+        // witness page before the prover takes ownership of the row.
+        let mut helper_columns = HashSet::new();
+        for &(a, first, _) in &lookup_arrays {
+            helper_columns.extend((first..first + arrays[a].lookups.len()).map(|k| (a, k)));
+        }
+        helper_columns.extend(tables.iter().map(|&(_, _, wa)| (wa, 1)));
+        helper_columns.extend(exports.iter().map(|(_, wa, _, _)| (*wa, 1)));
         for (a, arr) in arrays
-            .iter()
+            .iter_mut()
             .enumerate()
             .filter(|(a, _)| !is_io.get(*a).copied().unwrap_or(false))
         {
@@ -2503,7 +2640,8 @@ impl<F: Scalar> UniformCircuit<F> {
                 .enumerate()
                 .filter(|(k, _)| moved[a][*k].is_none())
             {
-                for (i, v) in vals.iter().enumerate() {
+                let deferred = helper_columns.contains(&(a, k));
+                for i in 0..vals.len() {
                     if (i >> rho) < counts[fam] && field_present(rfield[a], i & ((1 << rho) - 1)) {
                         let x = blocks[a][k].index(i);
                         assert!(
@@ -2512,20 +2650,24 @@ impl<F: Scalar> UniformCircuit<F> {
                             arr.name
                         );
                         taken[x >> 6] |= 1 << (x & 63);
-                        if !bool::from(v.is_zero()) {
-                            w[x] = *v;
+                        if !deferred {
+                            w[x] = vals[i];
                             written[x / cols] = true;
                         }
-                    } else {
+                    } else if !deferred {
                         assert!(
-                            bool::from(v.is_zero()),
+                            bool::from(vals[i].is_zero()),
                             "{}: an absent instance holds zero",
                             arr.name
                         );
                     }
                 }
             }
+            if !arr.fixed {
+                release(&mut arr.values);
+            }
         }
+        drop(taken);
         if std::env::var("ZKS_PLACE").is_ok() {
             // Per row: present cells and the row's bound.
             let mut per_row = vec![0usize; shape.rows()];
@@ -2651,6 +2793,37 @@ impl<F: Scalar> UniformCircuit<F> {
             m_plans: OnceLock::new(),
             plan: OnceLock::new(),
         };
+        // Check the final physical address of every declared column, including
+        // cells rewritten into chunks. Within one post-split family the block
+        // address is monotone in the instance index, also after chunk mapping.
+        let first_end = p1_rows * shape.cols();
+        let witness_end = shape.rows() * shape.cols();
+        let fixed_start = (shape.rows() - fixed_rows) * shape.cols();
+        for (a, array) in circuit.arrays.iter().enumerate() {
+            let present = &present_rows[a];
+            let (Some(&lo), Some(&hi)) = (present.first(), present.last()) else {
+                continue;
+            };
+            for k in 0..array.cells() {
+                let region = if circuit.phase2[a][k] {
+                    second_phase.clone()
+                } else if is_io.get(a) == Some(&true) {
+                    witness_end..2 * witness_end
+                } else if array.fixed || wallet.is_some_and(|(wa, _)| wa == a) {
+                    fixed_start..witness_end
+                } else if link_array[a] {
+                    first_end..second_phase.start
+                } else {
+                    0..first_end
+                };
+                assert!(
+                    region.contains(&circuit.cell_index(a, k, lo))
+                        && region.contains(&circuit.cell_index(a, k, hi)),
+                    "{label}: {} column {k} must be in its committed phase",
+                    array.name
+                );
+            }
+        }
         let fill = (0..shape.rows())
             .map(|r| {
                 if r >= padding {
@@ -2851,10 +3024,12 @@ impl<F: Scalar> UniformCircuit<F> {
         }
     }
 
-    /// Committed entries per width class (the Pixel model's commit input):
-    /// first-phase rows count their nonzero values at the row's bound,
-    /// second-phase rows their present helper cells at full width; constant
-    /// rows are the key's.
+    /// Committed entries per width class (the variable-time Pixel model's
+    /// commit input, measurement only): first-phase rows count their nonzero
+    /// values at the row's bound, second-phase rows their present helper
+    /// cells at full width; constant rows are the key's. It reads witness
+    /// values; the prover never calls it, and its constant-time commit reads
+    /// every entry of a committed row, zero or not.
     pub fn width_classes(&self, w: &[F]) -> BTreeMap<u16, usize> {
         let (cols, active) = (self.shape.cols(), self.shape.active_cols());
         let mut out: BTreeMap<u16, usize> = BTreeMap::new();
@@ -2897,46 +3072,55 @@ impl<F: Scalar> UniformCircuit<F> {
     }
 
     /// Counts the link tables' multiplicities from the witness (after the
-    /// link phase's fill), as the build counts the others.
+    /// link phase's fill), obliviously as the build counts the others: the
+    /// link phase's tuples are private.
     fn recount_link_tables<W: Cells<F> + ?Sized>(&self, w: &mut W) {
-        let key = |vals: &[F]| -> Vec<u8> {
-            vals.iter()
-                .flat_map(|v| v.to_repr().as_ref().to_vec())
-                .collect()
-        };
         for &(va, tid, wa) in self
             .tables
             .iter()
             .filter(|t| self.link_tables.contains(&t.1))
         {
-            let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
-            for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
-                let entry: Vec<F> = (0..self.arrays[va].cells())
-                    .map(|k| w.cell(self.blocks[va][k].index(i)))
-                    .collect();
-                index.insert(key(&entry), i);
-            }
-            let mut mult = vec![0u64; 1usize << self.m(va)];
-            for &(a, _, _) in &self.lookup_arrays {
-                for i in (0..1usize << self.m(a)).filter(|i| self.present(a, *i)) {
-                    for (t, tuple) in &self.arrays[a].lookups {
-                        if *t != tid {
-                            continue;
+            let entries: Vec<usize> = (0..1usize << self.m(va))
+                .filter(|i| self.present(va, *i))
+                .collect();
+            let (cells, fixed) = (self.arrays[va].cells(), self.arrays[va].fixed);
+            let table = oblivious_histogram::Table::gather(cells, &entries, fixed, |k, i| {
+                w.cell(self.blocks[va][k].index(i))
+            });
+            let (readers, lookup_count) = table_readers(
+                &self.arrays,
+                &self.lookup_arrays,
+                |a| self.instances(a),
+                tid,
+                cells,
+                "link-phase",
+            );
+            let found = oblivious_histogram::count(&table, readers.len(), lookup_count, |sink| {
+                let mut key = Vec::with_capacity(cells * oblivious_histogram::FIELD_WORDS);
+                for (g, &a) in readers.iter().enumerate() {
+                    for i in (0..1usize << self.m(a)).filter(|i| self.present(a, *i)) {
+                        for (t, tuple) in &self.arrays[a].lookups {
+                            if *t != tid {
+                                continue;
+                            }
+                            key.clear();
+                            for lin in tuple {
+                                let v = self.eval_w(&*w, a, lin, i);
+                                oblivious_histogram::push_field(&mut key, v);
+                            }
+                            sink(g, key.as_slice());
                         }
-                        let vals: Vec<F> =
-                            tuple.iter().map(|lin| self.eval_w(w, a, lin, i)).collect();
-                        let slot = *index.get(&key(&vals)).unwrap_or_else(|| {
-                            panic!(
-                                "{}: a link-phase tuple is in table {tid}",
-                                self.arrays[a].name
-                            )
-                        });
-                        mult[slot] += 1;
                     }
                 }
+            });
+            if let Some(g) = found.missing.iter().position(|m| *m) {
+                panic!(
+                    "{}: a link-phase tuple is in table {tid}",
+                    self.arrays[readers[g]].name
+                );
             }
-            for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
-                w.set_cell(self.blocks[wa][0].index(i), F::from(mult[i]));
+            for (&i, &m) in entries.iter().zip(&found.counts) {
+                w.set_cell(self.blocks[wa][0].index(i), F::from(m));
             }
         }
     }
@@ -3690,8 +3874,12 @@ impl<F: Scalar> UniformCircuit<F> {
     }
 
     pub fn program_digest(&self) -> [u8; 32] {
+        self.program_digest_with_domain(b"kagemusha-spartan/program/full-logup/v1\0")
+    }
+
+    fn program_digest_with_domain(&self, domain: &[u8]) -> [u8; 32] {
         let mut h = blake3::Hasher::new();
-        h.update(b"kagemusha-spartan/program/v1\0");
+        h.update(domain);
         let word = |h: &mut blake3::Hasher, v: usize| {
             h.update(&(v as u64).to_le_bytes());
         };
@@ -3725,9 +3913,9 @@ impl<F: Scalar> UniformCircuit<F> {
             Some(tape) => hash_tape(
                 &mut h,
                 tape.inputs,
-                tape.ops.len(),
+                tape.regs.ops.len(),
                 &tape.pool,
-                tape.ops.iter().copied(),
+                tape.slot_instructions(),
                 tape.out,
             ),
             None => {
@@ -3770,7 +3958,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// a constant, and instructions.
     pub fn plan_stats(&self) -> (usize, usize, usize) {
         let p = self.plan();
-        (p.muls, p.scales, p.ops.len())
+        (p.muls, p.scales, p.regs.ops.len())
     }
 
     /// One array's part of `A~, B~, C~` (its own compiled program).
@@ -3802,7 +3990,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// The compiled program's batched form: its registers against its slots.
     pub fn plan_registers(&self) -> (usize, usize) {
         let p = self.plan();
-        (p.registers(), p.inputs + p.ops.len())
+        (p.registers(), p.inputs + p.regs.ops.len())
     }
 
     /// The fixed witness bits of block `(a2, k2)` against `r_y`, times the
@@ -5296,7 +5484,7 @@ pub enum Factor {
 /// A program slot: the inputs, then one per instruction.
 type Slot = u32;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
     Add(Slot, Slot),
     Sub(Slot, Slot),
@@ -5307,10 +5495,23 @@ enum Op {
     Const(u32),
 }
 
-/// A straight-line program: `inputs` slots, then one slot per instruction.
+impl Op {
+    /// Rename operand slots, preserving constant-pool indices.
+    fn map_slots(self, slot: impl Fn(Slot) -> Slot) -> Self {
+        match self {
+            Self::Add(a, b) => Self::Add(slot(a), slot(b)),
+            Self::Sub(a, b) => Self::Sub(slot(a), slot(b)),
+            Self::Mul(a, b) => Self::Mul(slot(a), slot(b)),
+            Self::Scale(a, k) => Self::Scale(slot(a), k),
+            Self::Const(k) => Self::Const(k),
+        }
+    }
+}
+
+/// Public matrix program. The register instructions also determine the
+/// canonical slot instructions used by the manifest and transport.
 pub struct Tape<F> {
     inputs: usize,
-    ops: Vec<Op>,
     pool: Vec<F>,
     out: [Slot; 3],
     /// Products of two slots.
@@ -5345,16 +5546,19 @@ fn operands(op: Op) -> ([Slot; 2], usize) {
 impl Regs {
     fn of(inputs: usize, ops: &[Op], out: [Slot; 3]) -> Regs {
         let n = inputs + ops.len();
-        // The last instruction reading each slot; the outputs live to the end.
-        let mut last: Vec<Option<usize>> = vec![None; n];
+        // Store last uses in the same width as the instruction operands. The
+        // slot just past the program keeps outputs live through the last write.
+        let end = Slot::try_from(n).expect("tape fits its slot representation");
+        assert!(end < Slot::MAX, "reserve one unused-slot marker");
+        let mut last = vec![Slot::MAX; n];
         for (i, op) in ops.iter().enumerate() {
             let (src, k) = operands(*op);
             for a in &src[..k] {
-                last[*a as usize] = Some(inputs + i);
+                last[*a as usize] = (inputs + i) as Slot;
             }
         }
         for o in out {
-            last[o as usize] = Some(usize::MAX);
+            last[o as usize] = end;
         }
         let alloc = |free: &mut Vec<Slot>, count: &mut Slot| -> Slot {
             free.pop().unwrap_or_else(|| {
@@ -5367,33 +5571,26 @@ impl Regs {
             *r = alloc(&mut free, &mut count);
         }
         for j in 0..inputs {
-            if last[j].is_none() {
+            if last[j] == Slot::MAX {
                 free.push(reg[j]);
             }
         }
         let mut rops = Vec::with_capacity(ops.len());
         for (i, op) in ops.iter().enumerate() {
             let s = inputs + i;
-            let r = |x: Slot| reg[x as usize];
-            let rop = match *op {
-                Op::Add(a, b) => Op::Add(r(a), r(b)),
-                Op::Sub(a, b) => Op::Sub(r(a), r(b)),
-                Op::Mul(a, b) => Op::Mul(r(a), r(b)),
-                Op::Scale(a, k) => Op::Scale(r(a), k),
-                Op::Const(k) => Op::Const(k),
-            };
+            let rop = op.map_slots(|x| reg[x as usize]);
             // Operands read for the last time give their registers back
             // first, so the result may take one (each lane reads its
             // operands before it writes).
             let (src, k) = operands(*op);
             for a in &src[..k] {
-                if last[*a as usize] == Some(s) {
+                if last[*a as usize] == s as Slot {
                     free.push(reg[*a as usize]);
                 }
             }
             let d = alloc(&mut free, &mut count);
             reg[s] = d;
-            if last[s].is_none() {
+            if last[s] == Slot::MAX {
                 free.push(d);
             }
             rops.push((rop, d));
@@ -5431,6 +5628,25 @@ fn q_lanes() -> usize {
 }
 
 impl<F: Scalar> Tape<F> {
+    /// Replay the latest slot written to each register to recover every
+    /// canonical instruction. Operands must be resolved before overwriting
+    /// a destination that aliases a last-use input.
+    fn slot_instructions(&self) -> impl ExactSizeIterator<Item = Op> + '_ {
+        let mut slots = vec![0; self.regs.count];
+        for (input, &register) in self.regs.inputs.iter().enumerate() {
+            slots[register as usize] = input as Slot;
+        }
+        self.regs
+            .ops
+            .iter()
+            .enumerate()
+            .map(move |(i, &(op, dest))| {
+                let original = op.map_slots(|r| slots[r as usize]);
+                slots[dest as usize] = (self.inputs + i) as Slot;
+                original
+            })
+    }
+
     /// Registers of the batched form.
     pub fn registers(&self) -> usize {
         self.regs.count
@@ -5438,13 +5654,21 @@ impl<F: Scalar> Tape<F> {
 
     /// `run` at up to `L` points at once: every instruction over the lanes
     /// of its registers (independent products, no dispatch per point).
-    fn run_lanes<const L: usize>(&self, points: &[Vec<F>]) -> Vec<(F, F, F)> {
+    fn run_lanes<const L: usize>(&self, points: &[impl AsRef<[F]>]) -> Vec<(F, F, F)> {
+        let mut registers = vec![[F::ZERO; L]; self.registers()];
+        self.run_lanes_with(points, &mut registers)
+    }
+
+    fn run_lanes_with<const L: usize>(
+        &self,
+        points: &[impl AsRef<[F]>],
+        r: &mut [[F; L]],
+    ) -> Vec<(F, F, F)> {
         assert!(points.len() <= L, "at most one point per lane");
         let rg = &self.regs;
-        let mut r: Vec<[F; L]> = vec![[F::ZERO; L]; rg.count];
         for (j, &g) in rg.inputs.iter().enumerate() {
             for (l, p) in points.iter().enumerate() {
-                r[g as usize][l] = p[j];
+                r[g as usize][l] = p.as_ref()[j];
             }
         }
         for &(op, d) in &rg.ops {
@@ -5475,50 +5699,50 @@ impl<F: Scalar> Tape<F> {
             .collect()
     }
 
-    /// `run` at many points: groups of lanes over the register form, the
-    /// groups in parallel; the same values as one `run` per point.
+    /// Keep one register file per parallel job and reuse it for that job's
+    /// consecutive lane groups. Only outputs from occupied lanes are read.
+    fn run_groups<const L: usize>(
+        &self,
+        points: &[Vec<F>],
+        max_concurrent_lanes: usize,
+    ) -> Vec<(F, F, F)> {
+        let groups = points.len().div_ceil(L);
+        let workers = (max_concurrent_lanes / L)
+            .max(1)
+            .min(rayon::current_num_threads());
+        let chunk_size = groups.div_ceil(workers).max(1) * L;
+        points
+            .par_chunks(chunk_size)
+            .flat_map_iter(|chunk| {
+                let mut registers = vec![[F::ZERO; L]; self.registers()];
+                chunk
+                    .chunks(L)
+                    .flat_map(move |group| self.run_lanes_with(group, &mut registers))
+            })
+            .collect()
+    }
+
+    /// Evaluate in order. Bound the simultaneous register files independently
+    /// of the Rayon pool size. A single scalar file is always necessary.
     pub fn run_many(&self, points: &[Vec<F>]) -> Vec<(F, F, F)> {
-        use rayon::prelude::*;
         assert!(
             points.iter().all(|p| p.len() == self.inputs),
             "one value per input slot"
         );
-        let groups: Vec<Vec<(F, F, F)>> = match q_lanes() {
-            8 => points
-                .par_chunks(8)
-                .map(|g| self.run_lanes::<8>(g))
-                .collect(),
-            16 => points
-                .par_chunks(16)
-                .map(|g| self.run_lanes::<16>(g))
-                .collect(),
-            _ => points
-                .par_chunks(4)
-                .map(|g| self.run_lanes::<4>(g))
-                .collect(),
-        };
-        groups.concat()
+        const REGISTER_BUDGET_BYTES: usize = 64 << 20;
+        let scalar_bytes = self.registers().saturating_mul(size_of::<F>()).max(1);
+        let max_lanes = (REGISTER_BUDGET_BYTES / scalar_bytes).max(1);
+        match q_lanes().min(max_lanes) {
+            16.. => self.run_groups::<16>(points, max_lanes),
+            8.. => self.run_groups::<8>(points, max_lanes),
+            4.. => self.run_groups::<4>(points, max_lanes),
+            _ => self.run_groups::<1>(points, max_lanes),
+        }
     }
 
     pub fn run(&self, inputs: &[F]) -> (F, F, F) {
         assert_eq!(inputs.len(), self.inputs, "one value per input slot");
-        let mut v: Vec<F> = Vec::with_capacity(self.inputs + self.ops.len());
-        v.extend_from_slice(inputs);
-        for op in &self.ops {
-            let x = match *op {
-                Op::Add(a, b) => v[a as usize] + v[b as usize],
-                Op::Sub(a, b) => v[a as usize] - v[b as usize],
-                Op::Mul(a, b) => v[a as usize] * v[b as usize],
-                Op::Scale(a, k) => v[a as usize] * self.pool[k as usize],
-                Op::Const(k) => self.pool[k as usize],
-            };
-            v.push(x);
-        }
-        (
-            v[self.out[0] as usize],
-            v[self.out[1] as usize],
-            v[self.out[2] as usize],
-        )
+        self.run_lanes::<1>(&[inputs])[0]
     }
 }
 
@@ -5753,13 +5977,7 @@ impl<F: Scalar> Builder<F> {
             .iter()
             .enumerate()
             .filter(move |(i, _)| at[ni + i] != UNKNOWN)
-            .map(move |(_, op)| match *op {
-                Op::Add(a, b) => Op::Add(r(a), r(b)),
-                Op::Sub(a, b) => Op::Sub(r(a), r(b)),
-                Op::Mul(a, b) => Op::Mul(r(a), r(b)),
-                Op::Scale(a, k) => Op::Scale(r(a), k),
-                Op::Const(k) => Op::Const(k),
-            })
+            .map(move |(_, op)| op.map_slots(r))
     }
 
     /// The program's digest words ([`hash_tape`]) without building the
@@ -5795,7 +6013,6 @@ impl<F: Scalar> Builder<F> {
         let regs = Regs::of(ni, &ops, out);
         Tape {
             inputs: ni,
-            ops,
             pool: self.pool,
             out,
             muls,
@@ -6514,22 +6731,14 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn fixed_row(&self, shape: &Shape, k: usize) -> Vec<F> {
         let cols = shape.cols();
-        let (start, end) = (k * cols, (k + 1) * cols);
-        let mut row = vec![F::ZERO; cols];
-        let mut at = 0;
-        self.fixed_values
-            .visit_runs::<std::convert::Infallible>(|count, values| {
-                if let Some(values) = values {
-                    let (lo, hi) = (at.max(start), (at + count).min(end));
-                    if lo < hi {
-                        row[lo - start..hi - start].copy_from_slice(&values[lo - at..hi - at]);
-                    }
-                }
-                at += count;
-                Ok(())
-            })
-            .unwrap();
+        let start = k * cols;
+        let mut row = self.fixed_values.nonzero_prefix(start..start + cols);
+        row.resize(cols, F::ZERO);
         row
+    }
+    fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let start = k * shape.cols();
+        self.fixed_values.nonzero_prefix(start..start + shape.active_cols())
     }
     fn wallet_rows(&self) -> usize {
         self.wallet_rows
@@ -6606,23 +6815,35 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
 // ---------------------------------------------------------------------------
 // Template building: linear combinations over sources, coefficients per r.
 
-pub(crate) fn compact<F: Field>(lin: Lin<F>) -> Lin<F> {
-    let mut out: Vec<Term<F>> = Vec::new();
+pub(crate) fn compact<F: Field>(mut lin: Lin<F>) -> Lin<F> {
+    let nonzero = |t: &Term<F>| t.coef.iter().any(|c| !bool::from(c.is_zero()));
+    if lin.len() <= 1 {
+        lin.retain(nonzero);
+        return lin;
+    }
+    let small = lin.len() <= 8;
+    let mut out: Vec<Term<F>> = Vec::with_capacity(lin.len());
     let mut index: HashMap<Src, usize> = HashMap::new();
     for t in lin {
-        match index.get(&t.src) {
-            Some(&k) => {
-                for (a, b) in out[k].coef.iter_mut().zip(&t.coef) {
-                    *a += b;
-                }
+        // Most template sums have a handful of terms. Comparing their sources
+        // directly avoids allocating a table and cloning every link's row map.
+        let prior = if small {
+            out.iter().position(|existing| existing.src == t.src)
+        } else {
+            index.get(&t.src).copied()
+        };
+        if let Some(k) = prior {
+            for (a, b) in out[k].coef.iter_mut().zip(&t.coef) {
+                *a += b;
             }
-            None => {
+        } else {
+            if !small {
                 index.insert(t.src.clone(), out.len());
-                out.push(t);
             }
+            out.push(t);
         }
     }
-    out.retain(|t| t.coef.iter().any(|c| !bool::from(c.is_zero())));
+    out.retain(nonzero);
     out
 }
 
@@ -6960,7 +7181,7 @@ pub fn rp57_with<F: Scalar + PoseidonField>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::grid::eq_table;
     use iroha_pasta::Eq as Vesta;
@@ -7374,6 +7595,17 @@ mod tests {
     /// LogUp: range lookups into a 2^11-entry constant column and pair
     /// lookups into a 16-entry table, from a partial family (6 of 8 ladders).
     fn lookup_circuit() -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>) {
+        lookup_test_program::<Fv>()
+    }
+
+    pub(crate) fn lookup_test_program<Fv: Scalar>()
+    -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>) {
+        let (c, i, w, _) = lookup_test_rows();
+        (c, i, w)
+    }
+
+    fn lookup_test_rows<Fv: Scalar>()
+    -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>, Vec<RowFill>) {
         let mut rng = SpikeRng::new(b"logup");
         let slots = 8 * 4;
         let mut x = vec![Fv::ZERO; slots];
@@ -7425,15 +7657,17 @@ mod tests {
                 ],
             },
         ];
-        UniformCircuit::build(
+        UniformCircuit::build_rows(
             "logup-test",
             arrays,
             vec![3, 0],
             vec![6, 1],
             vec![(1, 0), (2, 1)],
+            Copies::default(),
             12,
             4,
             b"logup",
+            None,
         )
     }
 
@@ -7497,6 +7731,257 @@ mod tests {
         assert!(
             crate::spartan::verify_circuit(&shape, &gens, &inst, &proof.to_bytes(), &c).is_err(),
             "a pair outside its table is refused"
+        );
+    }
+
+    /// Checks every table's multiplicities in `w` against a direct count (the
+    /// last equal present entry takes a tuple's lookups); returns the entries
+    /// checked.
+    fn assert_direct_multiplicities(c: &UniformCircuit<Fv>, w: &[Fv]) -> usize {
+        let mut checked = 0;
+        for &(va, tid, wa) in &c.tables {
+            let slots: Vec<usize> = (0..1usize << c.m(va))
+                .filter(|i| c.present(va, *i))
+                .collect();
+            let entry = |i: usize| -> Vec<Fv> {
+                (0..c.arrays[va].cells())
+                    .map(|k| w[c.cell_index(va, k, i)])
+                    .collect()
+            };
+            let mut want = vec![0u64; 1usize << c.m(va)];
+            for &(a, _, _) in &c.lookup_arrays {
+                for i in (0..1usize << c.m(a)).filter(|i| c.present(a, *i)) {
+                    for (t, tuple) in &c.arrays[a].lookups {
+                        if *t != tid {
+                            continue;
+                        }
+                        let v: Vec<Fv> = tuple.iter().map(|lin| c.eval_w(w, a, lin, i)).collect();
+                        let slot = *slots
+                            .iter()
+                            .rev()
+                            .find(|&&s| entry(s) == v)
+                            .expect("a looked-up tuple in its table");
+                        want[slot] += 1;
+                    }
+                }
+            }
+            for &i in &slots {
+                assert_eq!(
+                    w[c.cell_index(wa, 0, i)],
+                    Fv::from(want[i]),
+                    "table {tid} entry {i}"
+                );
+                checked += 1;
+            }
+        }
+        checked
+    }
+
+    /// [`lookup_test_program`] with fixed values and its square table a
+    /// witness table whose entry 15 repeats entry 3's tuple (3, 9).
+    fn witness_table_lookup() -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>) {
+        let slots = 8 * 4;
+        let mut x = vec![Fv::ZERO; slots];
+        let mut sv = vec![Fv::ZERO; slots];
+        let mut s2 = vec![Fv::ZERO; slots];
+        for i in 0..slots {
+            if (i >> 2) < 6 && (i & 3) < 3 {
+                let s = ((i >> 2) % 4) as u64;
+                x[i] = Fv::from((i as u64 * 397) % 2048);
+                sv[i] = Fv::from(s);
+                s2[i] = Fv::from(s * s);
+            }
+        }
+        let square = |a: u64| if a == 15 { 3 } else { a };
+        let arrays = vec![
+            Array {
+                name: "values",
+                family: 0,
+                rho: 2,
+                r_count: 3,
+                fixed: false,
+                lookups: vec![(0, vec![own(0, 4)]), (1, vec![own(1, 4), own(2, 4)])],
+                widths: vec![11, 4, 8],
+                rows: vec![[own(1, 4), own(1, 4), own(2, 4)]],
+                values: vec![x, sv, s2],
+            },
+            Array {
+                name: "range table",
+                family: 1,
+                rho: 11,
+                r_count: 2048,
+                fixed: true,
+                lookups: Vec::new(),
+                widths: vec![11],
+                rows: Vec::new(),
+                values: vec![(0..2048u64).map(Fv::from).collect()],
+            },
+            Array {
+                name: "witness square table",
+                family: 1,
+                rho: 4,
+                r_count: 16,
+                fixed: false,
+                lookups: Vec::new(),
+                widths: vec![4, 8],
+                rows: Vec::new(),
+                values: vec![
+                    (0..16u64).map(|a| Fv::from(square(a))).collect(),
+                    (0..16u64).map(|a| Fv::from(square(a) * square(a))).collect(),
+                ],
+            },
+        ];
+        UniformCircuit::build(
+            "logup-witness-table-test",
+            arrays,
+            vec![3, 0],
+            vec![6, 1],
+            vec![(1, 0), (2, 1)],
+            12,
+            4,
+            b"logup witness table",
+        )
+    }
+
+    /// The oblivious count gives the hash index's multiplicities for a fixed
+    /// range table, a fixed pair table and a witness table with a repeated
+    /// tuple, and the witness-table relation still proves.
+    #[test]
+    fn table_multiplicities_match_a_direct_count() {
+        let (c, _, wit) = lookup_circuit();
+        assert_eq!(assert_direct_multiplicities(&c, &wit.w), 2048 + 16);
+        let (c, inst, wit) = witness_table_lookup();
+        assert!(!c.arrays[c.tables[1].0].fixed, "a witness table");
+        assert_eq!(assert_direct_multiplicities(&c, &wit.w), 2048 + 16);
+        let square = c.tables[1].2;
+        let mult = |i: usize| wit.w[c.cell_index(square, 0, i)];
+        // Three instances (p 3) look up (3, 9): the last equal entry takes them.
+        assert_eq!((mult(3), mult(15)), (Fv::ZERO, Fv::from(3u64)));
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let mut rng = SpikeRng::new(b"logup witness table prove");
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut rng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "honest"
+        );
+    }
+
+    /// The link phase's recount: a repeated tuple counts on its last entry,
+    /// and a tuple in no entry names its reader.
+    #[test]
+    fn link_table_recount_leaves_equal_entries_to_the_last() {
+        // The phased fixture's link-phase nibble table, entry 15 repeating 3.
+        let (c, _, wit) = crate::spartan::phase1_tests::phased_fixture::<Fv>(3);
+        let &(_, _, wa) = c
+            .tables
+            .iter()
+            .find(|t| c.link_tables.contains(&t.1))
+            .expect("a link table");
+        let mut w = wit.w.clone();
+        c.fill_link(&[3; 32], &mut w);
+        let mut want = vec![Fv::ZERO; 16];
+        want[15] = Fv::ONE;
+        let mult: Vec<Fv> = (0..16).map(|i| w[c.cell_index(wa, 0, i)]).collect();
+        assert_eq!(mult, want, "nibble 3 counts on entry 15 alone");
+        assert_eq!(assert_direct_multiplicities(&c, &w), 16);
+        let mut w = wit.w.clone();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.fill_link(&[15; 32], &mut w)
+        }))
+        .expect_err("nibble 15 is in no entry");
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            message.contains("rho-bound copy and lookup: a link-phase tuple is in table 0"),
+            "{message}"
+        );
+    }
+
+    /// The installed prover runs these row hooks (masks, link phase, second
+    /// phase) on the private witness. Each takes a copy of every row holding a
+    /// cell it writes, whether or not the value changes, so which rows it owns
+    /// follows public positions. The non-uniform circuits' default hooks
+    /// (`kern::Rows::write_back`) compare rows by value instead; over a witness
+    /// that already holds every value they write, they would take no row.
+    #[test]
+    fn uniform_row_hooks_take_rows_by_position() {
+        let (c, _, wit) = crate::spartan::phase1_tests::phased_fixture::<Fv>(15);
+        assert!(c.link_rows(&c.shape) > 0 && c.phase2_challenges() > 0);
+        let mut challenges = SpikeRng::new(b"row hook challenges");
+        let ch: [Fv; 2] = [challenges.scalar(), challenges.scalar()];
+        let run = |w: &[Fv]| -> (usize, Vec<Fv>) {
+            let mut rows = crate::kern::Rows::new(w, c.shape.cols());
+            c.randomize_masks_rows(&mut rows, &mut SpikeRng::new(b"row hook masks"));
+            c.fill_link_rows(&[7; 32], &mut rows);
+            drop(c.instantiate_rows(&c.shape, &ch, &mut rows));
+            (rows.owned(), rows.to_vec())
+        };
+        let (owned, filled) = run(&wit.w[..]);
+        assert!(owned > 0, "the hooks write rows");
+        let (again, refilled) = run(&filled[..]);
+        assert_eq!(refilled, filled, "the hooks are deterministic");
+        assert_eq!(again, owned, "rows taken by position, never by comparing values");
+    }
+
+    /// The build refuses a copy read unequal to the entry it names, comparing
+    /// with the fields' constant-time equality at public positions.
+    #[test]
+    fn a_copy_read_unequal_to_its_entry_is_refused_at_build() {
+        let build = |read: u64| {
+            let array = |name, values: Vec<Fv>| Array {
+                name,
+                family: 0,
+                rho: 1,
+                r_count: 2,
+                fixed: false,
+                lookups: Vec::new(),
+                widths: vec![255],
+                rows: Vec::new(),
+                values: vec![values],
+            };
+            let arrays = vec![
+                array("exported", vec![Fv::from(5u64), Fv::from(6u64)]),
+                array("importer", vec![Fv::from(read), Fv::from(6u64)]),
+            ];
+            let copies = Copies {
+                exports: vec![Export {
+                    array: 0,
+                    tuple: vec![own(0, 2)],
+                }],
+                imports: vec![Import {
+                    array: 1,
+                    tuple: vec![own(0, 2)],
+                    from: vec![Some((0, 0)), Some((0, 1))],
+                }],
+                ..Default::default()
+            };
+            UniformCircuit::build_with_copies(
+                "copy-refusal-test",
+                arrays,
+                vec![0],
+                vec![1],
+                Vec::new(),
+                copies,
+                10,
+                4,
+                b"copy refusal",
+            )
+        };
+        let (c, _, _) = build(5);
+        assert_eq!(c.copy_counts(), (2, 2), "entries and reads");
+        let failure = std::panic::catch_unwind(|| {
+            build(7);
+        })
+        .expect_err("an unequal copy");
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            message.contains("importer slot 0: copied value 0 equals exported slot 0's"),
+            "{message}"
         );
     }
 
@@ -7825,23 +8310,53 @@ mod tests {
                     let regs = Regs::of(inputs, &ops, out);
                     let tape = Tape {
                         inputs,
-                        ops,
                         pool,
                         out,
                         muls: 0,
                         scales: 0,
                         regs,
                     };
+                    assert!(tape.slot_instructions().eq(ops.iter().copied()));
                     for count in [0, 1, 3, 4, 5, 8, 9, 16, 17] {
                         let points: Vec<Vec<F>> = (0..count)
                             .map(|_| (0..inputs).map(|_| rng.scalar()).collect())
                             .collect();
-                        let expected: Vec<_> = points.iter().map(|p| tape.run(p)).collect();
+                        // Independent slot interpreter, including dead writes, repeated
+                        // operands, original inputs as outputs and aliased outputs.
+                        let expected: Vec<_> = points
+                            .iter()
+                            .map(|p| {
+                                let mut slots = p.clone();
+                                for &op in &ops {
+                                    let value = match op {
+                                        Op::Add(a, b) => slots[a as usize] + slots[b as usize],
+                                        Op::Sub(a, b) => slots[a as usize] - slots[b as usize],
+                                        Op::Mul(a, b) => slots[a as usize] * slots[b as usize],
+                                        Op::Scale(a, k) => {
+                                            slots[a as usize] * tape.pool[k as usize]
+                                        }
+                                        Op::Const(k) => tape.pool[k as usize],
+                                    };
+                                    slots.push(value);
+                                }
+                                let [a, b, c] = out.map(|s| slots[s as usize]);
+                                (a, b, c)
+                            })
+                            .collect();
+                        assert!(
+                            points
+                                .iter()
+                                .map(|p| tape.run(p))
+                                .eq(expected.iter().copied())
+                        );
                         assert_eq!(
                             tape.run_many(&points),
                             expected,
                             "inputs={inputs}, seed={seed}, count={count}"
                         );
+                        // Force consecutive groups to reuse a single register
+                        // file, including a short final group and empty input.
+                        assert_eq!(tape.run_groups::<4>(&points, 4), expected);
                         assert_eq!(
                             points
                                 .chunks(4)
@@ -8017,6 +8532,21 @@ mod tests {
                 None,
             )
         }
+        fn check_helpers<C: iroha_pasta::PastaCurve>()
+        where F<C>: Scalar {
+            let (c, i, w, fill) = lookup_test_rows::<F<C>>();
+            let start = c.p1_rows + c.pl_rows;
+            let mut helpers = start..start + c.p2_rows;
+            assert!(!helpers.is_empty());
+            assert!(helpers.clone().all(|r| fill[r] == RowFill::Zero));
+            let mut rows = crate::kern::Rows::with_fill(&w.w, c.shape.cols(), &fill);
+            let mut rng = SpikeRng::new(b"LogUp deferred helper rows");
+            c.fill_second_phase(&[rng.scalar(), rng.scalar()], &mut rows);
+            assert!(helpers.all(|r| !rows.is_zero_row(r)));
+            same::<C>("LogUp deferred helper rows", &c, &i, &w, &fill);
+        }
+        check_helpers::<Vesta>();
+        check_helpers::<iroha_pasta::Ep>();
         let mut never_read = [0usize; 2];
         let mut add = |seen: [usize; 2]| {
             never_read[0] += seen[0];
@@ -8070,19 +8600,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn zero_private_values_preserve_declared_row_occupancy() {
+        let build = |zero_private: bool| {
+            let (mut arrays, pi, _) = rp57::<iroha_pasta::Fp>(2, b"public row occupancy");
+            if zero_private {
+                for array in arrays.iter_mut().filter(|array| !array.fixed) {
+                    for values in &mut array.values {
+                        values.fill(iroha_pasta::Fp::ZERO);
+                    }
+                }
+            }
+            let counts = pi.iter().map(|p| 1 << p).collect();
+            let (c, _, w, fill) = UniformCircuit::build_rows(
+                "occupancy", arrays, pi, counts, vec![], Copies::default(), 11, 4,
+                b"occupied rows", None,
+            );
+            (c.program_digest(), w.w, fill)
+        };
+        let (program, witness, fill) = build(false);
+        let (zero_program, zero_witness, zero_fill) = build(true);
+        assert_ne!(witness, zero_witness);
+        assert_eq!(program, zero_program);
+        assert_eq!(fill, zero_fill);
+    }
+
+    #[test]
+    fn placing_then_erasing_private_arrays_preserves_witness_and_program() {
+        fn check<G: Scalar + iroha_pasta::poseidon::PoseidonField + zeroize::Zeroize>() {
+            let build = |erase| {
+                let (arrays, pi, _) = rp57::<G>(2, b"private array placement");
+                let counts = pi.iter().map(|p| 1 << p).collect();
+                UniformCircuit::build_rows_with_release(
+                    "placement",
+                    arrays,
+                    pi,
+                    counts,
+                    vec![],
+                    Copies::default(),
+                    11,
+                    4,
+                    b"placed rows",
+                    None,
+                    |values| {
+                        if erase {
+                            zeroize::Zeroize::zeroize(values);
+                        }
+                    },
+                )
+            };
+            let (original, inputs, witness, rows) = build(false);
+            let (erased, new_inputs, new_witness, new_rows) = build(true);
+            assert_eq!(witness.w, new_witness.w);
+            assert_eq!(inputs.io, new_inputs.io);
+            assert_eq!(rows, new_rows);
+            assert_eq!(original.program_digest(), erased.program_digest());
+            assert!(
+                erased
+                    .arrays
+                    .iter()
+                    .filter(|a| !a.fixed)
+                    .all(|a| a.values.is_empty())
+            );
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+
     /// Proof bytes of the uniform fixtures (lookups, copies, a link phase,
     /// product masks; both curves) and first-phase digests under fixed RNG
-    /// streams, as the prover at iroha 9ee63f379a produced them: the
-    /// prover's memory layout may change, its bytes may not.
+    /// streams. The signed v4 profile selects the full-width LogUp transcript.
+    /// Prover memory-layout changes must preserve these profile-specific bytes.
     #[test]
     fn prover_bytes_match_the_recorded_proofs() {
         use crate::ipa::F;
-        use crate::spartan::{Link, prepare_linked_phase1, prove_circuit, prove_linked_circuit};
+        use crate::spartan::{
+            Link, prepare_linked_phase1, prove_circuit, prove_linked_circuit, verify_circuit,
+            verify_linked_circuit,
+        };
         use ff::PrimeField;
         type Built<C> = (UniformCircuit<F<C>>, Instance<F<C>>, Witness<F<C>>);
         fn linked<C: iroha_pasta::PastaCurve>(
             name: &str,
             (c, i, w): Built<C>,
+            binding: u64,
             out: &mut Vec<String>,
         ) {
             let gens = crate::ipa::Gens::<C>::new(c.shape.cols());
@@ -8097,7 +8698,7 @@ mod tests {
             );
             let link = Link::First {
                 rho: F::<C>::from(7).to_repr(),
-                r: F::<C>::from(11).to_repr(),
+                r: F::<C>::from(binding).to_repr(),
             };
             let (proof, d2, r) = prove_linked_circuit(
                 &c.shape,
@@ -8109,10 +8710,15 @@ mod tests {
                 &c,
             );
             assert_eq!(d, d2);
+            let bytes = proof.to_bytes();
+            assert_eq!(
+                verify_linked_circuit(&c.shape, &gens, &i, &bytes, &link, &c),
+                Ok(d)
+            );
             out.push(format!("{name} digest {}", blake3::hash(&d).to_hex()));
             out.push(format!(
                 "{name} linked {} r {}",
-                blake3::hash(&proof.to_bytes()).to_hex(),
+                blake3::hash(&bytes).to_hex(),
                 blake3::hash(&r).to_hex()
             ));
         }
@@ -8134,16 +8740,18 @@ mod tests {
             )
         }
         let mut out = Vec::new();
-        linked::<Vesta>("rp57 Vesta", rp::<Vesta>(), &mut out);
-        linked::<iroha_pasta::Ep>("rp57 Pallas", rp::<iroha_pasta::Ep>(), &mut out);
+        linked::<Vesta>("rp57 Vesta", rp::<Vesta>(), 11, &mut out);
+        linked::<iroha_pasta::Ep>("rp57 Pallas", rp::<iroha_pasta::Ep>(), 11, &mut out);
         linked::<Vesta>(
             "phased Vesta",
             crate::spartan::phase1_tests::phased_fixture::<Fv>(15),
+            14, // the phased relation binds low(rho) + 7
             &mut out,
         );
         linked::<iroha_pasta::Ep>(
             "phased Pallas",
             crate::spartan::phase1_tests::phased_fixture::<F<iroha_pasta::Ep>>(15),
+            14, // the phased relation binds low(rho) + 7
             &mut out,
         );
         for (name, (c, i, w)) in [
@@ -8161,10 +8769,9 @@ mod tests {
                 &mut SpikeRng::new(seed.as_bytes()),
                 &c,
             );
-            out.push(format!(
-                "{name} proof {}",
-                blake3::hash(&proof.to_bytes()).to_hex()
-            ));
+            let bytes = proof.to_bytes();
+            verify_circuit(&c.shape, &gens, &i, &bytes, &c).expect("fixture proof verifies");
+            out.push(format!("{name} proof {}", blake3::hash(&bytes).to_hex()));
         }
         for line in &out {
             println!("E3 golden {line}");
@@ -8177,16 +8784,16 @@ mod tests {
     }
 
     const RECORDED: [&str; 11] = [
-        "rp57 Vesta digest 370707a54b9034cf1ff5f0706686287144b4c1eac6f01221df09386af531a817",
-        "rp57 Vesta linked 30e287805c1b9a423a31f06f57fe48cf1354148ac73654955a1b8096570d5b17 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
-        "rp57 Pallas digest c89bb7e0b69eb9e6e247a344403eea3981a922aa8970ccabebc69b896e99f0ac",
-        "rp57 Pallas linked f9d46a87a2b6ded82e4cc95f7d9988818ca97584787c41e13f655dd024467676 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
-        "phased Vesta digest 66c2c273306ae19b855e60dc9015132b661d438e13718bb728d1941abeef007e",
-        "phased Vesta linked 610ac3d682a935d03340ea91f93602f6225f4fb5185bff5901185d908063f9a7 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
-        "phased Pallas digest 6debc9688293ad5441616407547a450dbb962efbd1d46e58de82672c5f450581",
-        "phased Pallas linked af3ddb007ccc5f5c0884359ad5ecb7dc8f02391cdf70893f09b9a2432ab2a9d3 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
-        "small proof 4d43a5714d243ebd5ad86d6d5bd088292b1559cfece1ab96472fff02598eb0e3",
-        "lookup proof db4a4d0651fec879e8b48540c1faf6d3f365e26bcbb397c7e3f6959b1d97e142",
-        "copy proof f4b6b3baef1707acbe3ffdb4e89a246eef0cf96eafb1811becc90c8cef669c9a",
+        "rp57 Vesta digest f01aff25f43beb8653d3072b68c7ce05df70325bc4348757a4a47601e544c27c",
+        "rp57 Vesta linked 0997938c2e3ae7c780a4f7460f763f1ef23de9402cfc8c67ad823022f0c36b87 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "rp57 Pallas digest 3e8f25ad13c67e0707eaf424d2f288d8910ae342c15e5881343678314e007dde",
+        "rp57 Pallas linked 966ec7c299336048fd82bf56e45182c573be0fe6b08c606a3b133bc71b01d78e r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "phased Vesta digest b134d33af2118fa3533cfb9d644ae3b9bf2f2af9809786b299eb670ddbad672e",
+        "phased Vesta linked f9c33a4af74fcafad213979824a3d94f67cd192ad86bb3aad80cb18cf8e0a82e r 865f674c86ac3831f049468d1b7526fc13a94cd2560e6492ed0a3d4f67f830ca",
+        "phased Pallas digest 8e501f07b69b81702eb8e97d36803e6a9e3402c61364615924c0432e201cd393",
+        "phased Pallas linked eb022bc915bdaedf33083a6dbcfad1e9883688521ec9f340da72b72d2853d2d1 r 865f674c86ac3831f049468d1b7526fc13a94cd2560e6492ed0a3d4f67f830ca",
+        "small proof 358a0114118a5f7a24a05f728f5e0dbdc069647b4fb35f0429296c50a8af71be",
+        "lookup proof e67019d5d6576e7bf51010c7f6c78096e94f7c4e6d93efb3ea719175c5f298cd",
+        "copy proof 4b23deb1bb9c3bc8d4eac70e8e65327685fc1fe5359527ad4aad8f92cb2a995c",
     ];
 }

@@ -34,13 +34,15 @@ impl Wallet {
         let key = WalletKey::labelled(label);
         let account = AccountId::new(account.parse().unwrap());
         let digest = kagemusha_wallet_account_digest_v1(&account).unwrap();
-        let bootstrap = issue(parameters, &key, &[(66, [id; 32]), (98, digest)]).unwrap();
+        let (bootstrap, marker) =
+            software_bootstrap(parameters, &key, vector_asset().asset_digest(), digest, id).unwrap();
+        bootstrap.credential().enrollment_fields().unwrap();
         let ExactOperationWitness::Bootstrap(b) = &bootstrap else {
             unreachable!()
         };
         let state = b.input.clone();
         let origin = NativeEngine::default()
-            .enrollment_origin(b, [id; 32], parameters)
+            .enrollment_origin(b, marker, parameters)
             .unwrap();
         let completed = finish(parameters, &key, &origin, &bootstrap);
         Self {
@@ -220,7 +222,9 @@ impl Wallet {
             std::fs::create_dir_all(&root).unwrap();
             std::fs::write(root.join("uncharged-unload-review.bin"), &review).unwrap();
         }
-        let terms = engine.verify_unload_claim(&bytes, params).unwrap();
+        let terms = engine
+            .verify_unload_claim(&bytes, params, capsule.scheme(), capsule.asset())
+            .unwrap();
         assert_eq!(Fp::from_u128(terms.ordinal()), old_ordinal);
         assert_eq!(
             (
@@ -347,6 +351,33 @@ fn combined_control_predecessors_and_repeated_operations() {
     );
 }
 
+/// The relation label can remain the same across independently signed manifests.
+#[test]
+#[ignore = "requires the signed device bundle and a complete retained Payment"]
+fn retained_payment_credit_status_requires_its_exact_manifest() {
+    let bundle = std::path::PathBuf::from(
+        std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+    );
+    let read = |name: &str| std::fs::read(bundle.join(name)).unwrap();
+    let mut parameters = install(
+        &read("program-bundle.norito"),
+        &read("parameter-manifest.norito"),
+        read("parameter-signature.bin").try_into().unwrap(),
+    )
+    .unwrap();
+    let original =
+        std::fs::read(std::env::var_os("KAGEMUSHA_SPARTAN_RETAINED_PAYMENT").unwrap()).unwrap();
+    let engine = NativeEngine::default();
+    let payment = engine.verify_payment(&original, &parameters).unwrap();
+    payment.require_parameters(&parameters).unwrap();
+    parameters.manifest_digest[0] ^= 1;
+    assert_eq!(parameters.id(), payment.parameters_id());
+    assert!(matches!(
+        engine.verify_credit_status_peer(&[], &[], &payment, &parameters),
+        Err(Error::AuthorityMismatch("verified Payment parameter manifest"))
+    ));
+}
+
 /// Spend an already retained Payment through both orderings of Refresh and a
 /// joined Receive. Each branch uses the same local proof inputs in isolation.
 #[test]
@@ -366,6 +397,22 @@ fn refresh_around_a_joined_payment_and_immediate_send() {
     let engine = NativeEngine::default();
     let incoming = engine.verify_payment(&original, &params).unwrap();
     let b = Counterparty::new(&params, incoming.payer()).unwrap();
+    let c_key = WalletKey::labelled("isolated joined history peer C");
+    let c_account = AccountId::new(
+        "ed0120FC51CD8E6218A1A38DA47ED00230F0580816ED13BA3303AC5DEB911548908025"
+            .parse()
+            .unwrap(),
+    );
+    let asset = b.credential().body[34..66].try_into().unwrap();
+    let (c, _) = software_bootstrap(
+        &params,
+        &c_key,
+        asset,
+        kagemusha_wallet_account_digest_v1(&c_account).unwrap(),
+        0x63,
+    )
+    .unwrap();
+    c.credential().enrollment_fields().unwrap();
     assert_eq!(
         incoming.request().body[130..162],
         b.credential().body[66..98]
@@ -403,9 +450,6 @@ fn refresh_around_a_joined_payment_and_immediate_send() {
         unreachable!()
     };
     assert_eq!(step.after_core[9], Fp::from(10));
-    let c_key = WalletKey::labelled("isolated joined history peer C");
-    let asset = b.credential().body[34..66].try_into().unwrap();
-    let c = issue(&params, &c_key, &[(34, asset), (66, [0x63; 32])]).unwrap();
     let pay = |origin: SendOrigin<'_>, head: &VerifiedWalletHead| {
         let request = CompletedRequest {
             body: request_from(&origin, c.credential()).try_into().unwrap(),

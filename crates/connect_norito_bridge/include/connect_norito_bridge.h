@@ -2051,12 +2051,55 @@ typedef struct {
  * 83 verified Payment projection (514 bytes), 84 discarded volatile preparation.
  * execute/output: 0 unknown, 1 exact retained output, 2 pending, 3 not performed,
  * 4 archived, 5 delivery-data loss. Existing free/close ownership applies. */
-/** Account begin: status15 challenge32. Authorize: status85 parameter32 + native slot32. */
+/** Account begin: status15 challenge32. Authorize: 85 ordinary or 87 retained outputs only, both parameter32 + native slot32.
+ * Begin has two argument forms. All four originals present are the exact credential (596 bytes),
+ * signer certificate (172 bytes), account and asset. With certificates and asset both null with
+ * zero length, credential carries one complete E6 enrollment result and account the existing
+ * account original: the signed selected owner supplies its own asset and Enrollment certificate
+ * and verifies the result against its retained E5, hardware key and evidence before retaining
+ * the admission. A partial tuple, or a non-null pointer with zero length, is invalid (-1). */
 int32_t connect_norito_kagemusha_spartan_begin_account_v1(uint64_t handle, const connect_norito_kagemusha_wallet_open_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_spartan_authorize_account_v1(uint64_t handle, const uint8_t* signature, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Install has two argument forms. Bundle, manifest and signature all null with zero length
+ * open the programs the owner authenticated from its installed carrier: only an owner of the
+ * signed Spartan profile answers 81 with its parameter32, and every other owner refuses.
+ * All three present (signature exactly 64 bytes) are compared with those installed originals.
+ * A partial tuple, or a non-null pointer with zero length, is invalid (-1). */
 int32_t connect_norito_kagemusha_spartan_install_v1(uint64_t handle, const uint8_t* bundle, size_t bundle_length, const uint8_t* manifest, size_t manifest_length, const uint8_t* signature, size_t signature_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Authenticate a complete signed local blacklist and its regulatory certificate set.
+ * 95 returns its 32-byte digest. Existing or selected monetary results remain retrievable. */
+int32_t connect_norito_kagemusha_spartan_install_blacklist_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* original, size_t original_length, const uint8_t* certificates, size_t certificates_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Issues a durable open receiver Request; status 96 returns the complete schema-3 wire. */
+/* Verify or read one retained account-signed Unload outcome. A zero-length proof reads custody. */
+int32_t connect_norito_kagemusha_spartan_unload_settlement_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* operation32, const uint8_t* signed_original, size_t signed_length, const uint8_t* proof, size_t proof_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Verify the signed activation transaction and its checkpoint-rooted outcome, or read
+ * the retained result with an empty proof. Status 108 uses the status 102 layout with
+ * the activated flag in place of paid. Each wallet incarnation has one activation. */
+int32_t connect_norito_kagemusha_spartan_activation_settlement_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* signed_original, size_t signed_length, const uint8_t* proof, size_t proof_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Query the protected epoch with (0, empty) or ingest the next certified boundary. */
+int32_t connect_norito_kagemusha_spartan_epoch_v1(uint64_t handle, const uint8_t* slot32, uint64_t expected_epoch, const uint8_t* boundary, size_t boundary_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* Selector 1 reads a released Receive and its 32-byte hosted Request id, returning exact peer bytes (104).
+ * Selector 2 verifies an acknowledgement against a released Send and its exact open Request. An
+ * empty Request selects the original retained for that Send. Returns one byte (105), 1 for
+ * Credited or 0 for Burned. Selector 3 requires the hosted Request id and the complete
+ * incoming Payment in the status buffer. The released Receive must have consumed those
+ * exact bytes before it returns the receiver's acknowledgement (104). All three are read-only. */
+int32_t connect_norito_kagemusha_spartan_credit_status_v1(uint64_t handle, const uint8_t* slot32, uint32_t selector, const uint8_t* operation32, const uint8_t* request, size_t request_length, const uint8_t* status, size_t status_length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_issue_open_request_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* request_id32, const uint8_t* amount_le16, const uint8_t* fee, size_t fee_length, const uint8_t* issuer, size_t issuer_length, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_spartan_prepare_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* witness, size_t witness_length, const uint8_t* head, size_t head_length, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_spartan_execute_v1(uint64_t handle, uint64_t token, connect_norito_kagemusha_wallet_result_v1* out);
+/* On iOS empty message plus [1] provisions the marker-pinned Secure Enclave key (93).
+ * With empty inputs begin a fresh prompt (88, 32-byte challenge). To cancel, send its
+ * challenge and empty signature (84). On iOS send the challenge and one zero byte
+ * to open Native's own Secure Enclave prompt. Android accepts the SDK-confirmed
+ * signature. Acknowledged exact evidence returns 89, including on delivery retry. */
+int32_t connect_norito_kagemusha_spartan_confirm_v1(uint64_t handle, uint64_t token, const uint8_t* message, size_t message_length, const uint8_t* der, size_t der_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* 0 begin (returns token and 32-byte nonce), 1 finish (anchor, certificate), 2 cancel,
+ * 3 capture (32-byte operation -> two little-endian u64 interval endpoints), 4 abandon capture. */
+int32_t connect_norito_kagemusha_spartan_time_v1(uint64_t handle, const uint8_t* slot32, uint32_t selector, uint64_t token, const uint8_t* first, size_t first_length, const uint8_t* second, size_t second_length, connect_norito_kagemusha_wallet_result_v1* out);
+/* For a zero operation, part 3 returns the snapshot (101); part 4 returns the Released head's
+ * 16-byte LE next Load ordinal (106). Part 5 issues/recovers signed Bootstrap activation (107):
+ * scheme32 || asset32 || manifest_digest32 || wallet32 || exact original (1..32768 bytes). */
 int32_t connect_norito_kagemusha_spartan_output_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* operation32, uint32_t part, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_spartan_verify_payment_v1(uint64_t handle, const uint8_t* payment, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_spartan_discard_v1(uint64_t handle, uint64_t token, connect_norito_kagemusha_wallet_result_v1* out);

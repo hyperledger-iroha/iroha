@@ -79,6 +79,8 @@ targets:
     platform: iOS
     sources:
       - path: ${IROHA_ROOT}/IrohaSwift/Tests/IrohaSwiftTests/KagemushaSpartanWalletV1Tests.swift
+      - path: ${IROHA_ROOT}/fixtures/kagemusha/spartan_unload_review_v3.bin
+        buildPhase: resources
     dependencies:
       - target: SpartanRuntimeFixture
       - target: IrohaSwift

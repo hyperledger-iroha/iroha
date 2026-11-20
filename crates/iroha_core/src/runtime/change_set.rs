@@ -545,6 +545,12 @@ pub fn activate_due(
                             return false;
                         }
                     }
+                    if let Err(reason) = crate::kagemusha_wallet_v1::spartan::validate_cutover(&current, &applied.selection, record.change_set.effective_height)
+                        .and_then(|()| crate::kagemusha_wallet_v1::spartan::check_transition(&*wtx, &applied.selection))
+                    {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set violates the Spartan reserve binding");
+                        return false;
+                    }
                     if let Err(reason) = super::deferred_consent::check_transition(&*wtx, &current, &applied.selection) {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;

@@ -197,7 +197,12 @@ public struct KagemushaWalletEpochProgressV1: Equatable, Sendable {
     func word(_ start: Int) -> UInt64 {
       (0..<8).reduce(UInt64(0)) { $0 | UInt64(result.bytes[start + $1]) << ($1 * 8) }
     }
-    epoch = result.sequenceLow; firstHeight = word(0); boundaryHeight = word(8)
+    try self.init(epoch: result.sequenceLow, firstHeight: word(0), boundaryHeight: word(8))
+  }
+  init(epoch: UInt64, firstHeight: UInt64, boundaryHeight: UInt64) throws {
+    self.epoch = epoch
+    self.firstHeight = firstHeight
+    self.boundaryHeight = boundaryHeight
     guard firstHeight > 0, boundaryHeight >= firstHeight else { throw KagemushaWalletErrorV1.invalidNativeOutput }
   }
 }

@@ -3,6 +3,100 @@
 use super::*;
 use group::{Curve, Group};
 
+#[test]
+#[ignore = "requires the signed device bundle and two distinct retained Payments"]
+fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
+    use std::{path::PathBuf, time::Instant};
+    let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+    let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
+    let programs = std::fs::read(bundle.join("program-bundle.norito")).unwrap();
+    let manifest = std::fs::read(bundle.join("parameter-manifest.norito")).unwrap();
+    let signature = std::fs::read(bundle.join("parameter-signature.bin"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let install =
+        || super::super::device_fixture::install(&programs, &manifest, signature).unwrap();
+    let parameters = install();
+    let first = std::fs::read(wallet.join("complete-payment.bin")).unwrap();
+    let second = std::fs::read(wallet.join("incoming-payment.bin")).unwrap();
+    assert_ne!(first, second);
+
+    let engine = NativeEngine::default();
+    let started = Instant::now();
+    let accepted = engine.verify_payment(&first, &parameters).unwrap();
+    let cold = started.elapsed();
+    let started = Instant::now();
+    let repeated = engine.clone().verify_payment(&first, &parameters).unwrap();
+    let warm = started.elapsed();
+    assert!(Arc::ptr_eq(&accepted.bytes, &repeated.bytes));
+    let mut damaged = first.clone();
+    *damaged.last_mut().unwrap() ^= 1;
+    assert!(engine.verify_payment(&damaged, &parameters).is_err());
+    assert!(Arc::ptr_eq(
+        &accepted.bytes,
+        &engine.verify_payment(&first, &parameters).unwrap().bytes
+    ));
+    let independent = NativeEngine::default()
+        .verify_payment(&first, &parameters)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&accepted.bytes, &independent.bytes));
+    let other = engine.verify_payment(&second, &parameters).unwrap();
+    assert_eq!(other.exact_bytes(), second);
+    let replaced = engine.verify_payment(&first, &parameters).unwrap();
+    assert!(!Arc::ptr_eq(&accepted.bytes, &replaced.bytes));
+
+    // The provider has already checked this exact capsule before signing. A staged
+    // readback still has to verify its own receipt, output proof and selected wallet.
+    let capsule = RecoveryCapsule::decode(
+        &std::fs::read(wallet.join("counterparty-receive-capsule.norito")).unwrap(),
+        &parameters.inner.scheme,
+    )
+    .unwrap();
+    let record = CompletionRecord::decode(
+        &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
+        capsule.wallet(),
+    )
+    .unwrap();
+    let prepared = engine.resume(&capsule, &parameters).unwrap();
+    let released = engine
+        .verify_staged_completion(&prepared, &record, &parameters)
+        .unwrap();
+    assert_eq!(
+        released.completion().encode().unwrap(),
+        record.encode().unwrap()
+    );
+    let mut wrong_wallet = record.clone();
+    wrong_wallet.frame.wallet[0] ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_wallet, &parameters)
+            .is_err()
+    );
+    let mut wrong_receipt = record.clone();
+    *wrong_receipt.frame.receipt.last_mut().unwrap() ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_receipt, &parameters)
+            .is_err()
+    );
+    let mut wrong_output = record.clone();
+    *wrong_output.frame.output.last_mut().unwrap() ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_output, &parameters)
+            .is_err()
+    );
+
+    drop(parameters);
+    let reinstalled = engine.verify_payment(&first, &install()).unwrap();
+    assert!(!Arc::ptr_eq(&replaced.bytes, &reinstalled.bytes));
+    eprintln!(
+        "signed Payment {} bytes, first {cold:?}, same-owner repeat {warm:?}",
+        first.len()
+    );
+}
+
 pub(super) fn reject_wrong_program_digests(
     parameters: &AuthenticatedParameters,
     original: &[u8],
@@ -166,6 +260,17 @@ fn finish(
     let started = std::time::Instant::now();
     eprintln!("native operation: preparing {label}");
     let prepared = engine.prepare(witness, head, parameters)?;
+    finish_prepared(label, engine, parameters, key, prepared, started)
+}
+
+fn finish_prepared(
+    label: &str,
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    key: &full::WalletKey,
+    prepared: PreparedOperation,
+    started: std::time::Instant,
+) -> Result<CompletedOperation> {
     let prepare_seconds = started.elapsed().as_secs_f64();
     let capsule = prepared.capsule().clone();
     let bytes = capsule.encode()?;
@@ -240,8 +345,7 @@ fn run_from_bundle(complete_validation: bool) {
             signature,
         )?;
         reject_wrong_program_digests(&parameters, &manifest)?;
-        let chain =
-            crate::chain_fixture::with_relation(&parameters.inner.generators.p, *parameters.id());
+        let chain = crate::native::device_fixture::chain(&parameters.inner.generators.p);
         let engine = NativeEngine::default();
         let bootstrap =
             |context: &bootstrap::Context, input: &bootstrap::Inputs| BootstrapWitness {
@@ -254,7 +358,7 @@ fn run_from_bundle(complete_validation: bool) {
         let receiver_bootstrap = bootstrap(&chain.receiver_context, &chain.receiver_bootstrap);
         // This host unit fixture supplies explicit test enrollment markers and
         // software signatures. Actual platform custody is a separate phone test.
-        let origin = engine.enrollment_origin(&sender_bootstrap, [0x31; 32], &parameters)?;
+        let origin = engine.enrollment_origin(&sender_bootstrap, [0x44; 32], &parameters)?;
         let sender_witness = ExactOperationWitness::Bootstrap(Box::new(sender_bootstrap));
         let sender = finish(
             "fresh sender Bootstrap",
@@ -264,7 +368,7 @@ fn run_from_bundle(complete_validation: bool) {
             &origin,
             &sender_witness,
         )?;
-        let origin = engine.enrollment_origin(&receiver_bootstrap, [0x32; 32], &parameters)?;
+        let origin = engine.enrollment_origin(&receiver_bootstrap, [0x44; 32], &parameters)?;
         let receiver = finish(
             "fresh receiver Bootstrap",
             &engine,
@@ -586,59 +690,21 @@ fn receive_and_successors(
         false,
     ));
 
-    // Isolate the receiver signature predicate from proof verification: produce
-    // a genuinely valid Send pair whose exact Request has an invalid signature.
-    // All updated statement/map/receipt bindings are proven by the real engine.
-    let mut bad_request_send = actual_send.clone();
-    bad_request_send.request.signature.fill(0);
-    let request =
-        crate::request::commitments(&bad_request_send.request).map_err(Error::Malformed)?;
-    bad_request_send.statement[23] = request.digest;
-    let pending_value = iroha_pasta::poseidon::hash_with_domain(
-        crate::send_maps::PENDING_DOMAIN,
-        &bad_request_send.statement[17..24],
-    );
-    let (pending, pending_root) = crate::indexed_map::empty_insert(request.credit, pending_value);
-    bad_request_send.maps.pending = pending;
-    bad_request_send.after_core[18] = pending_root;
-    bad_request_send.after_core[15] = iroha_pasta::poseidon::hash_with_domain(
-        crate::send_arithmetic::CHAIN_DOMAIN,
-        &[
-            bad_request_send.before_core[15],
-            request.credit,
-            bad_request_send.statement[18],
-            bad_request_send.statement[19],
-            bad_request_send.before_core[12],
-            bad_request_send.statement[21],
-            bad_request_send.statement[22],
-            request.digest,
-        ],
-    );
-    bad_request_send.statement[15] = crate::monetary_state::commitment(
-        &bad_request_send.after_core,
-        &bad_request_send.after_rest,
-    );
-    bad_request_send.receipt = crate::chain_fixture::own_receipt(
-        &chain.sender_key,
-        &bad_request_send.credential,
-        &bad_request_send.statement,
-        Fp::ZERO,
-    );
-    let signed_invalid_request = finish(
-        "valid Send proof containing invalid receiver Request signature",
-        engine,
-        parameters,
-        &chain.sender_key,
-        sender_loaded,
-        &ExactOperationWitness::Send(Box::new(bad_request_send)),
-    )?;
-    let bytes = signed_invalid_request.completion().output_part(1)?;
-    engine.verify_payment(&bytes, parameters)?;
-    cases.push((
-        "isolated Request signature with valid Send proof",
-        bytes,
-        true,
-    ));
+    // A payer with an otherwise complete private witness must refuse a Request
+    // whose receiver never authenticated the terms, before producing a review.
+    let mut unsigned = actual_send.clone();
+    unsigned.request.signature.fill(0);
+    if !matches!(
+        engine.prepare(
+            &ExactOperationWitness::Send(Box::new(unsigned)),
+            sender_loaded,
+            parameters
+        ),
+        Err(Error::AuthorityMismatch("Send Request receiver signature"))
+    ) {
+        return Err(Error::AuthorityMismatch("unauthenticated outgoing Request"));
+    }
+    eprintln!("native Send refused a Request with an invalid receiver signature before review");
 
     for (label, bytes, valid_send_proof) in cases {
         let candidate = engine.incoming_candidate(&bytes, parameters)?;
@@ -662,16 +728,27 @@ fn receive_and_successors(
             false,
         )
         .map_err(Error::Malformed)?;
-        let burned = finish(
+        let invalid = ExactOperationWitness::Receive {
+            step: Box::new(witness.clone()),
+            incoming_payment: bytes.into(),
+        };
+        let started = std::time::Instant::now();
+        if !matches!(engine.prepare(&invalid, loaded.head(), parameters), Err(Error::Rejected(_))) {
+            return Err(Error::AuthorityMismatch("fresh Receive admission must refuse Burn"));
+        }
+        // Only a historical selection reaches defensive Burn recovery. The
+        // wallet must also refuse to select an unselected restored capsule.
+        let historical = engine.prepare_retained(&invalid, loaded.head(), parameters)?;
+        if !matches!(engine.prepare_selection(historical.capsule(), parameters), Err(Error::Rejected(_))) {
+            return Err(Error::AuthorityMismatch("restored Receive admission must refuse Burn"));
+        }
+        let burned = finish_prepared(
             label,
             engine,
             parameters,
             &chain.receiver_key,
-            loaded.head(),
-            &ExactOperationWitness::Receive {
-                step: Box::new(witness.clone()),
-                incoming_payment: bytes.into(),
-            },
+            historical,
+            started,
         )?;
         if burned.head().profile()[35] != Fp::from(10)
             || witness.after_core[9] - burned.head().profile()[35] != Fp::from(100)

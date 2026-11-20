@@ -121,7 +121,7 @@ wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
 rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
-for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs", "suffix.rs"):
+for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs", "suffix.rs", "spartan.rs", "spartan/direct_time.rs", "spartan/settlement.rs"):
     rust += "\n" + (jni_path.parent / "kagemusha_wallet_ffi" / relative).read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
@@ -183,6 +183,14 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_spartan_begin_account_v1",
     "connect_norito_kagemusha_spartan_authorize_account_v1",
     "connect_norito_kagemusha_spartan_prepare_v1",
+    "connect_norito_kagemusha_spartan_credit_status_v1",
+    "connect_norito_kagemusha_spartan_epoch_v1",
+    "connect_norito_kagemusha_spartan_activation_settlement_v1",
+    "connect_norito_kagemusha_spartan_unload_settlement_v1",
+    "connect_norito_kagemusha_spartan_issue_open_request_v1",
+    "connect_norito_kagemusha_spartan_install_blacklist_v1",
+    "connect_norito_kagemusha_spartan_confirm_v1",
+    "connect_norito_kagemusha_spartan_time_v1",
     "connect_norito_kagemusha_spartan_execute_v1",
     "connect_norito_kagemusha_spartan_output_v1",
     "connect_norito_kagemusha_spartan_verify_payment_v1",
@@ -580,6 +588,13 @@ exact("Rust KAGEMUSHA wallet", KAGEMUSHA_WALLET_EXPORTS, {
 })
 exact("C KAGEMUSHA wallet", KAGEMUSHA_WALLET_EXPORTS, header_exports("connect_norito_kagemusha_"))
 native_jni_exports = set(re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust))
+spartan_prefix = "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_"
+exact("Spartan JNI wallet", {
+    spartan_prefix + method for method in (
+        "install", "prepare", "execute", "output", "verifyPayment", "discard",
+        "beginAccount", "authorizeAccount", "installBlacklist", "creditStatus", "epoch", "activationSettlement", "unloadSettlement", "issueOpenRequest", "time", "confirm",
+    )
+}, {name for name in native_jni_exports if name.startswith(spartan_prefix)})
 exact("current JNI wallet", KAGEMUSHA_WALLET_JNI_EXPORTS,
       native_jni_exports & KAGEMUSHA_WALLET_JNI_EXPORTS)
 exact("current JNI Load original DATA", KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS,
@@ -1061,8 +1076,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-retired-wallet-reviewed-execute-request-id)
       replace_once "${tmp_header}" \
-        'uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);' \
-        'uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);'
+        '    uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);' \
+        '    uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);'
       expected_diagnostic="retired execute-time reviewed request ID or parameter drift"
       ;;
     --self-test-bad-wallet-review-jni-request-id)

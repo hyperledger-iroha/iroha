@@ -2,6 +2,7 @@
 
 use super::carrier::*;
 use super::prekey::PreKeyDispatchV1;
+use super::spartan_credential::SpartanCredentialProfileV1;
 use crate::kagemusha_wallet_advance_v1::*;
 use crate::kagemusha_wallet_state_v1::NativeProviderV1;
 use iroha_crypto::{Algorithm, Signature};
@@ -135,10 +136,22 @@ pub enum RequestPreparationV1 {
     AccountChallenge([u8; 32]),
 }
 
+/// Initial-credential profile bound by the installed Native owner at construction. It alone
+/// selects the E6 credential verifier for this owner's whole lifetime: credential bytes never
+/// choose it, and neither profile falls back to the other.
+#[derive(Clone)]
+enum CredentialProfile {
+    /// Ledger `ArtifactManifest` installation: the Model credential frame.
+    Model,
+    /// Installed Spartan generation: the exact 596-byte original under admitted parameters.
+    Spartan(SpartanCredentialProfileV1),
+}
+
 /// The sole provider owner for enrollment; construction is a trusted native startup operation.
 pub struct EnrollmentOwnerV1<F: KagemushaWalletFsV1, P> {
     provider: NativeProviderV1<F, P>,
     config: EnrollmentConfigV1,
+    credential: CredentialProfile,
     pending: Option<prekey_owner::Pending>,
     selected: Option<(Scope, KagemushaWalletSlotIdV1)>,
     request: Option<RequestBodyV1>,
@@ -160,6 +173,42 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     pub fn new(
         provider: NativeProviderV1<F, P>,
         config: EnrollmentConfigV1,
+    ) -> Result<Self, (NativeProviderV1<F, P>, Error)> {
+        Self::with_profile(provider, config, CredentialProfile::Model)
+    }
+
+    /// Bind existing exclusive custody to an installed Spartan generation. The installed
+    /// owner supplies the parameters it already authenticated from its signed carrier, so
+    /// every E6 of this owner (delivery, retry and recovery) is verified as the exact
+    /// 596-byte Spartan original and never as a Model frame.
+    ///
+    /// # Errors
+    /// Returns the original provider together with an error for every refusal of
+    /// [`Self::new`], or if the profile's signed manifest digest is not the configured
+    /// installation's.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
+    pub fn new_spartan(
+        provider: NativeProviderV1<F, P>,
+        config: EnrollmentConfigV1,
+        profile: SpartanCredentialProfileV1,
+    ) -> Result<Self, (NativeProviderV1<F, P>, Error)> {
+        if *profile.manifest_digest() != config.installation.manifest_digest {
+            return Err((provider, Error::Original("installed credential profile")));
+        }
+        Self::with_profile(provider, config, CredentialProfile::Spartan(profile))
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
+    fn with_profile(
+        provider: NativeProviderV1<F, P>,
+        config: EnrollmentConfigV1,
+        credential: CredentialProfile,
     ) -> Result<Self, (NativeProviderV1<F, P>, Error)> {
         let checked = (|| {
             original(config.scheme.validate())?;
@@ -195,6 +244,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         Ok(Self {
             provider,
             config,
+            credential,
             pending: None,
             selected: None,
             request: None,
@@ -268,6 +318,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         let Self {
             provider,
             config,
+            credential,
             pending,
             selected,
             request,
@@ -280,6 +331,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
                 Self {
                     provider,
                     config,
+                    credential,
                     pending,
                     selected,
                     request,
@@ -556,7 +608,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         };
         let (_, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
         let slot = *slot;
-        let key = kagemusha_wallet_provider_digest_v1("enrollment-issuer-result", &request);
+        let key = kagemusha_wallet_enrollment_result_key_v1(&request);
         let retained = self
             .provider
             .with_archive(&slot, |archive| archive.read_record(&key, RESULT_MAX_BYTES))?;
@@ -653,7 +705,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         let request = RequestV1::decode(&request_bytes).map_err(Error::Original)?;
         let (_, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
         let slot = *slot;
-        let key = kagemusha_wallet_provider_digest_v1("enrollment-issuer-result", &request_bytes);
+        // The one key of this enrollment's durable winner, shared with account admission's
+        // read-only readback of the same record.
+        let key = kagemusha_wallet_enrollment_result_key_v1(&request_bytes);
         let retained = self
             .provider
             .with_archive(&slot, |archive| archive.read_record(&key, RESULT_MAX_BYTES))?;
@@ -691,13 +745,31 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     }
 
     fn verify_result(&mut self, request: &RequestV1, result: &ResultV1) -> Result<(), Error> {
-        let credential = result
-            .verify_for(
-                &self.config.scheme,
-                &self.config.enrollment_certificate,
-                request,
-            )
-            .map_err(Error::Original)?;
+        // The profile this owner was constructed with alone selects the credential verifier.
+        // Both profiles run the same shared E5/evidence/enrollment/lease/signer binding.
+        let (fields, model) = match &self.credential {
+            CredentialProfile::Model => {
+                let credential = result
+                    .verify_for(
+                        &self.config.scheme,
+                        &self.config.enrollment_certificate,
+                        request,
+                    )
+                    .map_err(Error::Original)?;
+                (credential.body, Some(credential))
+            }
+            CredentialProfile::Spartan(profile) => (
+                profile
+                    .verify_result(
+                        result,
+                        &self.config.scheme,
+                        &self.config.enrollment_certificate,
+                        request,
+                    )
+                    .map_err(Error::Original)?,
+                None,
+            ),
+        };
         let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
         let intent = self
             .provider
@@ -708,12 +780,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             || !super::credential::evidence_matches_policy(
                 &self.config.policy.platform,
                 intent.key_profile()?,
-                credential.body.evidence_kind,
+                fields.evidence_kind,
             )
             || !(intent.dates.issued_at_ms..intent.dates.expires_at_ms)
-                .contains(&credential.body.issued_at_ms)
+                .contains(&fields.issued_at_ms)
             || !(intent.dates.issued_at_ms..intent.dates.expires_at_ms)
-                .contains(&credential.body.enrollment_evidence.time_ms)
+                .contains(&fields.enrollment_evidence.time_ms)
         {
             return Err(Error::Original(
                 "initial enrollment credential policy/dates",
@@ -735,12 +807,23 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             }
             _ => return Err(Error::Phase),
         };
-        super::credential::verify_initial_credential_marker(
-            &credential,
-            &self.config.scheme,
-            &self.config.enrollment_certificate,
-            &scope.challenge,
-            marker.marker(),
-        )
+        // The marker is the one Native enrollment selected at key generation, for both
+        // profiles. The Model frame additionally re-authenticates against the marker's key.
+        match &model {
+            Some(credential) => super::credential::verify_initial_credential_marker(
+                credential,
+                &self.config.scheme,
+                &self.config.enrollment_certificate,
+                &scope.challenge,
+                marker.marker(),
+            ),
+            None => super::credential::verify_initial_fields_marker(
+                &fields,
+                &self.config.scheme,
+                &self.config.enrollment_certificate,
+                &scope.challenge,
+                marker.marker(),
+            ),
+        }
     }
 }

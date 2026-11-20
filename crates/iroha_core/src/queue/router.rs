@@ -4042,9 +4042,9 @@ fn fee_sponsor_enrollment_dataspace_target<W: WorldReadOnly>(
 
 fn kagemusha_dataspace_with_world(
     world: &impl WorldReadOnly,
-    instruction: &iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+    instruction: crate::kagemusha_wallet_v1::routing::Operation<'_>,
 ) -> Result<DataSpaceId, RoutingResolveError> {
-    crate::kagemusha_wallet_v1::routing::dataspace(world, instruction).map_err(|error| {
+    instruction.dataspace(world).map_err(|error| {
         RoutingResolveError::OrdinaryRouteUnavailable {
             reason: format!("KAGEMUSHA permanent scope unavailable: {error}"),
         }
@@ -4069,10 +4069,9 @@ fn instruction_transaction_dataspace_target(
     ) {
         return Ok(Some(register.dataspace_id));
     }
-    if let Some(operation) = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
-    ) {
+    if let Some(operation) =
+        crate::kagemusha_wallet_v1::routing::Operation::from_instruction(instruction)
+    {
         let view = state_view.ok_or_else(|| RoutingResolveError::OrdinaryRouteUnavailable {
             reason: "KAGEMUSHA routing requires original World state".into(),
         })?;
@@ -4504,10 +4503,9 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ) {
         return Ok(Some(register.dataspace_id));
     }
-    if let Some(operation) = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
-    ) {
+    if let Some(operation) =
+        crate::kagemusha_wallet_v1::routing::Operation::from_instruction(instruction)
+    {
         let target = kagemusha_dataspace_with_world(world, operation)?;
         return Ok(Some(target));
     }
@@ -6495,10 +6493,9 @@ fn instruction_transaction_target_requires_universal_coordinator(
     )? {
         return Ok(target == DataSpaceId::UNIVERSAL);
     }
-    if let Some(operation) = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
-    ) {
+    if let Some(operation) =
+        crate::kagemusha_wallet_v1::routing::Operation::from_instruction(instruction)
+    {
         let view = state_view.ok_or_else(|| RoutingResolveError::OrdinaryRouteUnavailable {
             reason: "KAGEMUSHA routing requires original World state".into(),
         })?;
@@ -6956,10 +6953,9 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<bool, RoutingResolveError> {
-    if let Some(operation) = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
-    ) {
+    if let Some(operation) =
+        crate::kagemusha_wallet_v1::routing::Operation::from_instruction(instruction)
+    {
         let target = kagemusha_dataspace_with_world(world, operation)?;
         return Ok(target == DataSpaceId::UNIVERSAL);
     }

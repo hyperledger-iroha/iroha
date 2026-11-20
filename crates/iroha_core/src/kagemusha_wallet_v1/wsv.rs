@@ -7,7 +7,7 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly as _;
 
 pub struct WsvLedger<'borrow, 'block, 'state> {
-    state: &'borrow mut StateTransaction<'block, 'state>,
+    pub(super) state: &'borrow mut StateTransaction<'block, 'state>,
     authority: AccountId,
     transaction: Digest,
 }
@@ -141,9 +141,18 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
         manifest_digest: Digest,
         pack: Vec<u8>,
     ) -> Result<()> {
-        use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet;
         let registration = self.registration(&scheme, &asset)?;
-        self.require_asset(&registration)?;
+        self.require_verifier_manager(&registration)?;
+        let value = super::artifacts::VerifierInstallation::authenticate(
+            &registration,
+            manifest_digest,
+            pack,
+        )?;
+        self.insert_immutable(vec![Self::row(super::artifacts::key(scheme), &value)?])
+    }
+    pub(super) fn require_verifier_manager(&self, registration: &Registration) -> Result<()> {
+        use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet;
+        self.require_asset(registration)?;
         if self.authority != registration.reserve
             || !crate::smartcontracts::isi::helpers::world_account_has_permission(
                 self.state.world(),
@@ -158,12 +167,7 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
                 "KAGEMUSHA verifier install requires reserve consent and exact CanManageKagemushaWallet".into(),
             )));
         }
-        let value = super::artifacts::VerifierInstallation::authenticate(
-            &registration,
-            manifest_digest,
-            pack,
-        )?;
-        self.insert_immutable(vec![Self::row(super::artifacts::key(scheme), &value)?])
+        Ok(())
     }
     fn insert_immutable(&mut self, rows: Vec<(KagemushaWalletLedgerKeyV1, Vec<u8>)>) -> Result<()> {
         // Prepare and compare every row before the first mutation. Permanent reference counts

@@ -724,6 +724,32 @@ The receiver durably admits the header and calls `receiveWithCompanion(requestId
 (execute selector 10) at COMMIT, persisting the Credited acknowledgement before exposing it.
 Reconnect only to recover interrupted contact; an exact retry never creates another Send.
 
+The wallet V1 profile is bound by reading its messages: the Payment must carry the hosted
+Request's completion and Credited must name its scheme. `KAGEMUSHA_SPARTAN_PAYMENT_V3` cannot be
+bound that way: its Payment restores its completed Request only inside the installed wallet, and
+its folded CreditStatus names no scheme. For it the carrier checks profile, kind, frozen sizes and
+exact bytes, and the same commands, chunks and resume carry it, but every binding is the wallet's:
+construct `IrohaPeerNfcProfilePolicyV1(profile, exchangeVerifier)` with an
+`IrohaPeerNfcExchangeVerifierV1` and use that policy for `readRequest`,
+`IrohaPeerNfcRequestReadV1.senderCheckpoint(payment, profilePolicy)`, `run`, the receiver session
+and its restored records. The verifier must accept a Request only for the wallet's signed scheme
+and asset, an outgoing Payment only as the wallet's exact retained Payment of the Send made for
+that Request, a received status only after the wallet verified it cryptographically against that
+Payment (`KagemushaSpartanWalletV1.verifyCreditStatus(sendOperationId, request, status)`), and a
+card's answered status only as the wallet's status for exactly the Payment it answers
+(`KagemushaSpartanWalletV1.receivedCreditStatus(requestId, receiveOperationId, payment)`: Native
+compares the complete IPM1 Payment, at most 12,182 bytes, with the one its released Receive
+retains, also after later operations moved the head, and refuses another Payment of the same
+Request). The two-argument `receivedCreditStatus` names no Payment and only shows a selected
+Receive; it is never a receipt handed to a payer. The status is verified once
+when its last byte arrives, before it is persisted or confirmed, and again whenever a checkpoint
+that carries it is restored. Without the verifier no Spartan checkpoint, card session or
+acknowledgement record exists (`CONTINUITY_MISMATCH`); a message of another profile is
+`INVALID_PROFILE`. A receiver that hosts the same Request again under a new session is another
+peer for a saved checkpoint and receives nothing from it. The payer reads that Request with
+`readRequest` and builds the checkpoint for the new session from the same retained Payment; the
+verifier admits no other Payment for that Request, so redelivery is a replay and never a new Send.
+
 There are three user-visible codes: receiver Request, payer Payment, receiver Credited.
 The Request carrier is `KWRQAC1` (envelope plus canonical destination account original,
 maximum 14,146 bytes); the Payment carrier is `KWPYPC1` (envelope plus payer companion,

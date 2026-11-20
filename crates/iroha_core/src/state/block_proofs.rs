@@ -12,7 +12,10 @@ use iroha_data_model::{
             ExecutionReceiptProof,
         },
     },
-    isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1},
+    isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+        spartan::{ActivateKagemushaSpartanV1, UnloadKagemushaSpartanV1},
+    },
     kagemusha::{
         KAGEMUSHA_WALLET_ACTIVATION_MAX_BYTES_V1, KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1,
         KagemushaWalletActivationV1, KagemushaWalletUnloadClaimV1,
@@ -686,6 +689,24 @@ impl KagemushaLedgerAttemptV1 {
             }))
     }
 
+    fn from_spartan(
+        instruction: &UnloadKagemushaSpartanV1,
+    ) -> Result<Option<Self>, BlockProofError> {
+        use iroha_core_zk::kagemusha_spartan_native::native::NativeEngine;
+        match NativeEngine::unload_attempt_owner(
+            &instruction.claim,
+            &instruction.scheme,
+            &instruction.asset,
+        ) {
+            Ok(owner) => Ok(owner.map(|(wallet, account)| Self {
+                scheme: instruction.scheme,
+                wallet,
+                kind: KagemushaLedgerAttemptKindV1::Unload { account },
+            })),
+            Err(error) => classify_shape_error(error),
+        }
+    }
+
     /// Whether `caller` owns this attempt of an input that `signer` signed: the signer owns
     /// every attempt, and the account an Unload claim pays owns that Unload.
     fn is_owned_by(&self, signer: &AccountId, caller: &AccountId) -> bool {
@@ -711,12 +732,16 @@ where
     let limits = norito::canonical_decode_limits(frame.len());
     match norito::decode_canonical_with_limits::<T>(frame, limits) {
         Ok(value) => Ok(Some(value)),
-        Err(error) => match crate::execution_attempt::norito_decode_attempt_error(error, |_| ()) {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
-                Err(BlockProofError::Deferred(original))
-            }
-            crate::execution_attempt::ExecutionAttemptError::Rejected(()) => Ok(None),
-        },
+        Err(error) => classify_shape_error(error),
+    }
+}
+
+fn classify_shape_error<T>(error: norito::Error) -> Result<Option<T>, BlockProofError> {
+    match crate::execution_attempt::norito_decode_attempt_error(error, |_| ()) {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+            Err(BlockProofError::Deferred(original))
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(()) => Ok(None),
     }
 }
 
@@ -742,12 +767,25 @@ impl KagemushaLedgerEntryOwnerV1 {
             .instructions()
             .explicit_instructions()
             .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<KagemushaWalletLedgerV1>()
-            })
-            .filter_map(|instruction| {
-                KagemushaLedgerAttemptV1::from_instruction(instruction).transpose()
+                let value = instruction.as_any();
+                if let Some(ledger) = value.downcast_ref::<KagemushaWalletLedgerV1>() {
+                    KagemushaLedgerAttemptV1::from_instruction(ledger).transpose()
+                } else if let Some(activation) = value.downcast_ref::<ActivateKagemushaSpartanV1>() {
+                    (activation.wallet != [0; 32]
+                        && !activation.activation.is_empty()
+                        && activation.activation.len() <= ActivateKagemushaSpartanV1::MAX_ACTIVATION_BYTES)
+                    .then_some(Ok(KagemushaLedgerAttemptV1 {
+                        scheme: activation.scheme,
+                        wallet: activation.wallet,
+                        kind: KagemushaLedgerAttemptKindV1::Activate,
+                    }))
+                } else {
+                    value
+                        .downcast_ref::<UnloadKagemushaSpartanV1>()
+                        .and_then(|unload| {
+                            KagemushaLedgerAttemptV1::from_spartan(unload).transpose()
+                        })
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {

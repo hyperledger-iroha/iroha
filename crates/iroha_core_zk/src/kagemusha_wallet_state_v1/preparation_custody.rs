@@ -503,27 +503,15 @@ impl<'a> PreparationCustodyV1<'a> {
         if self.state.rest.time_anchor == [0; 32] {
             return Ok(None);
         }
-        let address = self
-            .anchors
-            .get(&mut Store(self.maps.store()), &self.state.rest.time_anchor)?
-            .ok_or(Error::WitnessLost("direct time exchange"))?;
-        let address: [u8; 32] = address
-            .try_into()
-            .map_err(|_| Error::WitnessLost("direct time address"))?;
-        let bytes = self
-            .maps
-            .store()
-            .read_staged_object(&address, KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1 + 1024)?;
-        let anchored: KagemushaWalletAnchoredTimeV1 = archive::decode(&bytes)?;
-        anchored
-            .validate(self.state.core.time_anchor_max_response_ms)
-            .map_err(|_| Error::WitnessLost("direct anchor observation"))?;
-        if anchored.anchor.time_anchor_digest() != self.state.rest.time_anchor
-            || anchored.anchor.body.scheme_id != self.state.core.scheme_id
-        {
-            return Err(Error::WitnessLost("direct anchor binding"));
-        }
-        Ok(Some(anchored))
+        super::session_custody::read_direct_anchor(
+            &mut Store(self.maps.store()),
+            self.anchors,
+            &self.state.rest.time_anchor,
+            &self.state.core.scheme_id,
+            &self.state.core.wallet_id,
+            self.state.core.time_anchor_max_response_ms,
+        )
+        .map(Some)
     }
 
     pub(super) fn finish(

@@ -23,8 +23,19 @@ pub fn activate(
         &activation.bootstrap,
     )?;
     let digest = activation.bootstrap.verify(&activation.credential)?.package;
-    if let Some(record) = tx.wallet(&c.scheme_id, &c.wallet_id)? {
-        if record.asset != c.asset_digest || record.activation != digest {
+    activate_verified(tx, c.scheme_id, c.asset_digest, c.wallet_id, digest)
+}
+
+/// Record an independently authenticated Bootstrap, preserving the incarnation's permanent history.
+pub(super) fn activate_verified(
+    tx: &mut impl Transaction,
+    scheme: Digest,
+    asset: Digest,
+    wallet: Digest,
+    digest: Digest,
+) -> Result<()> {
+    if let Some(record) = tx.wallet(&scheme, &wallet)? {
+        if record.asset != asset || record.activation != digest {
             return Err(Error::Conflict);
         }
         if record.phase == Phase::Abandoned {
@@ -33,11 +44,11 @@ pub fn activate(
         // An exact activation retry must not reopen a closed wallet.
         return Ok(());
     }
-    let mut batch = Batch::new(c.scheme_id, c.asset_digest);
+    let mut batch = Batch::new(scheme, asset);
     batch.wallet = Some((
-        c.wallet_id,
+        wallet,
         WalletRecord {
-            asset: c.asset_digest,
+            asset,
             phase: Phase::Active,
             activation: digest,
             next_load: 0,
@@ -247,29 +258,53 @@ pub fn pay_unload(
     registration.require(&c.scheme_id, &c.asset_digest)?;
     let paid = claim.verify(&registration.scheme)?;
     verifier.verify(&registration.scheme, &claim.credential, &claim.package)?;
-    let key = KagemushaWalletPayoutKeyV1::Unload(paid.nullifier);
-    if let Some(prior) = prior_payout(tx, &c.scheme_id, key, paid.package, paid.amount)? {
+    settle_unload(
+        tx,
+        &registration,
+        paid.nullifier,
+        paid.package,
+        paid.amount,
+        &claim.account,
+        &claim.charge,
+    )
+}
+
+/// Commit the two authenticated destinations and the insert-only replay row in one batch.
+pub(super) fn settle_unload(
+    tx: &mut impl Transaction,
+    registration: &Registration,
+    nullifier: Digest,
+    source: Digest,
+    amount: u128,
+    account: &AccountId,
+    charge: &KagemushaWalletUnloadChargeV1,
+) -> Result<KagemushaWalletPayoutRecordV1> {
+    let scheme = registration.scheme.scheme_id();
+    let key = KagemushaWalletPayoutKeyV1::Unload(nullifier);
+    if let Some(prior) = prior_payout(tx, &scheme, key, source, amount)? {
         return Ok(prior);
     }
     let payout = KagemushaWalletPayoutRecordV1 {
         key,
-        source: paid.package,
-        amount: paid.amount,
+        source,
+        amount,
         transaction: tx.transaction_hash(),
     };
-    let mut batch = Batch::new(c.scheme_id, c.asset_digest);
-    if paid.account_payout != 0 {
+    let online_charge = charge.quote().map_or(0, |quote| quote.body.online_charge);
+    let account_payout = kagemusha_wallet_unload_account_payout_v1(amount, online_charge)?;
+    let mut batch = Batch::new(scheme, registration.asset.asset_digest());
+    if account_payout != 0 {
         batch.transfers.push(Transfer {
             from: registration.reserve.clone(),
-            to: claim.account.clone(),
-            amount: paid.account_payout,
+            to: account.clone(),
+            amount: account_payout,
         });
     }
-    if let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } = &claim.charge {
+    if let Some(beneficiary) = charge.beneficiary() {
         batch.transfers.push(Transfer {
-            from: registration.reserve,
+            from: registration.reserve.clone(),
             to: beneficiary.clone(),
-            amount: paid.online_charge,
+            amount: online_charge,
         });
     }
     batch.payout = Some(payout);

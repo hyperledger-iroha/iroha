@@ -14,21 +14,24 @@ fn program_bundle_frame_uses_its_explicit_bound() {
         primary: std::array::from_fn(|_| vec![1]),
         secondary: std::array::from_fn(|_| vec![2]),
     };
-    bundle.primary[0] = vec![0x5a; 65 * 1024 * 1024];
+    let overhead = bundle.encode().unwrap().len() - 1;
+    bundle.primary[0] = vec![0x5a; MAX_PROGRAM_BUNDLE_BYTES - overhead];
     let mut bytes = bundle.encode().unwrap();
-    assert!(bytes.len() > 64 * 1024 * 1024);
-    let decoded =
-        ProgramBundle::decode(&bytes).expect("bounded bundle above the default frame cap");
-    assert_eq!(decoded.version, bundle.version);
+    assert_eq!(bytes.len(), MAX_PROGRAM_BUNDLE_BYTES);
+    let decoded = ProgramBundle::decode(&bytes).unwrap();
     assert_eq!(decoded.primary, bundle.primary);
     assert_eq!(decoded.secondary, bundle.secondary);
     drop(decoded);
+    bundle.primary[0].push(0);
+    assert!(matches!(bundle.encode(), Err(Error::ResourceLimit)));
+    bytes.push(0);
+    assert!(matches!(
+        ProgramBundle::decode(&bytes),
+        Err(Error::ResourceLimit)
+    ));
+    bytes.pop();
     assert_eq!(norito::core::max_archive_len(), default_archive_limit);
-    if bytes.len().saturating_sub(norito::core::Header::SIZE) as u64 > default_archive_limit {
-        assert!(norito::core::from_bytes_view(&bytes).is_err());
-    }
-    // The explicit object budget cannot relax a stricter surrounding admission
-    // budget, and the larger frame allowance does not weaken exact framing.
+    // A valid full bundle must also satisfy any stricter surrounding budget.
     let strict = norito::DecodeLimits::new(1024, 1024, 4096, 4096, 16);
     assert!(
         norito::core::with_decode_limits_scope(strict, || ProgramBundle::decode(&bytes)).is_err()
@@ -74,7 +77,7 @@ fn parameter_manifest_requires_artifact_role_signer() {
     let artifact = engine::test_artifact_certificate(&scheme);
     let bytes = encode(&test_manifest(scheme, &artifact)).unwrap();
     let signature = engine::test_sign_manifest(&bytes);
-    assert!(engine::authenticate_manifest(&bytes, &signature, &root()).is_ok());
+    let (original, digest) = engine::authenticate_manifest(&bytes, &signature, &root()).unwrap();
     // Every pin, the profile included, is under the signature.
     for case in 0..4 {
         let mut changed: ParameterManifest = decode(&bytes).unwrap();
@@ -84,10 +87,16 @@ fn parameter_manifest_requires_artifact_role_signer() {
             2 => changed.generator_digests[1][0] ^= 1,
             _ => changed.table_vector[0][0] ^= 1,
         }
+        let changed_bytes = encode(&changed).unwrap();
         assert!(
-            engine::authenticate_manifest(&encode(&changed).unwrap(), &signature, &root()).is_err(),
+            engine::authenticate_manifest(&changed_bytes, &signature, &root()).is_err(),
             "changed pin {case}"
         );
+        let replacement_signature = engine::test_sign_manifest(&changed_bytes);
+        let (replacement, replacement_digest) =
+            engine::authenticate_manifest(&changed_bytes, &replacement_signature, &root()).unwrap();
+        assert_eq!(original.relation, replacement.relation);
+        assert_ne!(digest, replacement_digest, "changed pin {case}");
     }
     let wrong = p256::mul(&p256::generator(), &BigUint::from(12346u64)).unwrap();
     assert!(engine::authenticate_manifest(&bytes, &signature, &wrong).is_err());
@@ -544,8 +553,9 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
     body[274..306].fill(0);
     let capsule = RecoveryCapsule {
         frame: CapsuleFrame {
-            version: 1,
+            version: RECOVERY_CAPSULE_VERSION,
             parameters_id: chain.sender_context.relation,
+            manifest_digest: [8; 32],
             scheme: c.body[2..34].try_into().unwrap(),
             asset: c.body[34..66].try_into().unwrap(),
             wallet: c.body[66..98].try_into().unwrap(),
@@ -568,6 +578,7 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
     body[274..306].copy_from_slice(&RecoveryCapsule::frame_digest(&encoded));
     let head = VerifiedWalletHead {
         parameters_id: chain.sender_context.relation,
+        manifest_digest: [8; 32],
         profile: [Fp::ZERO; 64],
         pair: Arc::from([]),
         credential: c.clone(),
@@ -576,10 +587,12 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
         enrollment_marker: None,
     };
     let mut prepared = PreparedOperation {
+        manifest_digest: [8; 32],
         parameters_id: chain.sender_context.relation,
         capsule,
         witness: Arc::new(ExactOperationWitness::Send(Box::new(chain.send.clone()))),
         receipt_body: body,
+        receive: None,
         predecessor: head,
     };
     let signature = bootstrap::sign(
@@ -741,7 +754,7 @@ fn retired_manifest_is_refused_and_fixture_reissue_authenticates() {
         &engine::TEST_ARTIFACT_SECRET,
     )
     .unwrap();
-    let manifest = engine::authenticate_manifest(&bytes, &signature, &root()).unwrap();
+    let (manifest, _) = engine::authenticate_manifest(&bytes, &signature, &root()).unwrap();
     assert_eq!(manifest.version, engine::PARAMETER_MANIFEST_VERSION);
     assert_eq!(
         (
@@ -784,4 +797,114 @@ fn retired_manifest_is_refused_and_fixture_reissue_authenticates() {
         ),
         Err(Error::AuthorityMismatch("retired manifest program pins"))
     ));
+}
+
+#[test]
+fn signed_spartan_manifest_binds_registered_relation_and_genesis() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let scheme = device_fixture::scheme();
+    let genesis = NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
+    let id = scheme.scheme_id();
+    let mut manifest = test_manifest(id, &engine::test_artifact_certificate(&id));
+    manifest.relation = scheme.relation_id;
+    manifest.finality_network = genesis.network_id().to_string();
+    let accept = |m: &ParameterManifest| {
+        let bytes = encode(m).unwrap();
+        AuthenticatedParameters::authenticated_manifest(
+            &bytes,
+            &engine::test_sign_manifest(&bytes),
+            &scheme,
+        )
+    };
+    assert_eq!(accept(&manifest).unwrap().0.relation, scheme.relation_id);
+    manifest.relation[0] ^= 1;
+    assert!(accept(&manifest).is_err());
+    manifest.relation = scheme.relation_id;
+    let other_genesis = NativeFinalityFixture::start_at("portable-native-fixture", 17_001);
+    assert_ne!(genesis.network_id(), other_genesis.network_id());
+    manifest.finality_network = other_genesis.network_id().to_string();
+    assert!(accept(&manifest).is_err());
+}
+
+#[test]
+#[ignore = "requires closed v4 programs and a new isolated fixture output directory"]
+fn issue_genesis_bound_fixture_from_closed_public_programs() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    use std::{fs, path::PathBuf};
+    let source = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+    let destination = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT").unwrap());
+    let original = fs::read(source.join("parameter-manifest.norito")).unwrap();
+    let sig = fs::read(source.join("parameter-signature.bin"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let (mut manifest, _) = engine::authenticate_manifest(&original, &sig, &root()).unwrap();
+    let fixture = NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
+    let scheme = device_fixture::scheme();
+    assert_eq!(manifest.finality_network, fixture.network_id().to_string());
+    assert_eq!(manifest.relation, scheme.relation_id);
+    manifest.scheme = scheme.scheme_id();
+    let cert = engine::test_artifact_certificate(&manifest.scheme);
+    manifest.signer_certificate = [&cert.body[..], &cert.signature[..]].concat();
+    let bytes = encode(&manifest).unwrap();
+    let signature = engine::test_sign_manifest(&bytes);
+    let bundle = fs::read(source.join("program-bundle.norito")).unwrap();
+    let parameters = device_fixture::install(&bundle, &bytes, signature).unwrap();
+    assert_eq!(parameters.id(), &scheme.relation_id);
+    // Optional public World source for the independent carrier publisher.
+    if let Some(path) = std::env::var_os("KAGEMUSHA_SPARTAN_WORLD_EXPORT") {
+        use iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1;
+        use iroha_data_model::kagemusha::{
+            KagemushaDevicePublicKeyV1, KagemushaWalletSignerCertificateBodyV1,
+            KagemushaWalletSignerCertificateV1, KagemushaWalletSignerOutputV1, KagemushaWalletSignerRoleV1,
+        };
+        use std::io::Write as _;
+        let path = std::path::PathBuf::from(path);
+        fs::create_dir(&path).unwrap();
+        let fixture = crate::bootstrap::fixture_vector("credential_body_468");
+        let install = InstallKagemushaSpartanProgramsV1 {
+            scheme: scheme.scheme_id(), asset: fixture[34..66].try_into().unwrap(),
+            manifest_digest: *parameters.manifest_digest(), manifest: bytes.clone(),
+            signature, programs: bundle.clone(),
+        };
+        let _layout = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Fixed);
+        let certificate_frame = |raw: &crate::certificate::Certificate, role: KagemushaWalletSignerRoleV1| {
+            let body = KagemushaWalletSignerCertificateBodyV1 {
+                version: 1,
+                scheme_id: scheme.scheme_id(),
+                role,
+                key: KagemushaDevicePublicKeyV1::from_sec1_bytes(&raw.body[35..100]).unwrap(),
+                serial: u64::from_le_bytes(raw.body[100..108].try_into().unwrap()),
+            };
+            assert_eq!(body.transcript(), raw.body);
+            let certificate = KagemushaWalletSignerCertificateV1::sign(
+                body, &scheme, KagemushaWalletSignerOutputV1::Raw(raw.signature),
+            ).unwrap();
+            assert_eq!(certificate.signature.as_ref(), raw.signature);
+            certificate.to_canonical_bytes().unwrap()
+        };
+        for (name, original) in [
+            ("registered-scheme.norito", scheme.to_canonical_bytes().unwrap()),
+            ("selected-world-install.norito", norito::to_bytes(&install).unwrap()),
+            ("artifact-certificate.norito", certificate_frame(&cert, KagemushaWalletSignerRoleV1::Artifact)),
+            ("enrollment-certificate.norito", certificate_frame(&device_fixture::enrollment_certificate(), KagemushaWalletSignerRoleV1::Enrollment)),
+        ] {
+            let mut f = fs::File::create_new(path.join(name)).unwrap();
+            f.write_all(&original).unwrap();
+            let mut permissions = f.metadata().unwrap().permissions();
+            permissions.set_readonly(true);
+            f.set_permissions(permissions).unwrap();
+            f.sync_all().unwrap();
+        }
+    }
+    // No credential, balance, authorization or custody data is transferred.
+    fs::create_dir(&destination).unwrap();
+    fs::write(destination.join("program-bundle.norito"), bundle).unwrap();
+    fs::write(destination.join("parameter-manifest.norito"), bytes).unwrap();
+    fs::write(destination.join("parameter-signature.bin"), signature).unwrap();
+    eprintln!(
+        "Eight installed programs; signed fixture manifest digest {:02x?}; local fixture network {}",
+        parameters.manifest_digest(),
+        fixture.network_id()
+    );
 }

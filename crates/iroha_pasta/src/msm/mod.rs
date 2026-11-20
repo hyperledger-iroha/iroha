@@ -18,6 +18,12 @@
 //!   each column planned for its own public bound.
 //! - [`FixedBaseTable`]: precomputed window multiples of a fixed commitment
 //!   key; one bucket set and no doublings per MSM.
+//! - [`msm_secret_ct_cancellable`], [`msm_secret_ct_bounded_cancellable`] and
+//!   [`msm_secret_ct_bounded_columns_cancellable`]: constant-time MSMs for
+//!   private witness scalars ([`spartan_ct`]). Fixed windows, whole-table
+//!   constant-time selection and complete formulas; no digit-indexed bucket
+//!   and no value-based skip. The Pippenger entry points above keep their
+//!   variable-time posture for callers that accept it.
 //!
 //! Every entry point runs on the caller's Rayon pool
 //! (`rayon::current_num_threads()` of the pool the call is made from). Scratch
@@ -33,11 +39,16 @@
 mod budget;
 pub mod fixed_base;
 pub mod pippenger;
+pub mod spartan_ct;
 
 pub use budget::{
     BudgetExceeded, MemoryBudget, PROCESS_MSM_SCRATCH_BYTES, ScratchReservation, SharedMemoryBudget,
 };
 pub use fixed_base::FixedBaseTable;
+pub use spartan_ct::{
+    msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
+    msm_secret_ct_cancellable,
+};
 
 use crate::{CancellationToken, Cancelled};
 use group::CurveAffine;
@@ -126,7 +137,8 @@ pub fn msm_public<C: PastaCurve>(
 ///
 /// The plan assumes 255-bit scalars regardless of their values, the batch
 /// inversions are constant time, and scratch holding digits or bucket sums is
-/// zeroised. Bucket selection still follows the digits (see [`pippenger`]).
+/// zeroised. Bucket selection still follows the digits (see [`pippenger`]);
+/// scalars whose digits must not leak use [`msm_secret_ct_cancellable`].
 ///
 /// # Errors
 ///
@@ -576,6 +588,7 @@ impl<'a, F: PastaField> BoundedSecretScalars<'a, F> {
 /// Uses the same secret kernel: constant-time inversion and clearing of secret
 /// scratch. Digit buckets, skips and conflict handling remain variable-time,
 /// exactly as in [`msm_secret_cancellable`]. No witness-derived width is chosen.
+/// [`msm_secret_ct_bounded_cancellable`] is the constant-time counterpart.
 ///
 /// # Errors
 /// As [`msm_secret_cancellable`]. The checked prefix is already fully validated

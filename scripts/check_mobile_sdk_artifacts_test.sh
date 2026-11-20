@@ -59,6 +59,14 @@ wallet_symbols=(
   connect_norito_kagemusha_spartan_begin_account_v1
   connect_norito_kagemusha_spartan_authorize_account_v1
   connect_norito_kagemusha_spartan_prepare_v1
+  connect_norito_kagemusha_spartan_credit_status_v1
+  connect_norito_kagemusha_spartan_epoch_v1
+  connect_norito_kagemusha_spartan_activation_settlement_v1
+  connect_norito_kagemusha_spartan_unload_settlement_v1
+  connect_norito_kagemusha_spartan_issue_open_request_v1
+  connect_norito_kagemusha_spartan_install_blacklist_v1
+  connect_norito_kagemusha_spartan_confirm_v1
+  connect_norito_kagemusha_spartan_time_v1
   connect_norito_kagemusha_spartan_execute_v1
   connect_norito_kagemusha_spartan_output_v1
   connect_norito_kagemusha_spartan_verify_payment_v1
@@ -96,7 +104,10 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_registration_source_relocate_v1
 )
 wallet_jni_symbols=()
-for method in revision openBegin openFinish openCancel close activity call setup enrollment enrollmentRefusal execute snapshot review executeReviewed discardReview suffixUnloadStatus suffixUnloadPrepare suffixUnloadResume executeReviewedSuffixUnload suffixUnloadInstruction suffixUnloadAttemptOutcome suffixUnloadIngestFinality suffixUnloadSignedWire; do
+for method in install installBlacklist creditStatus epoch activationSettlement unloadSettlement issueOpenRequest beginAccount authorizeAccount prepare time confirm execute output verifyPayment discard; do
+  wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_${method}")
+done
+for method in revision openBegin openFinish openCancel close beginExchange endExchange activity call setup enrollment enrollmentRefusal execute snapshot review executeReviewed discardReview suffixUnloadStatus suffixUnloadPrepare suffixUnloadResume executeReviewedSuffixUnload suffixUnloadInstruction suffixUnloadAttemptOutcome suffixUnloadIngestFinality suffixUnloadSignedWire; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
 done
 for method in beginInstallation registerInstallation closeInstallation relocateRegistrationSource; do

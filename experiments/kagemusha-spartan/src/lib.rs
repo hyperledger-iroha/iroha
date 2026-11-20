@@ -630,7 +630,11 @@ fn run_census() {
 }
 
 /// Pixel 6 commitment cost per witness entry (microseconds, 8 threads) by
-/// width class and row length. Anchors: b04a57's 2^18 single-MSM kernel
+/// width class and row length, as measured for the retired variable-time
+/// Pippenger commits (zero entries free, digits bucketed). The prover's
+/// constant-time column MSM reads every entry of a committed row at its
+/// row's bound, zero or not, and is not calibrated on the phone; these
+/// figures do not describe it. Anchors: b04a57's 2^18 single-MSM kernel
 /// (1-bit 0.118, 8-bit 0.187, 16-bit 0.29 us) scaled by a row-length factor
 /// fitted to the spike's measured mix (64/16/80/1-bit rows: 0.72 us at
 /// 65,536 columns, 1.13 us at 8,192); full width 2.04 us at 65,536 (measured),
@@ -907,6 +911,11 @@ fn pixel_breakdown(
 ///   2026-11-09: commits per pair 1.238 -> 0.970 s);
 /// - IPA: the table times 0.76 (p.ipa 0.26 s at 16,384 columns, 0.1725 s at
 ///   8,192, against 0.342 and 0.226).
+///
+/// These are the variable-time kernels of 11-10. The current prover commits
+/// rows, rounds and the opening through constant-time MSMs without tables,
+/// and its inner support skips public structure only (never a witness run
+/// that is zero by value); neither is calibrated on the phone here.
 ///
 /// Returns the breakdown and the total, and the total if at most half the
 /// rows held cells.
@@ -2391,11 +2400,11 @@ fn prove_uniform_and_sparse(
         );
     }
     let gens = Gens::<Vesta>::new(shape.cols());
-    // Commitment tables are per-shape setup, built before the timed proofs.
-    let table_build = spartan::warm_table(&gens, &shape);
+    // No per-shape commitment setup: the timed proofs include every kernel.
     println!(
-        "  commit tables built in {table_build:.3} s; {}",
-        mem_note("after the tables")
+        "  {}; {}",
+        spartan::COMMIT_KERNELS,
+        mem_note("after the generators")
     );
     for i in 0..repeats {
         let (proof, tm) = spartan::prove_circuit(&shape, &gens, inst, wit, &mut rng, c);
@@ -2751,12 +2760,12 @@ fn run_uniform_full() {
         let nnz: usize = rel.nnz().iter().sum();
         let widths = c.width_classes(&wit.w);
         println!(
-            "  Pixel model, this layout: {}",
+            "  Pixel model (variable-time commits), this layout: {}",
             pixel_breakdown(&c.shape, &widths, c.sizes().1, nnz)
         );
         let (u1, u2, u3) = c.regions();
         println!(
-            "  Pixel model, kernels of 11-10: {}",
+            "  Pixel model, variable-time kernels of 11-10: {}",
             pixel_kern(&c.shape, &widths, c.sizes().1, u1 + u2 + u3)
         );
     }
@@ -2821,11 +2830,11 @@ fn run_uniform_full() {
         let nnz: usize = rel.nnz().iter().sum();
         let widths = c.width_classes(&wit.w);
         println!(
-            "  Pixel model, this layout: {}",
+            "  Pixel model (variable-time commits), this layout: {}",
             pixel_breakdown(&c.shape, &widths, c.sizes().1, nnz)
         );
         println!(
-            "  Pixel model, kernels of 11-10: {}",
+            "  Pixel model, variable-time kernels of 11-10: {}",
             pixel_kern(&c.shape, &widths, c.sizes().1, r1 + r2 + r3)
         );
     }
@@ -3071,7 +3080,7 @@ fn describe_hop_circuit<S: fs::Scalar>(
         d.q_secs * 1e3
     );
     println!(
-        "  Pixel model, kernels of 11-10: {name} {}",
+        "  Pixel model, variable-time kernels of 11-10: {name} {}",
         pixel_kern(
             &shape,
             &c.width_classes(&wit.w),
@@ -3086,19 +3095,17 @@ fn describe_hop_circuit<S: fs::Scalar>(
 /// split would take (2^k < n < 1.5 2^k, 2^k >= 8).
 fn split_families_note<G>(c: &uniform::UniformCircuit<G>) -> String {
     let mut pairs: Vec<(usize, Option<usize>, Vec<&str>)> = Vec::new();
-    for rest in c.arrays.iter().filter(|a| a.name.ends_with("(rest)")) {
-        let name = rest.name.trim_end_matches(" (rest)");
-        let orig = c
-            .arrays
-            .iter()
-            .find(|a| a.name == name)
-            .expect("a split array's original");
+    for (orig, split) in c.arrays.iter().zip(&c.split_of) {
+        let Some((rest_index, _)) = split else {
+            continue;
+        };
+        let rest = &c.arrays[*rest_index];
         match pairs
             .iter_mut()
             .find(|(f, g, _)| (*f, *g) == (orig.family, Some(rest.family)))
         {
-            Some((_, _, names)) => names.push(name),
-            None => pairs.push((orig.family, Some(rest.family), vec![name])),
+            Some((_, _, names)) => names.push(orig.name),
+            None => pairs.push((orig.family, Some(rest.family), vec![orig.name])),
         }
     }
     for (f, &n) in c.counts.iter().enumerate() {
@@ -3401,7 +3408,7 @@ fn describe_boot_circuit<S: fs::Scalar>(
         regions.2,
     );
     println!(
-        "  Pixel model, kernels of 11-10: {name} {}",
+        "  Pixel model, variable-time kernels of 11-10: {name} {}",
         pixel_kern(
             &shape,
             &c.width_classes(&wit.w),
@@ -4098,10 +4105,10 @@ fn prove_uniform_q(
     };
     let shape = c.shape;
     let gens = Gens::<Pallas>::new(shape.cols());
-    let table_build = spartan::warm_table(&gens, &shape);
     println!(
-        "  commit tables built in {table_build:.3} s; {}",
-        mem_note("after the tables")
+        "  {}; {}",
+        spartan::COMMIT_KERNELS,
+        mem_note("after the generators")
     );
     let mut rng = SpikeRng::new(b"s-recv-uniform prove");
     for i in 0..repeats {
@@ -4812,8 +4819,9 @@ fn run_real_receive() {
         use r1cs::Circuit;
         println!("{name}: {}", sparse::describe(g, shape));
         let (cols, active) = (shape.cols(), shape.active_cols());
-        // Row-granular width classes: every nonzero entry of a row commits at
-        // the row's bound. Second-phase helpers are full width: h is never
+        // Row-granular width classes for the variable-time Pixel model: every
+        // nonzero entry of a row at the row's bound (the constant-time commit
+        // reads zeros too). Second-phase helpers are full width: h is never
         // zero, g is zero exactly when its table entry's multiplicity is.
         let lookups = g.asm.lookups.len();
         let used: Vec<bool> = g
@@ -4877,16 +4885,11 @@ fn run_real_receive() {
         } else {
             "Mac"
         };
-        // Commitment tables are per-shape setup, built before the timed proofs.
-        let table_build = spartan::warm_table(gens, shape);
+        // No per-shape commitment setup: the timed proofs include every kernel.
         println!(
-            "  commit table: {}, built in {table_build:.3} s; {}",
-            if spartan::table_commits() {
-                format!("fixed-base, window c{}", spartan::table_window::<C>())
-            } else {
-                "off (variable-base column MSMs)".to_string()
-            },
-            mem_note("after the table")
+            "  {}; {}",
+            spartan::COMMIT_KERNELS,
+            mem_note("before the proofs")
         );
         let mut runs: Vec<(spartan::Timings, f64)> = Vec::new();
         let mut size = 0;
@@ -4946,10 +4949,10 @@ fn run_real_receive() {
         }
         println!("  proof {size} B; {}", mem_note("after proving"));
         println!(
-            "  Pixel model, this layout : {}",
+            "  Pixel model (variable-time commits), this layout : {}",
             pixel_breakdown(shape, &widths, g.asm.constraints(), nnz.iter().sum())
         );
-        println!("  Pixel model, census      : {census_model}");
+        println!("  Pixel model (variable-time commits), census      : {census_model}");
         // Full-size refusals: one full-width circuit cell off by one (not a
         // filler stand-in, mask or multiplicity): early, middle and the last
         // such cell (the binding chain's end).

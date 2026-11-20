@@ -557,6 +557,7 @@ irohaSwiftDependencies.append(
 // on the library so executable and test consumers inherit the native link inputs.
 irohaSwiftLinkerSettings.append(.linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Security", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("LocalAuthentication", .when(platforms: [.iOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Metal", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Accelerate", .when(platforms: [.iOS, .macOS])))

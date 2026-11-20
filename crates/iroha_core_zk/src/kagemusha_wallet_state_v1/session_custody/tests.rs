@@ -196,6 +196,37 @@ fn exchange(
 }
 
 #[test]
+fn direct_exchange_uses_a_fresh_native_nonce_and_verifies_the_signed_reply() {
+    let (scheme, certificate, state, mut anchor) = clock_fixture();
+    let scope = (scheme.scheme_id(), state.core.wallet_id);
+    let sent = KagemushaWalletMonotonicReadingV1 {
+        boot_id: [9; 32],
+        monotonic_ms: 1_000,
+    };
+    let arrived = KagemushaWalletMonotonicReadingV1 {
+        monotonic_ms: 1_010,
+        ..sent
+    };
+    let first = DirectTimeExchangeV1::start(scope.0, scope.1, 10, || Ok(sent)).unwrap();
+    let second = DirectTimeExchangeV1::start(scope.0, scope.1, 10, || Ok(sent)).unwrap();
+    assert_ne!(first.nonce(), second.nonce());
+    anchor.body.nonce = first.nonce();
+    anchor.signature = signature(&key("time_anchor"), &anchor.body.signing_message());
+    assert!(
+        second
+            .complete_for_wallet(anchor, &certificate, &scheme, scope, 10, arrived)
+            .is_err()
+    );
+    let observed = first
+        .complete_for_wallet(anchor, &certificate, &scheme, scope, 10, arrived)
+        .unwrap();
+    assert_eq!(observed.anchor, anchor);
+    assert_eq!(observed.request_monotonic_ms, sent.monotonic_ms);
+    assert_eq!(observed.receive_monotonic_ms, arrived.monotonic_ms);
+    assert_eq!(observed.boot_id, sent.boot_id);
+}
+
+#[test]
 fn direct_exchange_rejects_cached_foreign_late_and_rebooted_responses() {
     let (scheme, certificate, state, anchor) = clock_fixture();
     let received = KagemushaWalletMonotonicReadingV1 {
@@ -204,7 +235,14 @@ fn direct_exchange_rejects_cached_foreign_late_and_rebooted_responses() {
     };
     assert_eq!(exchange(&state, &anchor).nonce(), anchor.body.nonce);
     let accepted = exchange(&state, &anchor)
-        .complete(anchor, &certificate, &scheme, &state, received)
+        .complete_for_wallet(
+            anchor,
+            &certificate,
+            &scheme,
+            (state.core.scheme_id, state.core.wallet_id),
+            state.core.time_anchor_max_response_ms,
+            received,
+        )
         .unwrap();
     assert_eq!(accepted.response_width_ms().unwrap(), 5000);
     for reading in [
@@ -223,7 +261,14 @@ fn direct_exchange_rejects_cached_foreign_late_and_rebooted_responses() {
     ] {
         assert!(
             exchange(&state, &anchor)
-                .complete(anchor, &certificate, &scheme, &state, reading)
+                .complete_for_wallet(
+                    anchor,
+                    &certificate,
+                    &scheme,
+                    (state.core.scheme_id, state.core.wallet_id),
+                    state.core.time_anchor_max_response_ms,
+                    reading
+                )
                 .is_err()
         );
     }
@@ -231,28 +276,56 @@ fn direct_exchange_rejects_cached_foreign_late_and_rebooted_responses() {
     token.nonce[0] ^= 1;
     assert!(
         token
-            .complete(anchor, &certificate, &scheme, &state, received)
+            .complete_for_wallet(
+                anchor,
+                &certificate,
+                &scheme,
+                (state.core.scheme_id, state.core.wallet_id),
+                state.core.time_anchor_max_response_ms,
+                received
+            )
             .is_err()
     );
     let mut token = exchange(&state, &anchor);
     token.wallet[0] ^= 1;
     assert!(
         token
-            .complete(anchor, &certificate, &scheme, &state, received)
+            .complete_for_wallet(
+                anchor,
+                &certificate,
+                &scheme,
+                (state.core.scheme_id, state.core.wallet_id),
+                state.core.time_anchor_max_response_ms,
+                received
+            )
             .is_err()
     );
     let mut tightened = state;
     tightened.core.time_anchor_max_response_ms = 4999;
     assert!(
         exchange(&state, &anchor)
-            .complete(anchor, &certificate, &scheme, &tightened, received)
+            .complete_for_wallet(
+                anchor,
+                &certificate,
+                &scheme,
+                (tightened.core.scheme_id, tightened.core.wallet_id),
+                tightened.core.time_anchor_max_response_ms,
+                received
+            )
             .is_err()
     );
     let mut forged = anchor;
     forged.signature = signature(&key("payer_payment"), &anchor.body.signing_message());
     assert!(
         exchange(&state, &anchor)
-            .complete(forged, &certificate, &scheme, &state, received)
+            .complete_for_wallet(
+                forged,
+                &certificate,
+                &scheme,
+                (state.core.scheme_id, state.core.wallet_id),
+                state.core.time_anchor_max_response_ms,
+                received
+            )
             .is_err()
     );
 }
@@ -261,11 +334,12 @@ fn direct_exchange_rejects_cached_foreign_late_and_rebooted_responses() {
 fn direct_anchor_index_is_exact_and_never_restarts_elapsed_time() {
     let (scheme, certificate, state, anchor) = clock_fixture();
     let anchored = exchange(&state, &anchor)
-        .complete(
+        .complete_for_wallet(
             anchor,
             &certificate,
             &scheme,
-            &state,
+            (state.core.scheme_id, state.core.wallet_id),
+            state.core.time_anchor_max_response_ms,
             KagemushaWalletMonotonicReadingV1 {
                 boot_id: [9; 32],
                 monotonic_ms: 1100,

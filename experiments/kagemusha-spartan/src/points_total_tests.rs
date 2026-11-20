@@ -46,7 +46,42 @@ where
         claims,
         &crate::spartan::Link::None,
     );
-    let values = crate::verifier::shared_values(&tr, proof, claims);
+    build_from_trace(shape, gens, proof, claims, &tr)
+}
+
+fn build_from_trace<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    proof: &Proof<C>,
+    claims: &[Claim<C>],
+    tr: &Trace<C>,
+) -> (UniformCircuit<C::Base>, Instance<C::Base>, Witness<C::Base>)
+where
+    C::Base: Scalar + PoseidonField,
+{
+    let mut values = crate::verifier::shared_values(tr, proof, claims);
+    let (other, r) = match tr.link {
+        None => (None, None),
+        Some((first, _, other_word, binding)) => {
+            let n = values.len();
+            let mut append = |word: [u8; 32]| {
+                let index = values.len();
+                values.extend(
+                    word.chunks_exact(16)
+                        .map(|chunk| u128::from_le_bytes(chunk.try_into().unwrap())),
+                );
+                [index, index + 1]
+            };
+            let other = append(other_word);
+            // The primary trace already ends with the binding limbs.
+            let r = if first {
+                [n - 2, n - 1]
+            } else {
+                append(binding)
+            };
+            (Some(other), Some(r))
+        }
+    };
     let mut w = Wiring::<C::Base>::default();
     let f = w.family(0, 1);
     let e_out = w.reserve();
@@ -60,12 +95,8 @@ where
         gens,
         proof,
         claims,
-        &tr,
-        SharedMap {
-            base: 0,
-            other: None,
-            r: None,
-        },
+        tr,
+        SharedMap { base: 0, other, r },
         None,
         None,
     );
@@ -180,6 +211,203 @@ where
     );
     built
 }
+
+#[test]
+fn full_logup_words_match_native_trace_and_recursive_squeezes() {
+    fn check<C: PastaCurve>()
+    where
+        C::Base: Scalar,
+        F<C>: Scalar,
+    {
+        let (program, inputs, witness) = crate::uniform::tests::lookup_test_program::<F<C>>();
+        let shape = program.shape;
+        let gens = Gens::<C>::new(shape.cols());
+        let (proof, _) = crate::spartan::prove_circuit(
+            &shape,
+            &gens,
+            &inputs,
+            &witness,
+            &mut SpikeRng::new(b"two phase challenges"),
+            &program,
+        );
+        crate::spartan::verify_circuit(&shape, &gens, &inputs, &proof.to_bytes(), &program)
+            .unwrap();
+        let fixed = crate::spartan::fixed_commitments(&shape, &gens, &program);
+        let trace = crate::verifier::trace_circuit(
+            &shape,
+            &gens,
+            &inputs,
+            &proof,
+            &[],
+            &crate::spartan::Link::None,
+            &program,
+            &fixed,
+        );
+        assert!(trace.accepts);
+        let phase = &trace.circuit.as_ref().unwrap().phase2;
+        assert_eq!(phase.len(), 2);
+        let mut prefix = Transcript::<C>::new(shape.label.as_bytes());
+        crate::spartan::header(&mut prefix, &shape, &inputs.io);
+        for row in &proof.rows[..program.phase1_rows(&shape)] {
+            prefix.point(b"row", row);
+        }
+        let mut state = prefix.snapshot().0;
+        let words = crate::verifier::shared_values(&trace, &proof, &[]);
+        let mut recursive = build_from_trace(&shape, &gens, &proof, &[], &trace);
+        assert!(holds(&recursive));
+        let shared = recursive
+            .0
+            .arrays
+            .iter()
+            .position(|a| a.name == "total points test shared values")
+            .unwrap();
+        for (i, challenge) in phase.iter().enumerate() {
+            iroha_pasta::poseidon::permute(&mut state);
+            let bytes = state[0].to_repr();
+            assert_eq!(*challenge, crate::fs::full_scalar(&bytes));
+            assert!(matches!(&trace.challenges[i], (bits, Kind::Full, true) if bits.len() == 255));
+            let limbs = [
+                u128::from_le_bytes(bytes[..16].try_into().unwrap()),
+                u128::from_le_bytes(bytes[16..].try_into().unwrap()),
+            ];
+            assert_eq!(&words[2 * i..2 * i + 2], &limbs);
+            let alias = to_big(state[0]) + modulus::<C::Base>();
+            let mut aliased = alias.to_bytes_le();
+            aliased.resize(32, 0);
+            let indices = [2 * i, 2 * i + 1].map(|slot| recursive.0.cell_index(shared, 0, slot));
+            let shared_io = 5 + 2
+                * (proof.rows.len()
+                    + proof.outer.len()
+                    + proof.inner.len()
+                    + 2 * proof.ipa.lr.len()
+                    + 2);
+            for (j, (&index, chunk)) in indices.iter().zip(aliased.chunks_exact(16)).enumerate() {
+                let v = C::Base::from_u128(u128::from_le_bytes(chunk.try_into().unwrap()));
+                recursive.2.w[index] = v;
+                recursive.1.io[shared_io + 2 * i + j] = v;
+            }
+            assert!(
+                !holds(&recursive),
+                "full-width challenge {i} must have canonical limbs"
+            );
+            for (j, (&index, limb)) in indices.iter().zip(limbs).enumerate() {
+                let v = C::Base::from_u128(limb);
+                recursive.2.w[index] = v;
+                recursive.1.io[shared_io + 2 * i + j] = v;
+            }
+            assert!(holds(&recursive));
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn full_logup_challenges_follow_both_linked_prefixes() {
+    use crate::spartan::{
+        Link, fixed_commitments, phase1_tests::phased_fixture, prepare_linked_phase1,
+        prove_linked_circuit, verify_linked_circuit,
+    };
+    fn check<C: PastaCurve>(
+        program: &UniformCircuit<F<C>>,
+        gens: &Gens<C>,
+        inst: &Instance<F<C>>,
+        proof: &Proof<C>,
+        link: Link<'_>,
+        changed_r: Link<'_>,
+    ) where
+        C::Base: Scalar,
+        F<C>: Scalar,
+    {
+        let shape = program.shape;
+        let fixed = fixed_commitments(&shape, gens, program);
+        let trace =
+            crate::verifier::trace_circuit(&shape, gens, inst, proof, &[], &link, program, &fixed);
+        assert!(trace.accepts);
+        let ct = trace.circuit.as_ref().unwrap();
+        assert!(ct.pl > 0);
+        let mut prefix = Transcript::<C>::new(shape.label.as_bytes());
+        crate::spartan::header(&mut prefix, &shape, &inst.io);
+        for row in &proof.rows[..ct.p1] {
+            prefix.point(b"row", row);
+        }
+        match &link {
+            Link::First { rho, .. } => {
+                prefix.challenge_full(b"pair/d");
+                prefix.word_limbs(b"pair/rho", rho);
+            }
+            Link::Second { d, .. } => {
+                prefix.word_limbs(b"pair/d", d);
+                prefix.challenge_full(b"pair/rho");
+            }
+            Link::None => unreachable!(),
+        }
+        for row in &proof.rows[ct.p1..ct.p1 + ct.pl] {
+            prefix.point(b"row", row);
+        }
+        let expected = [
+            prefix.challenge_full(b"phase2"),
+            prefix.challenge_full(b"phase2"),
+        ];
+        assert_ne!(expected[0], expected[1]);
+        assert_eq!(ct.phase2, expected);
+        assert!(holds(&build_from_trace(&shape, gens, proof, &[], &trace)));
+        assert!(
+            verify_linked_circuit(&shape, gens, inst, &proof.to_bytes(), &changed_r, program)
+                .is_err()
+        );
+    }
+
+    let (p, ip, wp) = phased_fixture::<Fp>(15);
+    let (s, is, ws) = phased_fixture::<Fq>(15);
+    let gp = Gens::<Vesta>::new(p.shape.cols());
+    let gs = Gens::<Pallas>::new(s.shape.cols());
+    let primary_rng = || SpikeRng::new(b"linked full LogUp primary");
+    let d = prepare_linked_phase1(&p.shape, &gp, &ip, &wp, &mut primary_rng(), &p);
+    let (secondary, rho, r) = prove_linked_circuit(
+        &s.shape,
+        &gs,
+        &is,
+        &ws,
+        &mut SpikeRng::new(b"linked full LogUp secondary"),
+        &Link::Second {
+            d,
+            rlc: &|_| panic!("fixture binds R"),
+        },
+        &s,
+    );
+    let (primary, digest, binding) = prove_linked_circuit(
+        &p.shape,
+        &gp,
+        &ip,
+        &wp,
+        &mut primary_rng(),
+        &Link::First { rho, r },
+        &p,
+    );
+    assert_eq!((digest, binding), (d, r));
+    let wrong_r = (Fq::from_repr(r).unwrap() + Fq::ONE).to_repr();
+    check(
+        &p,
+        &gp,
+        &ip,
+        &primary,
+        Link::First { rho, r },
+        Link::First { rho, r: wrong_r },
+    );
+    check(
+        &s,
+        &gs,
+        &is,
+        &secondary,
+        Link::Second { d, rlc: &|_| r },
+        Link::Second {
+            d,
+            rlc: &|_| wrong_r,
+        },
+    );
+}
+
 fn run<C, D>()
 where
     C: PastaCurve,

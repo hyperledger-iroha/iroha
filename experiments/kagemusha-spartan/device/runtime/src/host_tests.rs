@@ -6,6 +6,9 @@
 //! DATA, which the fixture issuer does not verify on any platform. Custody, the
 //! C session, the engine and the installed programs are the ones phones run.
 use super::*;
+pub(super) mod local_blacklist;
+pub(super) mod recovery;
+pub(super) mod retained_refresh;
 use iroha_core_zk::kagemusha_wallet_advance_v1::{
     KagemushaWalletAnchorPolicyV1, KagemushaWalletFreshGenerationV1,
     KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletKeyGenerationRequestV1,
@@ -55,7 +58,9 @@ impl KagemushaWalletPlatformV1 for HostPlatform {
                 b"host software issuer: no attestation".to_vec(),
             ]),
             KagemushaWalletProbeV1::Absent => KagemushaWalletProbeV1::Absent,
-            KagemushaWalletProbeV1::Unavailable(reason) => KagemushaWalletProbeV1::Unavailable(reason),
+            KagemushaWalletProbeV1::Unavailable(reason) => {
+                KagemushaWalletProbeV1::Unavailable(reason)
+            }
         }
     }
     fn key_generate(
@@ -174,6 +179,116 @@ fn mac_available_memory() -> Option<u64> {
 
 /// No user on the host: accepts exactly one non-empty Native review per Send.
 struct HostConfirmation(std::sync::Mutex<Vec<Vec<u8>>>);
+
+/// Recheck an already-completed two-wallet run using a new wire encoder.
+/// The current released Receive and its immutable hosted Request must already exist.
+pub(super) fn verify_retained_credit(
+    root: &Path,
+    runtime: &mut SessionAdapter,
+    slot: &[u8; 32],
+    parameters: &native::AuthenticatedParameters,
+) -> Result<String> {
+    let head = runtime.output(slot, &[0; 32], 3)?;
+    if head.status != 101 || head.bytes.len() != 196 || head.bytes[2] != 3 {
+        return Err("retained credit needs the current Released head".into());
+    }
+    let operation = head.bytes[68..100].try_into().expect("released operation");
+    let status = runtime.credit_status(*slot, [0x39; 32], operation)?;
+    let request = runtime.open_request(slot, &[0x39; 32], 10)?;
+    let engine = native::NativeEngine::default();
+    let exact = std::fs::read(root.join("incoming-payment.bin")).map_err(fail)?;
+    if runtime.credit_status_for_payment(*slot, [0x39; 32], operation, &exact)? != status {
+        return Err("carrier Payment acknowledgement differs from the retained Receive".into());
+    }
+    let other = std::fs::read(root.join("complete-payment.bin")).map_err(fail)?;
+    if exact == other || runtime.credit_status_for_payment(*slot, [0x39; 32], operation, &other).is_ok() {
+        return Err("a different genuine Payment obtained this Receive's acknowledgement".into());
+    }
+    let payment = engine
+        .verify_payment(&exact, parameters)
+        .map_err(fail)?;
+    if engine.verify_credit_status_peer(&status, &request, &payment, parameters).map_err(fail)?
+        != native::VerifiedCreditStatus::Credited
+    {
+        return Err("retained genuine Receive did not prove a credit".into());
+    }
+    let mut changed = status.clone();
+    *changed.last_mut().ok_or("empty credit status")? ^= 1;
+    if engine.verify_credit_status_peer(&changed, &request, &payment, parameters).is_ok() {
+        return Err("changed retained credit receipt was accepted".into());
+    }
+    save_credit_measurement(root, "incoming", &status)?;
+    if root.join("counterparty-receive-capsule.norito").exists() {
+        verify_retained_counterparty_credit(root, runtime, slot, parameters)?;
+    }
+    runtime.close()?;
+    Ok(format!("Verified retained credited receipt: {} full IPM1 bytes, {} payload bytes", status.len(), status.len()-84))
+}
+
+fn save_credit_measurement(root: &Path, direction: &str, bytes: &[u8]) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let file = root.join(format!("verified-{direction}-credit-status-{digest}.ipm1"));
+    save_fixture_input(&file, bytes)
+}
+
+/// Re-encode B's previously released receipt using only A's actual outgoing
+/// Payment and B's exact saved capsule and completion. No operation is signed.
+fn verify_retained_counterparty_credit(
+    root: &Path,
+    runtime: &mut SessionAdapter,
+    slot: &[u8; 32],
+    parameters: &native::AuthenticatedParameters,
+) -> Result<()> {
+    let read = |name: &str| std::fs::read(root.join(name)).map_err(fail);
+    let engine = native::NativeEngine::default();
+    let payment = engine.verify_payment(&read("complete-payment.bin")?, parameters).map_err(fail)?;
+    // The two original quotes differ in nonce and signature, and carry the
+    // same receiver credential, issuer certificate and exact account companion.
+    let alternate = read("competing-send-request.bin")?;
+    let framed = alternate.strip_prefix(b"KSO1\x03").ok_or("competing Send frame")?;
+    let (len, quote) = framed.split_at_checked(4).ok_or("competing Send length")?;
+    if u32::from_le_bytes(len.try_into().unwrap()) as usize != quote.len() {
+        return Err("competing Send original length changed".into());
+    }
+    let companion = native::decode_open_request_peer(quote).map_err(fail)?;
+    let issued = payment.request();
+    let mut body = issued.body;
+    body[66..130].fill(0);
+    body[194..210].fill(0);
+    let original = [body.as_slice(), &issued.signature].concat();
+    let request = native::encode_open_request_peer(
+        &original,
+        companion.receiver_credential,
+        companion.certificates,
+        companion.fee_schedule,
+        companion.destination_account,
+    ).map_err(fail)?;
+    let capsule = native::RecoveryCapsule::decode(
+        &read("counterparty-receive-capsule.norito")?,
+        &native::device_fixture::scheme().scheme_id(),
+    ).map_err(fail)?;
+    let completion = native::CompletionRecord::decode(
+        &read("counterparty-receive-completion.norito")?, capsule.wallet(),
+    ).map_err(fail)?;
+    let wire = engine.encode_credit_status_peer(&capsule, &completion, &request, &payment, parameters)
+        .map_err(fail)?;
+    let send = payment.receipt().body[114..146].try_into().expect("receipt operation");
+    // C compares the supplied original with the exact selected payer-side Request.
+    if !runtime.verify_credit_status(*slot, send, &request, &wire)?
+        || !runtime.verify_credit_status(*slot, send, &[], &wire)?
+    {
+        return Err("retained counterparty receipt did not prove a credit".into());
+    }
+    let mut changed = wire.clone();
+    *changed.last_mut().ok_or("empty counterparty status")? ^= 1;
+    if runtime.verify_credit_status(*slot, send, &request, &changed).is_ok() {
+        return Err("payer accepted altered counterparty receipt".into());
+    }
+    save_credit_measurement(root, "outgoing", &wire)?;
+    eprintln!("Verified counterparty receipt: {} full IPM1 bytes", wire.len());
+    Ok(())
+}
 impl Confirmation for HostConfirmation {
     fn confirm(&self, review: &[u8]) -> Result<()> {
         if review.is_empty() {

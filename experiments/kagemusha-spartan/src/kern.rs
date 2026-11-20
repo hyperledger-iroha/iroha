@@ -13,16 +13,25 @@
 //!   leading coefficient: it only enters the Boolean points.
 //! - In the first outer round of a satisfied relation every Boolean point is
 //!   zero, so an honest prover skips those points and `C` altogether.
-//! - Inner rounds read which corners of the round's variables hold anything,
-//!   per run of 256 rows ([`support`]): the public half of `z` and of
-//!   `M(r_x, .)` is zero beyond the public inputs, and a padded witness has
-//!   empty rows. A variable whose upper (or lower) half is empty in both
-//!   tables contributes the factor `(1 - Y)^2` (or `Y^2`), so the round runs
-//!   on the remaining sub-cube (9 products instead of 27 for the public half
-//!   alone, 3 where half the rows are empty too), and so does its fold.
+//! - Inner rounds read which corners of the round's variables may hold
+//!   anything, per run of 256 rows ([`support`]), from public information
+//!   only: the public half of `z` is zero beyond the public inputs, rows the
+//!   witness build never wrote are zero, and `M(r_x, .)` is public. A variable
+//!   whose upper (or lower) half is empty in both tables contributes the
+//!   factor `(1 - Y)^2` (or `Y^2`), so the round runs on the remaining
+//!   sub-cube (9 products instead of 27 for the public half alone, 3 where
+//!   half the rows are empty too), and so does its fold. Later rounds carry
+//!   the folded witness's empty runs forward ([`Support::folded_live`]).
 //! - Tables fold by a tree (`2^k - 1` products per output instead of `2^k`).
 //! - Every loop is cut into leaves of bounded length, so a slow core never
 //!   holds a large share of a pass (unequal cores: a Pixel 6's 2 + 2 + 4).
+//!
+//! Private values never decide the schedule. Which rows, corners and
+//! products a pass touches follows from the shape, the witness build's public
+//! row account, public challenges and public tables; a private entry is never
+//! tested for zero (a witness run that happens to be zero is evaluated like
+//! any other), and the outer tables `Az, Bz, Cz` are always dense. The field
+//! arithmetic itself is the Pasta implementation's constant-time arithmetic.
 
 use ff::Field;
 use rayon::prelude::*;
@@ -32,15 +41,24 @@ use crate::grid::{boolean_positions, pow3};
 /// Longest leaf of a parallel pass, in rows of the folded table.
 const LEAF: usize = 1 << 10;
 
-/// A table the inner rounds read: a plain slice, or a [`Split`] table whose
-/// upper half is zero beyond a short prefix.
+/// A table the inner rounds read: a slice of private values, a [`Public`]
+/// slice, a [`Split`] `M(r_x, .)`, the prover's [`ZView`] of `z`, or a folded
+/// private table with its public [`Live`] runs ([`Masked`]).
 pub trait Table<F>: Sync {
     fn len(&self) -> usize;
     fn at(&self, i: usize) -> F;
-    /// Whether every entry in `range` is zero.
+    /// Whether every entry in `range` is zero by public information alone.
+    ///
+    /// A public table may read its values. A table of private values answers
+    /// from its public layout only (rows the witness build never wrote, the
+    /// public half beyond the io, runs an earlier fold emptied by layout) and
+    /// never reads a private value to decide. `false` is always correct: the
+    /// round then evaluates the run as live, with the same result.
     fn zero_run(&self, range: std::ops::Range<usize>) -> bool;
 }
 
+/// A plain slice is private: no entry is known to be zero, so a supported
+/// round evaluates every run of it ([`Public`] for a public slice).
 impl<F: Field> Table<F> for [F] {
     #[inline]
     fn len(&self) -> usize {
@@ -51,7 +69,7 @@ impl<F: Field> Table<F> for [F] {
         self[i]
     }
     fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
-        self[range].iter().all(|x| x.is_zero_vartime())
+        range.is_empty()
     }
 }
 
@@ -69,9 +87,87 @@ impl<F: Field> Table<F> for Vec<F> {
     }
 }
 
-/// `(dense || tail || 0...)` of length `2 * dense.len()`: `z = (w || io)` and
-/// `M(r_x, .)` before the first inner fold. Their upper (public) half is zero
-/// beyond the public inputs, so it is never allocated.
+/// A slice of public values (a folded `M(r_x, .)`): its zero runs are read
+/// from its values.
+pub struct Public<'a, F>(pub &'a [F]);
+
+impl<F: Field> Table<F> for Public<'_, F> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        self.0[i]
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        self.0[range].iter().all(|x| x.is_zero_vartime())
+    }
+}
+
+/// Which runs of a private table may hold anything, by public layout alone:
+/// run `s` covers entries `s * seg..(s + 1) * seg`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Live {
+    seg: usize,
+    runs: Vec<bool>,
+}
+
+impl Live {
+    /// Every run of a table of `len` entries may hold anything.
+    pub fn dense(len: usize) -> Self {
+        let seg = SEGMENT.min(len).max(1);
+        Live {
+            seg,
+            runs: vec![true; len.div_ceil(seg)],
+        }
+    }
+    /// Whether no run meeting `range` may hold anything.
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        range.is_empty()
+            || self.runs[range.start / self.seg..=(range.end - 1) / self.seg]
+                .iter()
+                .all(|live| !live)
+    }
+}
+
+/// A table of private values with its public [`Live`] runs (`z` after an
+/// inner fold): its zero runs come from the runs, never from its values.
+pub struct Masked<'a, F> {
+    values: &'a [F],
+    live: &'a Live,
+}
+
+impl<'a, F> Masked<'a, F> {
+    pub fn new(values: &'a [F], live: &'a Live) -> Self {
+        assert_eq!(
+            live.runs.len(),
+            values.len().div_ceil(live.seg),
+            "a live flag per run"
+        );
+        Masked { values, live }
+    }
+}
+
+impl<F: Field> Table<F> for Masked<'_, F> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        self.values[i]
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        self.live.zero_run(range)
+    }
+}
+
+/// `(dense || tail || 0...)` of length `2 * dense.len()`: `M(r_x, .)` before
+/// the first inner fold. Its upper (public) half is zero beyond the public
+/// inputs, so it is never allocated. Its values are public (the verifier
+/// evaluates the same `M(r_x, r_y)`), so its zero runs are read by value; a
+/// private table never takes this form (the prover's `z` is a [`ZView`]).
 pub struct Split<F> {
     pub dense: Vec<F>,
     pub tail: Vec<F>,
@@ -106,7 +202,8 @@ impl<F: Field> Split<F> {
             .as_ref()
             .is_none_or(|bits| bits[s / 64] >> (s % 64) & 1 == 1)
     }
-    /// The upper half's nonzero prefix becomes the tail.
+    /// The upper half's nonzero prefix becomes the tail (found by value:
+    /// `full` is a public `M(r_x, .)`).
     pub fn from_full(mut full: Vec<F>) -> Self {
         assert!(full.len().is_power_of_two() && full.len() >= 2);
         let half = full.len() / 2;
@@ -150,7 +247,7 @@ impl<F: Field> Table<F> for Split<F> {
         let low = range.start.min(half)..range.end.min(half);
         let tail_end = half + self.tail.len();
         let high = range.start.clamp(half, tail_end)..range.end.clamp(half, tail_end);
-        // Runs never written are zero unread.
+        // Runs never written are zero unread; written runs are public values.
         let mut at = low.start;
         while at < low.end {
             let s = at / SEGMENT;
@@ -349,7 +446,9 @@ impl<F: Field> Cells<F> for Rows<'_, F> {
 }
 
 /// `z = (w || io)` read through the prover's [`Rows`]: the public half is
-/// its tail (the io) and zero beyond.
+/// its tail (the io) and zero beyond. The witness half is private: its zero
+/// runs are the rows the build never wrote and padding rows beyond column 0,
+/// never a row's values.
 pub struct ZView<'r, 'a, F> {
     pub rows: &'r Rows<'a, F>,
     pub tail: &'r [F],
@@ -385,9 +484,10 @@ impl<F: Field> Table<F> for ZView<'_, '_, F> {
         while at < end {
             let (r, c) = (at >> self.rows.shift, at & (cols - 1));
             let n = (cols - c).min(end - at);
+            // The row's public account only: a row of values may hold
+            // anything, whatever it holds, and is not read here.
             let zero = match &self.rows.rows[r] {
-                Row::Shared(row) => row[c..c + n].iter().all(|x| x.is_zero_vartime()),
-                Row::Own(row) => row[c..c + n].iter().all(|x| x.is_zero_vartime()),
+                Row::Shared(_) | Row::Own(_) => false,
                 Row::Zero => true,
                 Row::Unit => c != 0,
             };
@@ -396,6 +496,7 @@ impl<F: Field> Table<F> for ZView<'_, '_, F> {
             }
             at += n;
         }
+        // The io is public: read by value.
         let high = range.start.clamp(half, tail_end)..range.end.clamp(half, tail_end);
         self.tail[high.start - half..high.end - half]
             .iter()
@@ -681,19 +782,35 @@ pub fn fold_top_streamed<F: Field>(
 /// Rows per run of the corner support.
 pub const SEGMENT: usize = 256;
 
-/// Which corners of a round's `k` variables hold anything: per run of
-/// [`SEGMENT`] rows `j`, bit `hi` is set when `m` or `z` is nonzero at corner
-/// `hi` somewhere in the run. Zero runs are public structure almost always
-/// (the public half beyond the inputs, rows without cells); a run of cells
-/// that are all zero by value is treated the same way, and the result is the
-/// same either way.
+/// Which corners of a round's `k` variables may hold anything: per run of
+/// [`SEGMENT`] rows `j`, bit `hi` is set unless both `m` and `z` are zero at
+/// corner `hi` throughout the run by public information ([`Table::zero_run`]).
+/// A set bit over entries that are zero changes no output, so the masks are a
+/// public over-approximation of the tables' true support: they never depend
+/// on a private value.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Support {
     k: usize,
     seg: usize,
     masks: Vec<u32>,
+    /// The same per run for `z` alone (the private table).
+    z_masks: Vec<u32>,
 }
 
-/// Scans both tables (a run stops at its first nonzero entry).
+impl Support {
+    /// The live runs of `z` folded under this support: a run whose corners
+    /// are all zero in `z` by layout folds to zero, so the folded table's run
+    /// `s` (entries `s * seg..`) is live only where `z` had a live corner.
+    pub fn folded_live(&self) -> Live {
+        Live {
+            seg: self.seg,
+            runs: self.z_masks.iter().map(|mask| *mask != 0).collect(),
+        }
+    }
+}
+
+/// Reads both tables' public zero runs: `m` (public) may be scanned by
+/// value, `z` (private) answers from its layout.
 pub fn support<F: Field, M: Table<F> + ?Sized, Z: Table<F> + ?Sized>(
     k: usize,
     m: &M,
@@ -702,19 +819,29 @@ pub fn support<F: Field, M: Table<F> + ?Sized, Z: Table<F> + ?Sized>(
     assert!(k <= 5 && z.len() == m.len());
     let low = m.len() >> k;
     let seg = SEGMENT.min(low).max(1);
-    let masks = (0..low.div_ceil(seg))
+    let pairs: Vec<(u32, u32)> = (0..low.div_ceil(seg))
         .into_par_iter()
         .with_max_len(16)
         .map(|s| {
             let (j0, j1) = (s * seg, ((s + 1) * seg).min(low));
-            (0..1usize << k).fold(0u32, |mask, hi| {
+            (0..1usize << k).fold((0u32, 0u32), |(mask, z_mask), hi| {
                 let run = hi * low + j0..hi * low + j1;
-                let any = !m.zero_run(run.clone()) || !z.zero_run(run);
-                mask | (u32::from(any) << hi)
+                let z_any = !z.zero_run(run.clone());
+                let any = z_any || !m.zero_run(run);
+                (
+                    mask | (u32::from(any) << hi),
+                    z_mask | (u32::from(z_any) << hi),
+                )
             })
         })
         .collect();
-    Support { k, seg, masks }
+    let (masks, z_masks) = pairs.into_iter().unzip();
+    Support {
+        k,
+        seg,
+        masks,
+        z_masks,
+    }
 }
 
 /// How one corner mask reduces a round: the variables that stay free, the
@@ -1126,11 +1253,21 @@ mod tests {
                 if n >= 4 {
                     m[n - 1] = Fp::from(5u64);
                 }
-                let sup = support(k, &m, &z);
+                // Read as public tables, so the emptied corners are seen.
+                let sup = support(k, &Public(&m), &Public(&z));
                 assert_eq!(
                     inner_round(&basis, &m, &z, Some(&sup)),
                     reference_round(k, &m, &z, None, None),
                     "padded inner k {k} log {log}"
+                );
+                // As private tables nothing is known to be empty; the
+                // round evaluates every run, with the same values.
+                let dense = support(k, &m, &z);
+                assert!(dense.masks.iter().all(|mask| *mask == (1u32 << (1 << k)) - 1));
+                assert_eq!(
+                    inner_round(&basis, &m, &z, Some(&dense)),
+                    reference_round(k, &m, &z, None, None),
+                    "private padded inner k {k} log {log}"
                 );
                 assert_eq!(
                     inner_round(&basis, &m, &z, None),
@@ -1149,5 +1286,171 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Witness rows of 64 columns, 32 rows: rows 8..12 and 24..28 never
+    /// written (their caller pages hold garbage the prover must not read),
+    /// row 5 written with zeros only, row 30 a padding row.
+    const COLS: usize = 64;
+    const ROWS: usize = 32;
+
+    fn layout() -> Vec<crate::r1cs::RowFill> {
+        use crate::r1cs::RowFill;
+        (0..ROWS)
+            .map(|r| match r {
+                8..12 | 24..28 => RowFill::Zero,
+                30 => RowFill::Unit,
+                _ => RowFill::Values,
+            })
+            .collect()
+    }
+
+    fn witness(rng: &mut SpikeRng, zero_row_5: bool) -> Vec<Fp> {
+        let mut w: Vec<Fp> = (0..ROWS * COLS).map(|_| rng.scalar()).collect();
+        if zero_row_5 {
+            w[5 * COLS..6 * COLS].fill(Fp::ZERO);
+        }
+        w
+    }
+
+    /// `M(r_x, .)` zero where no constraint reads (the rows never written),
+    /// with three public entries beyond the witness half.
+    fn m_table(rng: &mut SpikeRng) -> Split<Fp> {
+        let mut dense: Vec<Fp> = (0..ROWS * COLS).map(|_| rng.scalar()).collect();
+        let mut written = vec![0u64; 1];
+        for s in 0..ROWS * COLS / SEGMENT {
+            // Runs 2 and 6 are rows 8..12 and 24..28.
+            if s == 2 || s == 6 {
+                dense[s * SEGMENT..(s + 1) * SEGMENT].fill(Fp::ZERO);
+            } else {
+                written[0] |= 1 << s;
+            }
+        }
+        let tail = (0..3).map(|_| rng.scalar()).collect();
+        Split::with_written(dense, tail, written)
+    }
+
+    /// Zero runs of private tables come from public layout only: a slice
+    /// knows none, a row of values is live whatever it holds, the io is read
+    /// by value, and the support of two witnesses that differ only in their
+    /// values is the same.
+    #[test]
+    fn private_tables_answer_from_public_layout_only() {
+        let mut rng = SpikeRng::new(b"kern public layout");
+        let zeros = vec![Fp::ZERO; ROWS * COLS];
+        assert!(!<[Fp] as Table<Fp>>::zero_run(&zeros, 0..COLS));
+        assert!(<[Fp] as Table<Fp>>::zero_run(&zeros, 3..3));
+        assert!(Public(&zeros).zero_run(0..COLS));
+        let fill = layout();
+        let w = witness(&mut rng, true);
+        let rows = Rows::with_fill(&w, COLS, &fill);
+        let io = [Fp::ONE, Fp::ZERO, Fp::from(3u64)];
+        let zv = ZView {
+            rows: &rows,
+            tail: &io,
+        };
+        let half = ROWS * COLS;
+        assert!(!zv.zero_run(5 * COLS..6 * COLS), "zeros by value stay live");
+        assert!(!zv.zero_run(0..COLS));
+        assert!(zv.zero_run(8 * COLS..12 * COLS), "rows never written");
+        assert!(!zv.zero_run(30 * COLS..30 * COLS + 1), "a padding row's 1");
+        assert!(zv.zero_run(30 * COLS + 1..31 * COLS), "padding beyond column 0");
+        assert!(!zv.zero_run(half..half + 1), "public io by value");
+        assert!(zv.zero_run(half + 1..half + 2), "a public zero in the io");
+        assert!(zv.zero_run(half + 3..2 * half), "the public half beyond the io");
+        let live = Live {
+            seg: 4,
+            runs: vec![true, false, false, true],
+        };
+        let masked = Masked::new(&zeros[..16], &live);
+        assert!(!masked.zero_run(0..1), "a live run of zeros");
+        assert!(masked.zero_run(4..12));
+        assert!(!masked.zero_run(5..13));
+
+        let m = m_table(&mut rng);
+        let basis = Basis::new(2);
+        let mut seen = None;
+        for zero_row_5 in [false, true] {
+            let w = witness(&mut rng, zero_row_5);
+            let rows = Rows::with_fill(&w, COLS, &fill);
+            let zv = ZView {
+                rows: &rows,
+                tail: &io,
+            };
+            let sup = support(2, &m, &zv);
+            let z_full: Vec<Fp> = (0..2 * half).map(|i| zv.get(i)).collect();
+            assert_eq!(
+                inner_round(&basis, &m, &zv, Some(&sup)),
+                reference_round(2, &m.to_full(), &z_full, None, None)
+            );
+            match &seen {
+                None => seen = Some(sup),
+                Some(first) => assert_eq!(*first, sup, "a public schedule"),
+            }
+        }
+    }
+
+    /// Every inner round of a padded witness: the first on `M`'s split and
+    /// the prover's view of `z`, later ones on the folded public `M` and the
+    /// folded private `z` with the runs its layout emptied. Each round and
+    /// fold equals the dense reference, a run the layout empties is zero,
+    /// and the schedule reaches a reduced sub-cube after the first fold.
+    #[test]
+    fn masked_rounds_carry_the_witness_layout_forward() {
+        let mut rng = SpikeRng::new(b"kern masked rounds");
+        let k = 2;
+        let basis = Basis::new(k);
+        let fill = layout();
+        let w = witness(&mut rng, true);
+        let rows = Rows::with_fill(&w, COLS, &fill);
+        let io: Vec<Fp> = (0..5).map(|_| rng.scalar()).collect();
+        let zv = ZView {
+            rows: &rows,
+            tail: &io,
+        };
+        let m_split = m_table(&mut rng);
+        let half = ROWS * COLS;
+        let mut m_ref = m_split.to_full();
+        let mut z_ref: Vec<Fp> = (0..2 * half).map(|i| zv.get(i)).collect();
+        let sup = support(k, &m_split, &zv);
+        assert_eq!(
+            inner_round(&basis, &m_split, &zv, Some(&sup)),
+            reference_round(k, &m_ref, &z_ref, None, None),
+            "first round"
+        );
+        let r: Vec<Fp> = (0..k).map(|_| rng.scalar()).collect();
+        let mut m = fold_top(&m_split, &r, Some(&sup));
+        let mut z = fold_top(&zv, &r, Some(&sup));
+        m_ref = reference_fold(&m_ref, &r);
+        z_ref = reference_fold(&z_ref, &r);
+        assert_eq!((&m, &z), (&m_ref, &z_ref), "first fold");
+        let mut live = sup.folded_live();
+        // Run 2 of the fold is rows 8..12 and 24..28 at every corner.
+        assert_eq!(live.runs, [true, true, false, true]);
+        let mut reduced = false;
+        while m.len() > 1 {
+            let k = k.min(m.len().trailing_zeros() as usize);
+            let basis = Basis::new(k);
+            for (s, run) in live.runs.iter().enumerate() {
+                let run_values = &z[s * live.seg..((s + 1) * live.seg).min(z.len())];
+                assert!(*run || run_values.iter().all(|x| x.is_zero_vartime()));
+            }
+            let (mt, zt) = (Public(&m), Masked::new(&z, &live));
+            let sup = support(k, &mt, &zt);
+            reduced |= sup.masks.iter().any(|mask| *mask != (1u32 << (1 << k)) - 1);
+            assert_eq!(
+                inner_round(&basis, &mt, &zt, Some(&sup)),
+                reference_round(k, &m, &z, None, None),
+                "round over {} entries",
+                m.len()
+            );
+            let r: Vec<Fp> = (0..k).map(|_| rng.scalar()).collect();
+            let (m2, z2) = (fold_top(&mt, &r, Some(&sup)), fold_top(&zt, &r, Some(&sup)));
+            assert_eq!(m2, reference_fold(&m, &r), "fold of M over {}", m.len());
+            assert_eq!(z2, reference_fold(&z, &r), "fold of z over {}", z.len());
+            live = sup.folded_live();
+            (m, z) = (m2, z2);
+        }
+        assert!(reduced, "the carried layout reduces a later round");
     }
 }

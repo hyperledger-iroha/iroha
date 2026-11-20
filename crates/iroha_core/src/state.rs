@@ -1284,6 +1284,7 @@ macro_rules! with_world_overlay_fields {
             c10_contract_profiles,
             c10_triggers,
             c10_trigger_candidates,
+            kagemusha_spartan_programs,
             runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
@@ -4389,6 +4390,11 @@ pub struct WorldData {
         iroha_data_model::trigger::TriggerId,
         iroha_data_model::events::TriggeringEventType,
     >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: Storage<
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
@@ -5498,6 +5504,12 @@ pub struct WorldBlockFields<'world> {
         'world,
         iroha_data_model::trigger::TriggerId,
         iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageField<
+        'world,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageField<
@@ -6780,6 +6792,7 @@ impl WorldBlock<'_> {
             c10_contract_profiles,
             c10_triggers,
             c10_trigger_candidates,
+            kagemusha_spartan_programs,
             runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
@@ -7393,6 +7406,12 @@ pub struct WorldTransaction<'block, 'world> {
         'block,
         iroha_data_model::trigger::TriggerId,
         iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageTransaction<
+        'block,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageTransaction<
@@ -9751,6 +9770,12 @@ pub struct WorldView<'world> {
         'world,
         iroha_data_model::trigger::TriggerId,
         iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageView<
+        'world,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
     >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageView<
@@ -22130,6 +22155,9 @@ macro_rules! world_ro_accessors {
             storage c10_triggers: iroha_data_model::trigger::TriggerId => iroha_data_model::ivm_c10::StoredC10TriggerV1;
             /// Event category of each registered C10 trigger, rebuilt from the committed actions.
             storage c10_trigger_candidates: iroha_data_model::trigger::TriggerId => iroha_data_model::events::TriggeringEventType;
+            /// Exact installed Spartan original, keyed by registered scheme.
+            storage kagemusha_spartan_programs: [u8; 32]
+                => iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1;
             /// Permanent definition history and exclusion receipts (read-only).
             storage runtime_retirements:
                 iroha_data_model::runtime::definition::DefinitionId
@@ -26069,6 +26097,7 @@ impl WorldTransaction<'_, '_> {
             c10_contract_profiles: _,
             c10_triggers: _,
             c10_trigger_candidates: _,
+            kagemusha_spartan_programs: _,
             runtime_retirements: _,
             runtime_escrow_captures: _,
             runtime_migrations: _,
@@ -26544,6 +26573,7 @@ impl WorldTransaction<'_, '_> {
         self.c10_contract_profiles.apply();
         self.c10_triggers.apply();
         self.c10_trigger_candidates.apply();
+        self.kagemusha_spartan_programs.apply();
         self.runtime_retirements.apply();
         self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();

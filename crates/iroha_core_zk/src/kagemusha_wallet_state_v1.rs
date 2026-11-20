@@ -56,9 +56,15 @@ mod index;
 mod lifecycle;
 mod maintenance;
 mod manifest;
+pub(crate) use capacity::{blacklist_storage_required, open_request_storage_required, transfer_storage_required};
+pub(crate) use manifest::{LocalBlacklistV1, authenticate_local_blacklist};
 mod map_custody;
 mod map_tree;
+pub(crate) use map_tree::PersistentMapV1;
 mod native_owner;
+#[cfg(test)]
+pub(crate) use native_owner::settlement_fixture;
+pub(crate) use native_owner::signed_unload_relay_original;
 mod native_worker;
 pub use native_owner::{
     LEDGER_INSTRUCTION_MAX_BYTES_V1, LEDGER_PROOF_MAX_BYTES_V1, LedgerAttemptIngestV1,
@@ -108,6 +114,7 @@ pub use fold_metrics::{
 pub use folding::{FoldJobV1, FoldStatus, FoldTurnStatusV1, LineageCache, ProvedFoldV1};
 pub use index::{IndexRoot, ObjectStore, ObjectWorkspace};
 mod object_workspace;
+pub(crate) use object_workspace::with_transfer_draft;
 pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{
     BoundRequestStatusV1, ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation,
@@ -128,6 +135,7 @@ pub use scheduling::{
     Scheduler, Speculation, SpeculationJob, SpeculationRun,
 };
 pub use session_custody::DirectTimeExchangeV1;
+pub(crate) use session_custody::{read_direct_anchor, retain_anchor};
 pub use snapshot::{Snapshot, SnapshotFold};
 pub use transition_custody::TransitionCustodyV1;
 

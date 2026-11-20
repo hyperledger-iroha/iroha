@@ -924,7 +924,7 @@ fn trace_with<C: PastaCurve>(
                 t.point(b"row", row);
             }
             let phase2: Vec<F<C>> = (0..c.phase2_challenges())
-                .map(|_| ch(&mut t, Kind::Raw))
+                .map(|_| ch(&mut t, Kind::Full))
                 .collect();
             rel = Some(c.instantiate(shape, &phase2, None));
             let late_digest = (!proof.late.is_empty()).then(|| io_digest(&proof.late));

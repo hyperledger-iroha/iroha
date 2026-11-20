@@ -216,7 +216,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         _ => return Err(Failure::code(INVALID)),
     })
 }
-fn decode<T>(bytes: &[u8]) -> Result<T>
+pub(super) fn decode<T>(bytes: &[u8]) -> Result<T>
 where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,

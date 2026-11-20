@@ -54,6 +54,11 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     approval: Option<&dyn Confirmation>,
     measurements: &mut Measurements,
 ) -> Result<String> {
+    let key_type = if cfg!(any(target_os = "ios", target_os = "android")) {
+        "device hardware"
+    } else {
+        "host software"
+    };
     let (bundle, manifest, signature) = read_artifacts(artifacts)?;
     measurements.program_bundle(&bundle);
     let parameters =
@@ -63,7 +68,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         scheme.clone(),
         InstallationV1 {
             scheme_id: scheme.scheme_id(),
-            manifest_digest: *parameters.id(),
+            manifest_digest: *parameters.manifest_digest(),
         },
     );
     if apple.is_some() {
@@ -220,7 +225,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         account.as_slice(),
         asset.as_slice(),
     ];
-    let runtime = FutureRuntime::from_installed(provider, parameters, ());
+    let runtime =
+        FutureRuntime::from_installed(provider, parameters, native::device_fixture::scheme(), ());
+    #[cfg(test)]
+    let verification = runtime.authenticated_parameters();
     let mut runtime = SessionAdapter::new(runtime, &bundle, &manifest, &signature)?;
     // Each later owner re-reads the immutable artifact files, as a restarted
     // process would. Release the encoded transport buffers before proving.
@@ -233,10 +241,34 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         None,
     )?;
     let slot = admission.slot;
+    #[cfg(test)]
+    if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
+        && matches!(stage.as_str(), "refresh-prepare" | "refresh-execute" | "refresh-recover")
+    {
+        let wallet = bootstrap.input.credential.body[66..98].try_into().expect("credential wallet");
+        return host_tests::retained_refresh::check(root, &mut runtime, &slot.0, wallet, &stage);
+    }
+    #[cfg(test)]
+    if std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LAUNCH").as_deref()
+        == Some(std::ffi::OsStr::new("retained-credit"))
+    {
+        return host_tests::verify_retained_credit(root, &mut runtime, &slot.0, &verification);
+    }
+    #[cfg(test)]
+    drop(verification);
     let operation = operation_id(&witness);
-    let exact = complete(&mut runtime, &slot, &witness, &[], None, measurements)?
-        .encode()
-        .map_err(fail)?;
+    let exact = complete(
+        &mut runtime,
+        &slot,
+        &witness,
+        &[],
+        &wallet_action(1, &[])?,
+        None,
+        None,
+        measurements,
+    )?
+    .encode()
+    .map_err(fail)?;
     runtime.close()?;
     drop(runtime);
     let owner = Owner {
@@ -250,6 +282,26 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     };
     let (mut runtime, verification_parameters) =
         measurements.measure("Bootstrap", "cold_start_drill", || owner.open())?;
+    measurements.measure("Bootstrap", "activation_recovery_drill", || {
+        let exact = runtime.activation(&slot.0)?;
+        if exact[..32] != scheme.scheme_id()
+            || exact[32..64] != credential[34..66]
+            || exact[64..96] != *verification_parameters.manifest_digest()
+            || exact[96..128] != credential[66..98]
+            || runtime.activation(&slot.0)? != exact
+        {
+            return Err("signed activation response changed its exact scope or original".into());
+        }
+        let saved = root.join("bootstrap-activation.bin");
+        if saved.exists() {
+            if std::fs::read(&saved).map_err(fail)? != exact {
+                return Err("cold restart changed the wallet-signed activation".into());
+            }
+        } else {
+            save_fixture_input(&saved, &exact)?;
+        }
+        Ok(())
+    })?;
     let retained = runtime.output(&slot.0, &operation, 2)?;
     if retained.status != 1 {
         return Err("cold start did not recover exact completion".into());
@@ -261,11 +313,22 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     let retained = native::CompletionRecord::decode(&retained.bytes, &wallet).map_err(fail)?;
     let bootstrap_head = retained.output_part(0).map_err(fail)?;
     let load = native::device_fixture::load100(&witness).map_err(fail)?;
+    let native::ExactOperationWitness::Load {
+        receipt_original,
+        finality_original,
+        ..
+    } = &load
+    else {
+        return Err("missing fixture Load originals".into());
+    };
+    let load_input = wallet_action(2, &[receipt_original, finality_original])?;
     let loaded = complete(
         &mut runtime,
         &slot,
         &load,
         &bootstrap_head,
+        &load_input,
+        None,
         None,
         measurements,
     )?;
@@ -285,20 +348,50 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     // is deterministic, so a restart rebuilds the same Send witness.
     let b_request =
         native::device_fixture::request_to(&load, counterparty.credential()).map_err(fail)?;
-    let send = native::device_fixture::send10_to(
-        &load,
-        counterparty.credential(),
-        counterparty.sign_request(&b_request).map_err(fail)?,
-    )
-    .map_err(fail)?;
+    let request_signature = counterparty.sign_request(&b_request).map_err(fail)?;
+    let open = counterparty
+        .open_request_wire(&b_request, request_signature)
+        .map_err(fail)?;
+    let send_input = wallet_action(3, &[&open])?;
+    let send =
+        native::device_fixture::send10_to(&load, counterparty.credential(), request_signature)
+            .map_err(fail)?;
+    // A second signed Request has a competing unselected review at the same predecessor.
+    // If the first debit wins, this independent Request must remain payable on the new head.
+    let still_unspent = root.join("competing-send-request.bin");
+    let competing_review = root.join("competing-send-first-review.bin");
+    if !still_unspent.exists() {
+        let mut alternative = b_request.clone();
+        alternative[386..418].copy_from_slice(&[0x68; 32]);
+        let signed = counterparty.sign_request(&alternative).map_err(fail)?;
+        let alternative = counterparty
+            .open_request_wire(&alternative, signed)
+            .map_err(fail)?;
+        let action = wallet_action(3, &[&alternative])?;
+        let draft = runtime.prepare(&slot.0, &action, &[])?;
+        runtime.discard(draft.token)?;
+        save_fixture_input(&competing_review, &draft.review)?;
+        save_fixture_input(&still_unspent, &action)?;
+    }
     let sent = complete(
         &mut runtime,
         &slot,
         &send,
         &load_head,
+        &send_input,
+        send.counterparty_account(),
         approval,
         measurements,
     )?;
+    let alternative = std::fs::read(&still_unspent).map_err(fail)?;
+    let competing_before = std::fs::read(&competing_review).map_err(fail)?;
+    let rebound = runtime.prepare(&slot.0, &alternative, &[])?;
+    if rebound.review[99..131] == competing_before[99..131] {
+        return Err(
+            "an abandoned competing Send did not rebind to the actual released head".into(),
+        );
+    }
+    runtime.discard(rebound.token)?;
     let outgoing = sent.output_part(1).map_err(fail)?;
     measurements.outgoing_payment(&outgoing);
     // The independent proof reader's view of A's own Payment: B receives it,
@@ -311,18 +404,42 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     // B's return Payment is retained before A's Receive starts, so a restart
     // receives exactly the same bytes. A's hardware Request signature is not
     // deterministic; it travels inside these bytes.
+    // The receiver issues its signed Request from its actual Released head. The same stable
+    // fixture action id must reproduce the original across process launches and a later Receive.
+    let return_request = measurements.measure("Request", "issue_or_retry", || {
+        let original = runtime.open_request(&slot.0, &[0x39; 32], 10)?;
+        if runtime.open_request(&slot.0, &[0x39; 32], 10)? != original
+            || runtime.open_request(&slot.0, &[0x39; 32], 11).is_ok()
+        {
+            return Err("open Request retry changed its terms or signed bytes".into());
+        }
+        Ok(original)
+    })?;
     let incoming_path = root.join("incoming-payment.bin");
     if !incoming_path.exists() {
-        let bytes = counterparty_round(
+        let (bytes, outgoing_status) = counterparty_round(
+            root,
             &engine,
             &counterparty,
             &outgoing_payment,
             &verification_parameters,
-            platform.as_ref(),
-            &slot,
+            &open,
+            &return_request,
             witness.credential(),
             measurements,
         )?;
+        match outgoing_status {
+            Ok(wire) => save_fixture_input(&root.join("outgoing-credit-status.bin"), &wire)?,
+            Err(reason) => {
+                // Finish the independent payment and receiver recovery checks before reporting
+                // a transport refusal. The original encoder diagnostic includes the actual size.
+                eprintln!("counterparty CreditStatus refused: {reason}");
+                save_fixture_input(
+                    &root.join("outgoing-credit-status-error.txt"),
+                    reason.as_bytes(),
+                )?;
+            }
+        }
         save_fixture_input(&incoming_path, &bytes)?;
         measurements.incoming_payment(&bytes);
         // A receives in the next launch. This process still holds what B's
@@ -331,7 +448,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         // caches would be counted in the measured Receive.
         runtime.close()?;
         return Ok(format!(
-            "stage 1 of 2: hardware Bootstrap/account/cold-start with invalid-signature, changed-credential and old-challenge rejection, BLS-finalized fixture Load100, confirmed Send10 to the counterparty wallet, and counterparty Bootstrap/Receive and Send10 back under a hardware-signed Request passed; outgoing Payment {} bytes, incoming Payment {} bytes retained; launch again to receive it",
+            "stage 1 of 2: {key_type} keys. Bootstrap, account admission, cold startup, finalized Load100 and Send10 passed. The counterparty bootstrapped, received the payment and returned 10 under the wallet-signed Request. Retained outgoing and incoming Payments are {} and {} bytes.",
             outgoing.len(),
             bytes.len()
         ));
@@ -363,23 +480,18 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         }
         Ok(())
     })?;
-    let (receive, send_head) = measurements.measure("Receive", "witness_construction", || {
-        Ok((
-            native::device_fixture::receive_from(
-                &witness,
-                &send,
-                outgoing_payment.profile(),
-                &payment,
-            )
-            .map_err(fail)?,
-            sent.output_part(0).map_err(fail)?,
-        ))
-    })?;
+    let send_head = sent.output_part(0).map_err(fail)?;
     let receive_result = complete(
         &mut runtime,
         &slot,
-        &receive,
+        &send,
         &send_head,
+        &wallet_action(4, &[&[0x39; 32], &payment_bytes])?,
+        Some(
+            payment.payer().body[98..130]
+                .try_into()
+                .expect("fixture payer account"),
+        ),
         None,
         measurements,
     );
@@ -389,7 +501,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         return Err("Receive unexpectedly emits Payment".into());
     }
     // The exact outgoing object remains retrievable after the subsequent Receive.
-    let send_operation = operation_id(&send);
+    let send_operation = *sent.operation_id();
     let retry = runtime.output(&slot.0, &send_operation, 1)?;
     if retry.status != 1 {
         return Err("outgoing Payment retry missing after Receive".into());
@@ -404,10 +516,13 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     // Durable and releasable: a new owner of the same custody, as after a
     // process restart, returns the Receive's exact completion through the
     // production C output entry, and still the exact outgoing Payment.
-    let receive_operation = operation_id(&receive);
+    let receive_operation = *received.operation_id();
     let (mut runtime, verification_parameters) =
         measurements.measure("Receive", "cold_start_drill", || owner.open())?;
     measurements.measure("Receive", "cold_start_output_drill", || {
+        if runtime.next_load_ordinal(&slot.0)? != 1 {
+            return Err("cold wallet changed the consumed Load ordinal".into());
+        }
         for part in 0..=2 {
             let output = runtime.output(&slot.0, &receive_operation, part)?;
             if output.status != 1 || output.bytes != received.output_part(part).map_err(fail)? {
@@ -420,8 +535,127 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         }
         Ok(())
     })?;
-    // Native admission burns a Payment it cannot credit instead of refusing
-    // the Receive; the new head must show the credit and no Burn.
+    #[cfg(test)]
+    let credit_status_check = if std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LAUNCH").as_deref()
+        == Some(std::ffi::OsStr::new("3"))
+    {
+        measurements.measure(
+            "CreditStatus",
+            "cold_receiver_source_and_independent_peer",
+            || {
+                let status = runtime.credit_status_for_payment(
+                    slot.0, [0x39; 32], receive_operation, &payment_bytes,
+                )?;
+                let verify =
+                    |wire: &[u8], request: &[u8], payer: &native::VerifiedIncomingPayment| {
+                        engine.verify_credit_status_peer(
+                            wire,
+                            request,
+                            payer,
+                            &verification_parameters,
+                        )
+                    };
+                if verify(&status, &return_request, &payment).map_err(fail)?
+                    != native::VerifiedCreditStatus::Credited
+                    || verify(&status, &return_request, &outgoing_payment).is_ok()
+                    || verify(&status, &[], &payment).is_ok()
+                {
+                    return Err(
+                        "CreditStatus failed to bind the returned Payment and its open Request"
+                            .into(),
+                    );
+                }
+                let mut changed = status.clone();
+                *changed.last_mut().ok_or("empty credit status")? ^= 1;
+                if verify(&changed, &return_request, &payment).is_ok() {
+                    return Err("altered credit status accepted".into());
+                }
+                if runtime
+                    .credit_status(slot.0, [0x38; 32], receive_operation)
+                    .is_ok()
+                    || runtime
+                        .credit_status(slot.0, [0x39; 32], send_operation)
+                        .is_ok()
+                    || runtime
+                        .credit_status_for_payment(slot.0, [0x39; 32], receive_operation, &outgoing)
+                        .is_ok()
+                {
+                    return Err("unissued or unrelated source yielded a credit status".into());
+                }
+                let outgoing_status = match std::fs::read(root.join("outgoing-credit-status.bin")) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        let capsule = native::RecoveryCapsule::decode(
+                            &std::fs::read(root.join("counterparty-receive-capsule.norito"))
+                                .map_err(fail)?,
+                            &scheme.scheme_id(),
+                        )
+                        .map_err(fail)?;
+                        let completed = native::CompletionRecord::decode(
+                            &std::fs::read(root.join("counterparty-receive-completion.norito"))
+                                .map_err(fail)?,
+                            capsule.wallet(),
+                        )
+                        .map_err(fail)?;
+                        let bytes = engine
+                            .encode_credit_status_peer(
+                                &capsule,
+                                &completed,
+                                &open,
+                                &outgoing_payment,
+                                &verification_parameters,
+                            )
+                            .map_err(fail)?;
+                        save_fixture_input(&root.join("outgoing-credit-status.bin"), &bytes)?;
+                        bytes
+                    }
+                    Err(error) => return Err(fail(error)),
+                };
+                if !runtime.verify_credit_status(slot.0, send_operation, &open, &outgoing_status)?
+                    || !runtime.verify_credit_status(
+                        slot.0,
+                        send_operation,
+                        &[],
+                        &outgoing_status,
+                    )?
+                    || runtime
+                        .verify_credit_status(
+                            slot.0,
+                            send_operation,
+                            &return_request,
+                            &outgoing_status,
+                        )
+                        .is_ok()
+                    || runtime
+                        .verify_credit_status(slot.0, receive_operation, &open, &outgoing_status)
+                        .is_ok()
+                {
+                    return Err(
+                        "payer C verification did not bind its own Send, Request and peer".into(),
+                    );
+                }
+                let mut altered = outgoing_status.clone();
+                *altered
+                    .last_mut()
+                    .ok_or("empty counterparty credit status")? ^= 1;
+                if runtime
+                    .verify_credit_status(slot.0, send_operation, &open, &altered)
+                    .is_ok()
+                {
+                    return Err("payer C verifier accepted altered acknowledgement".into());
+                }
+                eprintln!(
+                    "Verified credited receipt: {} full IPM1 bytes, {} payload bytes",
+                    status.len(),
+                    status.len() - 84
+                );
+                Ok(())
+            },
+        )
+    } else {
+        Ok(())
+    };
+    // Confirm the financial effect under the actual released recursive head.
     measurements.measure("Receive", "credit_check_drill", || {
         let head = engine
             .verify_head(
@@ -434,9 +668,24 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             .map_err(fail)
     })?;
     runtime.close()?;
+    #[cfg(test)]
+    if std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LAUNCH").as_deref()
+        == Some(std::ffi::OsStr::new("3"))
+    {
+        host_tests::recovery::check(
+            &owner,
+            &receive_operation,
+            &send_operation,
+            &outgoing,
+            &send,
+            &load_head,
+        )?;
+    }
+    #[cfg(test)]
+    credit_status_check?;
     std::fs::write(root.join("complete-payment.bin"), &outgoing).map_err(fail)?;
     Ok(format!(
-        "actual C dispatch/registry/buffer lifecycle, hardware Bootstrap/account/cold-start with invalid-signature, changed-credential and old-challenge rejection, BLS-finalized fixture Load100, confirmed Send10 to the counterparty wallet, counterparty Bootstrap/Receive and Send10 back under a hardware-signed Request, complete Payment verification, Receive of the returned Payment in custody, credited without Burn and recovered exactly by a cold-started owner, and exact outgoing retry passed; outgoing Payment {} bytes, incoming Payment {} bytes",
+        "{key_type} keys. C dispatch, account admission and its rejection cases, finalized Load100, Send10, receipt of the returned Payment and cold recovery passed. Native verified the credit and both original Payments. Outgoing and incoming Payments are {} and {} bytes.",
         outgoing.len(),
         payment_bytes.len()
     ))
@@ -469,7 +718,12 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
             advance::KagemushaWalletProviderOptionsV1::default(),
         )
         .map_err(fail)?;
-        let runtime = FutureRuntime::from_installed(provider, parameters, ());
+        let runtime = FutureRuntime::from_installed(
+            provider,
+            parameters,
+            native::device_fixture::scheme(),
+            (),
+        );
         let verification = runtime.authenticated_parameters();
         let mut runtime = SessionAdapter::new(runtime, &bundle, &manifest, &signature)?;
         drop(bundle);
@@ -498,19 +752,20 @@ fn read_artifacts(artifacts: &Path) -> Result<(Vec<u8>, Vec<u8>, [u8; 64])> {
 /// that A's payment key signs through the canonical Request domain. Returns
 /// B's complete return Payment, the carrier of A's measured Receive.
 #[allow(clippy::too_many_arguments)]
-fn counterparty_round<P: KagemushaWalletPlatformV1 + ?Sized>(
+fn counterparty_round(
+    root: &Path,
     engine: &native::NativeEngine,
     counterparty: &native::device_fixture::Counterparty,
     payment: &native::VerifiedIncomingPayment,
     parameters: &native::AuthenticatedParameters,
-    platform: &P,
-    slot: &advance::KagemushaWalletSlotIdV1,
+    outgoing_request: &[u8],
+    open_request: &[u8],
     payee: &native::Credential,
     measurements: &mut Measurements,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Result<Vec<u8>>)> {
     let bootstrap = counterparty.bootstrap();
     let origin = counterparty.origin(engine, parameters).map_err(fail)?;
-    let enrolled = software_advance(
+    let (_, enrolled) = software_advance(
         "CounterpartyBootstrap",
         engine,
         counterparty,
@@ -526,7 +781,7 @@ fn counterparty_round<P: KagemushaWalletPlatformV1 + ?Sized>(
         payment,
     )
     .map_err(fail)?;
-    let received = software_advance(
+    let (receive_capsule, received) = software_advance(
         "CounterpartyReceive",
         engine,
         counterparty,
@@ -537,28 +792,30 @@ fn counterparty_round<P: KagemushaWalletPlatformV1 + ?Sized>(
     )?;
     native::device_fixture::require_credited(enrolled.head().profile(), received.head().profile())
         .map_err(fail)?;
+    // Preserve B's actual selected originals so a transport failure can be retried.
+    save_fixture_input(
+        &root.join("counterparty-receive-capsule.norito"),
+        &receive_capsule.encode().map_err(fail)?,
+    )?;
+    save_fixture_input(
+        &root.join("counterparty-receive-completion.norito"),
+        &received.completion().encode().map_err(fail)?,
+    )?;
+    let outgoing_status = engine
+        .encode_credit_status_peer(
+            &receive_capsule,
+            received.completion(),
+            outgoing_request,
+            payment,
+            parameters,
+        )
+        .map_err(fail);
     let origin =
         native::device_fixture::SendOrigin::after_receive(&receive, received.head().profile())
             .map_err(fail)?;
-    // A makes the return Request with its hardware key.
-    let request = native::device_fixture::request_from(&origin, payee);
-    let key =
-        iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(&payee.body[130..195])
-            .map_err(fail)?;
-    let request_signature = measurements.measure("Request", "hardware_signature", || {
-        advance::kagemusha_wallet_sign_domain_v1(
-            platform,
-            slot,
-            &key,
-            iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1::Request,
-            &request,
-        )
-        .map(|signature| *signature.as_raw_bytes())
-        .map_err(fail)
-    })?;
-    let back = native::device_fixture::send10_from(&origin, payee, request_signature)
-        .map_err(fail)?;
-    let sent = software_advance(
+    let back =
+        native::device_fixture::send10_from_open(&origin, payee, open_request).map_err(fail)?;
+    let (_, sent) = software_advance(
         "CounterpartySend",
         engine,
         counterparty,
@@ -567,7 +824,10 @@ fn counterparty_round<P: KagemushaWalletPlatformV1 + ?Sized>(
         parameters,
         measurements,
     )?;
-    sent.completion().output_part(1).map_err(fail)
+    Ok((
+        sent.completion().output_part(1).map_err(fail)?,
+        outgoing_status,
+    ))
 }
 
 /// One operation of the software counterparty: prepared, signed with its
@@ -580,18 +840,20 @@ fn software_advance(
     head: &native::VerifiedWalletHead,
     parameters: &native::AuthenticatedParameters,
     measurements: &mut Measurements,
-) -> Result<native::CompletedOperation> {
+) -> Result<(native::RecoveryCapsule, native::CompletedOperation)> {
     let prepared = measurements.measure(operation, "prepare", || {
         engine.prepare(witness, head, parameters).map_err(fail)
     })?;
     let receipt = measurements.measure(operation, "software_signature", || {
         wallet.sign(&prepared).map_err(fail)
     })?;
-    measurements.measure(operation, "finalize", || {
+    let capsule = prepared.capsule().clone();
+    let completed = measurements.measure(operation, "finalize", || {
         engine
             .finalize(prepared, &receipt, parameters)
             .map_err(fail)
-    })
+    })?;
+    Ok((capsule, completed))
 }
 
 fn save_fixture_input(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -664,25 +926,46 @@ fn operation_id(witness: &native::ExactOperationWitness) -> [u8; 32] {
     };
     body[114..146].try_into().unwrap()
 }
+fn wallet_action(kind: u8, originals: &[&[u8]]) -> Result<Vec<u8>> {
+    let mut out = b"KSO1".to_vec();
+    out.push(kind);
+    for original in originals {
+        let size = u32::try_from(original.len()).map_err(fail)?;
+        out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(original);
+    }
+    Ok(out)
+}
 fn complete(
     runtime: &mut SessionAdapter,
     slot: &advance::KagemushaWalletSlotIdV1,
     witness: &native::ExactOperationWitness,
     head: &[u8],
+    action: &[u8],
+    counterparty: Option<[u8; 32]>,
     approval: Option<&dyn Confirmation>,
     measurements: &mut Measurements,
 ) -> Result<native::CompletionRecord> {
-    let name = match witness {
-        native::ExactOperationWitness::Bootstrap(_) => "Bootstrap",
-        native::ExactOperationWitness::Load { .. } => "Load",
-        native::ExactOperationWitness::RefreshTimeAnchor(_) => "RefreshTimeAnchor",
-        native::ExactOperationWitness::Unload { .. } => {
-            return Err("protected Unload confirmation unavailable".into());
-        }
-        native::ExactOperationWitness::Send(_) => "Send",
-        native::ExactOperationWitness::Receive { .. } => "Receive",
+    let kind = action[4];
+    let name = match kind {
+        1 => "Bootstrap",
+        2 => "Load",
+        3 => "Send",
+        4 => "Receive",
+        _ => return Err("unsupported fixture action".into()),
     };
-    let operation = operation_id(witness);
+    #[cfg(not(test))]
+    let _ = counterparty;
+    let unused = measurements.measure(name, "prepare", || runtime.prepare(&slot.0, action, &[]))?;
+    if unused.review.get(2) != Some(&kind) {
+        return Err("wrong prepared wallet action".into());
+    }
+    let operation: [u8; 32] = unused.review[67..99]
+        .try_into()
+        .expect("Native review operation");
+    if kind != 4 && operation != operation_id(witness) {
+        return Err("wallet action changed its financial operation identity".into());
+    }
     let wallet: [u8; 32] = witness.credential().body[66..98].try_into().unwrap();
     let retained =
         measurements.measure(name, "lookup", || runtime.output(&slot.0, &operation, 2))?;
@@ -698,6 +981,11 @@ fn complete(
                 {
                     return Err("completed operation admitted a stale C preparation".into());
                 }
+                let historical = runtime.prepare(&slot.0, action, &[])?;
+                if historical.review != unused.review {
+                    return Err("retained wallet action changed its exact capsule".into());
+                }
+                runtime.discard(historical.token)?;
                 runtime.discard(0)?;
                 if runtime.execute(0).is_ok() {
                     return Err("unknown C review token became executable after discard".into());
@@ -714,26 +1002,88 @@ fn complete(
             ));
         }
     }
-    let encoded =
-        measurements.measure(name, "witness_encoding", || witness.encode().map_err(fail))?;
-    // Measure the first real preparation before the extra retry drill can warm
-    // any process caches. The replacement review selects identical inputs.
-    let unused =
-        measurements.measure(name, "prepare", || runtime.prepare(&slot.0, &encoded, head))?;
+    measurements.measure(name, "load_ordinal_before_drill", || {
+        if kind == 1 {
+            if runtime.next_load_ordinal(&slot.0).is_ok() || runtime.activation(&slot.0).is_ok() {
+                return Err("enrollment exposed an uncommitted ordinal or activation".into());
+            }
+        } else {
+            // The certified Load100 is ordinal zero. Send and Receive follow it.
+            let expected = u128::from(kind != 2);
+            let actual = runtime.next_load_ordinal(&slot.0)?;
+            if actual != expected {
+                return Err(format!("before {name}, expected Load ordinal {expected}, got {actual}"));
+            }
+        }
+        if runtime.output(&slot.0, &operation, 4).is_ok() {
+            return Err("operation-scoped lookup supplied a current Load ordinal".into());
+        }
+        if runtime.output(&slot.0, &operation, 5).is_ok() {
+            return Err("operation-scoped lookup supplied a Bootstrap activation".into());
+        }
+        Ok(())
+    })?;
     let prepared = measurements.measure(name, "discard_reprepare_drill", || {
         runtime.discard(unused.token)?;
         if runtime.execute(unused.token).is_ok() {
             return Err("discarded C review token remained executable".into());
         }
-        runtime.prepare(&slot.0, &encoded, head)
+        runtime.prepare(&slot.0, action, &[])
     })?;
-    if prepared.token == unused.token || prepared.review != unused.review {
+    if prepared.token == unused.token {
+        return Err("fresh C review reused a discarded token".into());
+    }
+    // Before the first selection, a discarded Bootstrap has no durable capsule.
+    // A new secret blinds its successor. The enrollment, predecessor and displayed
+    // terms must still match. Other wallet actions already reserve a frozen capsule.
+    let same_review = if kind == 1 {
+        prepared.review.len() == 291
+            && unused.review.len() == 291
+            && prepared.review[..99] == unused.review[..99]
+            && prepared.review[131..259] == unused.review[131..259]
+    } else {
+        prepared.review == unused.review
+    };
+    if !same_review {
         return Err("fresh C review changed the exact prepared capsule".into());
     }
-    if matches!(witness, native::ExactOperationWitness::Send(_)) {
+    #[cfg(test)]
+    let prepared = match counterparty {
+        Some(counterparty) => {
+            let initial_version = if kind == 3 { 1 } else { 3 };
+            host_tests::local_blacklist::check(
+                runtime,
+                &slot.0,
+                prepared.token,
+                action,
+                &[],
+                counterparty,
+                initial_version,
+            )?;
+            let fresh = runtime.prepare(&slot.0, action, &[])?;
+            if fresh.token == prepared.token || fresh.review != prepared.review {
+                return Err(
+                    "a changed list must permit a fresh review of the same exact terms".into(),
+                );
+            }
+            runtime.discard(prepared.token)?;
+            fresh
+        }
+        None => prepared,
+    };
+    if kind == 3 {
         let approval = approval.ok_or("actual hardware Send confirmation adapter is required")?;
         measurements.measure(name, "confirmation_wait", || {
-            approval.confirm(&prepared.review)
+            #[cfg(target_os = "ios")]
+            {
+                let mut display = runtime.apple_debit_asset(prepared.token)?.to_vec();
+                display.extend_from_slice(&prepared.review);
+                approval.confirm(&display)?;
+                runtime.confirm_apple_debit(prepared.token)?;
+            }
+            #[cfg(not(target_os = "ios"))]
+            approval.confirm(&prepared.review)?;
+            Ok(())
         })?;
     }
     let completion = measurements.measure(name, "execute", || runtime.execute(prepared.token))?;
@@ -755,6 +1105,11 @@ fn complete(
     })?;
     let record = native::CompletionRecord::decode(&completion.bytes, &wallet).map_err(fail)?;
     measurements.measure(name, "output_verification_drill", || {
+        let expected = u128::from(kind != 1);
+        let actual = runtime.next_load_ordinal(&slot.0)?;
+        if actual != expected {
+            return Err(format!("after {name}, expected Load ordinal {expected}, got {actual}"));
+        }
         for part in 0..=2 {
             let output = runtime.output(&slot.0, &operation, part)?;
             if output.status != 1 || output.bytes != record.output_part(part).map_err(fail)? {

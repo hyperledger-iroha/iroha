@@ -44,6 +44,18 @@ impl Writer {
         self.raw(&v.body);
         self.raw(&v.signature);
     }
+    fn request_originals(&mut self, originals: &crate::request::Originals) -> Result<()> {
+        if !(1..=2).contains(&originals.certificates.len()) {
+            return Err(Error::Malformed("Request signer count"));
+        }
+        self.credential(&originals.receiver);
+        self.uint(originals.certificates.len() as u128, 1);
+        for cert in &originals.certificates {
+            self.raw(&cert.body);
+            self.raw(&cert.signature);
+        }
+        Ok(())
+    }
     fn receipt(&mut self, v: &bootstrap::Receipt) {
         self.raw(&v.body);
         self.raw(&v.signature);
@@ -132,6 +144,24 @@ impl<'a> Reader<'a> {
         Ok(Credential {
             body: self.fixed()?,
             signature: self.fixed()?,
+        })
+    }
+    fn request_originals(&mut self) -> Result<crate::request::Originals> {
+        let receiver = self.credential()?;
+        let count = self.uint(1)? as usize;
+        if !(1..=2).contains(&count) {
+            return Err(Error::Malformed("Request signer count"));
+        }
+        let mut certificates = Vec::with_capacity(count);
+        for _ in 0..count {
+            certificates.push(crate::certificate::Certificate {
+                body: self.fixed()?,
+                signature: self.fixed()?,
+            });
+        }
+        Ok(crate::request::Originals {
+            receiver,
+            certificates,
         })
     }
     fn receipt(&mut self) -> Result<bootstrap::Receipt> {
@@ -287,6 +317,7 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.fields(&x.after_rest);
             w.credential(&x.credential);
             w.request(&x.request);
+            w.request_originals(&x.request_originals)?;
             w.raw(&x.fee_schedule.body);
             w.raw(&x.fee_schedule.signature);
             w.quota(&x.quota);
@@ -326,7 +357,7 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
         }
     };
     super::encode(&Frame {
-        version: 1,
+        version: if kind == 3 { 2 } else { 1 },
         kind,
         fields: w.fields,
         bytes: w.bytes,
@@ -334,7 +365,7 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
 }
 pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
     let f: Frame = super::decode(bytes)?;
-    if f.version != 1 {
+    if f.version != if f.kind == 3 { 2 } else { 1 } {
         return Err(Error::Malformed("recovery version"));
     }
     let mut r = Reader {
@@ -393,6 +424,7 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             after_rest: r.fields()?,
             credential: r.credential()?,
             request: r.request()?,
+            request_originals: r.request_originals()?,
             fee_schedule: crate::fee_schedule::SignedFeeSchedule {
                 body: r.fixed()?,
                 signature: r.fixed()?,

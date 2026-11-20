@@ -30,16 +30,8 @@ struct UnloadOutcome {
     outcome: LedgerOutcome,
 }
 
-/// DATA intake of one exact signed envelope carrying the exact retained claim. Any account
-/// may submit (relay) the claim: the claim's own canonical validation binds the paid account
-/// to its credential, and the caller binds that credential to this wallet. Certified
-/// execution then authenticates the exact instruction and its result.
-fn signed_unload(
-    bytes: &[u8],
-    network: &iroha_data_model::NetworkId,
-    scheme: &[u8; 32],
-    claim: &[u8],
-) -> Result<SignedTransaction, Error> {
+/// Authenticate the bounded original and its single Ed25519 relayer under the selected network.
+pub(crate) fn signed_unload_relay_original(bytes: &[u8], network: &iroha_data_model::NetworkId) -> Result<SignedTransaction, Error> {
     let transaction = ledger_outcome::signed_original(bytes)?;
     let public = transaction
         .authority()
@@ -59,6 +51,20 @@ fn signed_unload(
     transaction
         .verify_signature()
         .map_err(|_| Error::Proof("Unload submitter signature"))?;
+    Ok(transaction)
+}
+
+/// DATA intake of one exact signed envelope carrying the exact retained claim. Any account
+/// may submit (relay) the claim: the claim's own canonical validation binds the paid account
+/// to its credential, and the caller binds that credential to this wallet. Certified
+/// execution then authenticates the exact instruction and its result.
+fn signed_unload(
+    bytes: &[u8],
+    network: &iroha_data_model::NetworkId,
+    scheme: &[u8; 32],
+    claim: &[u8],
+) -> Result<SignedTransaction, Error> {
+    let transaction = signed_unload_relay_original(bytes, network)?;
     if !transaction
         .instructions()
         .explicit_instructions()

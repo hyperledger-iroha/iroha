@@ -31,6 +31,7 @@ pub(crate) mod helpers;
 pub mod identifier;
 /// KAGEMUSHA wallet ledger execution.
 pub mod kagemusha_wallet;
+use kagemusha_wallet::dispatch_spartan;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -336,6 +337,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::nft_market::OfferNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::BuyNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::CancelNftOfferV1>,
@@ -958,6 +962,7 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
     >;
     let restricted_read: InstructionHandler = dispatch_restricted_dataspace_read_successor;
+    let spartan_ledger: InstructionHandler = kagemusha_wallet::dispatch_spartan_ledger;
     let native_amx_begin: InstructionHandler =
         dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1>;
     let native_amx_prepare: InstructionHandler =
@@ -971,6 +976,13 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
     let native_game_import: InstructionHandler =
         dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1>;
     std::collections::BTreeMap::from([
+        (
+            crate::runtime::catalog::additions::KAGEMUSHA_SPARTAN.module,
+            std::collections::BTreeMap::from([(
+                iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID,
+                spartan_ledger,
+            )]),
+        ),
         (
             crate::runtime::catalog::additions::NATIVE_AMX_CAPTURE.module,
             std::collections::BTreeMap::from([
@@ -1285,10 +1297,11 @@ mod registry_dispatch_tests {
         assert_reviewed_initial_family(family, &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             family,
-            1,
-            &(BTreeSet::from([core::any::type_name::<
-                iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
-            >()])),
+            4,
+            &(BTreeSet::from([
+                core::any::type_name::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(),
+                core::any::type_name::<iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1>(),
+            ])),
         );
     }
     #[test]

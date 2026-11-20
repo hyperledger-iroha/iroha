@@ -624,42 +624,56 @@ pub(crate) fn projection(context: &Context, input: &Inputs) -> crate::carrier::P
     .expect("valid expected Bootstrap output encodings")
 }
 
+pub(crate) fn fixture_vector(name: &str) -> Vec<u8> {
+    let h = include_str!("../fixtures/credential-source-vectors.txt")
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .find(|(k, _)| *k == name)
+        .unwrap()
+        .1;
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+pub(crate) fn fixture_certificate() -> Certificate {
+    Certificate {
+        body: fixture_vector("certificate_body_108").try_into().unwrap(),
+        signature: fixture_vector("certificate_signature").try_into().unwrap(),
+    }
+}
+
 /// Public deterministic research fixture keys only. Actual deployments supply
 /// root/issuer-authorized credential bytes and hardware-produced receipt bytes.
 pub(crate) fn fixture(
     key: &WalletKey,
     gens: &crate::ipa::Gens<iroha_pasta::Eq>,
 ) -> (Context, Inputs) {
-    let bytes = |name: &str| -> Vec<u8> {
-        let h = include_str!("../fixtures/credential-source-vectors.txt")
-            .lines()
-            .filter_map(|l| l.split_once('='))
-            .find(|(k, _)| *k == name)
-            .unwrap()
-            .1;
-        (0..h.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
-            .collect()
-    };
-    let cert = Certificate {
-        body: bytes("certificate_body_108").try_into().unwrap(),
-        signature: bytes("certificate_signature").try_into().unwrap(),
-    };
+    fixture_with_certificate(key, gens, fixture_certificate(), [0x33; 32])
+}
+
+pub(crate) fn fixture_with_certificate(
+    key: &WalletKey,
+    gens: &crate::ipa::Gens<iroha_pasta::Eq>,
+    cert: Certificate,
+    relation: [u8; 32],
+) -> (Context, Inputs) {
     let context = Context {
         root: RootContext {
             scheme: cert.body[2..34].try_into().unwrap(),
             root: p256::mul(&p256::generator(), &BigUint::from_bytes_be(&[0x11; 32])).unwrap(),
         },
-        relation: [0x33; 32],
+        relation,
     };
-    let old = bytes("credential_body_468");
+    let old = fixture_vector("credential_body_468");
     let mut cred = Credential {
         body: [0; 532],
         signature: [0; 64],
     };
     cred.body[..195].copy_from_slice(&old[..195]);
     cred.body[259..].copy_from_slice(&old[195..]);
+    cred.body[2..34].copy_from_slice(&context.root.scheme);
     cred.body[131..163].copy_from_slice(&scalar_bytes(&key.q.x));
     cred.body[163..195].copy_from_slice(&scalar_bytes(&key.q.y));
     // Distinct wallets keep distinct issuer-authenticated identities.

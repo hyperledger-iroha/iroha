@@ -454,6 +454,42 @@ rearming. The SDK does not automatically restart a card session. Apple enforces 
 cooldown after expiry; a replacement can return `cardSessionSystemUnavailable`,
 so applications must bound any automatic retry and honor explicit user stops.
 
+The schema-3 Spartan profile (`kagemushaSpartanPaymentV3`) uses the same commands,
+chunk framing, checkpoints and resume. Its originals are bound only by the installed
+wallet. `IrohaPeerNfcProfilePolicyV1(profile: .kagemushaSpartanPaymentV3)` alone can
+read a hosted Request (tap 1), but every Payment, checkpoint, card session and
+delivery fails closed. Use the `profilePolicy` of a `KagemushaSpartanPeerNfcBindingV1`
+for the whole exchange:
+
+- **Payer.** Call `payer(wallet:sendOperationId:request:)` after the protected Send
+  of exactly that Request.
+  - The only Payment it accepts is Native's retained output of that operation, at
+    most `IrohaPeerNfcV1.maximumPaymentMessageBytes`.
+  - Native binds the Payment to the Request's signed terms. The completed Request's
+    payer wallet must be this wallet, under the snapshot's signed asset.
+  - `senderCheckpoint(sessionID:acknowledgement:)` is the durable checkpoint for
+    `run(restoredCheckpoint:)`.
+  - A CreditStatus counts only after `verifyCreditStatus(sendOperationId:request:status:)`
+    checks it against that retained Payment. This happens before the reader persists
+    or confirms it. The folded status has no readable scheme; that Native check
+    enforces it.
+- **Receiver.** Call `receiver(wallet:requestId:request:)`.
+  - It hosts only Native's own issued Request for that identity. Native's
+    issue-or-retrieve returns the exact original, even after a later head.
+  - A Payment counts at COMMIT only after `verifyPayment(_:matching:)`.
+  - The COMMIT handler's acknowledgement must come from
+    `acknowledgement(receiveOperationId:payment:)`. That is Native's
+    Payment-matched `receivedCreditStatus(requestId:receiveOperationId:payment:)`, which
+    answers only when the released Receive took exactly the delivered complete Payment
+    (at most `IrohaPeerNfcV1.maximumPaymentMessageBytes`). The request-only
+    `receivedCreditStatus(requestId:receiveOperationId:)` reads a selected operation's
+    archived status for display.
+  - A restarted card passes `durableAcknowledgement(sessionID:payment:acknowledgement:)`
+    as `restoredDurableAcknowledgement`.
+
+Wallet V1 binding is unchanged. Values validated under one binding are never accepted
+under another.
+
 Reader builds also need the Near Field Communication Tag Reading capability,
 which produces this entitlement:
 

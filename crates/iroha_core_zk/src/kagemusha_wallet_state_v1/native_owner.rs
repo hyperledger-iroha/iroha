@@ -8,6 +8,11 @@ pub(super) mod epochs;
 pub use epochs::NativeEpochProgressV1;
 mod ledger;
 mod ledger_outcome;
+#[cfg(test)]
+pub(crate) mod settlement_fixture {
+    pub(crate) use super::ledger_outcome::tests::{certify, original, rejected};
+}
+pub(crate) use ledger_producer::signed_unload_relay_original;
 mod ledger_producer;
 mod suffix;
 mod suffix_ledger;

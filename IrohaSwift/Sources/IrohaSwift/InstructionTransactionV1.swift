@@ -96,3 +96,78 @@ extension KagemushaWalletLedgerTransportV1 {
         return try TransactionInstructionFrame(wireName: instructionWireName, framedPayload: nativeFrame)
     }
 }
+
+extension TransactionInstructionFrame {
+    /// Construct the funding instruction for an active ledger wallet, using its expected ordinal and stable request identity.
+    /// The optional signed online charge is independent of the amount credited offline.
+    public static func kagemushaWalletIssueLoad(
+        scheme: Data, wallet: Data, asset: Data, ordinal: KagemushaWalletUInt128V1, requestId: Data,
+        amount: KagemushaWalletUInt128V1, charge: (quote: Data, beneficiary: String)? = nil
+    ) throws -> Self {
+        guard [scheme, wallet, asset, requestId].allSatisfy({ $0.count == 32 && $0.contains(where: { $0 != 0 }) }),
+              amount.low != 0 || amount.high != 0 else { throw ExecutableBatchInputError.invalidInstructionFrame }
+        func scalar(_ value: KagemushaWalletUInt128V1) -> Data {
+            var field = CompactNoritoWriter()
+            field.writeUInt64LE(value.low)
+            field.writeUInt64LE(value.high)
+            return field.data
+        }
+        var optional = CompactNoritoWriter()
+        if let charge {
+            guard (1...1_024).contains(charge.quote.count) else { throw ExecutableBatchInputError.invalidInstructionFrame }
+            var quote = CompactNoritoWriter()
+            quote.writeUInt64LE(UInt64(charge.quote.count))
+            quote.writeBytes(charge.quote)
+            var fields = CompactNoritoWriter()
+            fields.writeField(quote.data)
+            fields.writeField(try exactToriiAccountIdentityPayload(charge.beneficiary))
+            optional.writeUInt8(1)
+            optional.writeField(fields.data)
+        } else {
+            optional.writeUInt8(0)
+        }
+        var action = CompactNoritoWriter()
+        action.writeUInt32LE(5)
+        for field in [wallet, asset, scalar(ordinal), requestId, scalar(amount), optional.data] { action.writeField(field) }
+        var root = CompactNoritoWriter()
+        root.writeField(scheme)
+        root.writeField(action.data)
+        return try KagemushaWalletLedgerTransportV1.instructionFrame(noritoEncode(
+            typeName: "iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1", payload: root.data,
+            flags: NoritoHeader.compactLen, payloadAlignment: 16))
+    }
+
+    /// Account-signed ledger activation for a Native-exported, hardware-authorized Bootstrap package.
+    public static func kagemushaSpartanActivate(
+        scheme: Data, asset: Data, manifestDigest: Data, wallet: Data, activation: Data
+    ) throws -> Self {
+        try spartanControl(wireName: "iroha.kagemusha.spartan.activate.v1", schema: "iroha.kagemusha.spartan.Activate.v1",
+                           scopes: [scheme, asset, manifestDigest, wallet], original: activation, maximum: 32_768)
+    }
+
+    /// The completed Native Control claim and World-selected pins for an ordinary signed transaction.
+    public static func kagemushaSpartanUnload(
+        scheme: Data, asset: Data, manifestDigest: Data, claim: Data
+    ) throws -> Self {
+        try spartanControl(wireName: "iroha.kagemusha.spartan.unload.v1", schema: "iroha.kagemusha.spartan.Unload.v1",
+                           scopes: [scheme, asset, manifestDigest], original: claim, maximum: 16_384)
+    }
+
+    private static func spartanControl(wireName: String, schema: String, scopes: [Data], original claim: Data, maximum: Int) throws -> Self {
+        guard scopes.allSatisfy({ $0.count == 32 && $0.contains(where: { $0 != 0 }) }),
+              (1...maximum).contains(claim.count) else {
+            throw ExecutableBatchInputError.invalidInstructionFrame
+        }
+        var body = CompactNoritoWriter()
+        for scope in scopes { body.writeField(scope) }
+        var original = CompactNoritoWriter()
+        original.writeUInt64LE(UInt64(claim.count))
+        original.writeBytes(claim)
+        body.writeField(original.data)
+        return try Self(
+            wireName: wireName,
+            framedPayload: noritoEncode(typeName: schema,
+                                         payload: body.data, flags: NoritoHeader.compactLen, payloadAlignment: 8)
+        )
+    }
+}

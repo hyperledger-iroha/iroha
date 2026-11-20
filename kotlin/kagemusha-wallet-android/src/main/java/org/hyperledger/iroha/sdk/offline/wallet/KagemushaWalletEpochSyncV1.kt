@@ -46,3 +46,14 @@ internal fun synchronizeKagemushaEpochsV1(
     catch (error: Throwable) { result.completeExceptionally(error) }
     return result
 }
+
+/** Synchronize committees for this exact online Load. The following Load verifies its receipt. */
+@JvmOverloads
+fun KagemushaSpartanWalletV1.synchronizeLoadEpochs(original: KagemushaWalletLoadOriginalV1,
+    transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+    canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth,
+    requireCurrentOwner: Runnable, maximumBoundaries: Int = 64,
+): CompletableFuture<KagemushaWalletEpochProgressV1> =
+    synchronizeKagemushaEpochsV1(original.blockHeight, maximumBoundaries, requireCurrentOwner, ::epochProgress,
+        { height -> transport.getKagemushaWalletLoadEpochOriginalV1(original.selection, height, canonicalAuth, requireCurrentOwner) },
+        ::ingestEpochBoundary)

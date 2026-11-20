@@ -129,44 +129,20 @@ pub fn public_after(
 }
 
 pub fn new(gens: &Gens<Eq>) -> Chain {
-    new_inner(gens, None)
+    for_scope(gens, bootstrap::fixture_certificate(), [0x33; 32])
 }
 
-pub fn with_relation(gens: &Gens<Eq>, relation: [u8; 32]) -> Chain {
-    new_inner(gens, Some(relation))
-}
-
-fn new_inner(gens: &Gens<Eq>, relation: Option<[u8; 32]>) -> Chain {
+pub fn for_scope(
+    gens: &Gens<Eq>,
+    issuer: crate::certificate::Certificate,
+    relation: [u8; 32],
+) -> Chain {
     let sender_key = WalletKey::labelled("complete research chain sender");
     let receiver_key = WalletKey::labelled("complete research chain receiver");
-    let (mut sender_context, mut sender_bootstrap) = bootstrap::fixture(&sender_key, gens);
-    let (mut receiver_context, mut receiver_bootstrap) = bootstrap::fixture(&receiver_key, gens);
-    if let Some(relation) = relation {
-        for (context, input, key) in [
-            (&mut sender_context, &mut sender_bootstrap, &sender_key),
-            (
-                &mut receiver_context,
-                &mut receiver_bootstrap,
-                &receiver_key,
-            ),
-        ] {
-            context.relation = relation;
-            for i in 0..2 {
-                input.statement[1 + i] = crate::certificate::fp(
-                    &num_bigint::BigUint::from_bytes_le(&relation[16 * i..16 * i + 16]),
-                );
-            }
-            input.receipt.body[210..242]
-                .copy_from_slice(&statement::digest(&input.statement).to_repr());
-            input.receipt.signature = bootstrap::sign(
-                crate::receipt::message(&input.receipt),
-                &key.d,
-                "research Bootstrap selected relation",
-            );
-        }
-    }
-    assert_eq!(sender_context.root.scheme, receiver_context.root.scheme);
-    assert_eq!(sender_context.relation, receiver_context.relation);
+    let (sender_context, sender_bootstrap) =
+        bootstrap::fixture_with_certificate(&sender_key, gens, issuer.clone(), relation);
+    let (receiver_context, receiver_bootstrap) =
+        bootstrap::fixture_with_certificate(&receiver_key, gens, issuer, relation);
     let boot_public = bootstrap::public_profile(&sender_context, &sender_bootstrap);
     let mut ordinary = [0; 282];
     ordinary[0] = 1;
@@ -239,7 +215,12 @@ fn new_inner(gens: &Gens<Eq>, relation: Option<[u8; 32]>) -> Chain {
     request.body[306..314].copy_from_slice(&loaded[27].to_repr()[..8]);
     request.body[314..346].copy_from_slice(&sender_bootstrap.rest[1].to_repr());
     request.body[346..354].copy_from_slice(&110u64.to_le_bytes());
-    request.body[354] = 1;
+    request.body[354..386].copy_from_slice(
+        &request::certificate_set_digest(&[crate::certificate::certificate_digest(
+            &receiver_bootstrap.certificate,
+        )])
+        .to_repr(),
+    );
     request.body[386..418].fill(0x66);
     let message = request::commitments(&request).unwrap().message;
     request.signature = bootstrap::sign(
@@ -300,6 +281,10 @@ fn new_inner(gens: &Gens<Eq>, relation: Option<[u8; 32]>) -> Chain {
         after_rest: load.after_rest,
         credential: load.credential.clone(),
         request,
+        request_originals: request::Originals {
+            receiver: receiver_bootstrap.credential.clone(),
+            certificates: vec![receiver_bootstrap.certificate.clone()],
+        },
         fee_schedule: SignedFeeSchedule {
             body: [0; 191],
             signature: [0; 64],

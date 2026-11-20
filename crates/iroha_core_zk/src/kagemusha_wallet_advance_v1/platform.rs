@@ -548,6 +548,48 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
         slot: &KagemushaWalletSlotIdV1,
     ) -> KagemushaWalletProbeV1<KagemushaDevicePublicKeyV1>;
 
+    /// Read the separate local user-presence key from the platform's own protected namespace.
+    /// The adapter must authenticate a nonexportable, hardware-generated P-256 key whose
+    /// signing ACL requires strong biometric or device-credential authentication. This
+    /// read cannot create or replace the key, prompt, or select the wallet's payment key.
+    ///
+    /// # Errors
+    /// Returns unavailable if the key, hardware backing, ACL or scope cannot be established.
+    fn debit_confirmation_key(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<KagemushaDevicePublicKeyV1, KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::Platform(0))
+    }
+
+    /// Create a new user-presence Secure Enclave key at a fresh Native-owned tag, or probe it.
+    /// The create operation must return the public point of its own new key, never an old key.
+    /// A probe never creates and cannot replace a missing pinned key.
+    ///
+    /// # Errors
+    /// Returns unavailable if the platform cannot complete the requested hardware operation.
+    #[cfg(any(target_os = "ios", test))]
+    fn apple_debit_confirmation_key(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+        _tag: &[u8; 32],
+        _create: bool,
+    ) -> Result<KagemushaDevicePublicKeyV1, KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::KeyUnusable)
+    }
+
+    /// Verify that the Android SDK returned the exact per-use CryptoObject signature for
+    /// its active local review. This supplements the independent OS key and signature checks.
+    #[cfg(target_os = "android")]
+    fn debit_confirmation_origin(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+        _message: &[u8; 32],
+        _der: &[u8],
+    ) -> Result<(), KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::KeyUnusable)
+    }
+
     /// Leaf-first original DER attestation chain for the actual existing payment key.
     /// This is bounded evidence DATA; no certificate or vendor verdict is inferred.
     fn key_attestation_chain(
@@ -709,6 +751,30 @@ impl<P: KagemushaWalletPlatformV1> KagemushaWalletPlatformV1 for std::sync::Arc<
         s: &KagemushaWalletSlotIdV1,
     ) -> KagemushaWalletProbeV1<KagemushaDevicePublicKeyV1> {
         (**self).key_probe(s)
+    }
+    fn debit_confirmation_key(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<KagemushaDevicePublicKeyV1, KagemushaWalletUnavailableV1> {
+        (**self).debit_confirmation_key(slot)
+    }
+    #[cfg(any(target_os = "ios", test))]
+    fn apple_debit_confirmation_key(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+        tag: &[u8; 32],
+        create: bool,
+    ) -> Result<KagemushaDevicePublicKeyV1, KagemushaWalletUnavailableV1> {
+        (**self).apple_debit_confirmation_key(slot, tag, create)
+    }
+    #[cfg(target_os = "android")]
+    fn debit_confirmation_origin(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+        message: &[u8; 32],
+        der: &[u8],
+    ) -> Result<(), KagemushaWalletUnavailableV1> {
+        (**self).debit_confirmation_origin(slot, message, der)
     }
     fn key_attestation_chain(
         &self,

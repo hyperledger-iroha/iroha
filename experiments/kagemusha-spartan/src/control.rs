@@ -485,12 +485,22 @@ pub(crate) mod tests {
     }
     /// A genuine root-certified TimeAnchor answer for this wallet at `time`.
     fn authority(time: u64, label: &str) -> (Authority, BigUint) {
+        scoped_authority(time, label, &scheme(), &wallet_id())
+    }
+
+    fn scoped_authority(
+        time: u64,
+        label: &str,
+        scheme: &[u8; 32],
+        wallet: &[u8; 32],
+    ) -> (Authority, BigUint) {
         let (d, q) = signer(label);
-        let certificate = issue(Role::TimeAnchor as u8, &q, 9, &root_secret());
+        let certificate =
+            certificate::issue_fixture(scheme, Role::TimeAnchor as u8, &q, 9, &root_secret());
         let mut body = [0; time_anchor::BODY_BYTES];
         body[..2].copy_from_slice(&1u16.to_le_bytes());
-        body[2..34].copy_from_slice(&scheme());
-        body[34..66].copy_from_slice(&wallet_id());
+        body[2..34].copy_from_slice(scheme);
+        body[34..66].copy_from_slice(wallet);
         body[66..98].fill(0x4e);
         body[98..106].copy_from_slice(&time.to_le_bytes());
         let mut a = Authority {
@@ -593,11 +603,9 @@ pub(crate) mod tests {
         boot: &bootstrap::Inputs,
         time: u64,
     ) -> Witness {
-        let (mut authority, signer) = authority(time, SIGNER);
         let scheme = boot.credential.body[2..34].try_into().unwrap();
         let wallet: [u8; 32] = boot.credential.body[66..98].try_into().unwrap();
-        authority.anchor.body[34..66].copy_from_slice(&wallet);
-        sign_anchor(&mut authority, &signer);
+        let (authority, _) = scoped_authority(time, SIGNER, &scheme, &wallet);
         let verified = time_anchor::authenticate(&authority, &scheme, &wallet, &root()).unwrap();
         let (after, after_rest) =
             time_anchor::refresh(before, rest, &verified, before[29] + Fp::ONE).unwrap();
@@ -920,13 +928,39 @@ pub(crate) mod tests {
             key,
         };
         assert!(holds(&f));
-        for field in [9, 10, 14, 18, 19, 28] {
-            let expected = f.input.after_core[field];
-            f.input.after_core[field] += Fp::ONE;
+        let honest = f.input.clone();
+        // Keep the statement mirrors, successor commitment and receipt valid
+        // so the selected Control relation must enforce each state transition.
+        for field in 0..29 {
+            let changed = if field == 0 {
+                Fp::from(2)
+            } else {
+                honest.after_core[field] + Fp::ONE
+            };
+            f.input.after_core[field] = changed;
+            match field {
+                0 => f.input.statement[8] = changed,
+                1..=4 => f.input.statement[2 + field] = changed,
+                7 => f.input.statement[7] = changed,
+                11 => f.input.statement[9] = changed,
+                13 => f.input.statement[10] = changed,
+                _ => {}
+            }
             reseal(&mut f);
-            assert!(!holds(&f), "Unload successor field {field}");
-            f.input.after_core[field] = expected;
+            assert!(!holds(&f), "Unload successor core {field}");
+            f.input = honest.clone();
         }
+        for field in 0..honest.after_rest.len() {
+            f.input.after_rest[field] += Fp::ONE;
+            reseal(&mut f);
+            assert!(!holds(&f), "Unload successor rest {field}");
+            f.input = honest.clone();
+        }
+        // Core[29] is a freshly chosen nonce.
+        f.input.after_core[29] = Fp::from(99_991);
+        reseal(&mut f);
+        assert!(holds(&f), "fresh successor nonce");
+        f.input = honest;
         f.input.statement[21] = Fp::ZERO;
         reseal(&mut f);
         assert!(!holds(&f), "charged Unload needs the quote digest");

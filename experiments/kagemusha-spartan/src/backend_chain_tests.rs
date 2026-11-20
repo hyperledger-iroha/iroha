@@ -15,7 +15,7 @@ use group::{Curve, Group};
 use iroha_pasta::{Ep, Eq};
 use std::sync::Arc;
 
-const DIMENSIONS: ((usize, usize), (usize, usize)) = ((24, 25), (24, 24));
+use crate::native::PRODUCER_MATRIX_DIMENSIONS as DIMENSIONS;
 #[derive(Clone, Debug)]
 struct RunConfig {
     p_columns: usize,
@@ -948,20 +948,33 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
 #[test]
 #[ignore = "heavy actual recursive program fixed point; run in the coordinated proof lane"]
 fn complete_recursive_bootstrap_load_send_receive() {
-    run_recursive_chain(true);
+    run_recursive_chain(ChainRun::Qualify);
 }
 
 #[test]
 #[ignore = "layout measurement only; selected layout must pass the complete native containment gate"]
 fn measure_recursive_layout_candidate() {
-    run_recursive_chain(false);
+    run_recursive_chain(ChainRun::Measure);
 }
 
-fn run_recursive_chain(complete_validation: bool) {
+/// The retail build checks the current compiler against its independently signed carrier.
+#[test]
+#[ignore = "compiles the eight closed wallet programs for the application source check"]
+fn compile_wallet_program_bundle() {
+    run_recursive_chain(ChainRun::Compile);
+}
+
+enum ChainRun {
+    Compile,
+    Measure,
+    Qualify,
+}
+
+fn run_recursive_chain(mode: ChainRun) {
     let config = RunConfig::from_environment();
     eprintln!("full backend test config: {config:?}; dimensions={DIMENSIONS:?}");
     let seed_gens = empty_generators(&config);
-    let chain = chain_fixture::new(&seed_gens.p);
+    let chain = crate::native::device_fixture::chain(&seed_gens.p);
     let mut previous = generation(&config, &chain, &seed_gens, None, 0);
     let mut unchanged_geometry = 0;
     for hop in 1..=12 {
@@ -1020,6 +1033,20 @@ fn run_recursive_chain(complete_validation: bool) {
                 "generation {hop}: all eight complete public programs exactly equal to generation {}: canonical digests and canonical program bytes",
                 hop - 1
             );
+            if let Some((primary, secondary)) = crate::native::built_in_producer_programs() {
+                assert_eq!(after.map(|pair| pair[0]), primary, "published primary producer pins");
+                assert_eq!(after.map(|pair| pair[1]), secondary, "published secondary producer pins");
+            }
+            if matches!(mode, ChainRun::Compile) {
+                let bundle = crate::native::ProgramBundle {
+                    version: crate::native::FUTURE_ARTIFACT_VERSION,
+                    primary: std::array::from_fn(|k| next.kinds[k].cp.export_program().unwrap()),
+                    secondary: std::array::from_fn(|k| next.kinds[k].cs.export_program().unwrap()),
+                };
+                let bytes = bundle.encode().unwrap();
+                std::fs::write(config.output.join("program-bundle.norito"), bytes).unwrap();
+                return;
+            }
             let final_gens = next.generators();
             // The fixed-point generation's own pairs are construction
             // artifacts over the final programs; the native boundary must
@@ -1032,7 +1059,7 @@ fn run_recursive_chain(complete_validation: bool) {
             drop(imported_programs(&final_chain));
             malformed_receive_burn(&chain, &final_gens, &final_chain);
             let artifacts = config.output.join("native-device");
-            if complete_validation {
+            if matches!(mode, ChainRun::Qualify) {
                 crate::native::test_full_chain_native(
                     &chain,
                     &final_chain.kinds,

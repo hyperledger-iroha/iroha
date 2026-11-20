@@ -35,6 +35,8 @@ blake2 = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+# Exact integer checks of the two GLV lattice bases and transcript coefficient bounds.
+num-bigint = "0.4.8"
 # Differential oracle for encodings, field, curve and hash-to-curve results.
 pasta_curves = "0.6.1"
 # Cross-implementation encoding KATs against the halo2curves Pasta implementation.

@@ -9,9 +9,11 @@
 //! consumers must still run both linked cryptographic verifiers against the
 //! independently authenticated profile and reconstructed external inputs.
 //! The compact projection checks every ordinary word against explicitly supplied
-//! external inputs. Its caller must authenticate those sources. TODO: compose
-//! their actual encoding with the full monetary envelope before reporting a
-//! Payment size. `payment_wire` composes the complete future Send envelope.
+//! external inputs. Its caller authenticates those sources. The complete
+//! future Send envelope and its independent layer limits live in `payment_wire`.
+
+#[path = "payment_word_codec.rs"]
+pub(crate) mod payment_words;
 
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
@@ -94,6 +96,7 @@ pub(crate) struct TrustedProfile {
     s_shape: Shape,
     p: Layout,
     s: Layout,
+    late_slots: [Vec<usize>; 2],
     lean: bool,
 }
 
@@ -101,6 +104,60 @@ impl TrustedProfile {
     pub(crate) fn id(&self) -> &[u8; 32] {
         &self.id
     }
+    /// Byte offset, authenticated slot order and column dimension of one side's late public words.
+    pub(crate) fn projected_late_layout(&self, primary: bool) -> Result<(usize, &[usize], usize), String> {
+        let ranges = projected_ranges(self)?;
+        let (start, layout, slots) = if primary {
+            (ranges.primary.start, &self.p, &self.late_slots[0])
+        } else {
+            (ranges.secondary.start, &self.s, &self.late_slots[1])
+        };
+        Ok((start + layout.rows as usize * 32, slots, layout.col_bits as usize))
+    }
+    /// Original KGSPPR2 offsets for the inherited generator's public coordinates
+    /// and endoscalar challenges. The installed circuit supplies the slot order.
+    pub(crate) fn payment_generator_words(
+        &self,
+    ) -> Result<(usize, payment_words::Positions), String> {
+        let ranges = projected_ranges(self)?;
+        let mut words = Vec::new();
+        for (primary, shape, layout, start, slots) in [
+            (
+                true,
+                &self.p_shape,
+                &self.p,
+                ranges.primary.start,
+                &self.late_slots[0],
+            ),
+            (
+                false,
+                &self.s_shape,
+                &self.s,
+                ranges.secondary.start,
+                &self.late_slots[1],
+            ),
+        ] {
+            if slots.len() != layout.late as usize {
+                return Err("installed late-slot layout differs".into());
+            }
+            for (index, &slot) in slots.iter().enumerate() {
+                if let Some(word) = slot.checked_sub(crate::generator_claim::IO_START)
+                    && word < 4 + shape.col_bits
+                {
+                    let encoding = if word < 4 {
+                        payment_words::Encoding::Low(16)
+                    } else if primary {
+                        payment_words::Encoding::PrimaryEndo
+                    } else {
+                        payment_words::Encoding::SecondaryEndo
+                    };
+                    words.push((start + 32 * (layout.rows as usize + index), encoding));
+                }
+            }
+        }
+        Ok((ranges.total, words))
+    }
+
     /// Parameters must be authenticated independently. The ID identifies the
     /// exact authorized scheme/VKs, not a choice supplied by a Payment.
     pub(crate) fn from_parameters(
@@ -117,6 +174,7 @@ impl TrustedProfile {
             s_shape,
             p: Layout::new(&p_shape, primary, 64),
             s: Layout::new(&s_shape, secondary, 64),
+            late_slots: [primary.late_slots(), secondary.late_slots()],
             lean,
         };
         profile.p.check(&p_shape)?;
@@ -450,7 +508,7 @@ fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String>
     })
 }
 
-fn projected_prefix(profile: &TrustedProfile) -> Vec<u8> {
+pub(crate) fn projected_prefix(profile: &TrustedProfile) -> Vec<u8> {
     let mut bytes = PROJECTED_MAGIC.to_vec();
     bytes.extend_from_slice(&[u8::from(profile.lean), 0]);
     bytes.extend_from_slice(&profile.id);
@@ -632,6 +690,7 @@ pub fn measure_pair_with_projection(
         s_shape: cs.shape,
         p: Layout::new(&cp.shape, cp, ip.io.len()),
         s: Layout::new(&cs.shape, cs, is.io.len()),
+        late_slots: [cp.late_slots(), cs.late_slots()],
         lean: crate::fs::lean_schedule(),
     };
     let wire = wire_of(&profile, ip, is, &pair.pp, &pair.ps, pair.r);
@@ -725,6 +784,7 @@ mod tests {
             p,
             s,
             lean: false,
+            late_slots: [vec![], vec![]],
         };
         let wire = wire_of(
             &profile,
@@ -932,6 +992,7 @@ mod tests {
             p: Layout::new::<Fp>(&p_shape, &crate::r1cs::ToyCircuit, spec.inst_p.io.len()),
             s: Layout::new::<Fq>(&s_shape, &crate::r1cs::ToyCircuit, spec.inst_s.io.len()),
             lean: crate::fs::lean_schedule(),
+            late_slots: [vec![], vec![]],
         };
         let wire = wire_of(
             &profile,

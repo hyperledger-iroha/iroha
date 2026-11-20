@@ -766,7 +766,7 @@ For membership, an absent queried tuple has nonzero residue: its positive query 
 
 **Source-verified phase audit:** current phase-two cells are lookup/copy/table helpers and the matrix fold’s \(\Gamma(\beta)\) and \(q(\beta)\) cells. Multiplicities precede phase two; link-table multiplicities occupy the link phase. Copy addresses and read masks are fixed (`src/uniform.rs:834–916`, `1522–1553`, `1630–1638`, `2579–2621`; `src/deferral.rs:582–609`). The matrix evaluation cells are triangularly defined and exposed through linear late-IO ties; they do not enter current lookup/copy tuples (`src/deferral.rs:695–707`). No violation was found in the inspected builders.
 
-**Missing enforcement:** `UniformCircuit::build_with_copies_at` does not reject future lookup/export/import tuples that read phase-two or late-IO values. Its current storage/presence checks are insufficient (`src/uniform.rs:808–820`, `1461–1464`, `1701–1735`).
+**Compiler obligation identified at the original review.** At that revision the builder checked storage and presence but admitted semantic tuples reading phase-two or late-IO values. The v4 candidate checks semantic source provenance, rejects link/late IO aliases, and checks the resolved columns after placement. Its generated multiplicity and inverse helpers are checked against the phase mask. The [Control addendum](CONTROL-SOUNDNESS.md) identifies the separate transcript and security-budget changes. Acceptance of the new compiled profile still requires the independent checks in G3.
 
 The comment requiring every challenge-factor read to be first-phase is too broad (`src/uniform.rs:210–213`): the triangular Horner definition legitimately reads its own phase-two cells with factor \(-\beta\) (`src/deferral.rs:587–609`).
 

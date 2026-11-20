@@ -106,7 +106,21 @@ pub const ADDITIONS: &[Addition] = &[
     CONTRACT_LIFECYCLE,
     RUNTIME_RETIREMENT,
     IVM_C10,
+    KAGEMUSHA_SPARTAN,
 ];
+
+/// Spartan verifier installation, activation and payout. The selected ledger successor keeps the
+/// same segregated reserve from acquiring a second verifier family.
+pub const KAGEMUSHA_SPARTAN: Addition = Addition {
+    module: "iroha.kagemusha.spartan.v1",
+    instructions: &[
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1::WIRE_ID,
+        iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1::WIRE_ID,
+        iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1::WIRE_ID,
+    ],
+    rebinds: &[iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID],
+    storage: &[StorageAddition::Table("world.kagemusha_spartan_programs")],
+};
 
 /// Independently governed contract, trigger and certified output families of the C10 IVM.
 pub const IVM_C10: Addition = Addition {

@@ -30,19 +30,50 @@ use iroha_pasta::{Ep, Eq, Fq};
 #[path = "engine_adversarial_tests.rs"]
 mod adversarial_tests;
 
+#[path = "native_credential.rs"]
+mod issued_credential;
+pub use issued_credential::{credential_signing_message_for_body, CredentialIssuerParameters};
+#[path = "native_request.rs"]
+mod send_request;
+#[path = "open_request_wire.rs"]
+mod open_request_wire;
+#[path = "credit_status_wire.rs"]
+mod credit_status_wire;
+#[path = "native_transfers.rs"]
+mod transfers;
+pub use transfers::{SpartanWalletMap, SpartanWalletMaps, wallet_send_replay_key, wallet_receive_replay_key};
+pub use credit_status_wire::VerifiedCreditStatus;
+pub use open_request_wire::{OpenRequestPeer, decode_open_request_peer, encode_open_request_peer};
+
+#[path = "native_activation.rs"]
+mod activation;
+pub use activation::{BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim};
+
 #[path = "native_unload.rs"]
 mod unload_claim;
 #[cfg(test)]
 pub(crate) use unload_claim::tests::test_unload_claim;
 pub use unload_claim::{MAX_UNLOAD_CLAIM_BYTES, UnloadDestinations, VerifiedUnloadClaim};
 
-#[derive(Default)]
+#[path = "native_epoch.rs"]
+mod selected_epoch;
+
+#[derive(Clone, Default)]
 pub struct NativeEngine {
+    verified_payment: Arc<std::sync::Mutex<Option<AcceptedPayment>>>,
+    selected_epoch: Option<SumeragiCommitVerifierV1>,
     time: Option<Arc<dyn TimeSource>>,
+    debit: Option<Arc<dyn DebitAuthorizationSource>>,
     #[cfg(test)]
     isolated_unload_confirmation: bool,
 }
 impl sealed::Engine for NativeEngine {}
+
+/// One positive verifier result per owner. A fresh engine always verifies independently.
+struct AcceptedPayment {
+    installation: Arc<()>,
+    payment: VerifiedIncomingPayment,
+}
 
 pub(crate) struct Program {
     pub primary: Arc<UniformCircuit<Fp>>,
@@ -57,7 +88,7 @@ pub(crate) struct ParameterSet {
     pub finality: SumeragiCommitVerifierV1,
 }
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v3")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v4")]
 pub struct ParameterManifest {
     /// Exactly `PARAMETER_MANIFEST_VERSION`.
     pub version: u16,
@@ -91,9 +122,9 @@ pub struct ParameterManifest {
     pub signer_certificate: Vec<u8>,
 }
 
-/// Version 3 names four recursive pairs with 64 ordinary inputs on both
-/// sides. Control's last two inputs select Load, RefreshTimeAnchor or Unload.
-pub const PARAMETER_MANIFEST_VERSION: u16 = 3;
+/// Version 4 uses two fresh full-width LogUp challenges and four recursive
+/// pairs with 64 ordinary inputs. Control's last two inputs select its mode.
+pub const PARAMETER_MANIFEST_VERSION: u16 = 4;
 
 /// The retired v1 manifest layout, kept only so that installation refuses it
 /// by a typed error instead of a framing error, and so isolated fixtures can
@@ -318,9 +349,9 @@ pub fn reissue_fixture_manifest(
 }
 
 impl AuthenticatedParameters {
-    /// Exact lower bound from unavoidable simultaneous dense prover vectors.
-    /// This excludes symbolic planning, retained programs, allocator and worker
-    /// overhead; passing it is necessary, not evidence of device feasibility.
+    /// Early admission threshold derived from the signed program shapes.
+    /// The streamed prover accounts for its actual circuit and scratch at each stage.
+    /// This threshold measures available headroom separately from process peak memory.
     pub fn minimum_proving_memory_bytes(&self, kind: usize) -> Result<u64> {
         let program = self
             .inner
@@ -332,8 +363,9 @@ impl AuthenticatedParameters {
         let ws = count(program.secondary.shape.sw())?;
         let cp = count(program.primary.shape.sx)?;
         let cs = count(program.secondary.shape.sx)?;
-        // The caller's witness and z's witness half, then either A, B, C
-        // (outer rounds) or M(r_x, .)'s dense half and eq(r_x) (inner).
+        // Preserve the admission allowance for the dense witness and the larger of
+        // the outer and inner round workspaces. Streaming and copy-on-write change
+        // the allocations made for a particular program.
         let phase = |w: u64, other: u64, constraints: u64| {
             let outer = w
                 .checked_mul(2)
@@ -353,6 +385,123 @@ impl AuthenticatedParameters {
             .ok_or(Error::ResourceLimit)?;
         Ok(prefix.max(phase(wp, 0, cp)?).max(phase(ws, wp, cs)?))
     }
+    /// Prepare the canonical public manifest and the 32-byte message the Artifact
+    /// key signs with ECDSA P-256/SHA-256. Requires the complete original bundle
+    /// from the compiled producer and its root-certified Artifact signer.
+    /// This offline operation does not produce an authenticated installation.
+    pub fn prepare_manifest_for_signing(
+        program_bundle: &[u8],
+        scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
+        artifact_certificate_transcript: &[u8],
+        finality: SumeragiCommitVerifierV1,
+    ) -> Result<(Vec<u8>, [u8; 32])> {
+        scheme
+            .validate()
+            .map_err(|e| Error::Rejected(e.to_string()))?;
+        if finality.network().as_bytes() != &scheme.network_id {
+            return Err(Error::AuthorityMismatch("parameter ledger root"));
+        }
+        let scheme_id = scheme.scheme_id();
+        let signer = read_certificate(artifact_certificate_transcript)?;
+        certificate::authenticate_signer(
+            &signer,
+            &scheme_id,
+            &super::point(scheme.scheme_root_key.as_ref())?,
+            certificate::Role::Artifact,
+        )
+        .map_err(Error::AuthorityMismatch)?;
+
+        let (pinned_p, pinned_s) = super::built_in_producer_programs()
+            .ok_or(Error::Unavailable("compiled producer profile"))?;
+        let bundle = ProgramBundle::decode(program_bundle)?;
+        let (dp, ds) = super::PRODUCER_MATRIX_DIMENSIONS;
+        // Import one tape at a time. Only pins checked against this binary can
+        // select the size of either regenerated generator set.
+        fn columns<S: Scalar>(
+            originals: &[Vec<u8>; 4],
+            pins: &[[u8; 32]; 4],
+            primary: bool,
+            dimensions: (usize, usize),
+        ) -> Result<usize> {
+            let mut columns = None;
+            for (bytes, digest) in originals.iter().zip(pins) {
+                let tape =
+                    UniformCircuit::<S>::import_program(bytes, primary).map_err(Error::Rejected)?;
+                if tape.program_digest() != *digest {
+                    return Err(Error::AuthorityMismatch("compiled producer program"));
+                }
+                tape.check_declared_degrees().map_err(Error::Rejected)?;
+                if tape.shape.sx > dimensions.0
+                    || tape.shape.sz() > dimensions.1
+                    || columns
+                        .replace(tape.shape.cols())
+                        .is_some_and(|n| n != tape.shape.cols())
+                {
+                    return Err(Error::Malformed("compiled producer geometry"));
+                }
+            }
+            columns.ok_or(Error::Malformed("empty producer program set"))
+        }
+        let p = columns::<Fp>(&bundle.primary, &pinned_p, true, dp)?;
+        let s = columns::<Fq>(&bundle.secondary, &pinned_s, false, ds)?;
+        let manifest = manifest_for(
+            scheme_id,
+            scheme.relation_id,
+            std::array::from_fn(|i| [pinned_p[i], pinned_s[i]]),
+            (dp, ds),
+            (&Gens::<Eq>::new(p), &Gens::<Ep>::new(s)),
+            (&finality.network().to_string(), finality.chain_id()),
+            &signer,
+        )?;
+        let bytes = super::encode(&manifest)?;
+        let message = manifest_signing_message(&bytes).to_repr();
+        Ok((bytes, message))
+    }
+    /// Authenticate the small signed manifest against the registered scheme,
+    /// relation and genesis identity. The returned digest covers the exact
+    /// manifest bytes. Program installation separately verifies all eight pins.
+    pub fn authenticated_manifest(
+        manifest_bytes: &[u8],
+        signature: &[u8; 64],
+        installed_scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
+    ) -> Result<(ParameterManifest, [u8; 32])> {
+        installed_scheme
+            .validate()
+            .map_err(|e| Error::Rejected(e.to_string()))?;
+        let root = super::point(installed_scheme.scheme_root_key.as_ref())?;
+        let (manifest, digest) = authenticate_manifest(manifest_bytes, signature, &root)?;
+        let network: iroha_data_model::prelude::NetworkId = manifest
+            .finality_network
+            .parse()
+            .map_err(|_| Error::Malformed("parameter finality network"))?;
+        if manifest.scheme != installed_scheme.scheme_id()
+            || manifest.relation != installed_scheme.relation_id
+            || network.as_bytes() != &installed_scheme.network_id
+            || network.to_string() != manifest.finality_network
+        {
+            return Err(Error::AuthorityMismatch("installed native scheme"));
+        }
+        Ok((manifest, digest))
+    }
+    /// Check every public program against its independently authenticated manifest.
+    /// The offline carrier publisher releases each imported tape before the next
+    /// curve so it does not need to retain the complete prover and generator sets.
+    pub fn verify_program_originals(bundle: &[u8], manifest: &ParameterManifest) -> Result<()> {
+        let bundle = ProgramBundle::decode(bundle)?;
+        for (index, (primary, secondary)) in bundle.primary.into_iter().zip(bundle.secondary).enumerate() {
+            let check_primary = UniformCircuit::<Fp>::import_program(&primary, true).map_err(Error::Rejected)?;
+            if check_primary.program_digest() != manifest.primary[index] {
+                return Err(Error::AuthorityMismatch("primary program original"));
+            }
+            drop(check_primary);
+            let check_secondary = UniformCircuit::<Fq>::import_program(&secondary, false).map_err(Error::Rejected)?;
+            if check_secondary.program_digest() != manifest.secondary[index] {
+                return Err(Error::AuthorityMismatch("secondary program original"));
+            }
+        }
+        Ok(())
+    }
+
     /// Authenticate all eight exact public programs under Native's independently
     /// installed scheme root and checkpoint-rooted finality reader. SDK bridges
     /// obtain these two trusted inputs from their native installation owner;
@@ -364,25 +513,28 @@ impl AuthenticatedParameters {
         installed_scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
         finality: SumeragiCommitVerifierV1,
     ) -> Result<Self> {
-        installed_scheme
-            .validate()
-            .map_err(|e| Error::Rejected(e.to_string()))?;
-        let root = super::point(installed_scheme.scheme_root_key.as_ref())?;
-        // Authenticate the small manifest before allocating its large program bundle.
-        let manifest = authenticate_manifest(manifest_bytes, &signature, &root)?;
-        if manifest.scheme != installed_scheme.scheme_id() {
-            return Err(Error::AuthorityMismatch("installed native scheme"));
+        let (manifest, manifest_digest) =
+            Self::authenticated_manifest(manifest_bytes, &signature, installed_scheme)?;
+        if manifest.finality_network != finality.network().to_string()
+            || manifest.finality_chain != finality.chain_id()
+        {
+            return Err(Error::AuthorityMismatch("parameter ledger root"));
         }
+        let root = super::point(installed_scheme.scheme_root_key.as_ref())?;
         let bundle = ProgramBundle::decode(program_bundle)?;
-        let programs = (0..4)
-            .map(|i| {
+        // Release each pair of encoded programs after import. Generator derivation
+        // and fixed-key construction need only the authenticated program tapes.
+        let programs = bundle
+            .primary
+            .into_iter()
+            .zip(bundle.secondary)
+            .map(|(primary, secondary)| {
                 Ok(Program {
                     primary: Arc::new(
-                        UniformCircuit::import_program(&bundle.primary[i], true)
-                            .map_err(Error::Rejected)?,
+                        UniformCircuit::import_program(&primary, true).map_err(Error::Rejected)?,
                     ),
                     secondary: Arc::new(
-                        UniformCircuit::import_program(&bundle.secondary[i], false)
+                        UniformCircuit::import_program(&secondary, false)
                             .map_err(Error::Rejected)?,
                     ),
                 })
@@ -390,7 +542,13 @@ impl AuthenticatedParameters {
             .collect::<Result<Vec<_>>>()?
             .try_into()
             .map_err(|_| Error::Malformed("four monetary programs"))?;
-        ParameterSet::authenticate(programs, manifest_bytes, signature, root, finality)
+        ParameterSet::from_authenticated_manifest(
+            programs,
+            manifest,
+            manifest_digest,
+            root,
+            finality,
+        )
     }
     /// Canonical public programs only; this never exports private witness arrays.
     pub fn export_program_bundle(&self) -> Result<Vec<u8>> {
@@ -422,6 +580,7 @@ impl AuthenticatedParameters {
 impl ParameterSet {
     /// The compiler supplies real programs; the independent installation supplies
     /// its trusted scheme root and already authenticated native genesis reader.
+    #[cfg(test)]
     pub(crate) fn authenticate(
         programs: [Program; 4],
         manifest_bytes: &[u8],
@@ -429,7 +588,16 @@ impl ParameterSet {
         root: p256::Point,
         finality: SumeragiCommitVerifierV1,
     ) -> Result<AuthenticatedParameters> {
-        let manifest = authenticate_manifest(manifest_bytes, &signature, &root)?;
+        let (manifest, manifest_digest) = authenticate_manifest(manifest_bytes, &signature, &root)?;
+        Self::from_authenticated_manifest(programs, manifest, manifest_digest, root, finality)
+    }
+    fn from_authenticated_manifest(
+        programs: [Program; 4],
+        manifest: ParameterManifest,
+        manifest_digest: [u8; 32],
+        root: p256::Point,
+        finality: SumeragiCommitVerifierV1,
+    ) -> Result<AuthenticatedParameters> {
         if manifest.finality_network != finality.network().to_string()
             || manifest.finality_chain != finality.chain_id()
         {
@@ -459,6 +627,19 @@ impl ParameterSet {
                 .and(p.secondary.check_declared_degrees())
                 .map_err(|e| Error::Rejected(format!("declared matrix degrees: {e}")))?;
         }
+        // Refuse an otherwise signed generation that could only discover its
+        // outgoing Payment is oversized after a hardware-selected debit.
+        let send = &programs[full::SEND];
+        let transport = carrier::TrustedProfile::from_parameters(
+            manifest.relation,
+            send.primary.shape,
+            send.primary.as_ref(),
+            send.secondary.shape,
+            send.secondary.as_ref(),
+            true,
+        )
+        .map_err(Error::Rejected)?;
+        payment_wire::admit_send_profile(&transport).map_err(Error::Rejected)?;
         // Generators exactly as the signed profile names them, never derived
         // from program geometry alone.
         let (gp, gs) = authenticate_profile(&manifest, [pbits, sbits])?;
@@ -503,8 +684,11 @@ impl ParameterSet {
             keys_p: Some(keys_p),
             keys_s: Some(keys_s),
         };
-        Ok(AuthenticatedParameters {
+        let authenticated = AuthenticatedParameters {
+            installation: Arc::new(()),
             id: manifest.relation,
+            manifest_digest,
+            confirmation: ConfirmationScope::Installed,
             inner: Self {
                 programs,
                 generators,
@@ -513,7 +697,10 @@ impl ParameterSet {
                 root,
                 finality,
             },
-        })
+        };
+        let receive = authenticated.inner.profile(full::RECEIVE)?;
+        credit_status_wire::admit_profile(&receive, &authenticated.inner.generators).map_err(Error::Rejected)?;
+        Ok(authenticated)
     }
     fn profile(&self, kind: usize) -> Result<carrier::TrustedProfile> {
         let p = self
@@ -541,11 +728,15 @@ impl ParameterSet {
     }
 }
 
+fn manifest_signing_message(bytes: &[u8]) -> Fp {
+    crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), bytes)
+}
+
 pub(super) fn authenticate_manifest(
     bytes: &[u8],
     signature: &[u8; 64],
     root: &p256::Point,
-) -> Result<ParameterManifest> {
+) -> Result<(ParameterManifest, [u8; 32])> {
     let manifest: ParameterManifest = match super::decode(bytes) {
         Ok(manifest) => manifest,
         Err(e) => {
@@ -574,9 +765,9 @@ pub(super) fn authenticate_manifest(
         certificate::Role::Artifact,
     )
     .map_err(Error::AuthorityMismatch)?;
-    let m = crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), bytes);
+    let m = manifest_signing_message(bytes);
     verify_signature(&key, m, signature)?;
-    Ok(manifest)
+    Ok((manifest, m.to_repr()))
 }
 
 fn verify_signature(q: &p256::Point, m: Fp, sig: &[u8; 64]) -> Result<()> {
@@ -606,7 +797,7 @@ fn read_credential(b: &[u8]) -> Result<Credential> {
         signature: b[532..].try_into().unwrap(),
     })
 }
-fn read_certificate(b: &[u8]) -> Result<certificate::Certificate> {
+pub(super) fn read_certificate(b: &[u8]) -> Result<certificate::Certificate> {
     if b.len() != 172 {
         return Err(Error::Malformed("certificate length"));
     }
@@ -680,12 +871,15 @@ pub(super) fn authenticate_credential_under(
 /// The certified payment key-table commitment (credential bytes 195..259,
 /// `x || y` little-endian) must be exactly `TABLE_CONSTRUCTION` of the
 /// certified payment key on these generators.
-fn certified_table(generators: &Gens<Eq>, c: &Credential) -> Result<()> {
+fn payment_key_table(generators: &Gens<Eq>, key: &[u8]) -> Result<[[u8; 32]; 2]> {
     if generators.g.len() < full_table_bases() {
         return Err(Error::Malformed("payment table generators"));
     }
-    let q = point(&c.body[130..195])?;
-    let table = point_bytes(&full::wallet_table_commitment(&q, generators))?;
+    let q = point(key)?;
+    point_bytes(&full::wallet_table_commitment(&q, generators))
+}
+fn certified_table(generators: &Gens<Eq>, c: &Credential) -> Result<()> {
+    let table = payment_key_table(generators, &c.body[130..195])?;
     if c.body[195..227] != table[0] || c.body[227..259] != table[1] {
         return Err(Error::AuthorityMismatch("certified wallet table"));
     }
@@ -728,7 +922,7 @@ fn projection(profile: &[Fp; 64], kind: usize) -> Result<carrier::ProjectedInput
     }
     Ok(out)
 }
-fn verify_pair(
+fn assemble_pair(
     parameters: &ParameterSet,
     kind: usize,
     d: carrier::Decoded,
@@ -737,30 +931,7 @@ fn verify_pair(
         .programs
         .get(kind)
         .ok_or(Error::Malformed("wallet kind"))?;
-    let r = d.r;
-    let rlc = move |_: &[u8; 32]| r;
-    let vp = spartan::verify_linked_circuit(
-        &p.primary.shape,
-        &parameters.generators.p,
-        &d.ip,
-        &d.pp.to_bytes(),
-        &Link::First { rho: d.rho, r: d.r },
-        p.primary.as_ref(),
-    )
-    .map_err(|_| Error::Rejected("primary linked proof".into()))?;
-    let vs = spartan::verify_linked_circuit(
-        &p.secondary.shape,
-        &parameters.generators.s,
-        &d.is,
-        &d.ps.to_bytes(),
-        &Link::Second { d: d.d, rlc: &rlc },
-        p.secondary.as_ref(),
-    )
-    .map_err(|_| Error::Rejected("secondary linked proof".into()))?;
-    if vp != d.d || vs != d.rho {
-        return Err(Error::Rejected("pair transcript binding".into()));
-    }
-    let u = full::UniformPair {
+    Ok(full::UniformPair {
         cp: p.primary.clone(),
         ip: d.ip,
         pp: d.pp,
@@ -771,7 +942,38 @@ fn verify_pair(
         rho: d.rho,
         r: d.r,
         kind,
-    };
+    })
+}
+
+fn verify_pair(
+    parameters: &ParameterSet,
+    kind: usize,
+    decoded: carrier::Decoded,
+) -> Result<full::UniformPair> {
+    let u = assemble_pair(parameters, kind, decoded)?;
+    let r = u.r;
+    let rlc = move |_: &[u8; 32]| r;
+    let vp = spartan::verify_linked_circuit(
+        &u.cp.shape,
+        &parameters.generators.p,
+        &u.ip,
+        &u.pp.to_bytes(),
+        &Link::First { rho: u.rho, r },
+        u.cp.as_ref(),
+    )
+    .map_err(|_| Error::Rejected("primary linked proof".into()))?;
+    let vs = spartan::verify_linked_circuit(
+        &u.cs.shape,
+        &parameters.generators.s,
+        &u.is,
+        &u.ps.to_bytes(),
+        &Link::Second { d: u.d, rlc: &rlc },
+        u.cs.as_ref(),
+    )
+    .map_err(|_| Error::Rejected("secondary linked proof".into()))?;
+    if vp != u.d || vs != u.rho {
+        return Err(Error::Rejected("pair transcript binding".into()));
+    }
     decide_accumulators(&parameters.generators, &u)?;
     Ok(u)
 }
@@ -997,7 +1199,7 @@ fn freeze_witness(
     receipt_mut(&mut w).body[242..274].copy_from_slice(&digest);
     Ok((w, digest))
 }
-fn build<S: Scalar>(
+fn build<S: Scalar + zeroize::Zeroize>(
     w: full::Wiring<S>,
     target: &UniformCircuit<S>,
     entropy: &ProofEntropy,
@@ -1010,7 +1212,7 @@ fn build<S: Scalar>(
 ) {
     let (a, p, n, t, c) = w.finish();
     let seed = zeroize::Zeroizing::new(entropy.stream(purpose).scalar::<Fp>().to_repr());
-    UniformCircuit::build_rows(
+    UniformCircuit::build_rows_with_release(
         target.label,
         a,
         p,
@@ -1021,6 +1223,7 @@ fn build<S: Scalar>(
         target.io_len,
         seed.as_ref(),
         Some(target.layout()),
+        zeroize::Zeroize::zeroize,
     )
 }
 struct PrivateCircuit<S: Scalar + zeroize::Zeroize>(UniformCircuit<S>);
@@ -1107,7 +1310,7 @@ fn check_constraints(
             .scalar::<Fp>()
             .to_repr(),
     );
-    let (c, i, wit, rows) = UniformCircuit::build_rows(
+    let (c, i, wit, rows) = UniformCircuit::build_rows_with_release(
         "native preparation",
         a,
         p,
@@ -1118,6 +1321,7 @@ fn check_constraints(
         192,
         seed.as_ref(),
         None,
+        zeroize::Zeroize::zeroize,
     );
     let c = PrivateCircuit::new(c);
     let wit = WrittenWitness::new(wit, rows);
@@ -1191,11 +1395,20 @@ fn check_constraints(
     }
 }
 impl NativeEngine {
-    fn require_stage_memory(&self, workspace: u64, cold_commitments: u64) -> Result<()> {
+    pub(super) fn funding_commit_reader<'a>(
+        &'a self,
+        parameters: &'a AuthenticatedParameters,
+    ) -> &'a SumeragiCommitVerifierV1 {
+        self.selected_epoch.as_ref().unwrap_or(&parameters.inner.finality)
+    }
+
+    /// Admits a proving stage: its accounted `workspace` plus the process MSM
+    /// scratch ceiling must fit the memory now available. Private commitments
+    /// use the constant-time secret MSMs, whose scratch lies within that
+    /// ceiling; no commitment table is built, so none is charged.
+    fn require_stage_memory(&self, workspace: u64) -> Result<()> {
         if let Some(source) = &self.time {
             let required = workspace
-                .checked_add(cold_commitments)
-                .ok_or(Error::ResourceLimit)?
                 .checked_add(
                     u64::try_from(iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES)
                         .map_err(|_| Error::ResourceLimit)?,
@@ -1276,6 +1489,7 @@ impl NativeEngine {
             kind: full::SEND,
         };
         Ok(IncomingCandidate {
+            payment_digest: d.digests.payment,
             profile,
             proof_digest: d.digests.proof,
             valid,
@@ -1327,20 +1541,24 @@ impl NativeEngine {
         )
         .map_err(Error::AuthorityMismatch)
     }
-    /// Unload Prepare and Resume produce an authenticated review. A protected
-    /// confirmation verifier must precede both custody selection and finalization.
-    /// Only unit tests can run the software stand-in for that authority.
-    fn require_unload_confirmation(&self, tag: u8) -> Result<()> {
-        if tag == 6 {
+    /// The payment key signs after selection. Its signature cannot establish prior
+    /// user presence for a Send or Unload. A protected exact-review authorization
+    /// must be available at both debit boundaries before an installed wallet can spend.
+    fn require_debit_confirmation(&self, tag: u8, scope: ConfirmationScope) -> Result<()> {
+        match (tag, scope) {
+            #[cfg(any(test, feature = "device-fixture"))]
+            (3, ConfirmationScope::FixtureSend) => Ok(()),
+            (3, _) => Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable",
+            )),
             #[cfg(test)]
-            if self.isolated_unload_confirmation {
-                return Ok(());
-            }
-            return Err(Error::AuthorityMismatch(
+            (6, ConfirmationScope::FixtureSend) if self.isolated_unload_confirmation => Ok(()),
+            (6, _) => Err(Error::AuthorityMismatch(
                 "protected Unload review confirmation unavailable",
-            ));
+            )),
+            (1 | 2 | 4 | 7, _) => Ok(()),
+            _ => Err(Error::Malformed("capsule kind")),
         }
-        Ok(())
     }
 
     #[cfg(test)]
@@ -1349,6 +1567,22 @@ impl NativeEngine {
             isolated_unload_confirmation: true,
             ..Self::default()
         }
+    }
+
+    /// Install the stock wallet's protected custody adapter. The engine verifies the
+    /// actual hardware signature and complete review independently at both boundaries.
+    pub fn with_protected_custody(time: Arc<dyn TimeSource>, debit: Arc<dyn DebitAuthorizationSource>) -> Self {
+        Self { time: Some(time), debit: Some(debit), ..Self::default() }
+    }
+
+    fn authorize_debit(&self, boundary: DebitBoundary, prepared: &PreparedOperation,
+        parameters: &AuthenticatedParameters) -> Result<()> {
+        if let (ConfirmationScope::Installed, 3 | 6, Some(custody)) =
+            (parameters.confirmation, prepared.capsule().kind(), &self.debit)
+        {
+            return custody.evidence(boundary, prepared, parameters)?.verify(prepared, parameters);
+        }
+        self.require_debit_confirmation(prepared.capsule().kind(), parameters.confirmation)
     }
 
     /// Bind the canonical local custody/OS clock adapter. Controls-off operations
@@ -1391,10 +1625,11 @@ impl NativeEngine {
             .as_ref()
             .ok_or(Error::Unavailable("protected same-boot time anchor"))?;
         let wallet = step.credential.body[66..98].try_into().unwrap();
+        let operation_id = step.receipt.body[114..146].try_into().unwrap();
         let (anchor, now) = if fresh {
-            source.observe(&wallet)?
+            source.observe(&wallet, &operation_id)?
         } else {
-            source.prepared(&wallet, &step.receipt.body[114..146].try_into().unwrap())?
+            source.prepared(&wallet, &operation_id)?
         };
         if anchor.anchor.body.scheme_id != step.credential.body[2..34]
             || anchor.anchor.body.wallet_id != wallet
@@ -1453,6 +1688,7 @@ impl NativeEngine {
         {
             return Err(Error::AuthorityMismatch("enrollment installation"));
         }
+        input.input.credential.enrollment_fields()?;
         authenticate_credential(
             &parameters.inner,
             &input.input.credential,
@@ -1462,6 +1698,7 @@ impl NativeEngine {
         profile[0] = Fp::ONE;
         Ok(VerifiedWalletHead {
             parameters_id: parameters.id,
+            manifest_digest: parameters.manifest_digest,
             profile,
             pair: Arc::from([]),
             credential: input.input.credential.clone(),
@@ -1505,7 +1742,7 @@ impl NativeEngine {
         witness: &ExactOperationWitness,
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
-    ) -> Result<()> {
+    ) -> Result<Option<Box<PreparedReceive>>> {
         let p = &parameters.inner;
         let (c, _, _, _) = terms(witness);
         if !exact_credential(c, &head.credential) {
@@ -1515,12 +1752,14 @@ impl NativeEngine {
         let mut w = full::Wiring::default();
         let family = w.family(0, 1);
         let predecessor = full::native_predecessor(&mut w, family, head);
+        let mut receive = None;
         match witness {
             ExactOperationWitness::Bootstrap(input) => {
+                let marker = head.enrollment_marker.ok_or(Error::AuthorityMismatch("bootstrap enrollment origin"))?;
                 if input.scheme != p.scheme
                     || input.relation != p.relation
                     || input.root != p.root
-                    || head.enrollment_marker.is_none()
+                    || input.input.statement[19..21] != super::funding::limbs(&marker)
                     || !head.pair.is_empty()
                 {
                     return Err(Error::AuthorityMismatch("bootstrap enrollment origin"));
@@ -1531,7 +1770,7 @@ impl NativeEngine {
                     prepared.wiring,
                     p.programs[full::BOOTSTRAP].primary.shape.col_bits,
                     self.time.as_deref(),
-                );
+                ).map(|()| None);
             }
             ExactOperationWitness::Load {
                 step,
@@ -1550,7 +1789,7 @@ impl NativeEngine {
                 let finality = KagemushaWalletLoadFinalityV1::decode_canonical(finality_original)
                     .map_err(|e| Error::Rejected(e.to_string()))?;
                 finality
-                    .verify_with(&mut p.finality.clone(), &receipt)
+                    .verify_with(&mut self.funding_commit_reader(parameters).clone(), &receipt)
                     .map_err(|e| Error::Rejected(e.to_string()))?;
                 crate::control::append_preparation(
                     &mut w,
@@ -1610,31 +1849,40 @@ impl NativeEngine {
                     return Err(Error::AuthorityMismatch("exact incoming Payment originals"));
                 }
                 let incoming = full::native_incoming_candidate(&mut w, family, &candidate);
-                crate::receive::append_preparation(&mut w, family, step, &predecessor, &incoming)
+                let relation = crate::receive::append_preparation(&mut w, family, step, &predecessor, &incoming)
                     .map_err(Error::Malformed)?;
+                // The constrained relation conjoins the incoming proof, signed objects, issuer/payer/receiver
+                // scope, Request signature and consumed-credit nonmembership. A retained first credit-map
+                // entry still owns its digest even if a historic Burn left the consumed map unchanged.
+                let can_credit = relation.valid().value(&w) == Fp::ONE
+                    && step.maps.credit_search.leaf.key != step.statement[17];
+                receive = Some(Box::new(PreparedReceive {
+                    pair: candidate.pair,
+                    pair_bytes: candidate.pair_bytes,
+                    can_credit,
+                }));
             }
         }
         check_constraints(
             w,
             p.programs[kind(witness)].primary.shape.col_bits,
             self.time.as_deref(),
-        )
+        )?;
+        Ok(receive)
     }
+    // The private head already carries the installation that accepted its proof
+    // or enrollment. Cold recovery reconstructs it before restoring custody.
     fn prepare_retained(
         &self,
         witness: &ExactOperationWitness,
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
-        scope(parameters, &head.parameters_id)?;
+        head.require_parameters(parameters)?;
         let stage = crate::prof::Stage::start();
         if !matches!(witness, ExactOperationWitness::Bootstrap(_)) {
             if head.custody_digest == [0; 32] || head.enrollment_marker.is_some() {
                 return Err(Error::AuthorityMismatch("released predecessor custody"));
-            }
-            let checked = self.verify_head(&head.pair, &head.credential, parameters)?;
-            if checked.profile != head.profile {
-                return Err(Error::AuthorityMismatch("retained predecessor"));
             }
         }
         let (mut frozen, intent) = freeze_witness(witness.clone(), head)?;
@@ -1651,8 +1899,9 @@ impl NativeEngine {
         })?;
         let capsule = RecoveryCapsule {
             frame: CapsuleFrame {
-                version: 1,
+                version: RECOVERY_CAPSULE_VERSION,
                 parameters_id: parameters.id,
+                manifest_digest: parameters.manifest_digest,
                 scheme: parameters.inner.scheme,
                 asset: c.body[34..66].try_into().unwrap(),
                 wallet: c.body[66..98].try_into().unwrap(),
@@ -1672,15 +1921,17 @@ impl NativeEngine {
         let digest = RecoveryCapsule::frame_digest(&capsule.encode()?);
         receipt_mut(&mut frozen).body[274..306].copy_from_slice(&digest);
         stage.mark("head");
-        self.check_preparation(&frozen, head, parameters)?;
+        let receive = self.check_preparation(&frozen, head, parameters)?;
         stage.mark("preparation");
         stage.finish(&format!("prepare {}", kind_name(kind(&frozen))));
         let body = receipt_mut(&mut frozen).body;
         Ok(PreparedOperation {
+            manifest_digest: parameters.manifest_digest,
             parameters_id: parameters.id,
             capsule,
             witness: Arc::new(frozen),
             receipt_body: body,
+            receive,
             predecessor: head.clone(),
         })
     }
@@ -1706,12 +1957,27 @@ impl NativeEngine {
 }
 
 impl Engine for NativeEngine {
-    fn before_selection(
+    fn require_selected_debit(
+        &self,
+        prepared: &PreparedOperation,
+        checkpoint: [u8; 32],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<()> {
+        if prepared.manifest_digest != parameters.manifest_digest {
+            return Err(Error::AuthorityMismatch("prepared producer manifest"));
+        }
+        self.authorize_debit(
+            DebitBoundary::AnchoredSelection(checkpoint),
+            prepared,
+            parameters,
+        )
+    }
+
+    fn prepare_selection(
         &self,
         capsule: &RecoveryCapsule,
         parameters: &AuthenticatedParameters,
-    ) -> Result<()> {
-        self.require_unload_confirmation(capsule.kind())?;
+    ) -> Result<PreparedOperation> {
         let kind = match capsule.kind() {
             1 => full::BOOTSTRAP,
             2 | 6 | 7 => full::CONTROL,
@@ -1721,7 +1987,13 @@ impl Engine for NativeEngine {
         };
         self.require_minimum_memory(parameters, kind)?;
         let prepared = self.resume(capsule, parameters)?;
-        self.check_send_time(&prepared.witness, true)
+        prepared.require_receive_admission()?;
+        // A resumed preparation must bind its frozen interval to the operation's actual
+        // capture before fresh policy checking and selection. Selected recovery bypasses both.
+        self.check_send_time(&prepared.witness, false)?;
+        self.check_send_time(&prepared.witness, true)?;
+        self.authorize_debit(DebitBoundary::BeforeSelection, &prepared, parameters)?;
+        Ok(prepared)
     }
 
     fn verify_head(
@@ -1736,6 +2008,7 @@ impl Engine for NativeEngine {
         }
         Ok(VerifiedWalletHead {
             parameters_id: parameters.id,
+            manifest_digest: parameters.manifest_digest,
             profile,
             pair: bytes.into(),
             credential: c,
@@ -1749,6 +2022,14 @@ impl Engine for NativeEngine {
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedIncomingPayment> {
+        if let Ok(held) = self.verified_payment.lock()
+            && let Some(accepted) = held.as_ref()
+            && Arc::ptr_eq(&accepted.installation, &parameters.installation)
+            && accepted.payment.require_parameters(parameters).is_ok()
+            && accepted.payment.exact_bytes() == bytes
+        {
+            return Ok(accepted.payment.clone());
+        }
         let trusted = parameters.inner.profile(full::SEND)?;
         let profile = payment_wire::Profile {
             pair: &trusted,
@@ -1770,8 +2051,9 @@ impl Engine for NativeEngine {
             .map_err(|_| Error::Malformed("Payment profile"))?;
         profile_matches(&parameters.inner, &profile, &d.originals.payer)?;
         verify_pair(&parameters.inner, full::SEND, d.pair)?;
-        Ok(VerifiedIncomingPayment {
+        let payment = VerifiedIncomingPayment {
             parameters_id: parameters.id,
+            manifest_digest: parameters.manifest_digest,
             bytes: bytes.into(),
             profile,
             digest: d.digests.payment,
@@ -1780,7 +2062,14 @@ impl Engine for NativeEngine {
             statement: d.originals.statement,
             receipt: d.originals.receipt,
             pair: d.pair_bytes.into(),
-        })
+        };
+        if let Ok(mut held) = self.verified_payment.lock() {
+            *held = Some(AcceptedPayment {
+                installation: Arc::clone(&parameters.installation),
+                payment: payment.clone(),
+            });
+        }
+        Ok(payment)
     }
     fn prepare(
         &self,
@@ -1790,7 +2079,10 @@ impl Engine for NativeEngine {
     ) -> Result<PreparedOperation> {
         self.require_minimum_memory(parameters, kind(witness))?;
         self.check_send_time(witness, false)?;
-        self.prepare_retained(witness, head, parameters)
+        self.authenticate_send_request(witness, parameters)?;
+        let prepared = self.prepare_retained(witness, head, parameters)?;
+        prepared.require_receive_admission()?;
+        Ok(prepared)
     }
     fn resume(
         &self,
@@ -1798,12 +2090,16 @@ impl Engine for NativeEngine {
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
         scope(parameters, &capsule.frame.parameters_id)?;
+        if capsule.frame.manifest_digest != parameters.manifest_digest {
+            return Err(Error::AuthorityMismatch("recovery producer manifest"));
+        }
         capsule.validate()?;
         let r: RecoveryFrame = super::decode(&capsule.frame.recovery)?;
         if r.version != 1 || r.profile.len() != 64 || super::encode(&r)? != capsule.frame.recovery {
             return Err(Error::Malformed("canonical recovery payload"));
         }
         let witness = super::witness_codec::decode_witness(&r.witness)?;
+        self.authenticate_send_request(&witness, parameters)?;
         let c = read_credential(&r.credential)?;
         let cert = read_certificate(&r.certificate)?;
         let profile: [Fp; 64] = r
@@ -1835,14 +2131,20 @@ impl Engine for NativeEngine {
         }
         Ok(prepared)
     }
-    fn finalize(
+    fn finalize_selected(
         &self,
         prepared: PreparedOperation,
         receipt: &HardwareAdvanceReceipt,
         parameters: &AuthenticatedParameters,
-    ) -> Result<CompletedOperation> {
-        self.require_unload_confirmation(prepared.capsule.kind())?;
+    ) -> Result<(PreparedOperation, CompletedOperation)> {
         scope(parameters, &prepared.parameters_id)?;
+        if prepared.manifest_digest != parameters.manifest_digest {
+            return Err(Error::AuthorityMismatch("prepared producer manifest"));
+        }
+        // A selected capsule can resume in a colder, smaller process than the
+        // one that prepared it. Check again before cloning its private witness.
+        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
+        self.authorize_debit(DebitBoundary::AfterSelection, &prepared, parameters)?;
         let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
             &prepared,
@@ -1863,16 +2165,20 @@ impl Engine for NativeEngine {
             let (_, _, _, _, u) = decode_head(&prepared.predecessor.pair, parameters)?;
             pairs.push(full::trace_uniform(u, &p.generators));
         }
-        if let ExactOperationWitness::Receive {
-            incoming_payment, ..
-        } = &witness
-        {
-            let candidate = self.incoming_candidate(incoming_payment, parameters)?;
+        stage.mark("predecessor trace");
+        if k == full::RECEIVE {
+            // Preparation and cold resume derive this pair and its verdict
+            // from the same frozen Payment before checking its constraints.
+            let incoming = prepared
+                .receive
+                .as_ref()
+                .ok_or(Error::Malformed("missing prepared Receive"))?;
             pairs.push(full::trace_incoming_candidate(
-                candidate.pair,
+                incoming.pair.clone(),
                 &p.generators,
-                candidate.pair_bytes,
+                incoming.pair_bytes.clone(),
             ));
+            stage.mark("incoming trace");
         }
         let entropy = ProofEntropy::fresh().map_err(|_| Error::Unavailable("OS proof entropy"))?;
         let folds = if k == full::BOOTSTRAP {
@@ -1884,8 +2190,7 @@ impl Engine for NativeEngine {
             )
         };
         stage.mark("folds");
-        let prove_control = |control: &crate::control::Witness| -> Result<_> {
-            let folds = folds.as_ref().expect("Control has predecessor folds");
+        let build_control = |control: &crate::control::Witness| -> Result<_> {
             Ok((
                 full::p_operation(
                     full::OperationWitness::Control {
@@ -1894,25 +2199,25 @@ impl Engine for NativeEngine {
                     },
                     &p.generators,
                     &pairs,
-                    folds,
+                    folds.as_ref().expect("Control has predecessor folds"),
                 )
                 .map_err(Error::Malformed)?
                 .0,
-                full::s_operation(k, Some(control.mode), &p.generators, &pairs, folds).0,
+                Some(control.mode),
             ))
         };
-        let (wp, ws) = match &witness {
+        let (wp, control_mode) = match &witness {
             ExactOperationWitness::Bootstrap(input) => (
                 full::p_boot_from_inputs(&p.generators, &p.context(), &input.input)
                     .map_err(Error::Malformed)?
                     .0,
-                full::s_boot(&p.generators).0,
+                None,
             ),
             ExactOperationWitness::Load { step, .. } => {
-                prove_control(&crate::control::Witness::load((**step).clone()))?
+                build_control(&crate::control::Witness::load((**step).clone()))?
             }
             ExactOperationWitness::RefreshTimeAnchor(step)
-            | ExactOperationWitness::Unload { step, .. } => prove_control(step)?,
+            | ExactOperationWitness::Unload { step, .. } => build_control(step)?,
             ExactOperationWitness::Send(step) => (
                 full::p_operation(
                     full::OperationWitness::Send(step),
@@ -1922,7 +2227,7 @@ impl Engine for NativeEngine {
                 )
                 .map_err(Error::Malformed)?
                 .0,
-                full::s_operation(k, None, &p.generators, &pairs, folds.as_ref().unwrap()).0,
+                None,
             ),
             ExactOperationWitness::Receive { step, .. } => (
                 full::p_operation(
@@ -1933,12 +2238,10 @@ impl Engine for NativeEngine {
                 )
                 .map_err(Error::Malformed)?
                 .0,
-                full::s_operation(k, None, &p.generators, &pairs, folds.as_ref().unwrap()).0,
+                None,
             ),
         };
-        stage.mark("wiring");
-        // Each circuit gives up its builder's private values as soon as it
-        // is built (its witness holds them), before the next is built.
+        stage.mark("primary wiring");
         let (cp, ip, wp, rows_p) = build(
             wp,
             p.programs[k].primary.as_ref(),
@@ -1954,6 +2257,28 @@ impl Engine for NativeEngine {
         }
         let cp = PrivateCircuit::new(cp);
         let wp = WrittenWitness::new(wp, rows_p);
+        // Take the primary prefix before allocating the secondary wiring and
+        // witness. Its first-phase row commitments are kept for the primary
+        // proof below, which regenerates the masks and blinds from the same
+        // stream and does not commit those rows again.
+        self.require_stage_memory(cp.phase_memory_accounting().phase1_bytes)?;
+        let primary = spartan::prepare_linked_phase1_retained(
+            &cp.shape,
+            &p.generators.p,
+            &ip,
+            &wp,
+            &wp.rows,
+            &mut entropy.stream(b"primary"),
+            &*cp,
+        );
+        let d = primary.digest();
+        stage.mark("phase1");
+        let ws = match folds.as_ref() {
+            Some(folds) => full::s_operation(k, control_mode, &p.generators, &pairs, folds).0,
+            None => full::s_boot(&p.generators).0,
+        };
+        drop(folds);
+        drop(pairs);
         let (cs, is, ws, rows_s) = build(
             ws,
             p.programs[k].secondary.as_ref(),
@@ -1969,29 +2294,8 @@ impl Engine for NativeEngine {
         // before anything is verified or released.
         same_program(&cs, &p.programs[k].secondary)?;
         stage.mark("digest");
-        // Caller witnesses and both builders are already resident. Admit the
-        // actual next stage, then resample OS headroom before each full proof.
-        // S is dropped before P, so its released storage is available to P.
-        // These accounted workspaces exclude opaque closure/allocator overhead.
-        self.require_stage_memory(
-            cp.phase_memory_accounting().phase1_bytes,
-            p.generators.p.commitment_cache_bytes(&cp.shape, false),
-        )?;
-        let d = spartan::prepare_linked_phase1_built(
-            &cp.shape,
-            &p.generators.p,
-            &ip,
-            &wp,
-            &wp.rows,
-            &mut entropy.stream(b"primary"),
-            &*cp,
-        );
-        stage.mark("phase1");
         let rlc = |_: &[u8; 32]| [0; 32];
-        self.require_stage_memory(
-            cs.phase_memory_accounting().additional_peak_bytes,
-            p.generators.s.commitment_cache_bytes(&cs.shape, true),
-        )?;
+        self.require_stage_memory(cs.phase_memory_accounting().additional_peak_bytes)?;
         let (ps, rho, r) = spartan::prove_linked_built(
             &cs.shape,
             &p.generators.s,
@@ -2008,20 +2312,8 @@ impl Engine for NativeEngine {
         drop(ws);
         drop(cs);
         stage.mark("s-proof");
-        self.require_stage_memory(
-            cp.phase_memory_accounting().additional_peak_bytes,
-            p.generators.p.commitment_cache_bytes(&cp.shape, true),
-        )?;
-        let (pp, d2, _) = spartan::prove_linked_built(
-            &cp.shape,
-            &p.generators.p,
-            &ip,
-            &wp,
-            &wp.rows,
-            &mut entropy.stream(b"primary"),
-            &Link::First { rho, r },
-            &*cp,
-        );
+        self.require_stage_memory(cp.phase_memory_accounting().additional_peak_bytes)?;
+        let (pp, d2, _) = primary.prove_first(rho, r);
         if d != d2 {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
@@ -2038,7 +2330,9 @@ impl Engine for NativeEngine {
                 blake3::hash(&ps.to_bytes()).to_hex()
             );
         }
-        let u = verify_pair(
+        // Verify the canonical head and outgoing artifact together in output_head
+        // before constructing the completion. No local proof grants authority here.
+        let u = assemble_pair(
             p,
             k,
             carrier::Decoded {
@@ -2051,7 +2345,6 @@ impl Engine for NativeEngine {
                 rho,
             },
         )?;
-        stage.mark("verify");
         let (c, _, _, _) = terms(&witness);
         let cert = &prepared.predecessor.certificate;
         let head_bytes = encode_head(parameters, &u, c, cert)?;
@@ -2132,21 +2425,23 @@ impl Engine for NativeEngine {
         completion.validate()?;
         stage.mark("output");
         stage.finish(&format!("finalize {}", kind_name(k)));
-        Ok(CompletedOperation { completion, head })
+        Ok((prepared, CompletedOperation { completion, head }))
     }
-    fn verify_completion(
+    fn verify_staged_completion(
         &self,
-        capsule: &RecoveryCapsule,
+        prepared: &PreparedOperation,
         record: &CompletionRecord,
         parameters: &AuthenticatedParameters,
     ) -> Result<CompletedOperation> {
+        prepared.predecessor.require_parameters(parameters)?;
         scope(parameters, &record.frame.parameters_id)?;
         record.validate()?;
-        let stage = crate::prof::Stage::start();
-        let prepared = self.resume(capsule, parameters)?;
-        stage.mark("resume");
+        let capsule = prepared.capsule();
+        if record.frame.wallet != capsule.frame.wallet {
+            return Err(Error::AuthorityMismatch("retained completion wallet"));
+        }
         let receipt = HardwareAdvanceReceipt::verify_selected(
-            &prepared,
+            prepared,
             &record.frame.receipt[..338],
             record.frame.receipt[338..].try_into().unwrap(),
         )?;
@@ -2182,15 +2477,38 @@ impl Engine for NativeEngine {
             ));
         }
         head.custody_digest = receipt.capsule_digest;
+        Ok(CompletedOperation { completion: record.clone(), head })
+    }
+    fn verify_completion(
+        &self,
+        capsule: &RecoveryCapsule,
+        record: &CompletionRecord,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<CompletedOperation> {
+        self.verify_released_operation(capsule, record, parameters)
+            .map(|(_, completed)| completed)
+    }
+}
+
+impl NativeEngine {
+    /// Verify the released proof and signed hardware receipt, retaining the
+    /// same checked private opening for subsequent wallet projections.
+    pub fn verify_released_operation(
+        &self,
+        capsule: &RecoveryCapsule,
+        record: &CompletionRecord,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<(PreparedOperation, CompletedOperation)> {
+        // Refuse malformed or foreign records before the cold preparation.
+        scope(parameters, &record.frame.parameters_id)?;
+        record.validate()?;
+        let stage = crate::prof::Stage::start();
+        let prepared = self.resume(capsule, parameters)?;
+        stage.mark("resume");
+        let completed = self.verify_staged_completion(&prepared, record, parameters)?;
         stage.mark("output");
-        stage.finish(&format!(
-            "completion {}",
-            kind_name(kind(&prepared.witness))
-        ));
-        Ok(CompletedOperation {
-            completion: record.clone(),
-            head,
-        })
+        stage.finish(&format!("completion {}", kind_name(kind(&prepared.witness))));
+        Ok((prepared, completed))
     }
 }
 
@@ -2269,6 +2587,44 @@ pub(crate) fn test_measure_chain_native(
         artifacts,
         false,
     )
+}
+
+#[cfg(test)]
+#[test]
+fn installed_debits_require_protected_confirmation() {
+    let engine = NativeEngine::default();
+    for kind in [3, 6] {
+        assert!(matches!(
+            engine.require_debit_confirmation(kind, ConfirmationScope::Installed),
+            Err(Error::AuthorityMismatch(_))
+        ));
+        assert!(
+            NativeEngine::isolated_unload_fixture()
+                .require_debit_confirmation(kind, ConfirmationScope::Installed)
+                .is_err()
+        );
+    }
+    for kind in [0, 5, 8, 255] {
+        for scope in [ConfirmationScope::Installed, ConfirmationScope::FixtureSend] {
+            assert!(matches!(
+                engine.require_debit_confirmation(kind, scope),
+                Err(Error::Malformed("capsule kind"))
+            ));
+        }
+    }
+    for kind in [1, 2, 4, 7] {
+        engine
+            .require_debit_confirmation(kind, ConfirmationScope::Installed)
+            .unwrap();
+    }
+    engine
+        .require_debit_confirmation(3, ConfirmationScope::FixtureSend)
+        .unwrap();
+    assert!(
+        engine
+            .require_debit_confirmation(6, ConfirmationScope::FixtureSend)
+            .is_err()
+    );
 }
 
 #[cfg(test)]
@@ -2361,7 +2717,7 @@ fn test_chain_native(
             .collect::<Result<Vec<_>>>()?
             .try_into()
             .map_err(|_| Error::Malformed("test programs"))?;
-        let parameters = ParameterSet::authenticate(
+        let mut parameters = ParameterSet::authenticate(
             imported,
             &manifest,
             signature,
@@ -2427,6 +2783,23 @@ fn test_chain_native(
         );
         let receipt =
             HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signed)?;
+        // The restored capsule and genuine payment-key receipt still carry no user presence.
+        for result in [
+            engine.before_selection(&capsule, &parameters),
+            engine.finalize(restored, &receipt, &parameters).map(|_| ()),
+        ] {
+            if !matches!(
+                result,
+                Err(Error::AuthorityMismatch(
+                    "protected Send review confirmation unavailable"
+                ))
+            ) {
+                return Err(Error::Rejected(
+                    "installed Send confirmation boundary did not hold".into(),
+                ));
+            }
+        }
+        parameters.confirmation = ConfirmationScope::FixtureSend;
         eprintln!("native full-chain: finalizing Send through actual Engine");
         let completed = engine.finalize(prepared, &receipt, &parameters)?;
         let exact = completed.completion().encode()?;
@@ -2510,15 +2883,16 @@ fn test_chain_native(
             false,
         )
         .map_err(Error::Malformed)?;
-        let prepared = engine.prepare(
-            &ExactOperationWitness::Receive {
-                step: Box::new(witness),
-                incoming_payment: malformed.clone().into(),
-            },
-            &receiver,
-            &parameters,
-        )?;
+        let invalid = ExactOperationWitness::Receive {
+            step: Box::new(witness),
+            incoming_payment: malformed.clone().into(),
+        };
+        assert!(matches!(engine.prepare(&invalid, &receiver, &parameters), Err(Error::Rejected(_))));
+        // Model a historical, already-selected capsule. Recovery must finish the defensive Burn;
+        // neither a fresh Advance nor a restored unselected plan may select that branch.
+        let prepared = engine.prepare_retained(&invalid, &receiver, &parameters)?;
         let capsule = prepared.capsule().clone();
+        assert!(matches!(engine.before_selection(&capsule, &parameters), Err(Error::Rejected(_))));
         let resumed = engine.resume(&capsule, &parameters)?;
         let ExactOperationWitness::Receive {
             incoming_payment, ..
@@ -2539,7 +2913,7 @@ fn test_chain_native(
         let receipt =
             HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signed)?;
         eprintln!("native full-chain: finalizing malformed-R Burn through actual Engine");
-        let burned = engine.finalize(prepared, &receipt, &parameters)?;
+        let burned = engine.finalize(resumed, &receipt, &parameters)?;
         let verified = engine.verify_completion(&capsule, burned.completion(), &parameters)?;
         if verified.head.profile
             [crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL]

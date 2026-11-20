@@ -2062,6 +2062,77 @@ mod tests {
         assert!(!tamper(bytes, 40, 3), "changed canonicity chunk refused");
     }
 
+    #[test]
+    fn linked_binding_range_checks_every_shared_limb() {
+        use crate::uniform::Src;
+
+        let values = [0, 1u128 << 127, u128::MAX];
+        let mut w = Wiring::default();
+        let gfam = w.family(0, 1);
+        let shared = p_binding(&mut w, gfam, &binding_mu(&values), &values);
+        let a = &w.arrays[shared];
+        let range = w.tables.iter().find(|(_, id)| *id == nonnative::RANGE_TABLE)
+            .expect("fixed range table").0;
+        let table = &w.arrays[range];
+        assert!(table.fixed && !w.link.arrays.contains(&shared));
+        assert_eq!(
+            table.values,
+            vec![(0..2048).map(Fp::from).collect::<Vec<_>>()]
+        );
+
+        // Evaluate the actual first-phase recomposition rows and fixed-table queries.
+        // Width declarations alone cannot reject an out-of-range field element.
+        let check = |r: usize, cells: &[Fp]| {
+            let eval = |lin: &Lin<Fp>| -> Fp {
+                lin.iter().map(|term| {
+                    let cell = match &term.src {
+                        Src::One => Fp::ONE,
+                        Src::Own(k) => cells[*k],
+                        src => panic!("unexpected shared-limb source {src:?}"),
+                    };
+                    cell * term.coef[r]
+                }).sum()
+            };
+            let recomposes = a.rows.iter().all(|[x, y, z]| eval(x) * eval(y) == eval(z));
+            let in_table = a.lookups.iter().all(|(id, tuple)| {
+                assert_eq!((*id, tuple.len()), (nonnative::RANGE_TABLE, 1));
+                table.values[0].contains(&eval(&tuple[0]))
+            });
+            (recomposes, in_table)
+        };
+        for (r, value) in values.into_iter().enumerate() {
+            let mut cells: Vec<_> = a.values.iter().map(|column| column[r]).collect();
+            assert_eq!(cells[0], Fp::from_u128(value));
+            assert_eq!(check(r, &cells), (true, true));
+            cells[0] += Fp::ONE;
+            assert_eq!(check(r, &cells), (false, true));
+
+            // Eleven full 11-bit chunks and one 7-bit chunk. With exact recomposition,
+            // the first value outside each chunk's range must fail a lookup. For the
+            // last chunk this is the integer 2^128, one above the largest shared limb.
+            for (j, width) in [11u64; 11].into_iter().chain([7]).enumerate() {
+                cells.fill(Fp::ZERO);
+                cells[j + 1] = Fp::from(1u64 << width);
+                cells[0] = Fp::from(2).pow_vartime([j as u64 * 11 + width]);
+                assert_eq!(check(r, &cells), (true, false), "chunk {j}, instance {r}");
+            }
+        }
+
+        // S reads each matching first-phase cell in its link-phase Horner step.
+        let mut s = Wiring::default();
+        let gfam = s.family(0, 1);
+        let shared_s = native_binding(&mut s, gfam, Fq::ONE, &values);
+        let (ends, _) = s.link.binding.as_ref().unwrap();
+        let [(acc, 0, last)] = ends.as_slice() else { panic!("S binding endpoint") };
+        assert_eq!(*last, values.len() - 1);
+        assert!(s.link.arrays.contains(acc) && !s.link.arrays.contains(&shared_s));
+        let step = &s.arrays[*acc].rows[0][2];
+        assert!(step.iter().any(|term| matches!(&term.src,
+            Src::Link { array, cell: 0, map } if *array == shared_s
+                && (0..values.len()).all(|i| map[i] == Some(i) && term.coef[i] == -Fq::ONE)
+        )));
+    }
+
     /// The pair's binding chains in the link phase, P's non-native (with the
     /// link range table and the word gadgets) and S's native, over the same
     /// shared values and mu, linked as the runner links them (P's first
@@ -2074,7 +2145,8 @@ mod tests {
         use crate::spartan::{Link, prove_linked_circuit, verify_linked_circuit};
         use crate::verifier::Fq;
         use iroha_pasta::Ep as Pallas;
-        let (_, _, values) = nonnative::sample_binding(20);
+        let (_, _, mut values) = nonnative::sample_binding(20);
+        values[..3].copy_from_slice(&[0, 1u128 << 127, u128::MAX]);
         let mu = binding_mu(&values);
         let fq = |x: &BigUint| Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(x))).unwrap();
         let p_of = |values: &[u128], mu: &BigUint| {
@@ -2209,7 +2281,7 @@ mod tests {
         let (_, _, v) = pair(&cs, &is, &ws);
         assert_eq!(v[..2], [true, false], "S with another mu: P refuses");
         let mut other = values.clone();
-        other[7] ^= 1;
+        other[2] -= 1;
         let (cs, is, ws) = s_of(&other, fq(&mu));
         let (_, _, v) = pair(&cs, &is, &ws);
         assert_eq!(v[..2], [true, false], "S over another value: P refuses");
@@ -2728,15 +2800,19 @@ where
         let _link = take(Kind::Full);
     }
     if let Some(ct) = &tr.circuit {
-        for k in 0..ct.phase2.len() {
-            glue_feed.push((scalar::PH0 + k, Feed::Raw(shared_at[take(Kind::Raw)])));
+        for (k, expected) in ct.phase2.iter().enumerate() {
+            let source = full(shared_at[take(Kind::Full)]);
+            assert_eq!(&source.2, expected, "LogUp challenge from its limbs");
+            glue_feed.push((scalar::PH0 + k, Feed::Full(limb_src.len())));
+            limb_src.push(source);
         }
     }
     if lean {
         let i = take(Kind::Full);
-        limb_src.push(full(shared_at[i]));
-        assert!(limb_src[0].2 == tr.tau[0], "tau from its limbs");
-        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(0));
+        let source = full(shared_at[i]);
+        assert_eq!(source.2, tr.tau[0], "tau from its limbs");
+        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(limb_src.len()));
+        limb_src.push(source);
     } else {
         for s in 0..mo {
             for v in 0..slots[s].k {
@@ -4728,8 +4804,8 @@ fn incoming_facts(
 /// repeated true claim folds into a true claim, and a false one still makes
 /// the folded claim false except when the fold challenge hits a root of the
 /// nonzero error polynomial `q - P(gamma)`: probability at most
-/// `deg q / 2^126`, since the fold challenge is the raw 126-bit second-phase
-/// challenge `ch[1]` (beta), not uniform in the field. The repetition is sound;
+/// `deg q` times the maximum atom of the full-width second-phase challenge
+/// `ch[1]` (2/q on P or 1/p on S in the idealized model). The repetition is sound;
 /// it only spends the second slot's fold work.
 ///
 /// Kinds: four, at selector corners Receive (0, 0), Send (1, 0), Bootstrap

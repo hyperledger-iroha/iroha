@@ -37,6 +37,7 @@ mod transport_metadata;
 
 #[path = "producer_inventory/encoded.rs"]
 mod encoded;
+pub use encoded::spartan;
 pub use encoded::{
     ENCODED_ORIGINAL_MAX_BYTES_V1, EncodedDirectoryOriginalsV1, EncodedOriginalV1,
     EncodedTransportV1, TRANSPORT_MAX_BYTES_V1, encode_original, encode_wallet_carrier_v1,

@@ -204,11 +204,9 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
   its verdict from the exact Payment bytes. A valid payment credits. An invalid one takes the burn branch: the Core
   balance is credited and the same amount is added to the adjusted burned value, so spendable value does not grow,
   and the credit id stays consumed. Neither the receiver nor the host is meant to choose the branch (spec
-  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3). **Open defect (review finding 4, 2026-11-18):** inside the circuit, a
-  verified proof's io-fold leaves at slots no digest or link tie covers are unconstrained, so a receiver can turn a
-  valid incoming pair's soft acceptance bit to 0 and take the burn branch, and the hard predecessor slot accepts
-  proofs native verification rejects. No value is created (the amount stays burned), but the in-circuit and native
-  verdicts can differ until those leaves are pinned (fix in progress).
+  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3). Review finding 4 identified unconstrained leaves in the fold of
+  verifier public inputs. Commit `6c345ed8d0` pinned those leaves in both proof halves. The regression exercises
+  both recursive verifiers. [Regression test](src/io_binding_tests.rs) · [Review status](TODO.md)
 - **Native admission derives the verdict from the bytes** (`engine.rs`, `valid` from parsing plus the exact full
   verifier; resource and availability errors still return). Fifteen independently corrupted Payments each burn on
   the Mac (2026-11-18, §0), and natively a valid Payment can neither be forced to burn nor fail to credit.
@@ -252,8 +250,9 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
   - Every P circuit uses one label (`P-uniform`) and every S circuit another (`S-uniform`), so a circuit's key does not
     depend on which kind of proof it verifies. The kind stays bound through the io.
 - **Endoscalars:** challenges that multiply points are Halo endoscalars.
-- **Challenge distributions:** each squeeze yields two 126-bit challenges from one state word; raw ones are the
-  126-bit integers, point-multiplying ones their endoscalars, and τ and the pair-link ρ are whole words. Transcript
+- **Challenge distributions:** the v4 candidate draws LogUp α and β from two successive full-width squeezes. Each
+  uses the first word of a fresh permutation. τ and the pair-link ρ also consume full words. Other squeezes can supply
+  two 126-bit raw or endoscalar challenges. The transcript domain is `kagemusha-spartan/full-logup/v1`. Transcript
   tags are ignored, so domain separation is the fixed positional schedule. Soundness bounds are taken over these
   distributions, including the correlation between the two halves of one squeeze, not over `|F|`
   ([research/SOUNDNESS.md](research/SOUNDNESS.md) §5). The local lemmas alone do not give prefix knowledge or
@@ -386,7 +385,8 @@ linked with S-send) is refused.
 
 A step with one input proof (Send, Load) repeats its two claims, which is sound. `q` is committed before β, and the
 four input equalities make any false input imply a nonzero `q − P∘γ`, so one fold fails with probability at most
-`deg q · λ_β`, with no factor four; β is a raw 126-bit challenge, so `λ_β ≈ 2^-126` (SOUNDNESS.md §5.2, §6.6). That
+`deg q · λ_β`. In the v4 candidate β is a fresh field word with maximum atom 2/q on P and 1/p on S. The v3 estimate
+used the second 126-bit half of a shared word. [Three-mode soundness review](research/CONTROL-SOUNDNESS.md). The bound
 is before Fiat-Shamir, grinding and composition losses. Declared challenge degrees are program metadata: native
 import has to verify them or rely on authenticated compiler output (TODO G5).
 
@@ -720,9 +720,9 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 
 | Mechanism | Argument |
 |---|---|
-| γ separation | A rewinding argument over a Laurent polynomial in γ: off-slot terms land on nonzero exponents, so a forgery needs γ to hit a root of a degree-`2m` Laurent polynomial, with the bound taken over γ's endoscalar distribution, conditional on consistent opening extraction (SOUNDNESS.md §6.1). α batches `m + 2` equations of degree at most `m + 1`. |
+| γ separation | Under the P2-RKFS representation assumption the extracted coefficients are fixed before the fresh γ reply. Multiplying the nonzero Laurent discrepancy by γᵐ gives a polynomial of degree at most `2m`. The probability of a root is bounded using the endoscalar distribution. α batches `m + 2` equations with degree at most `m + 1` (SOUNDNESS.md §6.1). |
 | Committed sumcheck rounds | Each block has individual degree at most two; with the three-variable Kronecker schedule its univariate error polynomial has degree at most 26; the initial equality test has degree at most `2^sx − 1`; the matrix combination is a degree-3 test (SOUNDNESS.md §6.2-§6.4). |
-| Deferred matrix claims | `q` is committed before β; a false input claim survives one fold with probability at most `deg q · λ_β` (186 on P, 174 on S at p18-s17; β raw 126-bit), and native decision is mandatory (§7.3). |
+| Deferred matrix claims | The first phase commits `q` before β. The survival bound for a nonzero discrepancy is `deg(q − P∘Γ) · λ_β` under the stated degree and reply-distribution hypotheses. Native decides both final claims (§7.3). |
 | Pair link | μ and the shared values are committed before ρ, the whole squeezed Fp word; two different chains agree with probability about `n/p`, n = 783 (Send, Load) or 1,539 (Receive) (§7.2). |
 | Curve arithmetic | Exception-free: complete additions wherever inputs may coincide. |
 | Encodings | Canonical: byte ranges, and comparisons against the modulus. |
@@ -765,7 +765,13 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 - an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
   is the checklist), and the open items in SOUNDNESS.md §9 and §11 (imported degree declarations, generator-profile
   binding, LogUp phase invariants, a frozen candidate equal to HEAD);
-- secret MSMs are not constant-time, as in today's prover;
+- side channels: private commitments use constant-time secret MSMs without tables, and the inner sumcheck's
+  support reads only public structure (rows the build never wrote, the io, the public `M(r_x, ·)`), never a
+  private zero. LogUp multiplicity counting and link-table recount use data-oblivious lookup schedules.
+  The installed prover's row hooks take rows by position; only the non-uniform benchmark and test circuits'
+  default hooks compare rows by value. The build's copy and absent-instance checks use constant-time field
+  equality and branch only on a malformed witness, whose refusal still stops at the first failing slot. Witness
+  construction has value-dependent paths, and the constant-time kernels still need physical measurements (TODO G8);
 - the deterministic `SpikeRng` is for tests only.
 
 ## 12. Status

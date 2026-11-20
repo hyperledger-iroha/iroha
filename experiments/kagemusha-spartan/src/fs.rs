@@ -30,8 +30,9 @@ pub const CHALLENGE_BITS: usize = 126;
 ///   (Vesta proofs: Fp into Fq), else absorbed as 128-bit low and high halves.
 ///   The two 128-bit limbs that carry a full-width value between the circuits
 ///   are its canonical encoding in both (`points::canonical_limbs`).
-/// - Each squeeze permutes and yields two 126-bit challenges from the
-///   canonical bits of the first state word. Challenges that multiply points
+/// - A full-width challenge consumes an entire fresh first state word.
+///   Each LogUp challenge takes a separate full-width squeeze. Other
+///   squeezes can yield two 126-bit challenges. Challenges that multiply points
 ///   in the verifier are Halo endoscalars of those bits (`endo_challenge`);
 ///   the others are the 126-bit integers themselves (`challenge`).
 /// - Tags are ignored: the absorption order is fixed by the shape.
@@ -47,7 +48,7 @@ pub struct Transcript<C: PastaCurve> {
 impl<C: PastaCurve> Transcript<C> {
     pub fn new(label: &[u8]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"kagemusha-zks-spike/v2");
+        hasher.update(b"kagemusha-spartan/full-logup/v1");
         hasher.update(label);
         let mut wide = [0_u8; 64];
         hasher.finalize_xof().fill(&mut wide);

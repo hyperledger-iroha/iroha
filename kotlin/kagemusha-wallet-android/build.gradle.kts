@@ -122,6 +122,8 @@ publishing {
 
 dependencies {
     api(project(":client-android"))
+    api(libs.androidx.biometric)
+    implementation(libs.coroutines.android)
     implementation(libs.serialization.json) // Fold telemetry reading only.
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))

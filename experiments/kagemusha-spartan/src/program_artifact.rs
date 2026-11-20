@@ -3,8 +3,11 @@
 use super::*;
 
 const MAX_PROGRAM_BYTES: usize = 128 * 1024 * 1024;
+#[path = "compact_program.rs"]
+mod compact;
+
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgram.v2")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgramPayload.v3")]
 struct PublicProgram {
     version: u16,
     side: u8,
@@ -15,8 +18,8 @@ struct PublicProgram {
     inputs: u32,
     // Norito's canonical Vec<u8> representation is a bounded raw byte blob.
     // Nested arrays would frame every scalar byte separately (over 9x larger).
-    // Instruction records are three little-endian u32 words; field records are
-    // exact canonical 32-byte representations, with no alternate encoding.
+    // Instructions use opcode-local differential byte planes. Field records
+    // use exact canonical 32-byte representations.
     operations: Vec<u8>,
     constants: Vec<u8>,
     outputs: [u32; 3],
@@ -127,10 +130,6 @@ fn check_register_degrees(
     Ok(())
 }
 
-fn encode(value: &PublicProgram) -> Result<Vec<u8>, String> {
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-    norito::to_bytes(value).map_err(|e| format!("public program encode: {e}"))
-}
 fn u32s<const N: usize>(v: [usize; N]) -> Result<[u32; N], String> {
     let mut out = [0; N];
     for (i, v) in v.into_iter().enumerate() {
@@ -260,22 +259,10 @@ impl<F: Scalar> UniformCircuit<F> {
     fn encode_public_program(&self, side: u8) -> Result<Vec<u8>, String> {
         let tape = self.plan();
         let degrees = self.challenge_degrees();
-        let operation_bytes = tape
-            .ops
-            .len()
-            .checked_mul(12)
-            .ok_or("program instruction byte bound")?;
-        if operation_bytes > MAX_PROGRAM_BYTES {
-            return Err("program instruction byte bound".into());
-        }
-        let mut operations = Vec::with_capacity(operation_bytes);
-        for op in &tape.ops {
-            for word in op_words(*op) {
-                operations.extend_from_slice(&word.to_le_bytes());
-            }
-        }
+        let inputs = u32::try_from(tape.inputs).map_err(|_| "program input count bound")?;
+        let operations = compact::pack(inputs, || tape.slot_instructions())?;
         let value = PublicProgram {
-            version: 2,
+            version: 3,
             side,
             modulus_minus_one: (-F::ONE).to_repr(),
             geometry: u32s([
@@ -294,7 +281,7 @@ impl<F: Scalar> UniformCircuit<F> {
             ])?,
             challenges: self.phase2_challenges() as u32,
             degrees: u32s([degrees.0, degrees.1])?,
-            inputs: tape.inputs as u32,
+            inputs,
             operations,
             constants: pack_fields(&tape.pool)?,
             outputs: tape.out,
@@ -310,52 +297,14 @@ impl<F: Scalar> UniformCircuit<F> {
                 .map(|&(a, b)| u32s([a, b]))
                 .collect::<Result<_, _>>()?,
         };
-        let bytes = encode(&value)?;
-        if bytes.len() > MAX_PROGRAM_BYTES {
-            return Err(format!(
-                "public program exceeds device bound ({} bytes; {} instructions, {} constants, {} fixed fields)",
-                bytes.len(),
-                tape.ops.len(),
-                tape.pool.len(),
-                self.fixed_values.len()
-            ));
-        }
-        Ok(bytes)
+        compact::encode(&value)
     }
 
     /// Decode a bounded verifier-only program. Its digest must subsequently be
     /// authenticated by the independent scheme-root manifest before use.
     pub fn import_program(bytes: &[u8], primary: bool) -> Result<Self, String> {
-        if bytes.len() > MAX_PROGRAM_BYTES {
-            return Err("public program exceeds device bound".into());
-        }
-        let p: PublicProgram = norito::core::with_decode_limits(
-            norito::DecodeLimits::new(
-                MAX_PROGRAM_BYTES,
-                MAX_PROGRAM_BYTES,
-                4 * MAX_PROGRAM_BYTES,
-                4 * MAX_PROGRAM_BYTES,
-                16,
-            ),
-            || {
-                let payload = norito::canonical_frame_payload_with_archive_limit::<PublicProgram>(
-                    bytes,
-                    norito::core::V1_LAYOUT_FLAGS,
-                    MAX_PROGRAM_BYTES as u64,
-                )?;
-                let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-                let (value, used) = norito::core::decode_field_canonical(payload)?;
-                if used != payload.len() {
-                    return Err(norito::Error::LengthMismatch);
-                }
-                Ok(value)
-            },
-        )
-        .map_err(|e| format!("public program decode: {e}"))?;
-        if encode(&p)? != bytes {
-            return Err("noncanonical public program".into());
-        }
-        if p.version != 2
+        let p = compact::decode::<PublicProgram>(bytes)?;
+        if p.version != 3
             || p.side != if primary { 1 } else { 2 }
             || p.modulus_minus_one != (-F::ONE).to_repr()
         {
@@ -409,7 +358,6 @@ impl<F: Scalar> UniformCircuit<F> {
             || phase_rows.is_none_or(|n| n > rows)
             || constraints > 1usize << sx
             || p.inputs as usize != sx + shape.sz() + p.challenges as usize
-            || !p.operations.len().is_multiple_of(12)
             || !p.constants.len().is_multiple_of(32)
         {
             return Err("public program phase layout".into());
@@ -441,36 +389,9 @@ impl<F: Scalar> UniformCircuit<F> {
             .checked_mul(shape.cols())
             .ok_or("fixed program field count overflow")?;
         let fixed_values = unpack_fixed_fields(&p.fixed, fixed_count)?;
-        let mut ops = Vec::with_capacity(p.operations.len() / 12);
-        let (mut muls, mut scales) = (0, 0);
-        for (i, record) in p.operations.chunks_exact(12).enumerate() {
-            let words: [u32; 3] = std::array::from_fn(|j| {
-                u32::from_le_bytes(
-                    record[j * 4..j * 4 + 4]
-                        .try_into()
-                        .expect("exact instruction word"),
-                )
-            });
-            let [tag, a, b] = words;
-            let before = p.inputs as usize + i;
-            let slot = |v: u32| (v as usize) < before;
-            let constant = |v: u32| (v as usize) < pool.len();
-            let op = match tag {
-                0 if slot(a) && slot(b) => Op::Add(a, b),
-                1 if slot(a) && slot(b) => Op::Sub(a, b),
-                2 if slot(a) && slot(b) => {
-                    muls += 1;
-                    Op::Mul(a, b)
-                }
-                3 if slot(a) && constant(b) => {
-                    scales += 1;
-                    Op::Scale(a, b)
-                }
-                4 if constant(a) && b == 0 => Op::Const(a),
-                _ => return Err("public program forward/invalid instruction".into()),
-            };
-            ops.push(op);
-        }
+        let ops = compact::unpack(p.inputs, pool.len(), &p.operations)?;
+        let muls = ops.iter().filter(|op| matches!(op, Op::Mul(..))).count();
+        let scales = ops.iter().filter(|op| matches!(op, Op::Scale(..))).count();
         if p.outputs
             .iter()
             .any(|v| *v as usize >= p.inputs as usize + ops.len())
@@ -478,6 +399,7 @@ impl<F: Scalar> UniformCircuit<F> {
             return Err("public program output bound".into());
         }
         let regs = Regs::of(p.inputs as usize, &ops, p.outputs);
+        drop(ops);
         // The declared LogUp degrees size the matrix fold's q and every bound
         // over it: derive the tape's real degrees instead of trusting them.
         check_register_degrees(
@@ -487,7 +409,6 @@ impl<F: Scalar> UniformCircuit<F> {
         )?;
         let tape = Tape {
             inputs: p.inputs as usize,
-            ops,
             pool,
             out: p.outputs,
             muls,
@@ -595,7 +516,7 @@ impl<F: Scalar> UniformCircuit<F> {
         crate::bootstrap_discharge::TapeWords {
             layout: (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
             inputs: tape.inputs,
-            words: tape.ops.iter().map(|op| op_words(*op)).collect(),
+            words: tape.slot_instructions().map(op_words).collect(),
             pool: tape.pool.clone(),
             outputs: tape.out,
         }
@@ -614,9 +535,14 @@ fn op_words(op: Op) -> [u32; 3] {
 }
 
 #[cfg(test)]
+#[path = "compact_program_fixture_tests.rs"]
+mod compact_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_pasta::{Fp, Fq};
+
     fn sample<F: Scalar>(primary: bool) -> UniformCircuit<F> {
         let mut w = crate::full::Wiring::default();
         let f = w.family(0, 1);
@@ -684,8 +610,8 @@ mod tests {
     fn check<F: Scalar>(primary: bool) {
         let c = sample::<F>(primary);
         let bytes = c.export_program().unwrap();
-        let packed: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
-        assert_eq!(packed.operations.len(), c.plan().ops.len() * 12);
+        let packed: PublicProgram = compact::decode(&bytes).unwrap();
+        assert_eq!(packed.operations.len(), c.plan().regs.ops.len() * 9);
         assert_eq!(packed.constants.len(), c.plan().pool.len() * 32);
         assert_eq!(
             unpack_fixed_fields::<F>(&packed.fixed, c.fixed_values.len())
@@ -714,17 +640,19 @@ mod tests {
         assert_eq!(c.link_io(&rho, &r), loaded.link_io(&rho, &r));
         assert!(UniformCircuit::<F>::import_program(&bytes, !primary).is_err());
         assert!(UniformCircuit::<F>::import_program(&bytes[..bytes.len() - 1], primary).is_err());
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
-        p.operations[..4].copy_from_slice(&2u32.to_le_bytes());
-        p.operations[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
-        p.operations[8..12].fill(0);
-        assert!(UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err());
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
+        p.operations = compact::pack(p.inputs, || std::iter::once(Op::Mul(u32::MAX, 0))).unwrap();
+        assert!(
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err()
+        );
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
         p.geometry[5] = u32::MAX;
         p.geometry[6] = u32::MAX;
-        assert!(UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err());
+        assert!(
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err()
+        );
         for field in 0..3 {
-            let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+            let mut p: PublicProgram = compact::decode(&bytes).unwrap();
             match field {
                 0 => {
                     p.operations.push(0);
@@ -737,14 +665,15 @@ mod tests {
                 }
             }
             assert!(
-                UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err(),
+                UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary)
+                    .is_err(),
                 "partial fixed-width records are not canonical"
             );
         }
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
         p.constants.extend_from_slice(&[255; 32]);
         assert!(
-            UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err(),
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err(),
             "each field must be strictly below its modulus"
         );
     }
@@ -812,17 +741,18 @@ mod tests {
             let bytes = c.export_program().unwrap();
             let honest = UniformCircuit::<F>::import_program(&bytes, primary).unwrap();
             assert_eq!(honest.check_declared_degrees(), Ok(()));
-            let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+            let mut p: PublicProgram = compact::decode(&bytes).unwrap();
             // Square r_x[0] and make it A's evaluation: still a valid
             // straight-line program, but no longer the matrices' MLE.
-            let slot = p.inputs + (p.operations.len() / 12) as u32;
-            for word in [2u32, 0, 0] {
-                p.operations.extend_from_slice(&word.to_le_bytes());
-            }
+            let mut ops = compact::unpack(p.inputs, p.constants.len() / 32, &p.operations).unwrap();
+            let slot = p.inputs + ops.len() as u32;
+            ops.push(Op::Mul(0, 0));
+            p.operations = compact::pack(p.inputs, || ops.iter().copied()).unwrap();
             p.outputs[0] = slot;
-            let refused = UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary)
-                .err()
-                .expect("a squared r_x tape must be refused");
+            let refused =
+                UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary)
+                    .err()
+                    .expect("a squared r_x tape must be refused");
             assert!(refused.contains("formal degree 2 in r_x[0]"), "{refused}");
         }
         run::<Fp>(true);
@@ -892,13 +822,15 @@ mod tests {
             assert_eq!(loaded.check_declared_degrees(), Ok(()));
             let tape = loaded.plan();
             eprintln!(
-                "{}: sx={} sz={} challenges={} declared degrees={:?}, {} instructions: within declared degrees",
+                "{}: sx={} sz={} constraints={} challenges={} declared degrees={:?}, {} instructions, {} live registers: within declared degrees",
                 path.file_name().unwrap().to_string_lossy(),
                 loaded.shape.sx,
                 loaded.shape.sz(),
+                loaded.constraints,
                 loaded.phase2_challenges(),
                 loaded.challenge_degrees(),
-                tape.ops.len(),
+                tape.regs.ops.len(),
+                tape.registers(),
             );
         }
         for kind in 0..4 {

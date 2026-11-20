@@ -231,6 +231,11 @@ impl_direct_instruction_box!(
 );
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
+impl_direct_instruction_box!(
+    crate::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    crate::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1,
+    crate::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1,
+);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1);

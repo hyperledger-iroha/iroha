@@ -291,6 +291,51 @@ fn archive_metadata_does_not_modify_or_resign_the_g1_head() {
 }
 
 #[test]
+fn authenticated_content_repair_checks_both_real_copies_despite_a_warm_write_memo() {
+    let (device, _, slot, _) = bootstrapped_device(Policy::Keychain, 0x56);
+    let mut provider = device.open();
+    let directory = kagemusha_wallet_archive_dir_v1(&slot);
+    let original = b"certified complete regulatory original";
+    let key = kagemusha_wallet_archive_object_digest_v1(original);
+    let primary = format!("w-{}.rec", hex::encode(key));
+    let backup = format!("{primary}.r");
+    provider
+        .with_archive(&slot, |archive| archive.write_record(&key, original))
+        .unwrap();
+    device.fs.unlink(&directory, &primary).unwrap();
+    device.fs.sync_dir(&directory).unwrap();
+    provider
+        .with_archive(&slot, |archive| {
+            archive.restore_content_record(&key, original, 128)
+        })
+        .unwrap();
+    device.fs.unlink(&directory, &backup).unwrap();
+    device.fs.sync_dir(&directory).unwrap();
+    assert_eq!(
+        provider
+            .with_archive(&slot, |archive| archive.read_record(&key, 128))
+            .unwrap()
+            .as_deref(),
+        Some(&original[..])
+    );
+    assert!(
+        provider
+            .with_archive(&slot, |archive| archive.restore_content_record(
+                &key,
+                b"replacement",
+                128
+            ))
+            .is_err()
+    );
+    provider
+        .with_archive(&slot, |archive| {
+            archive.restore_content_record(&key, original, 128)
+        })
+        .unwrap();
+    assert!(device.fs.visible_names(&directory).contains(&backup));
+}
+
+#[test]
 fn scoped_archive_capability_binds_record_bounds_content_and_protected_storage() {
     let (device, _, slot, _) = bootstrapped_device(Policy::NotRequired, 0x65);
     let mut provider = device.open();

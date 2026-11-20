@@ -9163,6 +9163,10 @@ fn decode_world_fields(
             &triggers.block_and_revert(),
         )?,
     );
+    let kagemusha_spartan_programs: Storage<
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    > = take_required(&mut map, "kagemusha_spartan_programs")?;
     let runtime_retirements: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
@@ -9302,6 +9306,7 @@ fn decode_world_fields(
         c10_contract_profiles,
         c10_triggers,
         c10_trigger_candidates,
+        kagemusha_spartan_programs,
         runtime_retirements,
         runtime_escrow_captures,
         runtime_migrations,
@@ -9601,10 +9606,14 @@ fn validate_runtime_manifest_and_retirement_shapes(
     }
     let current = world.view();
     validate(&current, "world.runtime_retirements")?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&current)
+        .map_err(|error| json::Error::InvalidField { field: "world.kagemusha_spartan_programs".into(), message: error.to_string() })?;
     crate::smartcontracts::code::registered_manifest::validate_cut(&current, budget)?;
     drop(current);
     let previous = world.try_block_and_revert(budget)?;
     validate(&previous, "world.runtime_retirements.revert")?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&previous)
+        .map_err(|error| json::Error::InvalidField { field: "world.kagemusha_spartan_programs.revert".into(), message: error.to_string() })?;
     crate::smartcontracts::code::registered_manifest::validate_cut(&previous, budget)?;
     Ok(())
 }

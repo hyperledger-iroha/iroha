@@ -36,6 +36,13 @@ public struct IrohaPeerWalletPaymentV1: Sendable, Equatable {
         return bytes
     }
     public static func decode(_ original: Data) throws -> Self {
+        let envelope = try envelopeRange(in: original)
+        let bytes = Data(original)
+        return try .init(paymentEnvelope: bytes.subdata(in: envelope),
+                         payerCompanion: bytes.subdata(in: envelope.upperBound..<bytes.count))
+    }
+    /// Shared KWPYPC1 framing. The selected profile owns its embedded envelopes.
+    static func envelopeRange(in original: Data) throws -> Range<Int> {
         guard (headerBytes + 2...maximumBytes).contains(original.count) else { throw invalid() }
         let bytes = [UInt8](original)
         guard Data(bytes.prefix(8)) == magic else { throw invalid() }
@@ -48,8 +55,7 @@ public struct IrohaPeerWalletPaymentV1: Sendable, Equatable {
         let envelopeLength = try length(8, KagemushaWalletWireV1.messageMaximumBytes)
         let companionLength = try length(12, maximumCompanionBytes)
         guard bytes.count == headerBytes + envelopeLength + companionLength else { throw invalid() }
-        return try .init(paymentEnvelope: Data(bytes[headerBytes..<headerBytes + envelopeLength]),
-                         payerCompanion: Data(bytes[(headerBytes + envelopeLength)...]))
+        return headerBytes..<headerBytes + envelopeLength
     }
     private static func invalid() -> IrohaPeerWireMessageErrorV1 {
         .invalidCanonicalPayload(profile: .kagemushaWalletV1, kind: .payment)

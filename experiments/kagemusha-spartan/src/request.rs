@@ -74,6 +74,23 @@ pub(crate) const WORDS: [(usize, usize); 24] = [
     (402, 16),
 ];
 
+/// Receiver-supplied dependencies of a Request. Certificate order is its wire order.
+#[derive(Clone)]
+pub struct Originals {
+    pub receiver: crate::credential::Credential,
+    pub certificates: Vec<crate::certificate::Certificate>,
+}
+
+/// The same kgwcset1 transcript as the public wallet certificate-set type.
+/// The caller validates wire order, cardinality and exact required roles.
+pub(crate) fn certificate_set_digest(digests: &[Fp]) -> Fp {
+    use iroha_data_model::kagemusha::KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1;
+    let mut words = Vec::with_capacity(1 + digests.len());
+    words.push(Fp::from(digests.len() as u64));
+    words.extend_from_slice(digests);
+    poseidon::hash_with_domain(KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1, &words)
+}
+
 /// Fixed transcript, not a Norito frame or an authenticated Request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletedRequest {

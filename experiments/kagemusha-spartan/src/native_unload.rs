@@ -35,6 +35,108 @@ struct Claim {
     destinations: UnloadDestinations,
 }
 
+impl Claim {
+    fn decode_original(bytes: &[u8]) -> core::result::Result<Self, norito::Error> {
+        if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
+            return Err(norito::Error::LengthMismatch);
+        }
+        let limits = norito::DecodeLimits::new(
+            MAX_UNLOAD_CLAIM_BYTES,
+            MAX_UNLOAD_CLAIM_BYTES,
+            4 * MAX_UNLOAD_CLAIM_BYTES,
+            8 * MAX_UNLOAD_CLAIM_BYTES,
+            16,
+        );
+        let claim: Self = norito::core::with_decode_limits_scope(limits, || {
+            norito::decode_canonical_with_layout(bytes, norito::core::WireLayout::Fixed)
+        })?;
+        if claim.version != 1 {
+            return Err(norito::Error::NonCanonicalEncoding);
+        }
+        Ok(claim)
+    }
+}
+
+fn claim_error(error: norito::Error) -> Error {
+    if matches!(error, norito::Error::AllocationFailed { .. })
+        || norito::core::decode_error_matches_active_limits(&error)
+    {
+        Error::Unavailable("local Unload decoder capacity")
+    } else {
+        Error::Malformed("canonical Unload claim")
+    }
+}
+
+impl NativeEngine {
+    /// Read the validated common enrollment fields of an exact 596-byte Spartan credential.
+    /// Callers that need enrollment authority must restore a verified issuer result first.
+    pub fn credential_original_fields(
+        bytes: &[u8],
+    ) -> Result<iroha_data_model::kagemusha::KagemushaWalletCredentialBodyV1> {
+        read_credential(bytes)?.enrollment_fields()
+    }
+
+    /// Verify the public terms of an account-signed relay request against the exact protected
+    /// enrollment result. The World independently verifies the proofs and settles the payout.
+    pub fn unload_relay_nullifier(
+        bytes: &[u8],
+        scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
+        asset: &[u8; 32],
+        credential_original: &[u8],
+        account: &AccountId,
+    ) -> Result<[u8; 32]> {
+        let claim = Claim::decode_original(bytes).map_err(claim_error)?;
+        if claim.parameter_id != scheme.relation_id
+            || claim.credential != credential_original
+            || &claim.destinations.account != account
+        {
+            return Err(Error::AuthorityMismatch("Unload relay originals"));
+        }
+        let credential = read_credential(&claim.credential)?;
+        let fields = credential.enrollment_fields()?;
+        let id = scheme.scheme_id();
+        let root = super::super::point(scheme.scheme_root_key.as_ref())?;
+        let issuer = read_certificate(&claim.issuer_certificate)?;
+        certificate::authenticate_signer(&issuer, &id, &root, certificate::Role::Enrollment)
+            .map_err(Error::AuthorityMismatch)?;
+        if fields.scheme_id != id
+            || &fields.asset_digest != asset
+            || fields.issuer_certificate != certificate::certificate_digest(&issuer).to_repr()
+        {
+            return Err(Error::AuthorityMismatch("Unload relay issuer/scope"));
+        }
+        let statement = self::fields::<26>(&claim.statement)?;
+        claim
+            .destinations
+            .verify(&credential, &statement, &id, &root)?;
+        Ok(statement[17].to_repr())
+    }
+
+    /// Project an explicit signed transaction's public attempt for account-scoped finality reads.
+    /// This result names the claimant and wallet. It grants no proof, payout or replay authority.
+    /// A caller-local decoder refusal remains distinguishable from a malformed peer frame.
+    pub fn unload_attempt_owner(
+        bytes: &[u8],
+        scheme: &[u8; 32],
+        asset: &[u8; 32],
+    ) -> core::result::Result<Option<([u8; 32], AccountId)>, norito::Error> {
+        let claim = Claim::decode_original(bytes)?;
+        let Ok(credential) = read_credential(&claim.credential) else {
+            return Ok(None);
+        };
+        let wallet: [u8; 32] = credential.body[66..98]
+            .try_into()
+            .expect("fixed credential");
+        if credential.body[2..34] != *scheme
+            || credential.body[34..66] != *asset
+            || wallet == [0; 32]
+        {
+            return Ok(None);
+        }
+        Ok(Some((wallet, claim.destinations.account)))
+    }
+}
+
 /// Payout terms exposed only after the full proof pair and originals authenticate.
 /// Core must use its installed World parameters before any replay or transfer.
 pub struct VerifiedUnloadClaim {
@@ -82,6 +184,15 @@ fn amount(field: Fp) -> Result<u128> {
 }
 
 impl UnloadDestinations {
+    /// Encode exact public payout terms for the wallet-owned Unload constructor.
+    pub fn to_original(&self) -> Result<Vec<u8>> {
+        let original = super::encode(self)?;
+        if original.len() > MAX_UNLOAD_CLAIM_BYTES {
+            return Err(Error::ResourceLimit);
+        }
+        Ok(original)
+    }
+
     pub(in crate::native) fn decode_bounded(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
             return Err(Error::ResourceLimit);
@@ -146,7 +257,8 @@ impl UnloadDestinations {
     }
 
     /// Check every quote and recipient binding before either Prepare or claim acceptance.
-    pub(super) fn verify(
+    /// The owned Unload constructor applies this same check before staging any map entry.
+    pub(in crate::native) fn verify(
         &self,
         credential: &Credential,
         statement: &[Fp; 26],
@@ -239,7 +351,7 @@ impl NativeEngine {
         if receipt.len() != 402 || !matches!(destinations.quote_certificate.len(), 0 | 172) {
             return Err(Error::Malformed("Unload receipt/certificate lengths"));
         }
-        scope(parameters, head.parameters_id())?;
+        head.require_parameters(parameters)?;
         let frame: HeadFrame = super::decode(head.exact_pair())?;
         if frame.kind as usize != full::CONTROL {
             return Err(Error::AuthorityMismatch("Unload head program"));
@@ -255,34 +367,35 @@ impl NativeEngine {
             receipt: receipt.to_vec(),
             destinations,
         })?;
-        self.verify_unload_claim(&bytes, parameters)?;
+        self.verify_unload_claim(
+            &bytes,
+            parameters,
+            head.credential.body[2..34].try_into().unwrap(),
+            head.credential.body[34..66].try_into().unwrap(),
+        )?;
         Ok(bytes)
     }
 
-    /// Authenticate the bounded claim under the caller's installed profile. Grants
-    /// no monetary effect and has no way to consult or alter a replay record.
+    /// Authenticate the bounded claim for an independently selected scheme and asset.
+    /// A ledger caller obtains these from the reserve registration and mounts the
+    /// parameters from its own installation before consulting any replay record.
     pub fn verify_unload_claim(
         &self,
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
+        expected_scheme: &[u8; 32],
+        expected_asset: &[u8; 32],
     ) -> Result<VerifiedUnloadClaim> {
         if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
             return Err(Error::ResourceLimit);
         }
-        let limits = norito::DecodeLimits::new(
-            MAX_UNLOAD_CLAIM_BYTES,
-            MAX_UNLOAD_CLAIM_BYTES,
-            4 * MAX_UNLOAD_CLAIM_BYTES,
-            8 * MAX_UNLOAD_CLAIM_BYTES,
-            16,
-        );
-        let claim: Claim = norito::core::with_decode_limits_scope(limits, || super::decode(bytes))?;
-        if claim.version != 1 || super::encode(&claim)? != bytes {
-            return Err(Error::Malformed("canonical Unload claim"));
-        }
+        let claim = Claim::decode_original(bytes).map_err(claim_error)?;
         scope(parameters, &claim.parameter_id)?;
         let p = &parameters.inner;
         let c = read_credential(&claim.credential)?;
+        if &p.scheme != expected_scheme || c.body[34..66] != *expected_asset {
+            return Err(Error::AuthorityMismatch("Unload reserve scheme/asset"));
+        }
         authenticate_credential(p, &c, &read_certificate(&claim.issuer_certificate)?)?;
         let profile = fields::<64>(&claim.profile)?;
         let statement = fields::<26>(&claim.statement)?;
@@ -327,6 +440,48 @@ pub(crate) mod tests {
     use iroha_data_model::kagemusha::{
         KagemushaDeviceSignatureV1, KagemushaWalletChargeQuoteBodyV1, KagemushaWalletChargeQuoteV1,
     };
+
+    #[test]
+    fn unload_attempt_projection_uses_canonical_original_and_credential_scope() {
+        let account = AccountId::new(
+            "ed01203D4017C3E843895A92B70AA74D1B7EBC9C982CCF2EC4968CC0CD55F12AF4660C"
+                .parse()
+                .unwrap(),
+        );
+        let mut credential = vec![0; 596];
+        credential[2..34].fill(1);
+        credential[34..66].fill(2);
+        credential[66..98].fill(3);
+        let claim = Claim {
+            version: 1,
+            parameter_id: [7; 32],
+            credential,
+            issuer_certificate: vec![],
+            profile: vec![],
+            pair: vec![],
+            statement: vec![],
+            receipt: vec![],
+            destinations: UnloadDestinations {
+                account: account.clone(),
+                charge: KagemushaWalletUnloadChargeV1::None,
+                quote_certificate: vec![],
+            },
+        };
+        let bytes = super::super::encode(&claim).unwrap();
+        let project = |frame: &[u8], scheme, asset| {
+            NativeEngine::unload_attempt_owner(frame, &scheme, &asset)
+        };
+        assert_eq!(
+            project(&bytes, [1; 32], [2; 32]).unwrap(),
+            Some(([3; 32], account))
+        );
+        assert_eq!(project(&bytes, [9; 32], [2; 32]).unwrap(), None);
+        assert_eq!(project(&bytes, [1; 32], [9; 32]).unwrap(), None);
+        assert!(project(&bytes[..bytes.len() - 1], [1; 32], [2; 32]).is_err());
+        let other = norito::encode_canonical_with_layout(&claim, norito::core::WireLayout::Compact)
+            .unwrap();
+        assert!(project(&other, [1; 32], [2; 32]).is_err());
+    }
 
     fn quoted(dest: AccountId, credential: &Credential, ordinal: u128) -> UnloadDestinations {
         let beneficiary = AccountId::new(
@@ -521,12 +676,32 @@ pub(crate) mod tests {
         let receipt = completed.completion().exact_receipt();
         let st = control.statement.map(|f| f.to_repr());
         let bytes = completed.completion().output_part(3).unwrap();
-        let restored = NativeEngine::default()
-            .verify_completion(&capsule, completed.completion(), parameters)
+        let (opening, restored) = NativeEngine::default()
+            .verify_released_operation(&capsule, completed.completion(), parameters)
             .unwrap();
+        let (gross, burned, spendable) = restored.balance(&opening).unwrap();
+        assert_eq!(Fp::from_u128(gross), control.after_core[9]);
+        assert_eq!(Fp::from_u128(burned), restored.head().profile()[crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL]);
+        assert_eq!(gross - burned, spendable);
         assert_eq!(restored.completion().output_part(3).unwrap(), bytes);
         assert!(restored.completion().output_part(1).unwrap().is_empty());
-        let accepted = engine.verify_unload_claim(&bytes, parameters).unwrap();
+        let verify = |wire: &[u8]| {
+            engine.verify_unload_claim(wire, parameters, capsule.scheme(), capsule.asset())
+        };
+        let accepted = verify(&bytes).unwrap();
+        let mut other_asset = *capsule.asset();
+        other_asset[0] ^= 1;
+        let mut other_scheme = *capsule.scheme();
+        other_scheme[0] ^= 1;
+        for (scheme, asset) in [
+            (&other_scheme, capsule.asset()),
+            (capsule.scheme(), &other_asset),
+        ] {
+            assert!(matches!(
+                engine.verify_unload_claim(&bytes, parameters, scheme, asset),
+                Err(Error::AuthorityMismatch("Unload reserve scheme/asset"))
+            ));
+        }
         assert_eq!(
             (
                 accepted.ordinal(),
@@ -549,10 +724,7 @@ pub(crate) mod tests {
             let mut changed: Claim = super::super::decode(&bytes).unwrap();
             apply(&mut changed);
             let encoded = super::super::encode(&changed).unwrap();
-            refused(
-                engine.verify_unload_claim(&encoded, parameters),
-                "altered completed claim",
-            );
+            refused(verify(&encoded), "altered completed claim");
         };
         tamper(&|c| c.pair[100] ^= 1);
         tamper(&|c| {
@@ -574,20 +746,18 @@ pub(crate) mod tests {
         });
         let mut trailing = bytes.clone();
         trailing.push(0);
+        refused(verify(&trailing), "trailing claim bytes");
         refused(
-            engine.verify_unload_claim(&trailing, parameters),
-            "trailing claim bytes",
-        );
-        refused(
-            engine.verify_unload_claim(&vec![0; MAX_UNLOAD_CLAIM_BYTES + 1], parameters),
+            verify(&vec![0; MAX_UNLOAD_CLAIM_BYTES + 1]),
             "oversize claim",
         );
-        let replay = engine.verify_unload_claim(&bytes, parameters).unwrap();
+        let replay = verify(&bytes).unwrap();
         assert_eq!(accepted.digest(), replay.digest());
         if let Some(directory) = std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT") {
             let path = std::path::PathBuf::from(directory);
             std::fs::create_dir_all(&path).unwrap();
             std::fs::write(path.join("signed-unload-claim.norito"), &bytes).unwrap();
+            std::fs::write(path.join("charged-enrollment-credential.bin"), credential_bytes(&control.credential)).unwrap();
             std::fs::write(path.join("charged-unload-review.bin"), &review).unwrap();
         }
         let pair = decode_head(head.exact_pair(), parameters).unwrap().4;

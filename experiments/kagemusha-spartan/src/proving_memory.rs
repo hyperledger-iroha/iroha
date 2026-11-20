@@ -341,7 +341,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let m_plan_bytes = retained - start;
         let start = retained;
         if let Some(t) = self.plan.get() {
-            retained += bytes(&t.ops) + bytes(&t.pool) + bytes(&t.regs.inputs) + bytes(&t.regs.ops);
+            retained += bytes(&t.pool) + bytes(&t.regs.inputs) + bytes(&t.regs.ops);
         }
         let matrix_program_bytes = retained - start;
 
@@ -528,7 +528,10 @@ impl<F: Scalar> UniformCircuit<F> {
         // in place).
         let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
         let inner_low = (2 * w) >> inner_k;
-        let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 4;
+        // Per run: the corner masks of both tables and of z alone (8 bytes),
+        // their scan's pairs while they are split (8) and z's live flag
+        // carried to the next round (1).
+        let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 17;
         let inner =
             phase1 + symbolic + support + (m_dense + inner_low * field).max(2 * inner_low * field);
         // At opening only the folded tables remain; IPA x/b, generator copy
