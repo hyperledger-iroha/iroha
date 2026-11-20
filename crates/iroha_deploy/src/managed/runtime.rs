@@ -484,7 +484,7 @@ pub fn run_worker(
             {
                 let next = (|| -> Result<_> {
                     let (selection, turn) = observation.begin(slot, Arc::clone(&cancelled))?;
-                    let live = processes.gateway(selection.provider())?;
+                    let live = processes.gateways()?;
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
                     processes.spawn_refresh(move || {

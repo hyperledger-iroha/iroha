@@ -43,6 +43,42 @@ pub(super) fn promote(
     result
 }
 
+/// Verify all three retained promoted catalogs after the selected owner's effects finish.
+/// Each HTTP call uses that provider's own live child and original catalog authority. Only
+/// full launch revalidation is serialized because it reopens shared native custody.
+pub(in crate::managed::runtime) fn observe(
+    prepared: &PreparedLocalnet,
+    live: &mut [OwnedGateway; 3],
+    expected: [PromotedGeneratedCatalog; 3],
+    budget: &Budget,
+) -> std::result::Result<(), Failure> {
+    budget.check()?;
+    let validation = Mutex::new(());
+    let [first, second, third] = live;
+    let [first_catalog, second_catalog, third_catalog] = expected;
+    let result = crate::managed::provider_round::run(
+        [
+            (first, first_catalog),
+            (second, second_catalog),
+            (third, third_catalog),
+        ],
+        true,
+        |(gateway, catalog)| {
+            let publisher =
+                budget.call(|_| ManagedGatewayCompliance::open(prepared, gateway.provider()))?;
+            let mut gateway = GuardedGateway {
+                gateway,
+                validation: &validation,
+                budget,
+            };
+            budget.call(|deadline| publisher.observe_promoted(&mut gateway, catalog, deadline))
+        },
+        || budget.progress.unconfirmed(),
+    );
+    budget.check()?;
+    result.map(|_| ())
+}
+
 struct GuardedGateway<'a, G> {
     gateway: &'a mut G,
     validation: &'a Mutex<()>,

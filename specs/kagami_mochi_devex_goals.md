@@ -412,7 +412,12 @@ authenticated Global decision. One cursor owns finality and each provider retain
 custody lock. Concurrent read-only verifiers join before the aggregate accepts any row.
 The common UTC and monotonic clocks start before the first proof. An active decode owner
 keeps the independent serial proof operations and requires the same certified decision across
-all three. Restart reconstructs each provider's native-selected
+all three. Each bounded maintenance turn allows only the chosen provider to publish
+an advertisement or advance a catalog. It then checks every provider's exact promoted catalog,
+owns one fresh Global cut for all three independent signer/custody reads, and revalidates the
+owned launch. The old aggregate remains authoritative until every check has returned and all
+old UTC and monotonic bounds still hold. A read-only refresh of another provider preserves
+that provider's place if its signed publication is due. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid

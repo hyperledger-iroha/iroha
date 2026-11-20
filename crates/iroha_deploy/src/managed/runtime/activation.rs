@@ -33,7 +33,7 @@ use std::{
 };
 
 #[path = "activation/catalog.rs"]
-mod catalog;
+pub(super) mod catalog;
 
 pub(super) struct Budget {
     pub(super) started: Instant,
@@ -434,24 +434,8 @@ impl Recheck {
         floors: [ManagedTransactionFinality; 3],
         budget: &Budget,
     ) -> std::result::Result<[maintenance::ProviderObservation; 3], Failure> {
-        budget.progress.enter(Phase::Discovery);
-        let observed_at = Instant::now();
-        let observed_utc = budget.call(|_| now_ms())?;
-        let currents = budget.call(|deadline| {
-            let select = |index: usize| -> Result<_> {
-                let gateway = &live[index];
-                Ok(build_registry::ServiceRead {
-                    provider: gateway.provider(),
-                    enrollment: gateway.selected_enrollment(floors[index])?,
-                    required: floors[index],
-                })
-            };
-            build_registry::observe_generated_service_set(
-                prepared,
-                [select(0)?, select(1)?, select(2)?],
-                deadline,
-            )
-        })?;
+        let (currents, observed_at, observed_utc) =
+            observe_native_set(prepared, live, floors, budget)?;
         let mut finish = |index: usize| -> std::result::Result<_, Failure> {
             let gateway = &mut live[index];
             let provider = gateway.provider();
@@ -494,6 +478,41 @@ impl Recheck {
         };
         Ok([finish(0)?, finish(1)?, finish(2)?])
     }
+}
+
+/// All native provider and signer checks use one original clock pair and certified Global cut.
+pub(super) fn observe_native_set(
+    prepared: &PreparedLocalnet,
+    live: &[OwnedGateway; 3],
+    floors: [ManagedTransactionFinality; 3],
+    budget: &Budget,
+) -> std::result::Result<
+    (
+        [build_registry::GeneratedServiceObservation; 3],
+        Instant,
+        u64,
+    ),
+    Failure,
+> {
+    budget.progress.enter(Phase::Discovery);
+    let observed_at = Instant::now();
+    let observed_utc = budget.call(|_| now_ms())?;
+    let currents = budget.call(|deadline| {
+        let select = |index: usize| -> Result<_> {
+            let gateway = &live[index];
+            Ok(build_registry::ServiceRead {
+                provider: gateway.provider(),
+                enrollment: gateway.selected_enrollment(floors[index])?,
+                required: floors[index],
+            })
+        };
+        build_registry::observe_generated_service_set(
+            prepared,
+            [select(0)?, select(1)?, select(2)?],
+            deadline,
+        )
+    })?;
+    Ok((currents, observed_at, observed_utc))
 }
 
 // Complete all three publications before sampling either shared observation clock.

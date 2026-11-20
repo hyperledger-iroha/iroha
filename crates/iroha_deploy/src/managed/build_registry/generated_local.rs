@@ -101,7 +101,7 @@ impl GeneratedServiceObservation {
 
 /// Read-only startup postcondition, reusing exactly the cold registry's native verifier.
 /// The minimum is only a rejection bound; it cannot create authenticated state.
-pub(in crate::managed) fn observe_generated_service(
+fn observe_generated_service(
     prepared: &PreparedLocalnet,
     provider: ProviderId,
     enrollment: &RetainedCustodyEnrollment,

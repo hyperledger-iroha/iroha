@@ -19,8 +19,7 @@ mod generated_local;
 #[cfg(test)]
 mod tests;
 pub(super) use generated_local::{
-    GeneratedServiceObservation, ServiceRead, observe_generated_service,
-    observe_generated_service_set,
+    GeneratedServiceObservation, ServiceRead, observe_generated_service_set,
 };
 
 /// Shared native discovery freshness for registry consumers and managed service observations.

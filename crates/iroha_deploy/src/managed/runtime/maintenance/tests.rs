@@ -253,3 +253,23 @@ fn due_order_uses_either_clock_and_preserves_original_order_on_ties() {
     timings[1].next_monotonic = now - Duration::from_secs(6);
     assert_eq!(oldest_due_slot(timings.iter(), now, utc), Some(1));
 }
+
+#[test]
+fn grouped_native_read_keeps_another_owners_overdue_signed_publication_ahead_of_retry() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let long = signed_window(utc, 86_400_000);
+    let mut old = Timing::select(utc + 60_000, long, long, mono, utc).unwrap();
+    old.next_monotonic = mono - Duration::from_secs(2);
+    old.next_utc = utc - 2_000;
+    let fresh = Timing::select(utc + 60_000, long, long, mono, utc).unwrap();
+    let mut untouched = fresh;
+    untouched.retain_due_publication(&old, utc - 10, utc);
+    assert_eq!(untouched.next_monotonic, old.next_monotonic);
+    assert_eq!(untouched.next_utc, old.next_utc);
+    assert_eq!(untouched.expiry, fresh.expiry);
+    let mut only_discovery_was_due = fresh;
+    only_discovery_was_due.retain_due_publication(&old, utc + 1, utc);
+    assert_eq!(only_discovery_was_due.next_monotonic, fresh.next_monotonic);
+    assert_eq!(only_discovery_was_due.next_utc, fresh.next_utc);
+}
