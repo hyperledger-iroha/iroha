@@ -174,11 +174,11 @@ impl<'a> SyscallQuote<'a> {
         super::DefaultHost::execution_summary_gas_quote(self.vm)
     }
 
+    /// Apply the VM's argument privacy rule for `number` before quoting it.
+    ///
+    /// Every argument window is public except the commitment syscall's two private operands.
     fn check_public_inputs(self, number: u32) -> Result<(), VMError> {
-        for &index in crate::ivm::syscall_public_input_registers(number) {
-            self.ensure_public_register(index)?;
-        }
-        Ok(())
+        self.vm.validate_syscall_privacy(number)
     }
 
     /// Compute a conservative charge from the declared public inputs of a syscall.
@@ -262,5 +262,30 @@ mod tests {
         ));
         assert_eq!(vm.register(12), 37);
         assert!(vm.registers.tag(12));
+    }
+
+    #[test]
+    fn commitment_quote_admits_its_private_operands_and_no_other_private_argument() {
+        use crate::syscalls::{SYSCALL_DEBUG_PRINT, SYSCALL_PRIVATE_NUMERIC_VALCOM};
+        let mut vm = IVM::new(100);
+        vm.set_zk_mode(true).unwrap();
+        vm.registers.set_tag(10, true);
+        vm.registers.set_tag(11, true);
+        let quote = vm.syscall_quote();
+        assert!(
+            quote
+                .common_syscall_gas_quote(SYSCALL_PRIVATE_NUMERIC_VALCOM)
+                .is_ok()
+        );
+        assert!(matches!(
+            quote.common_syscall_gas_quote(SYSCALL_DEBUG_PRINT),
+            Err(VMError::PrivacyViolation)
+        ));
+        vm.registers.set_tag(11, false);
+        assert!(matches!(
+            vm.syscall_quote()
+                .common_syscall_gas_quote(SYSCALL_PRIVATE_NUMERIC_VALCOM),
+            Err(VMError::PrivacyViolation)
+        ));
     }
 }

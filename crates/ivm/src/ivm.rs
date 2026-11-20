@@ -3283,7 +3283,7 @@ impl IVM {
         Ok(())
     }
     #[inline]
-    fn validate_syscall_privacy(&self, number: u32) -> Result<(), VMError> {
+    pub(crate) fn validate_syscall_privacy(&self, number: u32) -> Result<(), VMError> {
         if matches!(
             number,
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT
