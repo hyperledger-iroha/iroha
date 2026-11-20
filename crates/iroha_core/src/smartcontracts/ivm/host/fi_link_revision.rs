@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::asset_fi::AssetFiLinkRevisionError;
+use ivm_abi::error::VmTrap;
 
 fn map_revision_error(error: AssetFiLinkRevisionError) -> ivm::VMError {
     match error {
@@ -12,7 +13,7 @@ fn map_revision_error(error: AssetFiLinkRevisionError) -> ivm::VMError {
         ) => map_query_execution_error(crate::execution_attempt::ExecutionAttemptError::Rejected(
             error,
         )),
-        AssetFiLinkRevisionError::Execution(_) => ivm::VMError::DecodeError,
+        AssetFiLinkRevisionError::Execution(_) => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 
@@ -58,7 +59,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         vm.ensure_public_register(10)?;
         vm.ensure_public_register(11)?;
         vm.ensure_public_register(12)?;
@@ -74,7 +75,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let state = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::NotImplemented { syscall })?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }))?;
         let (revision, execution_stats) = state.fi_link_revision(
             &self.effect_authority(),
             context,
@@ -84,7 +85,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             budget,
         )?;
         let encoded = ivm_abi::numeric_tlv::encode_int(&BigInt::from(revision))?;
-        let length = u64::try_from(encoded.len()).map_err(|_| ivm::VMError::GasCostOverflow)?;
+        let length = u64::try_from(encoded.len())
+            .map_err(|_| ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
         let gas = Self::finish_core_query_encoded_bytes_gas(
             vm,
             remaining,
@@ -107,6 +109,7 @@ mod tests {
     use crate::state::asset_fi::FiLinkReaderFixture as Fixture;
     use iroha_data_model::prelude::BlockHeader;
     use ivm::host::IVMHost;
+    use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
     use std::num::NonZeroU64;
 
     fn header() -> BlockHeader {
@@ -247,7 +250,7 @@ mod tests {
         let mut vm = arguments(&f, 50_000_000);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION, &mut vm),
-            Err(ivm::VMError::NotImplemented { .. })
+            Err(ivm::VMError::Trap(VmTrap::NotImplemented { .. }))
         ));
     }
 
@@ -273,7 +276,7 @@ mod tests {
         let before = vm.register(10);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION, &mut vm),
-            Err(ivm::VMError::OutOfMemory)
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.register(10), before);
         assert_eq!(
@@ -295,14 +298,16 @@ mod tests {
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
         let mapped = map_revision_error(AssetFiLinkRevisionError::Local(refusal.into()));
-        assert!(matches!(mapped,ivm::VMError::AllocationDeferred(actual) if actual == expected));
+        assert!(
+            matches!(mapped,ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual == expected)
+        );
         drop(retained);
         assert!(budget.try_reserve_bytes(1).is_ok());
         assert!(matches!(
             map_revision_error(AssetFiLinkRevisionError::Query(
                 QueryExecutionFail::GasBudgetExceeded
             )),
-            ivm::VMError::OutOfGas
+            ivm::VMError::Trap(VmTrap::OutOfGas)
         ));
     }
 
@@ -413,7 +418,7 @@ mod tests {
         } else {
             assert!(matches!(
                 result.unwrap_err().as_unmetered(),
-                ivm::VMError::OutOfGas
+                VmErrorRef::Trap(VmTrap::OutOfGas)
             ));
             assert!(host.actual.is_none());
             assert!(vm.call_result_word_count().is_err());

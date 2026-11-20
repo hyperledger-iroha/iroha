@@ -12,6 +12,7 @@ use iroha_data_model::{
     ivm_c10::IvmAdmissionErrorC10V1,
 };
 use ivm::IvmEngine;
+use ivm_abi::error::{VmErrorRef, VmTrap};
 
 /// Project a deterministic preparation failure raised by `engine` onto its admission error.
 #[must_use]
@@ -36,23 +37,23 @@ fn baseline_admission_error(error: ivm::VMError) -> IvmAdmissionError {
 /// service captures the original admission cause in the transaction before ISI projection.
 fn c10_admission_error(error: ivm::VMError) -> IvmAdmissionError {
     match error {
-        ivm::VMError::UnsupportedProgramVersion { major, minor } => {
+        ivm::VMError::Trap(VmTrap::UnsupportedProgramVersion { major, minor }) => {
             IvmAdmissionError::UnsupportedVersion(UnsupportedVersionInfo { major, minor })
         }
-        ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
+        ivm::VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits }) => {
             IvmAdmissionError::UnsupportedFeatureBits(bits)
         }
-        ivm::VMError::UnsupportedProgramAbiVersion { version } => {
+        ivm::VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version }) => {
             IvmAdmissionError::UnsupportedAbiVersion(version)
         }
-        ivm::VMError::MissingMaxCycles => IvmAdmissionError::MissingMaxCycles,
-        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+        ivm::VMError::Trap(VmTrap::MissingMaxCycles) => IvmAdmissionError::MissingMaxCycles,
+        ivm::VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) => {
             IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                 expected: Hash::prehashed(expected),
                 actual: Hash::prehashed(actual),
             })
         }
-        ivm::VMError::GenericSyscallNotAllowed { syscall } => {
+        ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall }) => {
             IvmAdmissionError::GenericSyscallNotAllowed(syscall)
         }
         other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
@@ -69,29 +70,29 @@ pub(crate) fn c10_admission_error_v1(
     error: impl core::borrow::Borrow<ivm::VMError>,
 ) -> IvmAdmissionErrorC10V1 {
     match error.borrow().as_unmetered() {
-        ivm::VMError::UnsupportedProgramVersion { major, minor } => {
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramVersion { major, minor }) => {
             IvmAdmissionErrorC10V1::UnsupportedVersion(UnsupportedVersionInfo {
                 major: *major,
                 minor: *minor,
             })
         }
-        ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramFeatureBits { bits }) => {
             IvmAdmissionErrorC10V1::UnsupportedFeatureBits(*bits)
         }
-        ivm::VMError::UnsupportedProgramAbiVersion { version } => {
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramAbiVersion { version }) => {
             IvmAdmissionErrorC10V1::UnsupportedAbiVersion(*version)
         }
-        ivm::VMError::MissingMaxCycles => IvmAdmissionErrorC10V1::MissingMaxCycles,
-        ivm::VMError::MaxCyclesWithoutZk { max_cycles } => {
+        VmErrorRef::Trap(VmTrap::MissingMaxCycles) => IvmAdmissionErrorC10V1::MissingMaxCycles,
+        VmErrorRef::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles }) => {
             IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(*max_cycles)
         }
-        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+        VmErrorRef::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) => {
             IvmAdmissionErrorC10V1::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                 expected: Hash::prehashed(*expected),
                 actual: Hash::prehashed(*actual),
             })
         }
-        ivm::VMError::GenericSyscallNotAllowed { syscall } => {
+        VmErrorRef::Trap(VmTrap::GenericSyscallNotAllowed { syscall }) => {
             IvmAdmissionErrorC10V1::GenericSyscallNotAllowed(*syscall)
         }
         other => IvmAdmissionErrorC10V1::BytecodeDecodingFailed(other.to_string()),
@@ -102,38 +103,39 @@ pub(crate) fn c10_admission_error_v1(
 mod tests {
     use super::*;
     use iroha_data_model::executor::{MaxCyclesExceedsFuelInfo, VectorLengthTooLargeInfo};
+    use ivm_abi::error::VmTrap;
 
     /// Every preparation failure with its own admission reason in both engines, written out
     /// independently of the projection.
     fn structured_cases() -> Vec<(ivm::VMError, IvmAdmissionError)> {
         vec![
             (
-                ivm::VMError::UnsupportedProgramVersion { major: 9, minor: 8 },
+                ivm::VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 9, minor: 8 }),
                 IvmAdmissionError::UnsupportedVersion(UnsupportedVersionInfo {
                     major: 9,
                     minor: 8,
                 }),
             ),
             (
-                ivm::VMError::UnsupportedProgramFeatureBits { bits: 0x80 },
+                ivm::VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x80 }),
                 IvmAdmissionError::UnsupportedFeatureBits(0x80),
             ),
             (
-                ivm::VMError::UnsupportedProgramAbiVersion { version: 7 },
+                ivm::VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: 7 }),
                 IvmAdmissionError::UnsupportedAbiVersion(7),
             ),
             (
-                ivm::VMError::ArtifactAbiHashMismatch {
+                ivm::VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
                     expected: [3; 32],
                     actual: [4; 32],
-                },
+                }),
                 IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                     expected: Hash::prehashed([3; 32]),
                     actual: Hash::prehashed([4; 32]),
                 }),
             ),
             (
-                ivm::VMError::GenericSyscallNotAllowed { syscall: 0x51 },
+                ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: 0x51 }),
                 IvmAdmissionError::GenericSyscallNotAllowed(0x51),
             ),
         ]
@@ -142,16 +144,16 @@ mod tests {
     /// Failures without a structured admission reason: they keep their display text.
     fn unstructured_cases() -> Vec<ivm::VMError> {
         vec![
-            ivm::VMError::InvalidMetadata,
-            ivm::VMError::DecodeError,
-            ivm::VMError::InvalidOpcode(0xFE),
-            ivm::VMError::UnknownSyscall(0xF2),
-            ivm::VMError::MemoryOutOfBounds,
-            ivm::VMError::OutOfMemory,
-            ivm::VMError::MissingHalt,
-            ivm::VMError::ControlFlowViolation,
-            ivm::VMError::AbiTypeNotAllowed { abi: 1, type_id: 9 },
-            ivm::VMError::NoritoInvalid,
+            ivm::VMError::Trap(VmTrap::InvalidMetadata),
+            ivm::VMError::Trap(VmTrap::DecodeError),
+            ivm::VMError::Trap(VmTrap::InvalidOpcode(0xFE)),
+            ivm::VMError::Trap(VmTrap::UnknownSyscall(0xF2)),
+            ivm::VMError::Trap(VmTrap::MemoryOutOfBounds),
+            ivm::VMError::Trap(VmTrap::OutOfMemory),
+            ivm::VMError::Trap(VmTrap::MissingHalt),
+            ivm::VMError::Trap(VmTrap::ControlFlowViolation),
+            ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 1, type_id: 9 }),
+            ivm::VMError::Trap(VmTrap::NoritoInvalid),
         ]
     }
 
@@ -161,7 +163,7 @@ mod tests {
             assert_eq!(admission_error(IvmEngine::C10, error), expected);
         }
         assert_eq!(
-            admission_error(IvmEngine::C10, ivm::VMError::MissingMaxCycles),
+            admission_error(IvmEngine::C10, ivm::VMError::Trap(VmTrap::MissingMaxCycles)),
             IvmAdmissionError::MissingMaxCycles
         );
         for error in unstructured_cases() {
@@ -172,7 +174,7 @@ mod tests {
             );
         }
         // The baseline wire enum has no `MaxCyclesWithoutZk`; C10 carries it by its text.
-        let error = ivm::VMError::MaxCyclesWithoutZk { max_cycles: 5 };
+        let error = ivm::VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 5 });
         let text = error.to_string();
         assert_eq!(
             admission_error(IvmEngine::C10, error),
@@ -204,12 +206,14 @@ mod tests {
             assert_eq!(c10_admission_error_v1(error), expected);
         }
         assert_eq!(
-            c10_admission_error_v1(ivm::VMError::MissingMaxCycles),
+            c10_admission_error_v1(ivm::VMError::Trap(VmTrap::MissingMaxCycles)),
             C10::MissingMaxCycles
         );
         // The trace-bound rule the baseline family cannot name is structured here.
         assert_eq!(
-            c10_admission_error_v1(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 5 }),
+            c10_admission_error_v1(ivm::VMError::Trap(VmTrap::MaxCyclesWithoutZk {
+                max_cycles: 5
+            })),
             C10::MaxCyclesWithoutZk(5)
         );
         for error in unstructured_cases() {
@@ -235,10 +239,10 @@ mod tests {
         assert_eq!(
             admission_error(
                 IvmEngine::Baseline,
-                ivm::VMError::ProgramVectorLengthTooLarge {
+                ivm::VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
                     vector_length: 65,
                     max_allowed: 64,
-                }
+                })
             ),
             IvmAdmissionError::VectorLengthTooLarge(VectorLengthTooLargeInfo {
                 vector_length: 65,
@@ -246,12 +250,18 @@ mod tests {
             })
         );
         assert_eq!(
-            admission_error(IvmEngine::Baseline, ivm::VMError::InvalidMetadata),
+            admission_error(
+                IvmEngine::Baseline,
+                ivm::VMError::Trap(VmTrap::InvalidMetadata)
+            ),
             IvmAdmissionError::BytecodeDecodingFailed("invalid program metadata".to_owned())
         );
         // The anchor had no structured `MissingMaxCycles` VM error; its text is carried.
         assert!(matches!(
-            admission_error(IvmEngine::Baseline, ivm::VMError::MissingMaxCycles),
+            admission_error(
+                IvmEngine::Baseline,
+                ivm::VMError::Trap(VmTrap::MissingMaxCycles)
+            ),
             IvmAdmissionError::BytecodeDecodingFailed(_)
         ));
         // The fuel rule is a Core header rule, not a VM error; its wire value is restored.
@@ -292,9 +302,12 @@ mod tests {
         let vm = ivm::IVM::try_new(100).expect("allocate a VM");
         assert_eq!(vm.engine(), IvmEngine::C10);
         for (error, kind) in [
-            (ivm::VMError::OutOfGas, IvmFaultKindV1::OutOfGas),
             (
-                ivm::VMError::AssertionFailed,
+                ivm::VMError::Trap(VmTrap::OutOfGas),
+                IvmFaultKindV1::OutOfGas,
+            ),
+            (
+                ivm::VMError::Trap(VmTrap::AssertionFailed),
                 IvmFaultKindV1::AssertionFailed,
             ),
         ] {
@@ -309,7 +322,8 @@ mod tests {
         }
         // A C10 fault the baseline wire enum cannot name has no fault value yet.
         assert_eq!(
-            vm.engine().fault_kind(&ivm::VMError::ControlFlowViolation),
+            vm.engine()
+                .fault_kind(&ivm::VMError::Trap(VmTrap::ControlFlowViolation)),
             None
         );
         // A preparation failure that reaches the execution mapping has no fault value and
@@ -317,7 +331,7 @@ mod tests {
         let rejection = crate::execution_attempt::expect_completed_rejection(
             super::super::map_vm_error_with_context_to_validation(
                 &vm,
-                ivm::VMError::MissingMaxCycles,
+                ivm::VMError::Trap(VmTrap::MissingMaxCycles),
             ),
         );
         assert_eq!(

@@ -1,6 +1,7 @@
 //! Exact deterministic epoch-seed fixtures through the typed source boundary.
 
 use super::*;
+use crate::error::{VmErrorRef, VmTrap};
 
 fn execute(epoch: &str) -> (IVM, crate::PreparedContract, Result<(), VMError>) {
     let source = "seiyaku SeedReader { view fn read(int epoch) authorize(anyone) -> Option<bytes> { return crypto::vrf::epoch_seed(epoch: epoch); } }";
@@ -76,7 +77,9 @@ fn typed_epoch_seed_rejects_epoch_outside_u64_without_truncation() {
         assert!(
             matches!(
                 result.unwrap_err().as_unmetered(),
-                VMError::NumericFault(crate::numeric::NumericFaultV1::InexactConversion)
+                VmErrorRef::Trap(VmTrap::NumericFault(
+                    crate::numeric::NumericFaultV1::InexactConversion
+                ))
             ),
             "epoch {epoch}"
         );

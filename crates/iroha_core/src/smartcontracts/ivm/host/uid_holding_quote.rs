@@ -3,6 +3,7 @@
 use super::*;
 use crate::state::asset_uid_reader::AssetUidHoldingQuoteError;
 use iroha_data_model::asset::uid::AssetUidHoldingQuoteV1;
+use ivm_abi::error::VmTrap;
 
 fn map_quote_error(error: AssetUidHoldingQuoteError) -> ivm::VMError {
     match error {
@@ -13,7 +14,7 @@ fn map_quote_error(error: AssetUidHoldingQuoteError) -> ivm::VMError {
         ) => map_query_execution_error(crate::execution_attempt::ExecutionAttemptError::Rejected(
             error,
         )),
-        AssetUidHoldingQuoteError::Execution(_) => ivm::VMError::DecodeError,
+        AssetUidHoldingQuoteError::Execution(_) => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 
@@ -59,7 +60,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         for register in 10..=12 {
             vm.ensure_public_register(register)?;
         }
@@ -74,7 +75,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let state = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::NotImplemented { syscall })?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }))?;
         // The native helper validates the installed controller and explicit reader grant.
         // The outer transaction's human signer cannot substitute for that controller.
         let (quote, execution_stats) = state.uid_holding_quote(
@@ -153,19 +154,23 @@ impl PreparedUidHoldingQuote {
             .into_iter()
             .try_fold(0_u64, |total, length| {
                 total
-                    .checked_add(u64::try_from(length).map_err(|_| ivm::VMError::GasCostOverflow)?)
-                    .ok_or(ivm::VMError::GasCostOverflow)
+                    .checked_add(
+                        u64::try_from(length)
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::GasCostOverflow))?,
+                    )
+                    .ok_or(ivm::VMError::Trap(VmTrap::GasCostOverflow))
             })
     }
 
     /// Materialize the six-word product only after the caller completes gas preflight.
     fn materialize(self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let option = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+        let option = ivm::sum::SumLayoutV1::option(1)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let table_bytes = 6 * 8;
         let reserved_heap = table_bytes
             + option
                 .allocation_bytes()
-                .map_err(|_| ivm::VMError::DecodeError)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         // Check the whole allocation before publishing a pointer or advancing either arena.
         vm.preflight_host_tlv_allocations_with_reserved_heap(&self.leaf_lengths(), reserved_heap)?;
         let definition = vm.alloc_host_tlv(&self.definition)?;
@@ -196,6 +201,7 @@ mod tests {
     use super::*;
     use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
+    use ivm_abi::error::{VmDeferral, VmTrap};
 
     fn quote(limit: Option<u32>) -> AssetUidHoldingQuoteV1 {
         AssetUidHoldingQuoteV1 {
@@ -271,7 +277,7 @@ mod tests {
         let prepared = PreparedUidHoldingQuote::prepare(&quote(Some(1_000))).unwrap();
         assert!(matches!(
             prepared.materialize(&mut vm),
-            Err(ivm::VMError::OutOfMemory)
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.alloc_heap(0).unwrap(), before);
         assert_eq!(vm.register(10), 0);
@@ -287,14 +293,16 @@ mod tests {
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
         let mapped = map_quote_error(AssetUidHoldingQuoteError::Local(refusal.into()));
-        assert!(matches!(mapped, ivm::VMError::AllocationDeferred(actual) if actual == expected));
+        assert!(
+            matches!(mapped, ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual == expected)
+        );
         drop(retained);
         assert!(budget.try_reserve_bytes(1).is_ok());
         assert!(matches!(
             map_quote_error(AssetUidHoldingQuoteError::Query(
                 QueryExecutionFail::GasBudgetExceeded,
             )),
-            ivm::VMError::OutOfGas,
+            ivm::VMError::Trap(VmTrap::OutOfGas),
         ));
     }
 
@@ -305,7 +313,7 @@ mod tests {
         vm.set_register(10, u64::MAX);
         assert!(matches!(
             host.execute_uid_holding_quote(&mut vm, 0x01_0224),
-            Err(ivm::VMError::PermissionDenied),
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
         ));
         assert_eq!(vm.register(10), u64::MAX);
         assert!(host.queued.is_empty());

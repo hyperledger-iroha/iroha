@@ -1,6 +1,7 @@
 //! Prepared shell credit is attached to its actual original shared owner.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::prepared::{PreparedContract, PreparedContractParts};
 use iroha_allocation::AllocationRefusal;
 use std::{
@@ -45,16 +46,16 @@ fn shell_reserves_before_physical_allocation_and_refunds_unused_unwind() {
     let bytes = ChargedShared::<PreparedContractInner>::allocation_layout().size();
     let budget = AllocationBudget::new(0);
     assert!(
-        matches!(PreparedShell::reserve(Some(&budget)), Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. })) if requested_bytes == bytes)
+        matches!(PreparedShell::reserve(Some(&budget)), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. }))) if requested_bytes == bytes)
     );
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(bytes);
     let occupied = budget.try_reserve_bytes(bytes).unwrap();
     assert!(matches!(
         PreparedShell::reserve(Some(&budget)),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     drop(occupied);
     let panic = catch_unwind(AssertUnwindSafe(|| {
@@ -130,9 +131,9 @@ fn preparation_refunds_shell_after_index_refusal_then_retries_same_parts() {
     let budget = AllocationBudget::new(shell_bytes);
     assert!(matches!(
         PreparedContract::from_parts(parts(&source), Some(&budget)),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.peak_reserved_bytes(), shell_bytes);
     assert_eq!(budget.reserved_bytes(), 0);

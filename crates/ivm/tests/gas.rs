@@ -1,6 +1,7 @@
 use crate::common;
 use common::{assemble, assemble_zk};
 use ivm::{IVM, VMError, encoding, instruction};
+use ivm_abi::error::{VmDeferral, VmTrap};
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 #[test]
 fn test_out_of_gas() {
@@ -17,7 +18,7 @@ fn test_out_of_gas() {
     vm.set_gas_limit(0); // not enough for even the first instruction
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::OutOfGas)),
+        matches!(res, Err(VMError::Trap(VmTrap::OutOfGas))),
         "Expected OutOfGas error"
     );
 }
@@ -88,7 +89,7 @@ impl ivm::IVMHost for MeteredErrorHost {
     }
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
-        Err(VMError::metered(7, VMError::PermissionDenied))
+        Err(VMError::metered(7, VMError::Trap(VmTrap::PermissionDenied)))
     }
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
@@ -109,7 +110,7 @@ impl ivm::IVMHost for UnmeteredErrorHost {
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.calls += 1;
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     }
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
@@ -230,7 +231,7 @@ fn syscall_quote_is_debited_before_host_side_effects() {
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(6); // five for SCALL, but only one of the quoted two remains
     let result = vm.run_with_host(&mut host);
-    assert!(matches!(result, Err(VMError::OutOfGas)));
+    assert!(matches!(result, Err(VMError::Trap(VmTrap::OutOfGas))));
     assert_eq!(
         host.calls, 0,
         "host must not run when its quote cannot be paid"
@@ -242,11 +243,11 @@ fn compact_proof_helpers_debit_quotes_and_restore_the_host_on_failure() {
     vm.set_host(CompactProofHost { calls: 0 });
     assert!(matches!(
         vm.get_memory_compact_bundle(0, None),
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     ));
     assert!(matches!(
         vm.get_registers_compact_bundle(0, None),
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     ));
     let host = vm
         .host_mut_any()
@@ -287,10 +288,10 @@ fn syscall_rejects_a_host_cost_above_its_quote() {
     let result = vm.run_with_host(&mut host);
     assert!(matches!(
         result,
-        Err(VMError::SyscallGasQuoteExceeded {
+        Err(VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
             quoted: 1,
             actual: 2
-        })
+        }))
     ));
     assert_eq!(vm.remaining_gas(), 0);
     assert_eq!(
@@ -315,7 +316,7 @@ fn metered_syscall_error_debits_gas_and_preserves_error() {
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(20);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::PermissionDenied)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::PermissionDenied))));
     assert_eq!(vm.remaining_gas(), 8);
 }
 #[test]
@@ -331,7 +332,7 @@ fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(10);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::OutOfGas)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::OutOfGas))));
     assert_eq!(vm.remaining_gas(), 5);
 }
 #[test]
@@ -345,7 +346,10 @@ fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(20);
     let result = vm.run_with_host(&mut host);
-    assert!(matches!(result, Err(VMError::PermissionDenied)));
+    assert!(matches!(
+        result,
+        Err(VMError::Trap(VmTrap::PermissionDenied))
+    ));
     assert_eq!(host.calls, 1, "the host executes only after quote debit");
     assert_eq!(
         vm.remaining_gas(),
@@ -374,7 +378,7 @@ fn test_zk_padding_out_of_gas() {
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(3); // less than 4 padding cycles
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::OutOfGas)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::OutOfGas))));
     // Padding attempts set the cycle count to MAX_CYCLES even on failure
     assert_eq!(vm.get_cycle_count(), 5);
 }

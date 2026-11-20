@@ -1,6 +1,7 @@
 // Test body included from the parent module to keep its production source budget bounded.
 use super::*;
 use iroha_primitives::numeric_abi::IntValueV1;
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -2543,11 +2544,11 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         matches!(
             (
                 &(call_availability(&mut host)),
-                &(ivm::VMError::PermissionDenied)
+                &(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ),
             (
-                Err(ivm::VMError::PermissionDenied),
-                ivm::VMError::PermissionDenied
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                ivm::VMError::Trap(VmTrap::PermissionDenied)
             )
         ),
         "an app grant and a wrong-account subject grant must not authorize the effect"
@@ -2964,7 +2965,7 @@ fn vm_errors_classify_into_distinct_failure_kinds_without_debug_formatting() {
         (Trap::AssertionFailed, FailureKind::Assertion),
         (Trap::InvalidOpcode, FailureKind::Trap),
     ] {
-        let failure = classify_vm_error(&ivm::VMError::DecodeError, Some(trap));
+        let failure = classify_vm_error(&ivm::VMError::Trap(VmTrap::DecodeError), Some(trap));
         assert_eq!(failure.kind, kind, "{trap:?}");
         assert!(
             !failure.render().contains("DecodeError"),
@@ -2973,14 +2974,14 @@ fn vm_errors_classify_into_distinct_failure_kinds_without_debug_formatting() {
         );
     }
     let descriptor = ivm_abi::error_types::list_error_type();
-    let abort = ivm::VMError::ContractAbort {
+    let abort = ivm::VMError::Trap(VmTrap::ContractAbort {
         contract: "Vault".into(),
         name: descriptor.variants[0].name.clone(),
         message: None,
         error_type: descriptor.identity.clone(),
         schema_hash: descriptor.schema_hash(),
         code: descriptor.variants[0].code,
-    };
+    });
     let failure = classify_vm_error(&abort, Some(Trap::ContractAbort));
     assert_eq!(failure.kind, FailureKind::Rejected);
     assert!(failure.message.contains(&format!(
@@ -3272,11 +3273,14 @@ fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
         let occupied = budget.reserved_bytes();
         budget.set_limit_bytes(occupied);
         let refusal = vm.memory.load_u8(ivm::Memory::INPUT_START).unwrap_err();
-        assert!(matches!(refusal, ivm::VMError::AllocationDeferred(_)));
+        assert!(matches!(
+            refusal,
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_))
+        ));
         assert!(match (host.invoke_entrypoint(&mut vm, false), refusal) {
             (
-                Err(ivm::VMError::AllocationDeferred(actual)),
-                ivm::VMError::AllocationDeferred(expected),
+                Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual))),
+                ivm::VMError::Deferred(VmDeferral::AllocationDeferred(expected)),
             ) => actual == expected,
             _ => false,
         });
@@ -3289,11 +3293,11 @@ fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
             assert!(matches!(
                 (
                     &(host.invoke_entrypoint(&mut vm, false)),
-                    &(ivm::VMError::AssertionFailed)
+                    &(ivm::VMError::Trap(VmTrap::AssertionFailed))
                 ),
                 (
-                    Err(ivm::VMError::AssertionFailed),
-                    ivm::VMError::AssertionFailed
+                    Err(ivm::VMError::Trap(VmTrap::AssertionFailed)),
+                    ivm::VMError::Trap(VmTrap::AssertionFailed)
                 )
             ));
             assert!(host.last_test_error().unwrap().contains("unknown actor"));
@@ -3997,7 +4001,7 @@ fn misspelt_fixtures_and_actions_suggest_the_declared_name_at_their_site() {
 fn numeric_faults_name_their_numeric_error_variant() {
     use ivm_abi::numeric::NumericFaultV1;
     let failure = classify_vm_error(
-        &ivm::VMError::NumericFault(NumericFaultV1::RepeatingDecimal),
+        &ivm::VMError::Trap(VmTrap::NumericFault(NumericFaultV1::RepeatingDecimal)),
         Some(ivm_abi::error::VmTrapKind::NumericFault),
     );
     assert_eq!(failure.kind, FailureKind::NumericFault);

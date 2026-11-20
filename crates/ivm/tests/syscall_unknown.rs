@@ -1,4 +1,5 @@
 use ivm::{IVM, IVMHost, Memory, ProgramMetadata, VMError, encoding};
+use ivm_abi::error::VmTrap;
 use std::any::Any;
 #[test]
 fn unknown_syscall_traps_under_default_policy() {
@@ -12,7 +13,7 @@ fn unknown_syscall_traps_under_default_policy() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_code(&code).unwrap();
     match vm.run() {
-        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, syscall),
+        Err(VMError::Trap(VmTrap::UnknownSyscall(n))) => assert_eq!(n, syscall),
         other => panic!("expected UnknownSyscall(0xDF), got {other:?}"),
     }
 }
@@ -66,7 +67,7 @@ fn program_admission_enforces_syscall_policy_before_host_dispatch() {
     let mut vm = IVM::new(10_000);
     vm.set_host(PermissiveHost { called: false });
     assert!(
-        matches!(vm.load_program(&program), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xDF))
+        matches!(vm.load_program(&program), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xDF))
     );
     let host = vm
         .host_mut_any()

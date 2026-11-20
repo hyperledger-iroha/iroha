@@ -12,6 +12,7 @@ use iroha_data_model::{
     },
     trigger::{TriggerId, action::Repeats},
 };
+use ivm_abi::error::VmTrap;
 fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerDescriptor {
     TriggerDescriptor {
         id: TriggerId::new(id.parse().expect("trigger id")),
@@ -422,7 +423,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let artifact = contract_artifact(1, vec![oversized]);
     assert!(matches!(
         ivm::ProgramMetadata::parse(&artifact),
-        Err(ivm::VMError::InvalidMetadata)
+        Err(ivm::VMError::Trap(VmTrap::InvalidMetadata))
     ));
     let error = ivm::verify_contract_artifact(&artifact)
         .expect_err("return schema beyond the 256-node boundary must fail closed");
@@ -973,7 +974,10 @@ seiyaku ContractArtifactFixture { permission Entry;
     );
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
-    assert!(matches!(vm.run(), Err(ivm::VMError::DecodeError)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
+    ));
     assert!(
         vm.call_result_word_count().is_err(),
         "unselected root cannot complete"
@@ -1260,7 +1264,10 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
     let error = vm
         .run()
         .expect_err("a poisoned canonical return must trap before the write");
-    assert!(matches!(error, ivm::VMError::ControlFlowViolation));
+    assert!(matches!(
+        error,
+        ivm::VMError::Trap(VmTrap::ControlFlowViolation)
+    ));
     assert_eq!(vm.pc(), entry_pc + 4, "the hidden write was not reached");
 }
 #[test]
@@ -1292,7 +1299,7 @@ fn strict_outer_return_cannot_redirect_to_an_in_code_halt() {
     assert!(matches!(
         vm.run()
             .expect_err("outer return must remain bound to the end of code"),
-        ivm::VMError::ControlFlowViolation
+        ivm::VMError::Trap(VmTrap::ControlFlowViolation)
     ));
     assert_eq!(vm.pc(), entry_pc + 4);
 }

@@ -18,6 +18,7 @@ use iroha_data_model::{
     parameter::{Parameter, system::SumeragiNposParameters},
 };
 use ivm::{IVM, IVMHost, syscalls as ivm_sys};
+use ivm_abi::error::VmTrap;
 
 /// Accounts in the fixture World; more than one `CREATE_NFTS_FOR_ALL_USERS` call reads.
 const FIXTURE_ACCOUNTS: u32 = 300;
@@ -1142,7 +1143,7 @@ fn shared_root_hydration_preserves_root_bytes_and_gas() {
         let installed = Arc::clone(&cached_edit.zk_roots);
         assert!(matches!(
             cached_edit.set_zk_snapshots_from_state(&transaction),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(Arc::ptr_eq(&installed, &cached_edit.zk_roots));
         // Dropping the transaction rolls every tree edit back.

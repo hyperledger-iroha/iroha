@@ -1,6 +1,7 @@
 //! Operational read refusals survive TLV, crypto, numeric and loader consumers.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 
 fn funded() -> (IVM, AllocationBudget) {
@@ -20,7 +21,7 @@ fn exhaust_at_read(vm: &IVM, budget: &AllocationBudget, header_succeeds: bool) {
 
 fn assert_operational<T>(result: Result<T, VMError>) {
     match result {
-        Err(VMError::AllocationDeferred(_)) => {}
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_))) => {}
         Err(error) => panic!("expected the original allocation refusal, received {error:?}"),
         Ok(_) => panic!("resource exhaustion must defer before publishing a result"),
     }
@@ -56,11 +57,11 @@ fn assert_read_capacity_refusal<T>(
     rows: usize,
     original: &AllocationBudget,
 ) {
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
         requested_bytes,
         release,
         ..
-    })) = result
+    }))) = result
     else {
         panic!("expected original read-row capacity refusal");
     };
@@ -95,7 +96,7 @@ fn public_and_input_only_tlv_decoders_preserve_header_and_envelope_refusals() {
             // An invalid address retains its deterministic decoder fault.
             assert!(matches!(
                 vm.validate_tlv(u64::MAX).err().unwrap(),
-                VMError::NoritoInvalid
+                VMError::Trap(VmTrap::NoritoInvalid)
             ));
             budget.set_limit_bytes(occupied + 8 * std::mem::size_of::<crate::AccessRange>());
             assert!(
@@ -124,7 +125,7 @@ fn private_tlv_snapshot_preserves_header_and_complete_envelope_refusals() {
         assert_eq!(vm.snapshot_private_tlv(address, tlv.len()).unwrap(), tlv);
         assert!(matches!(
             vm.validate_tlv(address).err().unwrap(),
-            VMError::PrivacyViolation
+            VMError::Trap(VmTrap::PrivacyViolation)
         ));
     }
 }
@@ -162,7 +163,7 @@ fn staged_numeric_envelope_reads_keep_operational_errors_and_fault_semantics() {
         );
         vm.set_register(10, u64::MAX);
         assert!(
-            matches!(vm.execute_staged_syscall(&mut host, crate::syscalls::SYSCALL_INT_ADD, &prepared_log), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (
+            matches!(vm.execute_staged_syscall(&mut host, crate::syscalls::SYSCALL_INT_ADD, &prepared_log), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (
                 crate::numeric::PointerAbiFaultV1::InvalidAddress
             ))
         );
@@ -301,7 +302,10 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
             control.call_result_word_count(),
         ) {
             (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
-            (Err(VMError::ControlFlowViolation), Err(VMError::ControlFlowViolation)) => {
+            (
+                Err(VMError::Trap(VmTrap::ControlFlowViolation)),
+                Err(VMError::Trap(VmTrap::ControlFlowViolation)),
+            ) => {
                 assert!(
                     !prepared,
                     "completed contract must publish its root result table"
@@ -338,9 +342,10 @@ fn failed_cold_prepared_load_drops_its_original_pool_before_fresh_owner_retry() 
         Ok(vm)
     };
     budget.set_limit_bytes(construction + program_owners);
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
-        requested_bytes, ..
-    })) = load_cold()
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        requested_bytes,
+        ..
+    }))) = load_cold()
     else {
         panic!("cold load must reach its first cursor read before refusal");
     };

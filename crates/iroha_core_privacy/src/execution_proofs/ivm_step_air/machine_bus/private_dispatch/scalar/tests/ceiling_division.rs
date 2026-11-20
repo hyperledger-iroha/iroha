@@ -1,6 +1,7 @@
 //! Native ceiling division, exact rounding, shared-cell roles and original ports.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn expected(left: u64, right: u64) -> Option<u64> {
     let (left, right) = (u64::cast_signed(left), u64::cast_signed(right));
@@ -235,19 +236,25 @@ fn private_divceil_native_private_arithmetic_and_gas_traps_refuse_completed_rows
                 32,
             );
             if gas < 12 {
-                assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+                assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             } else if tags != [false, false] {
-                assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
+                assert!(matches!(
+                    outcome,
+                    Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
+                ));
             } else {
                 assert!(if right == 0 {
                     matches!(
                         outcome,
-                        Err(ivm::VMError::NumericFault(
+                        Err(ivm::VMError::Trap(VmTrap::NumericFault(
                             ivm::numeric::NumericFaultV1::DivisionByZero
-                        ))
+                        )))
                     )
                 } else {
-                    matches!(outcome, Err(ivm::VMError::RegisterIntegerOverflow))
+                    matches!(
+                        outcome,
+                        Err(ivm::VMError::Trap(VmTrap::RegisterIntegerOverflow))
+                    )
                 });
             }
             let record = &recorder.records()[0];
@@ -336,7 +343,10 @@ fn private_divceil_twelve_gas_cycles_and_last_attempt_boundary_are_bound() {
     }
     for limit in 1..=12 {
         let (program, recorder, outcome) = shifts::capture(&[instruction], &inputs, 100, limit);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];
         assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);

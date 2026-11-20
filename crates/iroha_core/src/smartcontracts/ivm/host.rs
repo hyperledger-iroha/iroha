@@ -7,6 +7,8 @@
 //! uniformly and prevents direct world state mutations from the VM.
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
+use ivm::error::VmTrap;
+use ivm_abi::error::VmDeferral;
 /// Physical durable state writes staged by this host.
 type DurableStateOverlay = BTreeMap<StatePath, Option<Vec<u8>>>;
 /// Borrowed visitor that can stop bounded traversal of physical state positions.
@@ -344,15 +346,15 @@ impl PublicInputRecord {
     }
     fn from_descriptor(desc: PublicInputDescriptor) -> Result<(Name, Self), ivm::VMError> {
         let expected_type =
-            PointerType::from_u16(desc.type_id).ok_or(ivm::VMError::NoritoInvalid)?;
+            PointerType::from_u16(desc.type_id).ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let hex_str = desc
             .tlv_hex
             .trim_start_matches("0x")
             .trim_start_matches("0X");
-        let bytes = hex::decode(hex_str).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let bytes = hex::decode(hex_str).map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let tlv = pointer_abi::validate_tlv_bytes(&bytes)?;
         if tlv.type_id != expected_type {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas_base = desc.gas_base.unwrap_or(PUBLIC_INPUT_GAS_BASE_DEFAULT);
         let gas_per_byte = desc
@@ -445,7 +447,9 @@ fn transfer_scope_for_policy(
         (AssetBalancePolicy::DataspaceRestricted, Some(dataspace)) => {
             Ok(AssetBalanceScope::Dataspace(dataspace))
         }
-        (AssetBalancePolicy::DataspaceRestricted, None) => Err(ivm::VMError::NoritoInvalid),
+        (AssetBalancePolicy::DataspaceRestricted, None) => {
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+        }
     }
 }
 /// Convert a registered definition policy and exact AXT intent dataspace into
@@ -506,8 +510,8 @@ impl PreparedCoreQueryWord {
         match self {
             Self::Tlv(tlv) => vm.alloc_host_tlv(&tlv),
             Self::OptionalTlv(tlv) => {
-                let layout =
-                    ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+                let layout = ivm::sum::SumLayoutV1::option(1)
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 match tlv {
                     Some(tlv) => {
                         let pointer = vm.alloc_host_tlv(&tlv)?;
@@ -587,16 +591,20 @@ pub enum HostOutputBudgetViolation {
 impl HostOutputBudgetViolation {
     fn into_vm_error(self) -> ivm::VMError {
         match self {
-            Self::ItemCount { attempted, limit } => ivm::VMError::HostOutputBudgetExceeded {
-                resource: ivm::HostOutputResource::Items,
-                attempted,
-                limit,
-            },
-            Self::EncodedBytes { attempted, limit } => ivm::VMError::HostOutputBudgetExceeded {
-                resource: ivm::HostOutputResource::Bytes,
-                attempted,
-                limit,
-            },
+            Self::ItemCount { attempted, limit } => {
+                ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
+                    resource: ivm::HostOutputResource::Items,
+                    attempted,
+                    limit,
+                })
+            }
+            Self::EncodedBytes { attempted, limit } => {
+                ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
+                    resource: ivm::HostOutputResource::Bytes,
+                    attempted,
+                    limit,
+                })
+            }
         }
     }
 }
@@ -843,12 +851,14 @@ impl HostExecutionClass {
         if matches!(self, Self::Generic | Self::StateFreeGeneric)
             && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
         {
-            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+            return Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
+                syscall: number,
+            }));
         }
         if matches!(self, Self::StateFreeGeneric | Self::LocalContractDebug)
             && ivm::syscalls::is_axt_syscall(number)
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         if matches!(self, Self::View | Self::LocalViewDebug)
             // Typed calls enforce the admitted target's view class before execution.
@@ -860,7 +870,7 @@ impl HostExecutionClass {
                     | ivm::syscalls::SyscallAccess::Dynamic
             )
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(())
     }
@@ -1277,14 +1287,14 @@ fn map_query_validation_error(
         crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
     };
     match error {
-        ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
-        _ => ivm::VMError::DecodeError,
+        ValidationFail::NotPermitted(_) => ivm::VMError::Trap(VmTrap::PermissionDenied),
+        _ => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 fn map_validation_fail(error: &ValidationFail) -> ivm::VMError {
     match error {
-        ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
-        _ => ivm::VMError::DecodeError,
+        ValidationFail::NotPermitted(_) => ivm::VMError::Trap(VmTrap::PermissionDenied),
+        _ => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 fn map_query_execution_error(
@@ -1297,8 +1307,8 @@ fn map_query_execution_error(
         crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
     };
     match error {
-        QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
-        _ => ivm::VMError::DecodeError,
+        QueryExecutionFail::GasBudgetExceeded => ivm::VMError::Trap(VmTrap::OutOfGas),
+        _ => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 /// Query response plus processed item count for gas accounting.
@@ -1391,7 +1401,7 @@ fn execute_account_balance_query_on_state<R: StateReadOnly>(
     budget: Option<QueryExecutionBudget>,
 ) -> Result<QueryExecutionResult, ivm::VMError> {
     let QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) = &request else {
-        return Err(ivm::VMError::DecodeError);
+        return Err(ivm::VMError::Trap(VmTrap::DecodeError));
     };
     let asset_id = query.asset_id().clone();
     let mut validator = HostQueryValidator { authority, state };
@@ -1450,7 +1460,7 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     budget: Option<QueryExecutionBudget>,
 ) -> Result<(Option<SingularQueryOutputBox>, QueryExecutionStats), ivm::VMError> {
     if !matches!(request, QueryRequest::Singular(_)) {
-        return Err(ivm::VMError::DecodeError);
+        return Err(ivm::VMError::Trap(VmTrap::DecodeError));
     }
     let mut validator = HostQueryValidator { authority, state };
     let limits = QueryLimits::from_pipeline(state.pipeline());
@@ -1467,7 +1477,7 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
         Ok((QueryResponse::Singular(output), execution_stats)) => {
             Ok((Some(output), execution_stats))
         }
-        Ok((QueryResponse::Iterable(_), _)) => Err(ivm::VMError::DecodeError),
+        Ok((QueryResponse::Iterable(_), _)) => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error))
             if is_missing_query_error(&error) =>
         {
@@ -1487,7 +1497,7 @@ impl CoreQueryAccountFilter {
     fn decode(vm: &IVM, pointer: u64) -> Result<Self, ivm::VMError> {
         let tlv = vm.validate_tlv(pointer)?;
         if tlv.type_id != PointerType::AccountId {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let limits = norito::canonical_decode_limits(tlv.payload.len());
         let mut reservation =
@@ -1498,18 +1508,21 @@ impl CoreQueryAccountFilter {
                     ))
                 })
                 .transpose()
-                .map_err(ivm::VMError::AllocationDeferred)?;
-        let unavailable =
-            || ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable);
+                .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        let unavailable = || {
+            ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let context = match reservation.as_mut() {
             Some(reservation) => norito::core::DecodeBudgetContext::from_reservation(
                 limits,
                 reservation,
             )
             .map_err(|error| match error {
-                iroha_allocation::PrepaidSharedError::Reservation(_) => {
-                    ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::LocalInvariantViolation)
-                }
+                iroha_allocation::PrepaidSharedError::Reservation(_) => ivm::VMError::Deferred(
+                    VmDeferral::ExecutionDeferred(ivm::ExecutionDeferral::LocalInvariantViolation),
+                ),
                 iroha_allocation::PrepaidSharedError::Allocator { .. } => unavailable(),
             })?,
             None => norito::core::DecodeBudgetContext::new(limits),
@@ -1518,7 +1531,7 @@ impl CoreQueryAccountFilter {
             .with(|| norito::decode_canonical_with_limits(tlv.payload, limits))
             .map_err(|error| match error {
                 norito::Error::AllocationFailed { .. } => unavailable(),
-                _ => ivm::VMError::DecodeError,
+                _ => ivm::VMError::Trap(VmTrap::DecodeError),
             })?;
         drop(context);
         Ok(Self {
@@ -1830,7 +1843,7 @@ pub trait QueryStateRefOps {
         if profile == crate::smartcontracts::ivm::profile::interface_profile_id() {
             Ok(())
         } else {
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         }
     }
     /// Resolve a warm prepared contract under this query source's original execution root.
@@ -1909,7 +1922,7 @@ pub trait QueryStateRefOps {
     ///
     /// # Errors
     ///
-    /// Returns [`ivm::VMError::NoritoInvalid`] when the stored TLV has an
+    /// Returns [`ivm::error::VmTrap::NoritoInvalid`] when the stored TLV has an
     /// unexpected pointer type.
     fn durable_state_payload_len(&self, key: &StatePath) -> Result<Option<usize>, ivm::VMError>;
     /// Seek after a canonical physical position and stop immediately when the
@@ -2033,14 +2046,14 @@ fn visit_merged_durable_state_keys(
     let mut saw_live = false;
     let mut merge_live = |live_key: &StatePath| -> Result<(), ivm::VMError> {
         if !live_key.as_ref().starts_with(physical_prefix) {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if saw_live && previous_live.as_str() >= live_key.as_ref() {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         while let Some((key, present)) = local.next_before(live_key) {
             if !key.as_ref().starts_with(physical_prefix) {
-                return Err(ivm::VMError::NoritoInvalid);
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
             }
             emit(key, present)?;
         }
@@ -2080,11 +2093,11 @@ fn visit_bounded_durable_state_positions(
                 .as_ref()
                 .is_some_and(|previous| previous >= live_key)
         {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         while let Some((key, present)) = local.next_before(live_key) {
             if !key.as_ref().starts_with(prefix) {
-                return Err(ivm::VMError::NoritoInvalid);
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
             }
             if emit(key, present)?.is_break() {
                 return Ok(ControlFlow::Break(()));
@@ -2116,6 +2129,7 @@ mod durable_state_merge_tests {
     use super::*;
     use iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
+    use ivm_abi::error::VmTrap;
     #[test]
     fn bounded_merge_seeks_after_deleted_positions_and_stops_without_lookahead() {
         use std::ops::ControlFlow;
@@ -2269,7 +2283,7 @@ mod durable_state_merge_tests {
                     |visitor| live.iter().try_for_each(visitor),
                     &mut |_, _| Ok(()),
                 ),
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }
@@ -2369,7 +2383,7 @@ mod durable_state_merge_tests {
         let oversized = state_path(&"x".repeat(MAX_STATE_PATH_BYTES - scope_len + 1));
         assert!(matches!(
             host.scoped_durable_state_path(&oversized),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let path_len = norito::to_bytes(&oversized)
             .expect("encode logical prefix")
@@ -2378,7 +2392,7 @@ mod durable_state_merge_tests {
         assert!(
             matches!(
                 host.count_durable_state_keys(&vm, &oversized, path_len),
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "scans must not turn an unrepresentable physical prefix into an empty success"
         );
@@ -2531,22 +2545,22 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 .world()
                 .asset_definition(definition_id)
                 .map(|definition| definition.balance_scope_policy())
-                .map_err(|_| ivm::VMError::DecodeError),
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
             QueryStateRef::QueryView(view) => view
                 .world()
                 .asset_definition(definition_id)
                 .map(|definition| definition.balance_scope_policy())
-                .map_err(|_| ivm::VMError::DecodeError),
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
             QueryStateRef::Block(block) => block
                 .world()
                 .asset_definition(definition_id)
                 .map(|definition| definition.balance_scope_policy())
-                .map_err(|_| ivm::VMError::DecodeError),
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
             QueryStateRef::Transaction(tx) => tx
                 .world()
                 .asset_definition(definition_id)
                 .map(|definition| definition.balance_scope_policy())
-                .map_err(|_| ivm::VMError::DecodeError),
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
         }
     }
     fn uid_holding_quote(
@@ -2627,12 +2641,12 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                     .copied(),
             ),
         };
-        let current = current.ok_or(ivm::VMError::PermissionDenied)?;
+        let current = current.ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         current
             .validate()
-            .map_err(|_| ivm::VMError::PermissionDenied)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         if before_block != Some(current) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(current)
     }
@@ -2739,7 +2753,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
             QueryStateRef::Transaction(tx) => ensure_in_transaction(tx, profile),
         };
-        result.map_err(|_| ivm::VMError::PermissionDenied)
+        result.map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))
     }
     fn prepare_contract_cache_hit(
         &self,
@@ -2785,8 +2799,8 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
         };
         let contract = prepared
-            .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
-            .ok_or(ivm::VMError::PermissionDenied)??;
+            .map_err(|error| error.into_vm_error(|_| ivm::VMError::Trap(VmTrap::PermissionDenied)))?
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))??;
         self.ensure_host_profile(contract.profile_id())?;
         Ok(contract)
     }
@@ -3662,7 +3676,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Ok(Vec::new());
         }
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes)?;
-        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn soracloud_operation_for_syscall(number: u32) -> Option<SoracloudHostOperationV1> {
         match number {
@@ -3722,15 +3736,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn reject_soracloud_syscall(vm: &IVM, number: u32) -> Result<u64, ivm::VMError> {
         let expected = Self::soracloud_operation_for_syscall(number)
-            .ok_or(ivm::VMError::UnknownSyscall(number))?;
+            .ok_or(ivm::VMError::Trap(VmTrap::UnknownSyscall(number)))?;
         let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
-        let request: SoracloudHostRequestEnvelopeV1 =
-            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
-        request.validate().map_err(|_| ivm::VMError::DecodeError)?;
+        let request: SoracloudHostRequestEnvelopeV1 = decode_canonical_norito(tlv.payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
+        request
+            .validate()
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         if request.operation != expected
             || !Self::soracloud_payload_matches_operation(&request.payload, expected)
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         Err(ivm::VMError::metered_not_implemented(
             ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, tlv.payload.len(), 0),
@@ -4913,8 +4929,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     #[cfg(feature = "telemetry")]
     fn sm_error_reason(error: &ivm::VMError) -> &'static str {
-        use ivm::VMError::*;
-        match error {
+        use VmTrap::*;
+        let ivm::VMError::Trap(trap) = error else {
+            return "other";
+        };
+        match trap {
             PermissionDenied => "permission_denied",
             NoritoInvalid => "norito_invalid",
             DecodeError => "decode_error",
@@ -5030,14 +5049,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ///
     /// # Errors
     ///
-    /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current
+    /// Returns [`ivm::error::VmTrap::NoritoInvalid`] without replacing the current
     /// snapshots when any tree state is inconsistent with its persisted profile.
     pub fn set_zk_roots_snapshot(
         &mut self,
         map: &BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
     ) -> Result<(), ivm::VMError> {
-        self.zk_roots =
-            crate::state::ivm_zk_roots::project(map).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        self.zk_roots = crate::state::ivm_zk_roots::project(map)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         Ok(())
     }
     /// Hydrate the ABI-V1 `VRF_EPOCH_SEED` projection from finalized global pulses.
@@ -5105,10 +5124,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<(), ivm::VMError> {
         let elections = state
             .ivm_elections_snapshot()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let roots = state
             .ivm_zk_roots_snapshot()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         self.install_zk_snapshots(state.world(), state.zk(), roots, elections)
     }
     /// Hydrate a standalone World fixture without an enclosing State cache.
@@ -5119,9 +5138,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         zk_cfg: &iroha_config::parameters::actual::Zk,
     ) -> Result<(), ivm::VMError> {
         let elections = crate::state::ivm_elections::project(world.elections())
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let roots = crate::state::ivm_zk_roots::project(world.zk_assets().iter())
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         self.install_zk_snapshots(world, zk_cfg, roots, elections)
     }
     /// Validate the verifying-key registry, then install the validated projections.
@@ -5197,7 +5216,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .insert(rec.commitment, prepared)
                 .is_some()
             {
-                return Err(ivm::VMError::NoritoInvalid);
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
             }
         }
         Ok(prepared_by_commitment)
@@ -5220,20 +5239,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         // Early sanity: ensure commitments and backend labels match the
         // production no-trusted-setup verifier policy.
         if !id.is_portable_registry_id() {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let Some(registry_backend_tag) =
             crate::zk::verifier_backend_registry_tag_v1(id.backend.as_str())
         else {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         };
         if registry_backend_tag != rec.backend {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if rec.commitment.iter().all(|byte| *byte == 0)
             || rec.public_inputs_schema_hash.iter().all(|byte| *byte == 0)
         {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
             || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
@@ -5241,18 +5260,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 &rec.circuit_id,
             )
         {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let backend_label = Self::backend_label_for_record(id, rec);
         if !Self::production_backend_label_matches_record(&backend_label, rec.backend) {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let material =
             crate::zk::validate_and_prepare_verifying_key_record_v1(id, rec).map_err(|error| {
                 match error {
-                    crate::zk::VerificationAttemptError::Rejected(_) => ivm::VMError::NoritoInvalid,
+                    crate::zk::VerificationAttemptError::Rejected(_) => {
+                        ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                    }
                     crate::zk::VerificationAttemptError::Deferred(original) => {
-                        ivm::VMError::VerificationDeferred(original)
+                        ivm::VMError::Deferred(VmDeferral::VerificationDeferred(original))
                     }
                 }
             })?;
@@ -5577,7 +5598,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ///
     /// # Errors
     ///
-    /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current snapshot when an
+    /// Returns [`ivm::error::VmTrap::NoritoInvalid`] without replacing the current snapshot when an
     /// election has a non-canonical selector, an out-of-range option count, or a mismatched tally
     /// length.
     pub fn set_zk_elections_snapshot(
@@ -5595,7 +5616,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<(), ivm::VMError> {
         for (election_id, (options, _, tally)) in map {
             if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
-                return Err(ivm::VMError::NoritoInvalid);
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
             }
             Self::validate_zk_election_tally(*options, tally)?;
         }
@@ -5603,7 +5624,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn validate_zk_election_tally(options: u32, tally: &[u128]) -> Result<(), ivm::VMError> {
         crate::state::ivm_elections::validate_tally(options, tally)
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     /// Configure the non-zero retained-root bound returned by `ZK_ROOTS_GET`.
     pub fn set_zk_tree_roots_history_len(&mut self, len: NonZeroUsize) {
@@ -5619,7 +5640,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.ensure_output_measurement()?;
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(self
             .drain_queued_effects()
@@ -5821,7 +5842,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.ensure_output_measurement()?;
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(self.drain_queued_effects_with_fallback(contract_runtime_context))
     }
@@ -5934,14 +5955,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn ensure_output_measurement(&self) -> Result<(), ivm::VMError> {
         match &self.output_measurement_failure {
             Some(HostOutputMeasurementFailure::Incomplete) => {
-                return Err(ivm::VMError::ExecutionDeferred(
+                return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::ExecutionDeferral::LocalInvariantViolation,
-                ));
+                )));
             }
             Some(HostOutputMeasurementFailure::Local(original)) => {
-                return Err(ivm::VMError::DecodeDeferred(original.clone()));
+                return Err(ivm::VMError::Deferred(VmDeferral::DecodeDeferred(
+                    original.clone(),
+                )));
             }
-            Some(HostOutputMeasurementFailure::Invalid) => return Err(ivm::VMError::NoritoInvalid),
+            Some(HostOutputMeasurementFailure::Invalid) => {
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
+            }
             None => {}
         }
         Ok(())
@@ -5965,9 +5990,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Ok(false);
         };
         if self.nested_contract_call_depth != 0 || !self.nested_contract_call_journals.is_empty() {
-            return Err(ivm::VMError::ExecutionDeferred(
+            return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let descriptor = vm
             .contract_interface()
@@ -5977,7 +6002,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     .iter()
                     .find(|entrypoint| entrypoint.name == context.entrypoint)
             })
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         self.finish_result_schema(vm, descriptor.return_schema.as_ref())
     }
     /// Apply recoverable Result rollback to an explicitly selected local debug call.
@@ -5997,7 +6022,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             self.execution_class,
             HostExecutionClass::LocalContractDebug | HostExecutionClass::LocalViewDebug
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let descriptor = vm
             .contract_interface()
@@ -6007,7 +6032,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     .iter()
                     .find(|entrypoint| entrypoint.name == selector)
             })
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         self.finish_result_schema(vm, descriptor.return_schema.as_ref())
     }
     fn finish_result_schema(
@@ -6015,7 +6040,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         vm: &IVM,
         schema: Option<&iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1>,
     ) -> Result<bool, ivm::VMError> {
-        let schema = schema.ok_or(ivm::VMError::InvalidMetadata)?;
+        let schema = schema.ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         if !ivm::sum::entrypoint_return_is_error(vm, schema)? {
             return Ok(false);
         }
@@ -6224,7 +6249,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         scoped
             .parse()
             .map(Some)
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn ensure_raw_durable_state_path_allowed(&self, path: &StatePath) -> Result<(), ivm::VMError> {
         if self.current_contract_runtime_context.is_none()
@@ -6237,7 +6262,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             // `sc/<contract-address-hash>/...` and `lc/<contract-address-hash>` are
             // runtime-owned namespaces. An unscoped raw IVM program must not be able to
             // read, enumerate, overwrite, or tombstone either by spelling its physical path.
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(())
     }
@@ -6326,7 +6351,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let asset: AssetDefinitionId = request
             .asset_id
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let Some(snapshot) = self.zk_roots.get(&asset) else {
             return Ok(ivm::zk_verify::RootsGetResponse {
                 latest: [0; 32],
@@ -6364,7 +6389,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         request: &ivm::zk_verify::VoteGetTallyRequest,
     ) -> Result<ivm::zk_verify::VoteGetTallyResponse, ivm::VMError> {
         if !request.is_valid_v1() {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let Some((options, finalized, tally)) = self.zk_elections.get(&request.election_id) else {
             return Ok(ivm::zk_verify::VoteGetTallyResponse {
@@ -6436,7 +6461,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         instructions: &[InstructionBox],
     ) -> Result<u64, ivm::VMError> {
         let gas = crate::gas::meter_instructions(instructions, &self.confidential_gas)
-            .map_err(ivm::VMError::VerificationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)))?;
         Ok(gas.max(Self::create_nfts_for_all_gas()))
     }
     #[cfg(test)]
@@ -6469,7 +6494,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         scope_prefix.map_or(Ok(key.as_ref()), |scope_prefix| {
             key.as_ref()
                 .strip_prefix(scope_prefix)
-                .ok_or(ivm::VMError::NoritoInvalid)
+                .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         })
     }
     fn scan_durable_state_page(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -6488,11 +6513,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         prefix
             .trim_end_matches('/')
             .parse::<StatePath>()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         if let Some(after) = after.as_ref() {
             after
                 .parse::<StatePath>()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         }
         let mut page = ivm::state_scan::StateScanPage::new(request);
         visit_bounded_durable_state_positions(
@@ -6533,7 +6558,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if scope_prefix.is_some() {
             physical_prefix
                 .parse::<StatePath>()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         }
         let mut total = 0_u64;
         let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
@@ -6580,7 +6605,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok((total, scan_work_gas))
     }
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
-        decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_durable_state_path_payload(
         &self,
@@ -6594,15 +6619,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             && vm.contract_interface().is_none()
             && !self.local_debug_artifacts
         {
-            return Err(ivm::VMError::InvalidMetadata);
+            return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
         }
         let tlv = Self::expect_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
         if path_len > ivm::syscalls::STATE_MAX_PATH_FRAME_BYTES {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+        let path: StatePath = decode_canonical_norito(tlv.payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         ivm::host::validate_state_path(&path)?;
         Ok((path, path_len))
     }
@@ -6629,7 +6654,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let mut env = Vec::with_capacity(7 + stored.len() + Hash::LENGTH);
         env.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         env.push(1);
-        let env_len = u32::try_from(stored.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let env_len =
+            u32::try_from(stored.len()).map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         env.extend_from_slice(&env_len.to_be_bytes());
         env.extend_from_slice(stored);
         let h: [u8; Hash::LENGTH] = Hash::new(stored).into();
@@ -6656,7 +6682,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<pointer_abi::Tlv<'_>, ivm::VMError> {
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != expected {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(tlv)
     }
@@ -6673,41 +6699,49 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
-        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_quantity(vm: &IVM, ptr: u64) -> Result<Quantity, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
         QuantityValueV1::decode_frame(tlv.payload)
             .map(QuantityValueV1::into_quantity)
-            .map_err(|_| ivm::VMError::DecodeError)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Quantity>, ivm::VMError> {
-        let layout = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+        let layout = ivm::sum::SumLayoutV1::option(1)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
         if !is_some {
             return Ok(None);
         }
-        let amount_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
+        let amount_ptr = payload
+            .first()
+            .copied()
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::decode_quantity(vm, amount_ptr).map(Some)
     }
     fn decode_optional_string(vm: &IVM, ptr: u64) -> Result<Option<String>, ivm::VMError> {
-        let layout = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+        let layout = ivm::sum::SumLayoutV1::option(1)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
         if !is_some {
             return Ok(None);
         }
-        let string_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
+        let string_ptr = payload
+            .first()
+            .copied()
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let bytes = Self::decode_tlv_blob(vm, string_ptr)?;
         String::from_utf8(bytes)
             .map(Some)
-            .map_err(|_| ivm::VMError::DecodeError)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
         T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
-        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_contract_instance_lookup(
         vm: &IVM,
@@ -6717,17 +6751,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         match tlv.type_id {
             PointerType::NoritoBytes => decode_canonical_norito::<ContractAddress>(tlv.payload)
                 .map(ContractInstanceLookup::Address)
-                .map_err(|_| ivm::VMError::NoritoInvalid),
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid)),
             PointerType::Name => {
                 let alias_name = decode_canonical_norito::<Name>(tlv.payload)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let alias = alias_name
                     .as_ref()
                     .parse::<ContractAlias>()
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 Ok(ContractInstanceLookup::Alias(alias))
             }
-            _ => Err(ivm::VMError::NoritoInvalid),
+            _ => Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         }
     }
 
@@ -6745,7 +6779,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Returns an error if the pointer is invalid for the active ABI policy or the payload fails to decode.
     pub fn decode_tlv_json(vm: &IVM, ptr: u64) -> Result<Json, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Json)?;
-        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn permission_from_name(name: &Name) -> Permission {
         Permission::new(name.as_ref().to_string(), Json::new(()))
@@ -6761,16 +6795,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             let name = map
                 .get("name")
                 .and_then(json::Value::as_str)
-                .ok_or(ivm::VMError::DecodeError)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
             let payload = map.get("payload").cloned().unwrap_or(json::Value::Null);
             return Ok(Permission::new(name.to_string(), Json::from(payload)));
         }
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn permission_from_json(value: &Json) -> Result<Permission, ivm::VMError> {
         let value: json::Value = value
             .try_into_any_norito::<json::Value>()
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::permission_from_value(&value)
     }
     fn permissions_from_value(value: &json::Value) -> Result<Permissions, ivm::VMError> {
@@ -6804,14 +6838,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn permissions_from_json(value: &Json) -> Result<Permissions, ivm::VMError> {
         let value: json::Value = value
             .try_into_any_norito::<json::Value>()
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::permissions_from_value(&value)
     }
     fn public_key_from_value(value: &json::Value) -> Result<PublicKey, ivm::VMError> {
         if let Some(key_str) = value.as_str() {
             return key_str
                 .parse::<PublicKey>()
-                .map_err(|_| ivm::VMError::DecodeError);
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError));
         }
         if let Some(map) = value.as_object()
             && let Some(key_value) = map
@@ -6821,7 +6855,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         {
             return Self::public_key_from_value(key_value);
         }
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn public_key_from_json(value: &Json) -> Result<PublicKey, ivm::VMError> {
         if let Ok(key) = value.try_into_any_norito::<PublicKey>() {
@@ -6829,7 +6863,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         let value: json::Value = value
             .try_into_any_norito::<json::Value>()
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::public_key_from_value(&value)
     }
     fn peer_id_from_value(value: &json::Value) -> Result<PeerId, ivm::VMError> {
@@ -6840,7 +6874,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             if let Ok(peer) = Peer::from_str(peer_str) {
                 return Ok(peer.id().clone());
             }
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         if let Some(map) = value.as_object() {
             if let Some(peer_value) = map
@@ -6859,7 +6893,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 return Ok(PeerId::from(key));
             }
         }
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn register_peer_from_json(value: &Json) -> Result<RegisterPeerWithPop, ivm::VMError> {
         if let Ok(request) = value.try_into_any_norito::<RegisterPeerWithPop>() {
@@ -6867,14 +6901,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         let value: json::Value = value
             .try_into_any_norito::<json::Value>()
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::register_peer_from_value(&value)
     }
     fn register_peer_from_value(value: &json::Value) -> Result<RegisterPeerWithPop, ivm::VMError> {
         if let Ok(request) = json::from_value::<RegisterPeerWithPop>(value.clone()) {
             return Ok(request);
         }
-        let map = value.as_object().ok_or(ivm::VMError::DecodeError)?;
+        let map = value
+            .as_object()
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         if map.keys().any(|key| {
             !matches!(
                 key.as_str(),
@@ -6889,7 +6925,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     | "expiry_at"
             )
         }) {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let peer_value = map
             .get("peer")
@@ -6898,19 +6934,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .or_else(|| map.get("public_key"))
             .or_else(|| map.get("publicKey"))
             .or_else(|| map.get("key"))
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let peer_id = Self::peer_id_from_value(peer_value)?;
-        let pop_value = map.get("pop").ok_or(ivm::VMError::DecodeError)?;
-        let pop: Vec<u8> =
-            json::from_value(pop_value.clone()).map_err(|_| ivm::VMError::DecodeError)?;
+        let pop_value = map
+            .get("pop")
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+        let pop: Vec<u8> = json::from_value(pop_value.clone())
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let mut request = RegisterPeerWithPop::new(peer_id, pop);
         if let Some(value) = map.get("activation_at") {
-            request.activation_at =
-                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+            request.activation_at = Some(
+                json::from_value(value.clone())
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?,
+            );
         }
         if let Some(value) = map.get("expiry_at") {
-            request.expiry_at =
-                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
+            request.expiry_at = Some(
+                json::from_value(value.clone())
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?,
+            );
         }
         Ok(request)
     }
@@ -6925,25 +6967,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 let payload = Self::decode_tlv_json(vm, ptr)?;
                 Self::permission_from_json(&payload)
             }
-            _ => Err(ivm::VMError::NoritoInvalid),
+            _ => Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         }
     }
     fn decode_header<T>(payload: &[u8]) -> Result<T, ivm::VMError>
     where
         T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
-        decode_canonical_norito(payload).map_err(|_| ivm::VMError::NoritoInvalid)
+        decode_canonical_norito(payload).map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn expect_tlv(vm: &IVM, ptr: u64, expected: PointerType) -> Result<ivm::Tlv<'_>, ivm::VMError> {
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != expected {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if !is_type_allowed_for_policy(vm.syscall_policy(), expected) {
-            return Err(ivm::VMError::AbiTypeNotAllowed {
+            return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
                 abi: vm.abi_version(),
                 type_id: expected as u16,
-            });
+            }));
         }
         Ok(tlv)
     }
@@ -7132,9 +7174,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             error,
             fastpq_prover::Error::LocalAllocationUnavailable { .. }
         ) {
-            return ivm::VMError::ExecutionDeferred(
+            return ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::error::ExecutionDeferral::AllocationUnavailable,
-            );
+            ));
         }
         self.record_axt_reject(
             AxtRejectReason::Proof,
@@ -7142,7 +7184,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             Some(lane),
             format!("{context}: {error}"),
         );
-        ivm::VMError::PermissionDenied
+        ivm::VMError::Trap(VmTrap::PermissionDenied)
     }
     fn verify_fastpq_envelope_binding(
         &mut self,
@@ -7158,7 +7200,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "FASTPQ proof envelope is missing fastpq_binding",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         };
         fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
             self.map_axt_fastpq_error(
@@ -7175,7 +7217,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "FASTPQ binding source_dsid mismatch",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(envelope, expiry_slot)
             .map_err(|err| {
@@ -7205,7 +7247,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "standalone FASTPQ proof admission is unavailable until AXT_VERIFY_DS_PROOF binds the source roots and transaction set to an authoritative finalized source-state anchor",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let current_slot = Some(policy.current_slot);
         let expected_manifest = Some(policy.manifest_root);
@@ -7217,7 +7259,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "policy manifest root is zeroed",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         if proof.payload.is_empty() {
             self.record_axt_reject(
@@ -7226,7 +7268,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "empty proof payload",
             );
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
             self.record_axt_reject(
@@ -7238,7 +7280,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
                 ),
             );
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         if proof.expiry_slot == Some(0) {
             self.record_axt_reject(
@@ -7247,7 +7289,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "proof expiry slot is zero",
             );
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let expiry_with_skew = proof
             .expiry_slot
@@ -7269,10 +7311,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     policy.current_slot
                 ),
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         if !self.try_reserve_output(1, proof.payload.len().saturating_add(128)) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         // Keep the recorded proof expiry as provided; skew is only applied to cache/slot checks.
         let proof_for_state = ProofBlob {
@@ -7292,7 +7334,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     format!("proof payload is not an AXT proof envelope: {err}"),
                 );
                 self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
-                ivm::VMError::NoritoInvalid
+                ivm::VMError::Trap(VmTrap::NoritoInvalid)
             })?;
         if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
             self.record_axt_reject(
@@ -7305,7 +7347,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 ),
             );
             self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let Some(binding) = envelope.fastpq_binding.as_ref() else {
             self.record_axt_reject(
@@ -7314,7 +7356,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 "FASTPQ proof envelope is missing fastpq_binding",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         };
         fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
             self.record_axt_reject(
@@ -7323,7 +7365,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(policy.target_lane),
                 format!("generic AXT proof admission requires a witnessed transfer claim: {err}"),
             );
-            ivm::VMError::PermissionDenied
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         })?;
         let digest = Self::axt_proof_cache_digest(proof);
         let mut cache_snapshot: Option<CachedProofEntry> = None;
@@ -7378,7 +7420,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     hex::encode(policy.manifest_root)
                 ),
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         self.verify_fastpq_envelope_binding(dsid, &envelope, proof.expiry_slot, policy)?;
         let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
@@ -7431,11 +7473,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     #[cfg(test)]
     fn compute_envelope_hash(payload: &[u8]) -> Result<[u8; 32], ivm::VMError> {
         norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(payload)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         Ok(iroha_crypto::Hash::new(payload).into())
     }
     fn len_to_u32(len: usize) -> Result<u32, ivm::VMError> {
-        u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
+        u32::try_from(len).map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn snapshot_nested_contract_call(&mut self) -> NestedContractCallHostSnapshot {
         let output_count_before = self.instruction_queue_count;
@@ -7510,16 +7552,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             output_violation_before,
         } = snapshot;
         if self.nested_contract_call_journals.len() != journal_depth.saturating_add(1) {
-            return Err(ivm::VMError::ExecutionDeferred(
+            return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
-        let journal =
-            self.nested_contract_call_journals
-                .pop()
-                .ok_or(ivm::VMError::ExecutionDeferred(
-                    ivm::error::ExecutionDeferral::LocalInvariantViolation,
-                ))?;
+        let journal = self
+            .nested_contract_call_journals
+            .pop()
+            .ok_or(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
+            )))?;
         self.authority = authority;
         self.execution_class = execution_class;
         self.local_debug_artifacts |= local_debug_artifacts;
@@ -7530,16 +7572,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.fastpq_batch_entries = fastpq_batch_entries;
         if matches!(outcome, NestedContractCallOutcome::Commit) {
             if !self.default.commit_forwarded_call(default) {
-                return Err(ivm::VMError::ExecutionDeferred(
+                return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::error::ExecutionDeferral::LocalInvariantViolation,
-                ));
+                )));
             }
             return Ok(());
         }
         if !self.default.rollback_forwarded_call(default) {
-            return Err(ivm::VMError::ExecutionDeferred(
+            return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let preserve_reads = matches!(outcome, NestedContractCallOutcome::RollbackPreservingReads);
         let preserved_read_items = if preserve_reads {
@@ -7682,7 +7724,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     identity
                         .contract_address
                         .dataspace_id()
-                        .map_err(|_| ivm::VMError::PermissionDenied)?,
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?,
                     identity.code_hash,
                 ),
             );
@@ -7694,7 +7736,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 record.contract_address == identity.contract_address
                     && record.code_hash == identity.code_hash
             })
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         self.prepared_contract_cache
             .get_or_prepare(identity.code_hash, &record.code_bytes)
     }
@@ -7755,27 +7797,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             start_ms: u64,
             end_ms: u64,
         }
-        let trigger_id = self
-            .current_trigger_id
-            .clone()
-            .ok_or(ivm::VMError::NotImplemented {
-                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-            })?;
+        let trigger_id =
+            self.current_trigger_id
+                .clone()
+                .ok_or(ivm::VMError::Trap(VmTrap::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                }))?;
         let context = {
             let Some(state_ref) = self.query_state.get() else {
-                return Err(ivm::VMError::NotImplemented {
+                return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
                     syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-                });
+                }));
             };
             state_ref.subscription_context_for_trigger(&trigger_id)?
         };
         let mut subscription_state = context.subscription_state.clone();
         if subscription_state.subscriber != context.nft_owner {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let plan = context.plan.clone();
         if subscription_state.provider != plan.provider {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         subscription_state.billing_trigger_id = trigger_id.clone();
         #[cfg(feature = "telemetry")]
@@ -7818,20 +7860,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     cadence.anchor_time_ms,
                     bill_for,
                 )
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 let next_charge = calendar::monthly_anchor_after(
                     scheduled_at_ms,
                     cadence.anchor_day,
                     cadence.anchor_time_ms,
                 )
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 let next = calendar::monthly_billing_period(
                     scheduled_at_ms,
                     cadence.anchor_day,
                     cadence.anchor_time_ms,
                     calendar::BillingPeriod::Next,
                 )
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 (
                     BillingWindow {
                         start_ms: charge.start_ms,
@@ -7846,25 +7888,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             }
             SubscriptionCadence::FixedPeriod(cadence) => {
                 if cadence.period_ms == 0 {
-                    return Err(ivm::VMError::NoritoInvalid);
+                    return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let (start, end) = match billing.bill_for {
                     SubscriptionBillFor::PreviousPeriod => (
                         scheduled_at_ms
                             .checked_sub(cadence.period_ms)
-                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?,
                         scheduled_at_ms,
                     ),
                     SubscriptionBillFor::NextPeriod => (
                         scheduled_at_ms,
                         scheduled_at_ms
                             .checked_add(cadence.period_ms)
-                            .ok_or(ivm::VMError::NoritoInvalid)?,
+                            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?,
                     ),
                 };
                 let next_charge = scheduled_at_ms
                     .checked_add(cadence.period_ms)
-                    .ok_or(ivm::VMError::NoritoInvalid)?;
+                    .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 (
                     BillingWindow {
                         start_ms: start,
@@ -7893,7 +7935,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 }
                 let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
                     .parse()
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 let subscription_json =
                     iroha_primitives::json::Json::new(subscription_state.clone());
                 let isi = SetKeyValue::nft(
@@ -7915,7 +7957,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             SubscriptionPricing::Fixed(pricing) => {
                 let fixed_amount = pricing.amount.clone();
                 if charge_spec.check(fixed_amount.as_numeric()).is_err() {
-                    return Err(ivm::VMError::NoritoInvalid);
+                    return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 (fixed_amount, None)
             }
@@ -7927,9 +7969,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     .unwrap_or_else(Quantity::zero);
                 let amount = usage
                     .try_mul_decimal(pricing.unit_price.as_numeric())
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 if charge_spec.check(amount.as_numeric()).is_err() {
-                    return Err(ivm::VMError::NoritoInvalid);
+                    return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 (amount, Some(pricing.unit_key.clone()))
             }
@@ -8011,7 +8053,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
         let isi = SetKeyValue::nft(
             context.subscription_nft_id.clone(),
@@ -8022,7 +8064,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         gas = gas.saturating_add(self.queue_instruction(instr)?);
         let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let invoice_json = iroha_primitives::json::Json::new(invoice);
         let invoice_isi = SetKeyValue::nft(
             context.subscription_nft_id.clone(),
@@ -8048,7 +8090,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         for key in ["__registered_block_height", "__registered_at_ms"] {
             let key = key
                 .parse::<Name>()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
             next_trigger_metadata.remove(&key);
         }
         let action = iroha_data_model::trigger::action::Action::new(
@@ -8057,7 +8099,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             context.authority.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
         )
-        .map_err(|_| ivm::VMError::NoritoInvalid)?
+        .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?
         .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
         let unregister =
@@ -8068,15 +8110,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok(gas)
     }
     fn subscription_record_usage(&mut self) -> Result<u64, ivm::VMError> {
-        let args = self.args.as_ref().ok_or(ivm::VMError::NoritoInvalid)?;
+        let args = self
+            .args
+            .as_ref()
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let delta: SubscriptionUsageDelta = args
             .try_into_any_norito()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let (mut subscription_state, plan) = {
             let Some(state_ref) = self.query_state.get() else {
-                return Err(ivm::VMError::NotImplemented {
+                return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
                     syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
-                });
+                }));
             };
             let subscription_state =
                 state_ref.subscription_state_for_nft(&delta.subscription_nft_id)?;
@@ -8087,16 +8132,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             subscription_state.status,
             SubscriptionStatus::Active | SubscriptionStatus::PastDue
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         match &plan.pricing {
             SubscriptionPricing::Usage(pricing) => {
                 if pricing.unit_key != delta.unit_key {
-                    return Err(ivm::VMError::PermissionDenied);
+                    return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                 }
             }
             SubscriptionPricing::Fixed(_) => {
-                return Err(ivm::VMError::PermissionDenied);
+                return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         let entry = subscription_state
@@ -8105,11 +8150,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .or_insert_with(Quantity::zero);
         let updated = entry
             .checked_add(&delta.delta)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         *entry = updated;
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let subscription_json = iroha_primitives::json::Json::new(subscription_state);
         let isi = SetKeyValue::nft(
             delta.subscription_nft_id,
@@ -8128,20 +8173,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .time_triggers()
             .get(trigger_id)
             .cloned()
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let action = triggers
             .get_original_action(action)
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let trigger_metadata = action.metadata.clone();
         let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let trigger_ref_json = trigger_metadata
             .get(&trigger_ref_key)
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let trigger_ref: SubscriptionTriggerRef = trigger_ref_json
             .try_into_any_norito()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let subscription_nft_id = trigger_ref.subscription_nft_id;
         let (subscription_state, nft_owner) =
             Self::subscription_state_and_owner(state, &subscription_nft_id)?;
@@ -8154,7 +8199,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             state
                 .world()
                 .asset_definition(charge_asset_id)
-                .map_err(|_| ivm::VMError::NoritoInvalid)?
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?
         };
         let balance = {
             let asset_id = AssetId::of(
@@ -8192,18 +8237,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let entry = state
             .world()
             .nft(nft_id)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let value = entry
             .value()
             .content
             .get(&subscription_key)
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let subscription_state = value
             .try_into_any_norito::<SubscriptionState>()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let owner = entry.value().owned_by.clone();
         Ok((subscription_state, owner))
     }
@@ -8214,24 +8259,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let asset_def = state
             .world()
             .asset_definition(plan_id)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY
             .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let value = asset_def
             .metadata()
             .get(&plan_key)
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         value
             .try_into_any_norito::<SubscriptionPlan>()
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn parse_account_alias<S: StateReadOnly>(
         state: &S,
         alias_literal: &str,
     ) -> Result<AccountAlias, ivm::VMError> {
         AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn parameter_by_name<S: StateReadOnly>(
         state: &S,
@@ -8315,7 +8360,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             "executor.max_output_bytes" => Parameter::Executor(
                 SmartContractParameter::MaxOutputBytes(params.executor().max_output_bytes()),
             ),
-            _ => return Err(ivm::VMError::DecodeError),
+            _ => return Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         };
         Ok(parameter)
     }
@@ -8327,28 +8372,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             state.world(),
             contract_address,
         )
-        .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?;
+        .map_err(|error| error.into_vm_error(|_| ivm::VMError::Trap(VmTrap::PermissionDenied)))?;
         let code_hash = state
             .world()
             .contract_instances()
             .get(contract_address)
             .copied()
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let artifact = iroha_data_model::smart_contract::ContractArtifactId::new(
             contract_address
                 .dataspace_id()
-                .map_err(|_| ivm::VMError::PermissionDenied)?,
+                .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?,
             code_hash,
         );
         let manifest = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
             state.world(),
             &artifact,
         )
-        .ok_or(ivm::VMError::DecodeError)?;
+        .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         if manifest.hashes().0 != Some(code_hash)
             || state.world().contract_code().get(&artifact).is_none()
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let contract_alias = state
             .world()
@@ -8358,7 +8403,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if let Some(alias) = contract_alias.as_ref()
             && state.world().contract_aliases().get(alias) != Some(contract_address)
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         if state
             .world()
@@ -8368,7 +8413,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 address == contract_address && Some(alias) != contract_alias.as_ref()
             })
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         Ok(ContractInstance {
             contract_address: contract_address.clone(),
@@ -8385,7 +8430,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .contract_aliases()
             .get(alias)
             .cloned()
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let mut instance = Self::contract_instance_by_address(state, &contract_address)?;
         if instance.contract_alias.is_none() {
             instance.contract_alias = Some(alias.clone());
@@ -8417,7 +8462,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .base
             .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items));
         if gas_remaining < base_cost {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let remaining = gas_remaining.saturating_sub(base_cost);
         Ok(QueryExecutionBudget::from_weighted_limit(
@@ -8432,7 +8477,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn encode_amount_payload(value: &Quantity) -> Result<Vec<u8>, ivm::VMError> {
         QuantityValueV1::new(value.clone())
             .encode_frame()
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn project_account(account: Account) -> AccountView {
         AccountView {
@@ -8486,7 +8531,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<PreparedCoreQueryWord, ivm::VMError> {
         let payload = QuantityValueV1::new(value.as_quantity().clone())
             .encode_frame()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         Ok(PreparedCoreQueryWord::Tlv(Self::encode_tlv_payload(
             PointerType::Quantity,
             &payload,
@@ -8499,7 +8544,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .map(|value| {
                 let frame = IntValueV1::try_new(BigInt::from(value))
                     .and_then(|value| value.encode_frame())
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 Self::encode_tlv_payload(PointerType::Int, &frame)
             })
             .transpose()?;
@@ -8587,14 +8632,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
             metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         }
-        let decoded: Option<T> =
-            decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
+        let decoded: Option<T> = decode_canonical_norito(payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let prepared = decoded.map(prepare).transpose()?;
         if prepared
             .as_ref()
             .is_some_and(|words| u64::try_from(words.len()).unwrap_or(u64::MAX) != payload_words)
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let leaf_tlv_bytes = prepared.as_ref().map_or(0, |words| {
             Self::prepared_query_leaf_bytes(std::slice::from_ref(words))
@@ -8613,8 +8658,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             processed_bytes,
             encoded_bytes,
         )?;
-        let layout =
-            ivm::sum::SumLayoutV1::option(payload_words).map_err(|_| ivm::VMError::DecodeError)?;
+        let layout = ivm::sum::SumLayoutV1::option(payload_words)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let handle = match prepared {
             Some(words) => {
                 let words = Self::materialize_prepared_query_words(vm, words)?;
@@ -8641,8 +8686,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
             metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         }
-        let decoded: QueryPageV1<T> =
-            decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
+        let decoded: QueryPageV1<T> = decode_canonical_norito(payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let (items, next_offset) = decoded.into_parts();
         let elements = items
             .into_iter()
@@ -8653,7 +8698,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .iter()
             .any(|words| u64::try_from(words.len()).unwrap_or(u64::MAX) != element_words)
         {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let leaf_tlv_bytes =
             Self::prepared_query_leaf_bytes(&elements).saturating_add(next_offset.encoded_bytes());
@@ -8677,7 +8722,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .collect::<Result<Vec<_>, _>>()?;
         let list_layout =
             ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, element_words)
-                .map_err(|_| ivm::VMError::DecodeError)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let list_handle = ivm::list::allocate_words(vm, list_layout, &elements)?;
         let offset_handle = next_offset.materialize(vm)?;
         vm.set_register(10, list_handle);
@@ -8691,11 +8736,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         account: Option<AccountId>,
     ) -> Result<QueryRequest, ivm::VMError> {
         if account.is_some() && tag != CoreQueryEntityTagV1::Asset {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
-        let fetch_size = NonZeroU64::new(limit).ok_or(ivm::VMError::DecodeError)?;
-        let window_size = NonZeroU64::new(limit.checked_add(1).ok_or(ivm::VMError::DecodeError)?)
-            .ok_or(ivm::VMError::DecodeError)?;
+        let fetch_size = NonZeroU64::new(limit).ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+        let window_size = NonZeroU64::new(
+            limit
+                .checked_add(1)
+                .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?,
+        )
+        .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let params = QueryParams {
             pagination: Pagination::new(Some(window_size), offset),
             sorting: Sorting::default(),
@@ -8727,7 +8776,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             CoreQueryEntityTagV1::Asset if account.is_some() => request_for!(
                 Asset,
                 iroha_data_model::query::asset::prelude::FindAssetsByAccountId::new(
-                    account.ok_or(ivm::VMError::DecodeError)?
+                    account.ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?
                 ),
                 Asset,
                 params
@@ -8779,7 +8828,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         );
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if gas > gas_remaining {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         Ok(gas)
     }
@@ -8799,10 +8848,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let gas_ctx = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
         if budget.max_items() == 0 {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let Some(state_ref) = self.query_state.get() else {
-            return Err(ivm::VMError::NotImplemented { syscall });
+            return Err(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }));
         };
         if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.host_queries = metrics.host_queries.saturating_add(1);
@@ -8845,7 +8894,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                         SingularQueryOutputBox::Account(account) => {
                             Ok(Self::project_account(account))
                         }
-                        _ => Err(ivm::VMError::DecodeError),
+                        _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                     },
                     Self::ACCOUNT_VIEW_WORDS,
                     |value| Self::prepare_account_view(&value),
@@ -8861,7 +8910,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     request,
                     |output| match output {
                         SingularQueryOutputBox::Asset(asset) => Ok(Self::project_asset(asset)),
-                        _ => Err(ivm::VMError::DecodeError),
+                        _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                     },
                     Self::ASSET_VIEW_WORDS,
                     |value| Self::prepare_asset_view(&value),
@@ -8881,7 +8930,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                         SingularQueryOutputBox::AssetDefinition(definition) => {
                             Ok(Self::project_asset_definition(definition))
                         }
-                        _ => Err(ivm::VMError::DecodeError),
+                        _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                     },
                     Self::ASSET_DEFINITION_VIEW_WORDS,
                     |value| Self::prepare_asset_definition_view(&value),
@@ -8897,7 +8946,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     request,
                     |output| match output {
                         SingularQueryOutputBox::Domain(domain) => Ok(Self::project_domain(domain)),
-                        _ => Err(ivm::VMError::DecodeError),
+                        _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                     },
                     Self::DOMAIN_VIEW_WORDS,
                     |value| Self::prepare_domain_view(&value),
@@ -8913,7 +8962,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     request,
                     |output| match output {
                         SingularQueryOutputBox::Nft(nft) => Ok(Self::project_nft(nft)),
-                        _ => Err(ivm::VMError::DecodeError),
+                        _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                     },
                     Self::NFT_VIEW_WORDS,
                     |value| Self::prepare_nft_view(&value),
@@ -8930,27 +8979,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         limit: u64,
     ) -> Result<u64, ivm::VMError> {
         if offset < 0 || !(1..=QUERY_PAGE_CAPACITY_V1 as u64).contains(&limit) {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
-        let limit_i64 = i64::try_from(limit).map_err(|_| ivm::VMError::DecodeError)?;
+        let limit_i64 =
+            i64::try_from(limit).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         offset
             .checked_add(limit_i64)
-            .ok_or(ivm::VMError::DecodeError)?;
-        let offset_u64 = u64::try_from(offset).map_err(|_| ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+        let offset_u64 =
+            u64::try_from(offset).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         vm.ensure_public_register(13)?;
         let owner_pointer = vm.register(13);
         let (mut filter, filter_gas) = if owner_pointer == 0 {
             (None, 0)
         } else {
             if tag != CoreQueryEntityTagV1::Asset {
-                return Err(ivm::VMError::DecodeError);
+                return Err(ivm::VMError::Trap(VmTrap::DecodeError));
             }
             let payload_bytes =
                 quote_tlv_payload_len_at(vm, owner_pointer, PointerType::AccountId)?;
             let gas = 32_u64.saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
             if gas > vm.remaining_gas() {
-                return Err(ivm::VMError::OutOfGas);
+                return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
             }
             let filter = CoreQueryAccountFilter::decode(vm, owner_pointer)
                 .map_err(|error| ivm::VMError::metered(gas, error))?;
@@ -8963,10 +9014,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         gas_ctx.base = gas_ctx.base.saturating_add(filter_gas);
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
         if budget.max_items() == 0 {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let Some(state_ref) = self.query_state.get() else {
-            return Err(ivm::VMError::NotImplemented { syscall });
+            return Err(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }));
         };
         if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.host_queries = metrics.host_queries.saturating_add(1);
@@ -8974,19 +9025,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let query_result =
             state_ref.execute_bounded_query_with_budget(&self.authority, request, Some(budget))?;
         let QueryResponse::Iterable(output) = query_result.response else {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         };
         let has_more = output.has_more;
         let mut columns = output.batch.into_columns();
         if columns.len() != 1 {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
-        let batch = columns.pop().ok_or(ivm::VMError::DecodeError)?;
+        let batch = columns
+            .pop()
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         match (tag, batch) {
             (CoreQueryEntityTagV1::Account, QueryOutputBatchBox::Account(accounts)) => {
                 let items = accounts.into_iter().map(Self::project_account).collect();
                 let page = QueryPageV1::from_window(offset, items, has_more)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = Self::encode_norito_payload(&page)?;
                 self.finish_and_materialize_core_query_page::<AccountView>(
                     vm,
@@ -9003,7 +9056,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     .map(Self::project_asset)
                     .collect::<Vec<_>>();
                 let page = QueryPageV1::from_window(offset, items, has_more)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = Self::encode_norito_payload(&page)?;
                 self.finish_and_materialize_core_query_page::<AssetView>(
                     vm,
@@ -9023,7 +9076,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     .map(Self::project_asset_definition)
                     .collect::<Vec<_>>();
                 let page = QueryPageV1::from_window(offset, items, has_more)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = Self::encode_norito_payload(&page)?;
                 self.finish_and_materialize_core_query_page::<AssetDefinitionView>(
                     vm,
@@ -9037,7 +9090,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             (CoreQueryEntityTagV1::Domain, QueryOutputBatchBox::Domain(domains)) => {
                 let items = domains.into_iter().map(Self::project_domain).collect();
                 let page = QueryPageV1::from_window(offset, items, has_more)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = Self::encode_norito_payload(&page)?;
                 self.finish_and_materialize_core_query_page::<DomainView>(
                     vm,
@@ -9051,7 +9104,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             (CoreQueryEntityTagV1::Nft, QueryOutputBatchBox::Nft(nfts)) => {
                 let items = nfts.into_iter().map(Self::project_nft).collect();
                 let page = QueryPageV1::from_window(offset, items, has_more)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = Self::encode_norito_payload(&page)?;
                 self.finish_and_materialize_core_query_page::<NftView>(
                     vm,
@@ -9062,7 +9115,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     |value| Self::prepare_nft_view(&value),
                 )
             }
-            _ => Err(ivm::VMError::DecodeError),
+            _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         }
     }
     fn execute_singular_query_payload(
@@ -9091,11 +9144,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let gas_remaining = vm.remaining_gas();
         let gas_ctx = QueryGasContext::from_request(&request);
         let Some(state_ref) = self.query_state.get() else {
-            return Err(ivm::VMError::NotImplemented { syscall });
+            return Err(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }));
         };
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
         if budget.max_items() == 0 {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let query_result = if syscall == ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE {
             state_ref.execute_account_balance_query(&self.authority, request, Some(budget))?
@@ -9104,7 +9157,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         };
         let output = match query_result.response {
             QueryResponse::Singular(output) => output,
-            QueryResponse::Iterable(_) => return Err(ivm::VMError::DecodeError),
+            QueryResponse::Iterable(_) => return Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         };
         let payload = payload_from_output(output)?;
         let payload_len_u64 = u64::try_from(payload.len()).unwrap_or(u64::MAX);
@@ -9115,7 +9168,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         );
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if gas > gas_remaining {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let ptr = Self::alloc_tlv_payload(vm, output_type, &payload)?;
         vm.set_register(10, ptr);
@@ -9131,7 +9184,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let gas = Self::query_gas_cost(&gas_ctx, 1, payload_len_u64);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if gas > gas_remaining {
-            return Err(ivm::VMError::OutOfGas);
+            return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let ptr = Self::alloc_norito_bytes(vm, payload)?;
         vm.set_register(10, ptr);
@@ -9143,7 +9196,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn preflight_zk_verify_payload(&self, vm: &IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
         if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.zk_gas_schedule.max_payload_bytes
         {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = self.gas_for_zk_verify_payload(payload);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -9183,7 +9236,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             self.current_contract_runtime_context.as_ref(),
             instruction,
         )
-        .map_err(|_| ivm::VMError::PermissionDenied)
+        .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))
     }
     /// Queue the exact kernel operation under the original authenticated contract frame.
     /// Effect application retains its ordinary gas/output ownership and immutable authorization.
@@ -9199,9 +9252,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         if self.current_entrypoint_authorization.is_none() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let permitted = match operation_tag {
             ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION => instruction
@@ -9214,7 +9267,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             _ => false,
         };
         if !permitted {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let gas = self.queue_instruction_after_preflight(vm, instruction)?;
         // Output admission may retain an original local refusal without enqueueing the effect.
@@ -9226,13 +9279,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn decode_opaque_instruction(&self, vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
         let pointer = vm.register(10);
         let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)?;
-        let value =
-            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let value = decode_canonical_norito(tlv.payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         if crate::runtime::ironwood::admission::instruction_requires_ironwood(&value) {
             let query_state = self.query_state.get();
-            let state = query_state.as_ref().ok_or(ivm::VMError::PermissionDenied)?;
+            let state = query_state
+                .as_ref()
+                .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
             if !crate::runtime::ironwood::enabled(state.runtime_selection()) {
-                return Err(ivm::VMError::NoritoInvalid);
+                return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
             }
         }
         Ok(value)
@@ -9252,7 +9307,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn queue_instruction(&mut self, instr: InstructionBox) -> Result<u64, ivm::VMError> {
         let gas = crate::gas::meter_instruction(&instr, &self.confidential_gas)
-            .map_err(ivm::VMError::VerificationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)))?;
         self.enqueue_priced_instruction(instr);
         Ok(gas)
     }
@@ -9276,7 +9331,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<u64, ivm::VMError> {
         self.ensure_instruction_queue_allowed(&instruction)?;
         let gas = crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-            .map_err(ivm::VMError::VerificationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)))?;
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         self.enqueue_priced_instruction(instruction);
         Ok(gas)
@@ -9332,7 +9387,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if self.fastpq_batch_entries.is_some() {
             return Err(ivm::VMError::metered(
                 ivm::gas::G_FASTPQ_BATCH,
-                ivm::VMError::PermissionDenied,
+                ivm::VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         self.fastpq_batch_entries = Some(Vec::new());
@@ -9354,14 +9409,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         if self.fastpq_batch_entries.is_none() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
         let isi = Transfer::asset_quantity(asset_id, amount.clone(), to.clone());
         let instruction = InstructionBox::from(TransferBox::from(isi));
         let gas = crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-            .map_err(ivm::VMError::VerificationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)))?;
         if self.try_reserve_serialized_output(&instruction, 1) {
             self.fastpq_batch_entries
                 .as_mut()
@@ -9374,13 +9429,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let Some(entries) = self.fastpq_batch_entries.take() else {
             return Err(ivm::VMError::metered(
                 ivm::gas::G_FASTPQ_BATCH,
-                ivm::VMError::PermissionDenied,
+                ivm::VMError::Trap(VmTrap::PermissionDenied),
             ));
         };
         if entries.is_empty() {
             return Err(ivm::VMError::metered(
                 ivm::gas::G_FASTPQ_BATCH,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
             ));
         }
         self.enqueue_fastpq_batch(entries);
@@ -9388,13 +9443,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn apply_fastpq_batch_from_tlv(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         if self.fastpq_batch_entries.is_some() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::NoritoBytes)?;
-        let batch: TransferAssetBatch =
-            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+        let batch: TransferAssetBatch = decode_canonical_norito(tlv.payload)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         if batch.entries().is_empty() {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         let instr = InstructionBox::from(batch);
         self.queue_instruction(instr)
@@ -9414,7 +9469,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let binding = axt::compute_binding(&descriptor).map_err(|_| {
             self.record_axt_reject_detail(
@@ -9425,7 +9480,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            ivm::VMError::NoritoInvalid
+            ivm::VMError::Trap(VmTrap::NoritoInvalid)
         })?;
         let policy_slot = self
             .axt_policy_snapshot
@@ -9440,7 +9495,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .saturating_mul(3)
                 .saturating_add(256),
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         self.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
         Ok(gas)
@@ -9456,7 +9511,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let ds_ptr = vm.register(10);
         let ds_tlv = Self::expect_tlv(vm, ds_ptr, PointerType::DataSpaceId)?;
@@ -9504,7 +9559,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Err(err);
         }
         if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(128)) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let record_result = {
             let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
@@ -9535,7 +9590,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let ds_ptr = vm.register(10);
         let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)?;
@@ -9552,7 +9607,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let policy = self.policy_entry_for(dsid).ok_or_else(|| {
             self.record_axt_reject_detail(
@@ -9563,7 +9618,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            ivm::VMError::PermissionDenied
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         })?;
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
@@ -9590,7 +9645,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 None,
             );
-            ivm::VMError::NoritoInvalid
+            ivm::VMError::Trap(VmTrap::NoritoInvalid)
         })?;
         axt::validate_proof_blob(&proof)?;
         self.validate_axt_proof(
@@ -9612,13 +9667,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 "AXT_STAGE_ANCHORED_SPEND invoked before AXT_BEGIN",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         };
         let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::AxtAnchoredSpendV1)?;
         // The canonical proof is capped at 2 MiB; this larger envelope ceiling
         // leaves room for signed source metadata while bounding decode work.
         if tlv.payload.len() > MAX_SPEND_FRAME_BYTES_V1 {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = Self::axt_gas(tlv.payload.len());
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -9634,13 +9689,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Some(spend.draft.handle.target_lane),
                 "signed anchored spend has inconsistent public binding",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         // This is only a producer for the signed wire. State remains the sole
         // owner of finalized-source, issuer-key, nonce, budget and effect
         // admission, and currently rejects every nonempty spend before effects.
         if !self.try_reserve_output(1, tlv.payload.len().saturating_add(128)) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Arc::make_mut(self.axt_state.as_mut().expect("active envelope checked"))
             .record_spend(spend)?;
@@ -9655,7 +9710,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 None,
                 "AXT_COMMIT invoked before AXT_BEGIN",
             );
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         };
         let gas = Self::axt_commit_gas(state);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -9713,12 +9768,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 }
             };
             self.axt_state = Some(state);
-            return Err(ivm::VMError::AmxBudgetExceeded {
+            return Err(ivm::VMError::Trap(VmTrap::AmxBudgetExceeded {
                 dataspace,
                 stage: iroha_data_model::errors::AmxStage::Commit,
                 elapsed_ms: elapsed_ms_ceil,
                 budget_ms: budget_ms_ceil,
-            });
+            }));
         }
         if let Err(error) = state.validate_commit() {
             self.axt_state = Some(state);
@@ -9887,10 +9942,12 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
             state.world(),
             contract_address,
         )
-        .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?;
+        .map_err(|error| error.into_vm_error(|_| ivm::VMError::Trap(VmTrap::PermissionDenied)))?;
         let Some(identity) =
             crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
-                .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
+                .map_err(|error| {
+                    error.into_vm_error(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))
+                })?
         else {
             return Ok(None);
         };
@@ -9918,7 +9975,7 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         alias: &str,
     ) -> Result<AccountId, ivm::VMError> {
         let alias_label = AccountAlias::from_literal(alias, &state.nexus().dataspace_catalog)
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         if !crate::alias::authority_can_resolve_account_alias(
             state.world(),
             authority,
@@ -9926,14 +9983,14 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         )
         .map_err(|error| {
             error
-                .into_attempt_error(|_| ivm::VMError::DecodeError)
+                .into_attempt_error(|_| ivm::VMError::Trap(VmTrap::DecodeError))
                 .into_vm_error(core::convert::identity)
         })? {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let now_ms = state
             .latest_block()
-            .map_err(|error| error.into_vm_error(|_| ivm::VMError::DecodeError))?
+            .map_err(|error| error.into_vm_error(|_| ivm::VMError::Trap(VmTrap::DecodeError)))?
             .map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
             });
@@ -9945,12 +10002,12 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         )
         .map_err(|error| {
             error
-                .into_attempt_error(|_| ivm::VMError::DecodeError)
+                .into_attempt_error(|_| ivm::VMError::Trap(VmTrap::DecodeError))
                 .into_vm_error(core::convert::identity)
         })? {
             return Ok(account_id);
         }
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     }
     /// Set the trigger identifier for the current execution.
     pub(crate) fn set_trigger_id(&mut self, id: TriggerId) {
@@ -9968,8 +10025,10 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         map: &mut BTreeMap<String, json::Value>,
         key: &str,
     ) -> Result<T, ivm::VMError> {
-        let value = map.remove(key).ok_or(ivm::VMError::DecodeError)?;
-        json::from_value(value).map_err(|_| ivm::VMError::DecodeError)
+        let value = map
+            .remove(key)
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+        json::from_value(value).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_trigger_filter(value: json::Value) -> Result<EventFilterBox, ivm::VMError> {
         use iroha_data_model::events::{
@@ -9995,7 +10054,7 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         if let Ok(filter) = json::from_value::<TriggerCompletedEventFilter>(value) {
             return Ok(EventFilterBox::TriggerCompleted(filter));
         }
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_trigger_action_spec(value: json::Value) -> Result<Action, ivm::VMError> {
         if let Ok(action) = json::from_value::<Action>(value.clone()) {
@@ -10003,20 +10062,24 @@ impl<QS> CoreHostImpl<'_, '_, QS> {
         }
         let mut map = match value {
             json::Value::Object(map) => map,
-            _ => return Err(ivm::VMError::DecodeError),
+            _ => return Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         };
         let executable: Executable = Self::take_json_field(&mut map, "executable")?;
         let repeats: Repeats = Self::take_json_field(&mut map, "repeats")?;
         let authority: AccountId = Self::take_json_field(&mut map, "authority")?;
-        let filter_value = map.remove("filter").ok_or(ivm::VMError::DecodeError)?;
+        let filter_value = map
+            .remove("filter")
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let metadata = match map.remove("metadata") {
-            Some(value) => json::from_value(value).map_err(|_| ivm::VMError::DecodeError)?,
+            Some(value) => {
+                json::from_value(value).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?
+            }
             None => Metadata::default(),
         };
         let filter = Self::decode_trigger_filter(filter_value)?;
         Action::new(executable, repeats, authority, filter)
             .map(|action| action.with_metadata(metadata))
-            .map_err(|_| ivm::VMError::DecodeError)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn escrow_id_from_name(name: &Name) -> EscrowId {
         EscrowId::from_kotodama_name(name)
@@ -10109,7 +10172,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
         // future resolver regression cannot turn DefaultHost's prover/test
         // transport into a production witness oracle.
         if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         if self.lifecycle_hook_is_running()
             && matches!(
@@ -10118,7 +10181,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     | ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
             )
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let state_quote = match number {
             ivm::syscalls::SYSCALL_STATE_LEN
@@ -10194,7 +10257,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         Some(vm.reserve_available_syscall_gas()?)
                     }
                 } else {
-                    return Err(ivm::VMError::PermissionDenied);
+                    return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                 }
             }
             ivm::syscalls::SYSCALL_CURRENT_TIME_MS
@@ -10254,7 +10317,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             }
             ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 if self.fastpq_batch_entries.is_some() {
-                    return Err(ivm::VMError::PermissionDenied);
+                    return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                 }
                 for (register, pointer_type) in [
                     (10, PointerType::AccountId),
@@ -10355,7 +10418,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             // witness transport, even if a caller bypasses the staged VM path and
             // invokes the host method directly.
             if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
-                return Err(ivm::VMError::PermissionDenied);
+                return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
             }
             if self.lifecycle_hook_is_running()
                 && matches!(
@@ -10364,7 +10427,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         | ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
                 )
             {
-                return Err(ivm::VMError::PermissionDenied);
+                return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
             }
             match number {
                 // ----------------- Domain ISIs via pointer-ABI -----------------
@@ -10406,7 +10469,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let payload: Json = Self::decode_tlv_json(vm, ptr)?;
                     let value: json::Value = payload
                         .try_into_any_norito::<json::Value>()
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let peer_id = Self::peer_id_from_value(&value)?;
                     let isi = Unregister::peer(peer_id);
                     let instr = InstructionBox::from(UnregisterBox::from(isi));
@@ -10454,9 +10517,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let quorum_raw = vm.register(11);
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                    let quorum_u16 =
-                        u16::try_from(quorum_raw).map_err(|_| ivm::VMError::DecodeError)?;
-                    let quorum = NonZeroU16::new(quorum_u16).ok_or(ivm::VMError::DecodeError)?;
+                    let quorum_u16 = u16::try_from(quorum_raw)
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
+                    let quorum = NonZeroU16::new(quorum_u16)
+                        .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let isi = SetAccountQuorum::new(account, quorum);
                     let instr = InstructionBox::from(isi);
                     Ok(self.queue_instruction(instr)?)
@@ -10479,7 +10543,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             vm.register(12),
                             vm.register(13),
                         )
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let owning_domain: DomainId =
                         Self::decode_tlv_typed(vm, vm.register(14), PointerType::DomainId)?;
                     let definition = AssetDefinition::new(
@@ -10534,11 +10598,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     if self.fastpq_batch_entries.is_some() {
                         return self.push_fastpq_batch_entry(vm);
                     }
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 }
                 ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                     if self.fastpq_batch_entries.is_some() {
-                        return Err(ivm::VMError::PermissionDenied);
+                        return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     }
                     let from_ptr = vm.register(10);
                     let to_ptr = vm.register(11);
@@ -10564,7 +10628,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         let state_ref = self
                             .query_state
                             .get()
-                            .ok_or(ivm::VMError::PermissionDenied)?;
+                            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                         transfer_scope_for_policy(
                             state_ref.asset_balance_policy(&asset_def)?,
                             dataspace,
@@ -10586,7 +10650,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let expected_revision = vm.register(12);
                     let availability_flags = vm.register(13);
                     if availability_flags & !0b11 != 0 {
-                        return Err(ivm::VMError::DecodeError);
+                        return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                     }
                     let availability = |mask| {
                         if availability_flags & mask == 0 {
@@ -10645,17 +10709,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE => {
                     let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
-                    let alias_literal =
-                        std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let alias_literal = std::str::from_utf8(&alias_bytes)
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let alias = self
                         .query_state
                         .get()
-                        .ok_or(ivm::VMError::PermissionDenied)?
+                        .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
                         .parse_account_alias(alias_literal)?;
                     let replacement: AccountId =
                         Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
                     let request_generation = std::num::NonZeroU64::new(vm.register(12))
-                        .ok_or(ivm::VMError::DecodeError)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let instruction =
                         iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
                             alias,
@@ -10668,15 +10732,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
                 | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
                     let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
-                    let alias_literal =
-                        std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let alias_literal = std::str::from_utf8(&alias_bytes)
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let alias = self
                         .query_state
                         .get()
-                        .ok_or(ivm::VMError::PermissionDenied)?
+                        .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
                         .parse_account_alias(alias_literal)?;
                     let request_generation = std::num::NonZeroU64::new(vm.register(11))
-                        .ok_or(ivm::VMError::DecodeError)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let instruction = match number {
                         ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
                             iroha_data_model::isi::account_recovery::ApproveAccountRecovery {
@@ -10882,18 +10946,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         Self::decode_tlv_typed(vm, vm.register(11), PointerType::Name)?;
                     let interface = vm
                         .contract_interface()
-                        .ok_or(ivm::VMError::PermissionDenied)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     if !interface.permissions.iter().any(|declaration| {
                         declaration.name == declaration_name
                             && matches!(declaration.scope, ContractPermissionScopeV1::Instance)
                     }) {
-                        return Err(ivm::VMError::PermissionDenied);
+                        return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     }
                     let contract = self
                         .current_contract_runtime_context
                         .as_ref()
                         .map(|context| context.contract_address.clone())
-                        .ok_or(ivm::VMError::PermissionDenied)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     let permission = Permission::from(CanUseContractPermission {
                         contract,
                         permission: declaration_name,
@@ -10914,16 +10978,23 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     } else {
                         let value: json::Value = spec
                             .try_into_any_norito::<json::Value>()
-                            .map_err(|_| ivm::VMError::DecodeError)?;
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                         let mut map = match value {
                             json::Value::Object(map) => map,
-                            _ => return Err(ivm::VMError::DecodeError),
+                            _ => return Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                         };
-                        let id_value = map.remove("id").ok_or(ivm::VMError::DecodeError)?;
-                        let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
-                        let id: TriggerId =
-                            id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
-                        let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
+                        let id_value = map
+                            .remove("id")
+                            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+                        let id_str = id_value
+                            .as_str()
+                            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
+                        let id: TriggerId = id_str
+                            .parse()
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
+                        let action_value = map
+                            .remove("action")
+                            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                         let mut action = Self::decode_trigger_action_spec(action_value)?;
                         if action.authority.subject_id() == self.authority.subject_id() {
                             action.authority = self.authority.clone();
@@ -10933,13 +11004,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     {
                         let query_state = self.query_state.get();
                         let catalog = crate::runtime::release_catalog()
-                            .map_err(|_| ivm::VMError::DecodeError)?;
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                         if query_state.is_none()
                             && crate::runtime::ironwood::admission::executable_requires_ironwood(
                                 trigger.action().executable(),
                             )
                         {
-                            return Err(ivm::VMError::PermissionDenied);
+                            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                         }
                         // This is the native SCCP preflight parser boundary, not wire admission.
                         // Without committed state, inspect every grammar this binary implements:
@@ -10952,7 +11023,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                                 &catalog
                                     .ironwood
                                     .as_ref()
-                                    .ok_or(ivm::VMError::DecodeError)?
+                                    .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?
                                     .selection
                             }
                         };
@@ -10961,7 +11032,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                                 trigger.action().executable(),
                             )
                         {
-                            return Err(ivm::VMError::DecodeError);
+                            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                         }
                         // A contract-registered trigger is an opaque deferred executable: it may
                         // not carry the signed-only outbound SCCP record (specs/sccp.md §4.4).
@@ -10970,7 +11041,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             trigger.action().executable(),
                             selection,
                         ) {
-                            return Err(ivm::VMError::PermissionDenied);
+                            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                         }
                     }
                     let instr = InstructionBox::from(Register::trigger(trigger));
@@ -10991,7 +11062,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let id = TriggerId::new(name);
                     let key: Name = TRIGGER_ENABLED_METADATA_KEY
                         .parse()
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let isi = SetKeyValue::trigger(id, key, Json::from(enabled));
                     let instr = InstructionBox::from(SetKeyValueBox::from(isi));
                     Ok(self.queue_instruction(instr)?)
@@ -11001,11 +11072,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     // Decode manifest registration request from Norito-encoded TLV bytes.
                     let tlv = vm.validate_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let request: scode::RegisterSmartContractCode =
                         decode_canonical_norito(tlv.payload)
-                            .map_err(|_| ivm::VMError::DecodeError)?;
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let instr = InstructionBox::from(request);
                     Ok(self.queue_instruction(instr)?)
                 }
@@ -11116,7 +11187,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     );
                     let instr = InstructionBox::from(SetParameter::new(param));
                     let gas = crate::gas::meter_instruction(&instr, &self.confidential_gas)
-                        .map_err(ivm::VMError::VerificationDeferred)?
+                        .map_err(|cause| {
+                            ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause))
+                        })?
                         .max(Self::smartcontract_depth_gas());
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                     self.enqueue_priced_instruction(instr);
@@ -11144,7 +11217,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
                             let sb = any_ref
                                 .downcast_ref::<DMZk::SubmitBallot>()
-                                .ok_or(ivm::VMError::PermissionDenied)?;
+                                .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                             let mut proof = sb.ballot_proof.clone();
                             let pending_hash = if proof.envelope_hash.is_none() {
                                 self.zk_last_env_hash_ballot.front().copied()
@@ -11162,7 +11235,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             });
                             let gas =
                                 crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-                                    .map_err(ivm::VMError::VerificationDeferred)?;
+                                    .map_err(|cause| {
+                                        ivm::VMError::Deferred(VmDeferral::VerificationDeferred(
+                                            cause,
+                                        ))
+                                    })?;
                             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                             if pending_hash.is_some() {
                                 let consumed_hash =
@@ -11175,7 +11252,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         // ABI v1 also handles `2=PresentX509` above. Contracts record no SCCP
                         // messages (specs/sccp.md §4.4): an encoded `RecordSccpMessage` fails
                         // under every tag, like every other instruction type.
-                        _ => Err(ivm::VMError::PermissionDenied),
+                        _ => Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
                     }
                 }
                 ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
@@ -11186,11 +11263,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let gas_remaining = vm.remaining_gas();
                     let gas_ctx = QueryGasContext::from_request(&request);
                     let Some(state_ref) = self.query_state.get() else {
-                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                        return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
+                            syscall: number,
+                        }));
                     };
                     let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
                     if matches!(request, QueryRequest::Singular(_)) && budget.max_items() == 0 {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let query_result = state_ref.execute_query_with_budget(
                         &self.authority,
@@ -11206,10 +11285,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     );
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                     if gas > gas_remaining {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let response_bytes = Self::encode_norito_payload(&response)
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let payload_len = Self::len_to_u32(response_bytes.len())?;
                     let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -11232,14 +11311,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let gas_remaining = vm.remaining_gas();
                     let alias_ptr = vm.register(10);
                     let alias_bytes = Self::decode_tlv_blob(vm, alias_ptr)?;
-                    let alias_literal =
-                        String::from_utf8(alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let alias_literal = String::from_utf8(alias_bytes)
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let gas_ctx = QueryGasContext::singular();
                     let Some(state_ref) = self.query_state.get() else {
-                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                        return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
+                            syscall: number,
+                        }));
                     };
                     if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let account_id =
                         state_ref.resolve_account_alias(&self.authority, &alias_literal)?;
@@ -11248,7 +11329,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let gas = Self::query_gas_cost(&gas_ctx, 1, payload_len_u64);
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                     if gas > gas_remaining {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let payload_len = Self::len_to_u32(payload.len())?;
                     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -11283,7 +11364,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             SingularQueryOutputBox::Asset(asset) => {
                                 Self::encode_amount_payload(asset.value())
                             }
-                            _ => Err(ivm::VMError::DecodeError),
+                            _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                         },
                     )
                 }
@@ -11293,13 +11374,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let name = Self::decode_name_payload(tlv.payload)?;
                     if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
                         let Some(args) = self.args.as_ref() else {
-                            return Err(ivm::VMError::PermissionDenied);
+                            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                         };
                         if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
-                            return Err(ivm::VMError::AbiTypeNotAllowed {
+                            return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
                                 abi: vm.abi_version(),
                                 type_id: PointerType::Json as u16,
-                            });
+                            }));
                         }
                         let payload = Self::encode_norito_payload(args)?;
                         let payload_len = Self::len_to_u32(payload.len())?;
@@ -11320,13 +11401,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         return Ok(gas);
                     }
                     let Some(record) = self.public_inputs.get(&name) else {
-                        return Err(ivm::VMError::PermissionDenied);
+                        return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     };
                     if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
-                        return Err(ivm::VMError::AbiTypeNotAllowed {
+                        return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
                             abi: vm.abi_version(),
                             type_id: record.type_id as u16,
-                        });
+                        }));
                     }
                     let gas = record.gas_cost();
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -11340,7 +11421,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
                     let envelope = match envelope {
@@ -11355,7 +11436,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ok = match self.verify_bound_envelope(envelope, tlv.payload, "ballot") {
                         Ok(ok) => ok,
                         Err(crate::zk::VerificationAttemptError::Deferred(original)) => {
-                            return Err(ivm::VMError::VerificationDeferred(original));
+                            return Err(ivm::VMError::Deferred(VmDeferral::VerificationDeferred(
+                                original,
+                            )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
                             vm.set_register(10, 0);
@@ -11375,7 +11458,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
                     let envelope = match envelope {
@@ -11390,7 +11473,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ok = match self.verify_bound_envelope(envelope, tlv.payload, "tally") {
                         Ok(ok) => ok,
                         Err(crate::zk::VerificationAttemptError::Deferred(original)) => {
-                            return Err(ivm::VMError::VerificationDeferred(original));
+                            return Err(ivm::VMError::Deferred(VmDeferral::VerificationDeferred(
+                                original,
+                            )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
                             vm.set_register(10, 0);
@@ -11410,7 +11495,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
                     let envelope = match envelope {
@@ -11424,7 +11509,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ok = match self.verify_any_namespace_envelope(envelope, tlv.payload) {
                         Ok(ok) => ok,
                         Err(crate::zk::VerificationAttemptError::Deferred(original)) => {
-                            return Err(ivm::VMError::VerificationDeferred(original));
+                            return Err(ivm::VMError::Deferred(VmDeferral::VerificationDeferred(
+                                original,
+                            )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
                             vm.set_register(10, 0);
@@ -11440,12 +11527,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     if u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX)
                         > self.zk_gas_schedule.max_payload_bytes
                     {
-                        return Err(ivm::VMError::NoritoInvalid);
+                        return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let quote = ivm::host::quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
                     ivm::host::preflight_reserved_syscall_gas(vm, quote.gas)?;
@@ -11512,7 +11599,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             Some(vk_box),
                             guardrails,
                         )
-                        .map_err(ivm::VMError::VerificationDeferred)?;
+                        .map_err(|cause| {
+                            ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause))
+                        })?;
                         status = u8::from(report.ok);
                         if !report.ok {
                             first_error.get_or_insert(ivm::host::ERR_VERIFY);
@@ -11524,15 +11613,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         vm.set_register(11, ivm::host::ERR_DECODE);
                         return Ok(gas);
                     }
-                    let body = Self::encode_norito_payload(&statuses)
-                        .map_err(|_| ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid))?;
+                    let body = Self::encode_norito_payload(&statuses).map_err(|_| {
+                        ivm::VMError::metered(gas, ivm::VMError::Trap(VmTrap::NoritoInvalid))
+                    })?;
                     let output_bytes = 7_usize
                         .saturating_add(body.len())
                         .saturating_add(iroha_crypto::Hash::LENGTH);
                     if u64::try_from(output_bytes).unwrap_or(u64::MAX)
                         != self.zk_gas_schedule.batch_output_bytes(statuses.len())
                     {
-                        return Err(ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid));
+                        return Err(ivm::VMError::metered(
+                            gas,
+                            ivm::VMError::Trap(VmTrap::NoritoInvalid),
+                        ));
                     }
                     let mut out = Vec::with_capacity(output_bytes);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -11564,7 +11657,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let input_len = req_tlv.payload.len();
                     let req: ivm::zk_verify::RootsGetRequest =
                         decode_canonical_norito(req_tlv.payload)
-                            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                     let resp = self.roots_get_response(&req)?;
                     let body = Self::encode_norito_payload(&resp)?;
                     let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
@@ -11588,7 +11681,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let input_len = req_tlv.payload.len();
                     let req: ivm::zk_verify::VoteGetTallyRequest =
                         decode_canonical_norito(req_tlv.payload)
-                            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                     let resp = self.vote_get_tally_response(&req)?;
                     let body = Self::encode_norito_payload(&resp)?;
                     let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
@@ -11661,7 +11754,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         let stored = self
                             .durable_state_base_or_live_get(&key)
-                            .ok_or(ivm::VMError::DecodeError)?;
+                            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                         ivm::host::validate_declared_state_value_payload(
                             vm,
                             &path,
@@ -11688,9 +11781,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         .scoped_durable_state_path(&path)?
                         .unwrap_or_else(|| path.clone());
                     validate_reserve_durable_state_path(&key)
-                        .map_err(|_| ivm::VMError::PermissionDenied)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     if crate::validation_fee::is_consensus_fee_state_key(&key) {
-                        return Err(ivm::VMError::PermissionDenied);
+                        return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     }
                     ivm::host::validate_declared_state_path(vm, &path)?;
                     let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
@@ -11713,9 +11806,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let key = scoped_path.unwrap_or_else(|| path.clone());
                     let effective_path = &key;
                     validate_reserve_durable_state_path(effective_path)
-                        .map_err(|_| ivm::VMError::PermissionDenied)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     if crate::validation_fee::is_consensus_fee_state_key(effective_path) {
-                        return Err(ivm::VMError::PermissionDenied);
+                        return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     }
                     ivm::host::validate_declared_state_path(vm, &path)?;
                     let gas = ivm::host::state_path_gas(path_len);
@@ -11800,7 +11893,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         .current_contract_runtime_context
                         .as_ref()
                         .map(|context| &context.contract_subject)
-                        .ok_or(ivm::VMError::PermissionDenied)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     let payload = Self::encode_norito_payload(subject)?;
                     let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                     vm.set_register(10, ptr);
@@ -11851,12 +11944,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_CORE_QUERY_GET => {
                     let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     self.execute_core_query_get(vm, number, tag)
                 }
                 ivm::syscalls::SYSCALL_CORE_QUERY_PAGE => {
                     let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                        .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let offset = i64::from_ne_bytes(vm.register(11).to_ne_bytes());
                     let limit = vm.register(12);
                     self.execute_core_query_page(vm, number, tag, offset, limit)
@@ -11878,7 +11971,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             SingularQueryOutputBox::ContractManifest(manifest) => {
                                 Self::encode_norito_payload(&manifest)
                             }
-                            _ => Err(ivm::VMError::DecodeError),
+                            _ => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
                         },
                     )
                 }
@@ -11888,10 +11981,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let gas_remaining = vm.remaining_gas();
                     let gas_ctx = QueryGasContext::singular();
                     let Some(state_ref) = self.query_state.get() else {
-                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                        return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
+                            syscall: number,
+                        }));
                     };
                     if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let parameter = state_ref.parameter_by_name(&name)?;
                     let payload = Self::encode_norito_payload(&parameter)?;
@@ -11902,10 +11997,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let gas_remaining = vm.remaining_gas();
                     let gas_ctx = QueryGasContext::singular();
                     let Some(state_ref) = self.query_state.get() else {
-                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                        return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
+                            syscall: number,
+                        }));
                     };
                     if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                        return Err(ivm::VMError::OutOfGas);
+                        return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
                     }
                     let instance = match lookup {
                         ContractInstanceLookup::Address(address) => {
@@ -11947,7 +12044,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
     }
     fn begin_tx(&mut self, declared: &ivm::parallel::StateAccessSet) -> Result<(), ivm::VMError> {
         if !self.nested_contract_call_journals.is_empty() {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         self.rollback_attachment_root()?;
         self.durable_state_overlay.clear();
@@ -11995,6 +12092,7 @@ mod pointer_abi_tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::syscalls as ivm_sys;
+    use ivm_abi::error::{VmErrorRef, VmTrap};
     pub(super) fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
         let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         v.extend_from_slice(&type_id.to_be_bytes());
@@ -12084,7 +12182,10 @@ mod pointer_abi_tests {
             .expect_err("call depth must be enforced")
             .split_metered();
         assert_eq!(gas, Some(ivm::gas::G_CALL_CONTRACT));
-        assert!(matches!(original, ivm::VMError::CallDepthExceeded));
+        assert!(matches!(
+            original,
+            ivm::VMError::Trap(VmTrap::CallDepthExceeded)
+        ));
         assert_eq!(
             host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
             "rejection must not mutate the active-frame counter"
@@ -12268,7 +12369,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             assert!(
                 matches!(
                     host.prepare_syscall(syscall, vm.syscall_quote()),
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "view preparation must reject effect syscall 0x{syscall:02x} before pointer decoding"
             );
@@ -12276,7 +12377,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             assert!(
                 matches!(
                     host.syscall(syscall, &mut vm),
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "direct view dispatch must reject effect syscall 0x{syscall:02x} before pointer decoding"
             );
@@ -12334,9 +12435,9 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         assert!(host.current_entrypoint_authorization.is_none());
         assert_eq!(host.effect_authority(), authority);
         assert!(matches!((&(host.execution_class
-                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET)), &(ivm::VMError::GenericSyscallNotAllowed {
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_SET,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed { syscall: __actual_syscall }), ivm::VMError::GenericSyscallNotAllowed { syscall: __expected_syscall }) if __actual_syscall == __expected_syscall));
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __actual_syscall })), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __expected_syscall })) if __actual_syscall == __expected_syscall));
         host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
         assert_eq!(host.execution_class, HostExecutionClass::Contract);
         assert!(
@@ -12376,7 +12477,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             assert!(
                 matches!(
                     host.execution_class.ensure_syscall_allowed(syscall),
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "state-free local debug calls must reject AXT syscall 0x{syscall:02x}"
             );
@@ -12395,7 +12496,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             assert!(
                 matches!(
                     host.execution_class.ensure_syscall_allowed(syscall),
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "local debug views must reject effect syscall 0x{syscall:02x}"
             );
@@ -12429,9 +12530,9 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             Ok(())
         ));
         assert!(matches!((&(host.execution_class
-                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_GET)), &(ivm::VMError::GenericSyscallNotAllowed {
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_GET)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_GET,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed { syscall: __actual_syscall }), ivm::VMError::GenericSyscallNotAllowed { syscall: __expected_syscall }) if __actual_syscall == __expected_syscall));
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __actual_syscall })), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __expected_syscall })) if __actual_syscall == __expected_syscall));
         for syscall in [
             ivm_sys::SYSCALL_AXT_BEGIN,
             ivm_sys::SYSCALL_AXT_TOUCH,
@@ -12441,7 +12542,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             assert!(
                 matches!(
                     host.execution_class.ensure_syscall_allowed(syscall),
-                    Err(ivm::VMError::PermissionDenied)
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "state-free generic execution must reject AXT syscall 0x{syscall:02x}"
             );
@@ -12846,7 +12947,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         assert!(
             matches!(
                 host.syscall(ivm::syscalls::SYSCALL_STATE_GET, &mut vm),
-                Err(ivm::VMError::InvalidMetadata)
+                Err(ivm::VMError::Trap(VmTrap::InvalidMetadata))
             ),
             "a contract runtime context must never fall back to untyped durable state"
         );
@@ -12919,7 +13020,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             .expect_err("invalid norito json payload should be rejected");
         assert!(matches!(
             err,
-            ivm::VMError::DecodeError | ivm::VMError::NoritoInvalid
+            ivm::VMError::Trap(VmTrap::DecodeError) | ivm::VMError::Trap(VmTrap::NoritoInvalid)
         ));
     }
     #[test]
@@ -12949,7 +13050,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             PointerType::AccountId,
         )
         .expect_err("invalid hash must be rejected");
-        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
     }
     #[test]
     fn pointer_from_norito_wrong_type_is_rejected() {
@@ -12966,7 +13067,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_register(11, u64::from(PointerType::AccountId as u16));
         let res = host.syscall(ivm::syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm);
         assert!(
-            matches!(res, Err(ivm::VMError::NoritoInvalid)),
+            matches!(res, Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
             "expected NoritoInvalid for mismatched pointer type, got {res:?}"
         );
     }
@@ -13016,7 +13117,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let stored = vec![0u8; ivm::syscalls::STATE_MAX_VALUE_BYTES + 1];
         let err =
             CoreHost::load_state_value(&mut vm, &stored).expect_err("oversized raw state payload");
-        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
     }
     #[test]
     fn load_state_value_wraps_raw_norito_payload_into_norito_bytes_tlv() {
@@ -13121,7 +13222,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         assert!(
             matches!(
                 host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a valid caller-carried FASTPQ proof must not become standalone authorization"
         );
@@ -13186,7 +13287,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         assert!(
             matches!(
                 host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "an old valid cache bit must not make an opaque carrier contract-observable"
         );
@@ -13215,7 +13316,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
 
         assert!(matches!(
             host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let reject = host.take_axt_reject_for_tests().expect("reject context");
         assert_eq!(reject.reason, AxtRejectReason::Proof);
@@ -13263,7 +13364,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                     policy,
                     AxtProofAdmission::AuthenticatedHandle,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "an expired outer expiry must not alias a cached live payload"
         );
@@ -13286,7 +13387,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                     policy,
                     AxtProofAdmission::AuthenticatedHandle,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a longer outer expiry must not alias a cached proof payload"
         );
@@ -13338,7 +13439,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let err = host
             .syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
             .expect_err("undeclared dataspace should be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
         let ctx = host
             .take_axt_reject_for_tests()
             .expect("reject context recorded");
@@ -13484,7 +13585,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let err = host
             .syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm)
             .expect_err("prefix violation must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
         let ctx = host
             .take_axt_reject_for_tests()
             .expect("reject context recorded");
@@ -13590,7 +13691,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                     policy,
                     AxtProofAdmission::AuthenticatedHandle,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "expired proof must be rejected"
         );
@@ -13990,7 +14091,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                         ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                         &mut vm,
                     ),
-                    Err(ivm::VMError::NoritoInvalid)
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{label} must not be accepted as pointer-ABI provenance"
             );
@@ -14008,7 +14109,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                 &mut vm,
             ),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(host.queued.is_empty());
         let mut partial_vm = ivm::IVM::new(1_000);
@@ -14029,7 +14130,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                 &mut partial_vm,
             ),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(host.queued.is_empty());
         let mut corrupted = tlv.clone();
@@ -14039,17 +14140,17 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             (
                 "wrong pointer type",
                 make_tlv(PointerType::Blob as u16, &payload),
-                ivm::VMError::NoritoInvalid,
+                ivm::VMError::Trap(VmTrap::NoritoInvalid),
             ),
             (
                 "corrupted payload hash",
                 corrupted,
-                ivm::VMError::NoritoInvalid,
+                ivm::VMError::Trap(VmTrap::NoritoInvalid),
             ),
             (
                 "malformed Norito payload",
                 make_tlv(PointerType::NoritoBytes as u16, b"not a request"),
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
             ),
         ] {
             let mut vm = ivm::IVM::new(1_000);
@@ -14066,9 +14167,12 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 matches!(
                     (&actual, &expected),
                     (
-                        Err(ivm::VMError::NoritoInvalid),
-                        ivm::VMError::NoritoInvalid
-                    ) | (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+                        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
+                        ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                    ) | (
+                        Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+                        ivm::VMError::Trap(VmTrap::DecodeError)
+                    )
                 ),
                 "{label} must fail closed: {actual:?} != {expected:?}"
             );
@@ -14193,7 +14297,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 assert!(
                     matches!(
                         host.prepare_syscall(*syscall, vm.syscall_quote()),
-                        Err(ivm::VMError::PermissionDenied)
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                     ),
                     "{entrypoint} must fail during syscall preparation"
                 );
@@ -14201,7 +14305,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 assert!(
                     matches!(
                         host.syscall(*syscall, &mut vm),
-                        Err(ivm::VMError::PermissionDenied)
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                     ),
                     "{entrypoint} must also fail closed when the host is invoked directly"
                 );
@@ -14243,7 +14347,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                     ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
                     exhausted_vm.syscall_quote(),
                 ),
-                Err(ivm::VMError::OutOfGas)
+                Err(ivm::VMError::Trap(VmTrap::OutOfGas))
             ),
             "an unaffordable opaque call must fail before its invalid pointer is decoded"
         );
@@ -14272,7 +14376,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             assert_eq!(vm.remaining_gas(), gas_before);
             assert!(matches!(
                 host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert_eq!(vm.remaining_gas(), gas_before);
             assert!(host.queued.is_empty());
@@ -14351,18 +14455,18 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             let address = ContractAddress::derive(&network, &authority, 0, foreign).unwrap();
             assert!(matches!(
                 CoreHost::contract_instance_by_address(&view, &address),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert!(matches!(
                 CoreHost::bound_contract_dispatch_identity(&view, &address),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
         }
         let local = ContractAddress::derive(&network, &authority, 0, own).unwrap();
         assert!(
             matches!(
                 CoreHost::contract_instance_by_address(&view, &local),
-                Err(ivm::VMError::DecodeError)
+                Err(ivm::VMError::Trap(VmTrap::DecodeError))
             ),
             "exact local scope proceeds to the missing-binding lookup"
         );
@@ -14540,7 +14644,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             vm.set_register(13, mintable_word);
             assert!(matches!(
                 host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm),
-                Err(ivm::VMError::DecodeError)
+                Err(ivm::VMError::Trap(VmTrap::DecodeError))
             ));
             assert!(host.queued.is_empty());
         }
@@ -14565,7 +14669,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         );
         assert!(matches!(
             transfer_scope_for_policy(AssetBalancePolicy::DataspaceRestricted, None),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -14717,7 +14821,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_register(13, 0);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER, &mut vm),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(host.queued.is_empty());
         vm.set_register(10, escrow_ptr);
@@ -14726,14 +14830,14 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_register(13, 0);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE, &mut vm),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(host.queued.is_empty());
         vm.set_register(10, escrow_ptr);
         vm.set_register(11, retired_blob_evidence_ptr);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE, &mut vm),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(11), retired_blob_evidence_ptr);
         assert!(host.queued.is_empty());
@@ -14796,7 +14900,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_register(10, ptr);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(host.queued.len(), 1);
     }
@@ -14850,7 +14954,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             .expect_err("Soracloud runtime host is not bound in CoreHostImpl");
         assert!(matches!(
             err.as_unmetered(),
-            ivm::VMError::NotImplemented { syscall }
+            VmErrorRef::Trap(VmTrap::NotImplemented { syscall })
                 if *syscall == ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
         ));
         assert_eq!(
@@ -14877,12 +14981,12 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
                 vm.syscall_quote()
             ),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let err = host
             .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
             .expect_err("wrong pointer type must fail before runtime rejection");
-        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
         assert!(host.queued.is_empty());
     }
     #[test]
@@ -14902,7 +15006,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 &mut vm,
             )
             .expect_err("operation mismatch must fail before runtime rejection");
-        assert!(matches!(err, ivm::VMError::DecodeError));
+        assert!(matches!(err, ivm::VMError::Trap(VmTrap::DecodeError)));
         assert!(host.queued.is_empty());
     }
     #[test]
@@ -14913,7 +15017,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         for number in 0xC5..=0xC7 {
             assert!(matches!(
                 host.syscall(number, &mut vm),
-                Err(ivm::VMError::UnknownSyscall(rejected)) if rejected == number
+                Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(rejected))) if rejected == number
             ));
         }
         assert!(host.queued.is_empty());
@@ -15319,7 +15423,10 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&spec));
         vm.set_register(10, ptr);
         let result = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
-        assert!(matches!(result, Err(ivm::VMError::DecodeError)));
+        assert!(matches!(
+            result,
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
+        ));
         assert!(
             host.queued.is_empty(),
             "an invalid trigger action must not leave queued effects"
@@ -15394,7 +15501,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 assert!(
                     matches!(
                         host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm),
-                        Err(ivm::VMError::PermissionDenied)
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
                     ),
                     "executable {index} (contract frame: {contract_frame})"
                 );
@@ -15465,7 +15572,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         );
         assert!(matches!(
             CoreHost::decode_quantity(&vm, wrong_type_ptr),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         for (mantissa, scale, expected) in [
             (
@@ -15493,7 +15600,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             let ptr = store_tlv(&mut vm, PointerType::Quantity, &frame);
             assert!(matches!(
                 CoreHost::decode_quantity(&vm, ptr),
-                Err(ivm::VMError::DecodeError)
+                Err(ivm::VMError::Trap(VmTrap::DecodeError))
             ));
         }
     }
@@ -15679,7 +15786,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let res = host.syscall(UNKNOWN_SYSCALL, &mut vm);
         assert!(matches!(
             res,
-            Err(ivm::VMError::UnknownSyscall(UNKNOWN_SYSCALL))
+            Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(UNKNOWN_SYSCALL)))
         ));
     }
     #[test]
@@ -15743,7 +15850,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         .unwrap();
         let res = vm.run();
         assert!(
-            matches!(res, Err(ivm::VMError::NoritoInvalid)),
+            matches!(res, Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
             "expected NoritoInvalid, got {res:?}"
         );
     }
@@ -15779,7 +15886,10 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             .preload_input(off, &tlv_wrong_ver)
             .expect("preload input");
         let res = vm.memory.validate_tlv(ivm::Memory::INPUT_START + off);
-        assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+        assert!(matches!(
+            res,
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+        ));
         // Wrong hash with correct header
         let mut tlv_wrong_hash = Vec::new();
         tlv_wrong_hash.extend_from_slice(&0x0003u16.to_be_bytes());
@@ -15793,7 +15903,10 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             .preload_input(off, &tlv_wrong_hash)
             .expect("preload input");
         let res2 = vm.memory.validate_tlv(ivm::Memory::INPUT_START + off);
-        assert!(matches!(res2, Err(ivm::VMError::NoritoInvalid)));
+        assert!(matches!(
+            res2,
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+        ));
     }
 }
 #[cfg(test)]

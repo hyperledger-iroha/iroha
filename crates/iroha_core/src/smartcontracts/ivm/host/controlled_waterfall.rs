@@ -10,6 +10,7 @@ use iroha_data_model::{
         },
     },
 };
+use ivm_abi::error::VmTrap;
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_asset_lock_with_waterfall(
@@ -20,16 +21,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let controller = &context.contract_address;
         if context.contract_subject != controller.subject_id() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let (last_register, revision_register) = match number {
             ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL => (14, 13),
             ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL => (13, 12),
             ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL => (12, 11),
-            _ => return Err(ivm::VMError::UnknownSyscall(number)),
+            _ => return Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(number))),
         };
         for register in 10..=last_register {
             vm.ensure_public_register(register)?;
@@ -67,7 +68,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     waterfall,
                 })
             }
-            _ => return Err(ivm::VMError::UnknownSyscall(number)),
+            _ => return Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(number))),
         };
         // Native application rechecks authority, revision pins, expiry or CAS,
         // current excess and both source balances before its single decrement.

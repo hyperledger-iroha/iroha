@@ -4,6 +4,7 @@
 //! AXT wire to pointer-ABI TLVs. Remote-spend staging carries the exact
 //! `AxtAnchoredSpendV1` model value. Staging checks public structural binding;
 //! finalized-source and issuer authority remain State-owned admission work.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     codec::{decode_canonical_norito, encode_canonical_norito},
     error::VMError,
@@ -134,7 +135,7 @@ impl AxtProofUseFacts {
     ///
     /// # Errors
     ///
-    /// Returns [`VMError::PermissionDenied`] unless the consumed commitment
+    /// Returns [`crate::error::VmTrap::PermissionDenied`] unless the consumed commitment
     /// multiset exactly equals the proof's canonical commitment set.
     pub fn validate_remote_spend_consumption(
         &self,
@@ -145,7 +146,7 @@ impl AxtProofUseFacts {
         if consumed == self.remote_spend_intent_commitments {
             Ok(())
         } else {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
     }
 }
@@ -170,11 +171,13 @@ impl HandleAmountResolutionError {
     #[must_use]
     pub const fn to_vm_error(self) -> VMError {
         match self {
-            Self::MissingAmount | Self::InvalidProofEnvelope => VMError::NoritoInvalid,
+            Self::MissingAmount | Self::InvalidProofEnvelope => {
+                VMError::Trap(VmTrap::NoritoInvalid)
+            }
             Self::Mismatch
             | Self::ZeroAmount
             | Self::InvalidProofScalar
-            | Self::CommitmentMismatch => VMError::PermissionDenied,
+            | Self::CommitmentMismatch => VMError::Trap(VmTrap::PermissionDenied),
         }
     }
 }
@@ -440,7 +443,8 @@ impl AxtDescriptorBuilder {
     /// encoded to Norito bytes for hashing.
     pub fn build_with_binding(self) -> Result<(AxtDescriptor, [u8; 32]), VMError> {
         let descriptor = self.build()?;
-        let binding = compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
+        let binding =
+            compute_binding(&descriptor).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         Ok((descriptor, binding))
     }
 }
@@ -460,7 +464,8 @@ where
 }
 /// Validate basic invariants of an AXT descriptor.
 pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), VMError> {
-    validate_model_descriptor(&model_descriptor(descriptor)).map_err(|_| VMError::PermissionDenied)
+    validate_model_descriptor(&model_descriptor(descriptor))
+        .map_err(|_| VMError::Trap(VmTrap::PermissionDenied))
 }
 fn model_descriptor(descriptor: &AxtDescriptor) -> ModelAxtDescriptor {
     ModelAxtDescriptor {
@@ -594,10 +599,10 @@ pub struct TouchManifest {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when a key list is not canonical.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when a key list is not canonical.
 pub fn validate_touch_manifest(manifest: &TouchManifest) -> Result<(), VMError> {
     if !canonical_nonempty_strings(&manifest.read) || !canonical_nonempty_strings(&manifest.write) {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -605,7 +610,7 @@ pub fn validate_touch_manifest(manifest: &TouchManifest) -> Result<(), VMError> 
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when a key list is not canonical.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when a key list is not canonical.
 pub fn validate_model_touch_manifest(manifest: &ModelTouchManifest) -> Result<(), VMError> {
     validate_touch_manifest(&TouchManifest {
         read: manifest.read.clone(),
@@ -626,15 +631,15 @@ fn canonical_nonempty_strings(values: &[String]) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for noncanonical strings or account IDs
-/// and [`VMError::PermissionDenied`] for unusable capability values.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] for noncanonical strings or account IDs
+/// and [`crate::error::VmTrap::PermissionDenied`] for unusable capability values.
 pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMError> {
     if handle.group_binding.composability_group_id.is_empty()
         || !canonical_nonempty_strings(&handle.scope)
         || (!handle.subject.account.is_empty()
             && canonical_account_id(&handle.subject.account).is_none())
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     if handle.scope.is_empty()
         || handle.subject.account.is_empty()
@@ -657,7 +662,7 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
         || handle.issuer_context.abi_version != 1
         || handle.issuer_context.abi_hash.iter().all(|byte| *byte == 0)
     {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     Ok(())
 }
@@ -665,21 +670,21 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for non-transfer operations or
-/// noncanonical accounts and [`VMError::PermissionDenied`] for an absent or zero amount.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] for non-transfer operations or
+/// noncanonical accounts and [`crate::error::VmTrap::PermissionDenied`] for an absent or zero amount.
 pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Result<(), VMError> {
     if intent.op.kind != "transfer" {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     for account in [&intent.op.from, &intent.op.to] {
         if canonical_account_id(account).is_none() {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
     }
     // TODO: Admit private amounts only with a proof-bound confidential value,
     // conservation relation, and budget comparison; a public scalar is not private.
     if intent.op.amount.as_ref().is_none_or(Quantity::is_zero) {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     Ok(())
 }
@@ -697,7 +702,7 @@ fn canonical_account_id(value: &str) -> Option<AccountId> {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::PermissionDenied`] when the policy-derived scope does not
+/// Returns [`crate::error::VmTrap::PermissionDenied`] when the policy-derived scope does not
 /// match `asset_dsid`.
 pub fn validate_remote_spend_asset_scope(
     asset_dsid: DataSpaceId,
@@ -707,7 +712,9 @@ pub fn validate_remote_spend_asset_scope(
         AssetBalanceScope::Global => asset_dsid == DataSpaceId::UNIVERSAL,
         AssetBalanceScope::Dataspace(dataspace) => asset_dsid == dataspace,
     };
-    matches.then_some(()).ok_or(VMError::PermissionDenied)
+    matches
+        .then_some(())
+        .ok_or(VMError::Trap(VmTrap::PermissionDenied))
 }
 /// Require a proof-bound commitment for a persisted data-model remote spend.
 ///
@@ -715,8 +722,8 @@ pub fn validate_remote_spend_asset_scope(
 ///
 /// # Errors
 ///
-/// Returns [`VMError::PermissionDenied`] for a mismatched asset or absent
-/// proof-bound commitment, and [`VMError::NoritoInvalid`] for malformed proof bytes.
+/// Returns [`crate::error::VmTrap::PermissionDenied`] for a mismatched asset or absent
+/// proof-bound commitment, and [`crate::error::VmTrap::NoritoInvalid`] for malformed proof bytes.
 pub fn validate_model_remote_spend_intent_commitment(
     handle: &ModelAssetHandle,
     intent: &ModelRemoteSpendIntent,
@@ -726,7 +733,7 @@ pub fn validate_model_remote_spend_intent_commitment(
     if intent.op.amount.as_ref() != Some(effective_amount)
         || handle.asset_definition_id != intent.op.asset_definition_id
     {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     validate_remote_spend_intent_commitment_components(
         expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
@@ -741,7 +748,7 @@ pub fn validate_model_remote_spend_intent_commitment(
 ///
 /// # Errors
 ///
-/// Returns [`VMError::PermissionDenied`] when the proof facts do not contain
+/// Returns [`crate::error::VmTrap::PermissionDenied`] when the proof facts do not contain
 /// the exact handle identity/asset/operation/account/amount commitment.
 pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
     handle: &ModelAssetHandle,
@@ -753,7 +760,7 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
         || facts.dsid != intent.asset_dsid
         || handle.asset_definition_id != intent.op.asset_definition_id
     {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     validate_remote_spend_intent_commitment_components_from_commitments(
         expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
@@ -782,14 +789,14 @@ fn validate_remote_spend_intent_commitment_components(
     proof_payload: &[u8],
 ) -> Result<(), VMError> {
     if proof_payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(proof_payload)
-        .map_err(|_| VMError::NoritoInvalid)?;
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let binding = envelope
         .fastpq_binding
         .as_ref()
-        .ok_or(VMError::PermissionDenied)?;
+        .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
     validate_remote_spend_intent_commitment_components_from_commitments(
         expected,
         &binding.remote_spend_intent_commitments,
@@ -802,7 +809,7 @@ fn validate_remote_spend_intent_commitment_components_from_commitments(
     remote_spend_intent_commitments
         .binary_search(&expected)
         .map(|_| ())
-        .map_err(|_| VMError::PermissionDenied)
+        .map_err(|_| VMError::Trap(VmTrap::PermissionDenied))
 }
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
@@ -825,14 +832,14 @@ pub struct ProofBlob {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when proof bytes are empty or oversized,
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when proof bytes are empty or oversized,
 /// or an explicit expiry uses the forbidden zero sentinel.
 pub fn validate_proof_blob(proof: &ProofBlob) -> Result<(), VMError> {
     if proof.payload.is_empty()
         || proof.payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
         || proof.expiry_slot == Some(0)
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -843,7 +850,7 @@ pub fn validate_proof_blob(proof: &ProofBlob) -> Result<(), VMError> {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::PermissionDenied`] when the envelope does not bind to the
+/// Returns [`crate::error::VmTrap::PermissionDenied`] when the envelope does not bind to the
 /// expected dataspace/manifest or does not advertise FastPQ V1 proof material.
 pub fn preflight_fastpq_v1_proof_envelope_for_manifest(
     envelope: &AxtProofEnvelope,
@@ -852,7 +859,7 @@ pub fn preflight_fastpq_v1_proof_envelope_for_manifest(
 ) -> Result<(), VMError> {
     preflight_fastpq_v1_proof_envelope(envelope, dsid)?;
     if envelope.manifest_root != manifest_root {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     Ok(())
 }
@@ -863,14 +870,14 @@ pub fn preflight_fastpq_v1_proof_envelope_for_manifest(
 ///
 /// # Errors
 ///
-/// Returns [`VMError::PermissionDenied`] when the envelope does not bind to the
+/// Returns [`crate::error::VmTrap::PermissionDenied`] when the envelope does not bind to the
 /// expected dataspace or does not advertise FastPQ V1 proof material.
 pub fn preflight_fastpq_v1_proof_envelope(
     envelope: &AxtProofEnvelope,
     dsid: DataSpaceId,
 ) -> Result<(), VMError> {
     let Some(binding) = envelope.fastpq_binding.as_ref() else {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     };
     if envelope.dsid != dsid
         || envelope.manifest_root.iter().all(|byte| *byte == 0)
@@ -880,7 +887,7 @@ pub fn preflight_fastpq_v1_proof_envelope(
         || binding.verifier_version != "v1"
         || !fastpq_binding_shape_is_concrete(binding)
     {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     Ok(())
 }
@@ -985,10 +992,10 @@ impl HostAxtState {
     ) -> Result<(), VMError> {
         validate_touch_manifest(&manifest)?;
         if self.touches.contains_key(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if !self.expected_dsids.contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if let Some(spec) = self.descriptor.touch_for(&dsid) {
             if !manifest
@@ -996,17 +1003,17 @@ impl HostAxtState {
                 .iter()
                 .all(|entry| spec.read.iter().any(|prefix| entry.starts_with(prefix)))
             {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             if !manifest
                 .write
                 .iter()
                 .all(|entry| spec.write.iter().any(|prefix| entry.starts_with(prefix)))
             {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         } else if !manifest.read.is_empty() || !manifest.write.is_empty() {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         self.touches.insert(dsid, manifest);
         Ok(())
@@ -1022,7 +1029,7 @@ impl HostAxtState {
         current_slot: Option<u64>,
     ) -> Result<(), VMError> {
         if !self.expected_dsids.contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if let Some(p) = proof {
             validate_proof_blob(&p)?;
@@ -1031,7 +1038,7 @@ impl HostAxtState {
                 && slot > 0
                 && slot > expiry
             {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             self.proofs.insert(dsid, p);
         } else {
@@ -1065,13 +1072,15 @@ impl HostAxtState {
             || validate_model_remote_spend_intent(&spend.draft.intent).is_err()
             || spend.issuer_payload_v1().is_err()
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if self.spends.len() >= iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         self.spends.try_reserve(1).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         self.spends.push(spend);
         Ok(())
@@ -1092,7 +1101,7 @@ impl HostAxtState {
     pub fn validate_commit(&self) -> Result<(), VMError> {
         for dsid in &self.expected_dsids {
             if self.descriptor.touch_for(dsid).is_some() && !self.touches.contains_key(dsid) {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         for dsid in &self.expected_dsids {
@@ -1102,7 +1111,7 @@ impl HostAxtState {
                     .iter()
                     .any(|spend| spend.draft.intent.asset_dsid == *dsid)
             {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         // One signed issuer nonce and one finalized source transfer may each
@@ -1114,12 +1123,16 @@ impl HostAxtState {
         let mut nonces = Vec::<AxtAnchoredSpendReplayKeyV1>::new();
         let mut occurrences = Vec::new();
         nonces.try_reserve_exact(self.spends.len()).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         occurrences
             .try_reserve_exact(self.spends.len())
             .map_err(|_| {
-                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
         for spend in &self.spends {
             nonces.push(spend.replay_key_v1());
@@ -1138,7 +1151,7 @@ impl HostAxtState {
         if nonces.windows(2).any(|pair| pair[0] == pair[1])
             || occurrences.windows(2).any(|pair| pair[0] == pair[1])
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(())
     }
@@ -1146,6 +1159,7 @@ impl HostAxtState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use iroha_data_model::nexus::AxtPolicyEntry as ModelAxtPolicyEntry;
     use iroha_model_base::domain::DomainId;
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -1231,7 +1245,7 @@ mod tests {
             assert!(
                 matches!(
                     validate_descriptor(&descriptor),
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "noncanonical descriptor must fail: {descriptor:?}"
             );
@@ -1270,7 +1284,7 @@ mod tests {
                     read: keys,
                     write: Vec::new(),
                 }),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }
@@ -1318,25 +1332,25 @@ mod tests {
         malformed.group_binding.composability_group_id.clear();
         assert!(matches!(
             validate_model_asset_handle(&malformed),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut unusable = valid.clone();
         unusable.scope.clear();
         assert!(matches!(
             validate_model_asset_handle(&unusable),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         let mut unusable = valid.clone();
         unusable.budget.remaining = Quantity::zero();
         assert!(matches!(
             validate_model_asset_handle(&unusable),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         let mut unusable = valid.clone();
         unusable.budget.per_use = Some(Quantity::zero());
         assert!(matches!(
             validate_model_asset_handle(&unusable),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         for field in ["handle era", "sub nonce", "group epoch", "expiry slot"] {
             let mut unusable = valid.clone();
@@ -1350,7 +1364,7 @@ mod tests {
             assert!(
                 matches!(
                     validate_model_asset_handle(&unusable),
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "zero {field} must fail validation"
             );
@@ -1368,14 +1382,14 @@ mod tests {
             mutate(&mut malformed);
             assert!(matches!(
                 validate_model_asset_handle(&malformed),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
         let mut unusable = valid;
         unusable.subject.account.clear();
         assert!(matches!(
             validate_model_asset_handle(&unusable),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     #[test]
@@ -1401,7 +1415,7 @@ mod tests {
             assert!(
                 matches!(
                     validate_model_asset_handle(&invalid),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{case} subject account must fail"
             );
@@ -1419,21 +1433,21 @@ mod tests {
                 payload: Vec::new(),
                 expiry_slot: None,
             }),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             validate_proof_blob(&ProofBlob {
                 payload: vec![1],
                 expiry_slot: Some(0),
             }),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             validate_proof_blob(&ProofBlob {
                 payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
                 expiry_slot: None,
             }),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -1454,7 +1468,7 @@ mod tests {
         assert!(
             matches!(
                 decode_canonical_norito::<ProofBlob>(&omitted),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "V1 must reject a proof blob that omits its nullable expiry slot"
         );
@@ -1505,19 +1519,19 @@ mod tests {
             assert!(
                 matches!(
                     validate_model_remote_spend_intent(&invalid),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "invalid {field} must fail"
             );
         }
         assert!(matches!(
             validate_model_remote_spend_intent(&sample_intent(dsid, Some(0))),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(
             matches!(
                 validate_model_remote_spend_intent(&sample_intent(dsid, None)),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a redacted intent cannot be authorized by a public proof scalar"
         );
@@ -1527,7 +1541,7 @@ mod tests {
             assert!(
                 matches!(
                     validate_model_remote_spend_intent(&invalid),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "non-transfer operation {kind:?} must fail closed"
             );
@@ -1550,11 +1564,11 @@ mod tests {
                 dsid,
                 AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
             ),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(matches!(
             validate_remote_spend_asset_scope(dsid, AssetBalanceScope::Global),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     #[test]
@@ -1585,7 +1599,7 @@ mod tests {
                 assert!(
                     matches!(
                         validate_model_remote_spend_intent(&invalid),
-                        Err(VMError::NoritoInvalid)
+                        Err(VMError::Trap(VmTrap::NoritoInvalid))
                     ),
                     "{case} {field} account must fail"
                 );
@@ -1725,7 +1739,7 @@ mod tests {
 
         assert!(matches!(
             validate_proof_blob(&oversized),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             resolve_test_amount(&intent, Some(&oversized)),
@@ -1733,7 +1747,7 @@ mod tests {
         );
         assert!(matches!(
             validate_model_claim_for_test(&handle, &intent, &amount, &oversized),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let expected_raw = derive_amount_commitment_from_normalized_payload(
             dsid,
@@ -1775,7 +1789,7 @@ mod tests {
         assert!(
             matches!(
                 validate_model_claim_for_test(&second_handle, &redacted, &second_amount, &proof,),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "semantic membership cannot admit a public-scalar hidden route"
         );
@@ -1798,7 +1812,7 @@ mod tests {
                     &clear_amount,
                     &model_proof,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a redacted intent cannot use a public proof scalar"
         );
@@ -1831,7 +1845,7 @@ mod tests {
                     &clear_amount,
                     &facts,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a claim for a retired asset incarnation must not authorize the current handle"
         );
@@ -1844,7 +1858,7 @@ mod tests {
                 &clear_amount,
                 &facts,
             ),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         for field in ["kind", "from", "to"] {
             let mut substituted = clear.clone();
@@ -1862,7 +1876,7 @@ mod tests {
                         &clear_amount,
                         &proof,
                     ),
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "substituted {field} must not reuse the proof"
             );
@@ -1877,13 +1891,13 @@ mod tests {
                     &clear_amount,
                     &proof,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "substituted asset dataspace must not reuse the proof"
         );
         assert!(matches!(
             validate_model_claim_for_test(&clear_handle, &clear, &quantity(6), &proof,),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         let mut substituted_asset = clear.clone();
         substituted_asset.op.asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -1898,7 +1912,7 @@ mod tests {
                     &clear_amount,
                     &proof,
                 ),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "substituted asset definition must not reuse the proof"
         );
@@ -1906,7 +1920,7 @@ mod tests {
         substituted_handle.axt_binding = AxtBinding::new([0x94; 32]);
         assert!(matches!(
             validate_model_claim_for_test(&substituted_handle, &clear, &clear_amount, &proof,),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         let mut reincarnated_handle = clear_handle.clone();
         reincarnated_handle
@@ -1923,7 +1937,7 @@ mod tests {
         assert!(
             matches!(
                 validate_model_claim_for_test(&reincarnated_handle, &clear, &clear_amount, &proof,),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a proof for the retired incarnation must not authorize a current-incarnation handle"
         );
@@ -1932,7 +1946,7 @@ mod tests {
         assert!(
             matches!(
                 validate_model_claim_for_test(&second_handle, &clear, &clear_amount, &proof,),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "a proof for one handle must not authorize a new handle identity"
         );
@@ -1951,14 +1965,14 @@ mod tests {
         assert!(
             matches!(
                 facts.validate_remote_spend_consumption(&[clear_commitment, clear_commitment]),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "one proof claim cannot be consumed twice"
         );
         assert!(
             matches!(
                 facts.validate_remote_spend_consumption(&[clear_commitment]),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "an unconsumed proof claim must fail closed"
         );
@@ -1977,7 +1991,7 @@ mod tests {
         .expect("generic FastPQ proof accepts an empty remote-spend binding");
         assert!(matches!(
             validate_model_claim_for_test(&clear_handle, &clear, &clear_amount, &empty_proof,),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
 
         empty_envelope.fastpq_binding = None;
@@ -1987,7 +2001,7 @@ mod tests {
         };
         assert!(matches!(
             validate_model_claim_for_test(&clear_handle, &clear, &clear_amount, &unbound_proof,),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     #[test]
@@ -2012,7 +2026,7 @@ mod tests {
             .verifier_id = "synthetic".to_string();
         assert!(matches!(
             preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         envelope
             .fastpq_binding
@@ -2026,7 +2040,7 @@ mod tests {
             .verifier_version = "v2".to_string();
         assert!(matches!(
             preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     #[test]
@@ -2049,7 +2063,7 @@ mod tests {
             .claim_digest = String::new();
         assert!(matches!(
             preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         envelope.fastpq_binding = Some(sample_fastpq_binding(dsid));
         envelope
@@ -2059,7 +2073,7 @@ mod tests {
             .claim_type = "synthetic".to_string();
         assert!(matches!(
             preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         envelope.fastpq_binding = Some(sample_fastpq_binding(dsid));
         envelope
@@ -2070,7 +2084,7 @@ mod tests {
             .clear();
         assert!(matches!(
             preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     #[test]
@@ -2095,7 +2109,7 @@ mod tests {
             };
             assert!(matches!(
                 preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ));
         }
     }
@@ -2382,7 +2396,7 @@ mod tests {
         let mut state = HostAxtState::new(descriptor, binding);
         assert!(matches!(
             state.validate_commit(),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         state
             .record_proof(dsid, Some(proof_with_amount(dsid, Some(5), None)), None)
@@ -2418,28 +2432,28 @@ mod tests {
         wrong_binding.draft.handle.axt_binding = AxtBinding::new([0xFF; 32]);
         assert!(matches!(
             state.record_spend(wrong_binding),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(state.spends().is_empty());
         let mut wrong_amount = spends[0].clone();
         wrong_amount.draft.amount = Some(Quantity::from(99_u64));
         assert!(matches!(
             state.record_spend(wrong_amount),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(state.spends().is_empty());
         let mut wrong_scope = spends[0].clone();
         wrong_scope.draft.handle.scope.clear();
         assert!(matches!(
             state.record_spend(wrong_scope),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(state.spends().is_empty());
         let mut wrong_operation = spends[0].clone();
         wrong_operation.draft.intent.op.kind = "mint".to_owned();
         assert!(matches!(
             state.record_spend(wrong_operation),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(state.spends().is_empty());
         for spend in &spends {
@@ -2503,7 +2517,7 @@ mod tests {
             .expect("stage second signed claim");
         assert!(matches!(
             state.validate_commit(),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert_eq!(state.spends().len(), 2);
 
@@ -2529,7 +2543,7 @@ mod tests {
             .expect("stage second signed claim");
         assert!(matches!(
             state.validate_commit(),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert_eq!(state.spends().len(), 2);
     }
@@ -2710,7 +2724,7 @@ mod tests {
         let err = state
             .record_proof(dsid, Some(proof), Some(10))
             .expect_err("expired proof should be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
     }
     #[test]
     fn observed_declared_identities() {

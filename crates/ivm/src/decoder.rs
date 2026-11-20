@@ -3,6 +3,7 @@
 //! Every instruction occupies one 32-bit little-endian word aligned on a
 //! 4-byte boundary, so decoding reduces to a bounds check followed by a single
 //! load.  Compressed forms predating the wide encoding are no longer supported.
+use crate::error::VmTrap;
 use crate::{
     error::{Perm, VMError},
     memory::Memory,
@@ -34,20 +35,22 @@ fn check_fetch(code_len: u64, pc: u64) -> Result<(), VMError> {
         DECODE_CALLS.fetch_add(1, Ordering::Relaxed);
     }
     if !pc.is_multiple_of(4) {
-        return Err(VMError::MemoryAccessViolation {
+        return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: pc as u32,
             perm: Perm::EXECUTE,
-        });
+        }));
     }
-    let fetch_end = pc.checked_add(4).ok_or(VMError::MemoryAccessViolation {
-        addr: pc as u32,
-        perm: Perm::EXECUTE,
-    })?;
-    if fetch_end > code_len {
-        return Err(VMError::MemoryAccessViolation {
+    let fetch_end = pc
+        .checked_add(4)
+        .ok_or(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: pc as u32,
             perm: Perm::EXECUTE,
-        });
+        }))?;
+    if fetch_end > code_len {
+        return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
+            addr: pc as u32,
+            perm: Perm::EXECUTE,
+        }));
     }
     Ok(())
 }
@@ -62,23 +65,29 @@ pub fn decode_slice(code: &[u8], pc: u64) -> Result<u32, VMError> {
         DECODE_CALLS.fetch_add(1, Ordering::Relaxed);
     }
     if !pc.is_multiple_of(4) {
-        return Err(VMError::MemoryAccessViolation {
+        return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: pc as u32,
             perm: Perm::EXECUTE,
-        });
+        }));
     }
-    let start = usize::try_from(pc).map_err(|_| VMError::MemoryAccessViolation {
-        addr: pc as u32,
-        perm: Perm::EXECUTE,
+    let start = usize::try_from(pc).map_err(|_| {
+        VMError::Trap(VmTrap::MemoryAccessViolation {
+            addr: pc as u32,
+            perm: Perm::EXECUTE,
+        })
     })?;
-    let end = start.checked_add(4).ok_or(VMError::MemoryAccessViolation {
-        addr: pc as u32,
-        perm: Perm::EXECUTE,
-    })?;
-    let bytes = code.get(start..end).ok_or(VMError::MemoryAccessViolation {
-        addr: pc as u32,
-        perm: Perm::EXECUTE,
-    })?;
+    let end = start
+        .checked_add(4)
+        .ok_or(VMError::Trap(VmTrap::MemoryAccessViolation {
+            addr: pc as u32,
+            perm: Perm::EXECUTE,
+        }))?;
+    let bytes = code
+        .get(start..end)
+        .ok_or(VMError::Trap(VmTrap::MemoryAccessViolation {
+            addr: pc as u32,
+            perm: Perm::EXECUTE,
+        }))?;
     Ok(u32::from_le_bytes(
         bytes.try_into().expect("four-byte slice"),
     ))
@@ -86,6 +95,7 @@ pub fn decode_slice(code: &[u8], pc: u64) -> Result<u32, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn shared_and_exclusive_fetch_keep_the_same_read_set_and_fault_order() {
         let mut memory = Memory::new();
@@ -95,17 +105,17 @@ mod tests {
         memory.clear_tracking();
         assert!(matches!(
             decode_guest(&mut memory, 2),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::EXECUTE,
                 ..
-            })
+            }))
         ));
         assert!(matches!(
             decode_guest(&mut memory, 4),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::EXECUTE,
                 ..
-            })
+            }))
         ));
         assert!(memory.try_read_log_snapshot().unwrap().is_empty());
         assert_eq!(decode_guest(&mut memory, 0).unwrap(), 0x01234567);
@@ -132,7 +142,7 @@ mod tests {
         for pc in [1, 8, u64::MAX] {
             for result in [decode_slice(&code, pc), decode(&memory, pc)] {
                 assert!(
-                    matches!(result, Err(VMError::MemoryAccessViolation { addr, perm }) if addr == pc as u32 && perm == Perm::EXECUTE)
+                    matches!(result, Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr, perm })) if addr == pc as u32 && perm == Perm::EXECUTE)
                 );
             }
         }

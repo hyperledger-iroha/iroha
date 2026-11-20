@@ -8,6 +8,7 @@ use crate::error::{
     VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation,
     VmTrapKind,
 };
+use crate::error::{VmDeferral, VmErrorRef, VmTrap};
 use iroha_data_model::executor::fault::{
     IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1, IvmInvocationSelectorV1,
 };
@@ -130,13 +131,12 @@ impl IVM {
             // TODO: the diagnostic context carries the C10 opcode byte; a baseline rejection
             // reports its low 16 bits, which have no slot here.
             opcode: match error.as_unmetered() {
-                VMError::InvalidOpcode(op) => u8::try_from(*op).ok(),
+                VmErrorRef::Trap(VmTrap::InvalidOpcode(op)) => u8::try_from(*op).ok(),
                 _ => None,
             },
             syscall: match error.as_unmetered() {
-                VMError::UnknownSyscall(syscall) | VMError::NotImplemented { syscall } => {
-                    Some(*syscall)
-                }
+                VmErrorRef::Trap(VmTrap::UnknownSyscall(syscall))
+                | VmErrorRef::Trap(VmTrap::NotImplemented { syscall }) => Some(*syscall),
                 _ => None,
             },
             predecoded_loaded,
@@ -238,59 +238,76 @@ impl IVM {
 
     pub(crate) fn classify_trap(err: &VMError) -> VmTrapKind {
         match err.as_unmetered() {
-            VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => VmTrapKind::OutOfGas,
-            VMError::OutOfMemory => VmTrapKind::OutOfMemory,
-            VMError::MemoryAccessViolation { .. }
-            | VMError::MisalignedAccess { .. }
-            | VMError::MemoryOutOfBounds => VmTrapKind::MemoryFault,
-            VMError::DecodeError => VmTrapKind::DecodeError,
-            VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
-            VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
-            VMError::HostUnavailable | VMError::NotImplemented { .. } => VmTrapKind::NotImplemented,
-            VMError::SyscallGasQuoteExceeded { .. } => VmTrapKind::SyscallGasQuoteExceeded,
-            VMError::SyscallMeteringModeMismatch { .. } => VmTrapKind::SyscallMeteringModeMismatch,
-            VMError::GasCostOverflow => VmTrapKind::GasCostOverflow,
-            VMError::NumericFault(_) | VMError::RegisterIntegerOverflow => VmTrapKind::NumericFault,
-            VMError::PointerAbiFault(_) => VmTrapKind::PointerAbiFault,
-            VMError::AssertionFailed => VmTrapKind::AssertionFailed,
-            VMError::ContractAbort { .. } => VmTrapKind::ContractAbort,
-            VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
-            VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
-            VMError::UnsupportedProgramVersion { .. } => VmTrapKind::UnsupportedProgramVersion,
-            VMError::UnsupportedProgramFeatureBits { .. } => {
+            VmErrorRef::Trap(VmTrap::OutOfGas)
+            | VmErrorRef::Trap(VmTrap::SyscallOutOfGas { .. }) => VmTrapKind::OutOfGas,
+            VmErrorRef::Trap(VmTrap::OutOfMemory) => VmTrapKind::OutOfMemory,
+            VmErrorRef::Trap(VmTrap::MemoryAccessViolation { .. })
+            | VmErrorRef::Trap(VmTrap::MisalignedAccess { .. })
+            | VmErrorRef::Trap(VmTrap::MemoryOutOfBounds) => VmTrapKind::MemoryFault,
+            VmErrorRef::Trap(VmTrap::DecodeError) => VmTrapKind::DecodeError,
+            VmErrorRef::Trap(VmTrap::InvalidOpcode(_)) => VmTrapKind::InvalidOpcode,
+            VmErrorRef::Trap(VmTrap::UnknownSyscall(_)) => VmTrapKind::UnknownSyscall,
+            VmErrorRef::Deferred(VmDeferral::HostUnavailable)
+            | VmErrorRef::Trap(VmTrap::NotImplemented { .. }) => VmTrapKind::NotImplemented,
+            VmErrorRef::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. }) => {
+                VmTrapKind::SyscallGasQuoteExceeded
+            }
+            VmErrorRef::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => {
+                VmTrapKind::SyscallMeteringModeMismatch
+            }
+            VmErrorRef::Trap(VmTrap::GasCostOverflow) => VmTrapKind::GasCostOverflow,
+            VmErrorRef::Trap(VmTrap::NumericFault(_))
+            | VmErrorRef::Trap(VmTrap::RegisterIntegerOverflow) => VmTrapKind::NumericFault,
+            VmErrorRef::Trap(VmTrap::PointerAbiFault(_)) => VmTrapKind::PointerAbiFault,
+            VmErrorRef::Trap(VmTrap::AssertionFailed) => VmTrapKind::AssertionFailed,
+            VmErrorRef::Trap(VmTrap::ContractAbort { .. }) => VmTrapKind::ContractAbort,
+            VmErrorRef::Trap(VmTrap::ExceededMaxCycles) => VmTrapKind::ExceededMaxCycles,
+            VmErrorRef::Trap(VmTrap::InvalidMetadata) => VmTrapKind::InvalidMetadata,
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramVersion { .. }) => {
+                VmTrapKind::UnsupportedProgramVersion
+            }
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramFeatureBits { .. }) => {
                 VmTrapKind::UnsupportedProgramFeatureBits
             }
-            VMError::UnsupportedProgramAbiVersion { .. } => {
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramAbiVersion { .. }) => {
                 VmTrapKind::UnsupportedProgramAbiVersion
             }
-            VMError::MissingMaxCycles => VmTrapKind::MissingMaxCycles,
-            VMError::MaxCyclesWithoutZk { .. } => VmTrapKind::MaxCyclesWithoutZk,
-            VMError::ProgramVectorLengthTooLarge { .. } => VmTrapKind::ProgramVectorLengthTooLarge,
-            VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
-            VMError::VectorExtensionDisabled | VMError::ZkExtensionDisabled => {
-                VmTrapKind::PermissionDenied
+            VmErrorRef::Trap(VmTrap::MissingMaxCycles) => VmTrapKind::MissingMaxCycles,
+            VmErrorRef::Trap(VmTrap::MaxCyclesWithoutZk { .. }) => VmTrapKind::MaxCyclesWithoutZk,
+            VmErrorRef::Trap(VmTrap::ProgramVectorLengthTooLarge { .. }) => {
+                VmTrapKind::ProgramVectorLengthTooLarge
             }
-            VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
-            VMError::GenericSyscallNotAllowed { .. } => VmTrapKind::GenericSyscallNotAllowed,
-            VMError::MissingHalt => VmTrapKind::MissingHalt,
-            VMError::NullifierAlreadyUsed | VMError::PermissionDenied => {
-                VmTrapKind::PermissionDenied
+            VmErrorRef::Trap(VmTrap::InvalidVectorLength { .. }) => VmTrapKind::InvalidVectorLength,
+            VmErrorRef::Trap(VmTrap::VectorExtensionDisabled)
+            | VmErrorRef::Trap(VmTrap::ZkExtensionDisabled) => VmTrapKind::PermissionDenied,
+            VmErrorRef::Trap(VmTrap::ArtifactAbiHashMismatch { .. }) => {
+                VmTrapKind::ArtifactAbiHashMismatch
             }
-            VMError::ReentrantCall => VmTrapKind::ReentrantCall,
-            VMError::CallDepthExceeded => VmTrapKind::CallDepthExceeded,
-            VMError::ControlFlowViolation => VmTrapKind::ControlFlowViolation,
-            VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
-            VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
-            VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
-            VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
-            VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
-            VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
-            VMError::ExecutionDeferred(_)
-            | VMError::AllocationDeferred(_)
-            | VMError::AllocatorDeferred(_)
-            | VMError::DecodeDeferred(_)
-            | VMError::VerificationDeferred(_) => VmTrapKind::Other,
-            VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
+            VmErrorRef::Trap(VmTrap::GenericSyscallNotAllowed { .. }) => {
+                VmTrapKind::GenericSyscallNotAllowed
+            }
+            VmErrorRef::Trap(VmTrap::MissingHalt) => VmTrapKind::MissingHalt,
+            VmErrorRef::Trap(VmTrap::NullifierAlreadyUsed)
+            | VmErrorRef::Trap(VmTrap::PermissionDenied) => VmTrapKind::PermissionDenied,
+            VmErrorRef::Trap(VmTrap::ReentrantCall) => VmTrapKind::ReentrantCall,
+            VmErrorRef::Trap(VmTrap::CallDepthExceeded) => VmTrapKind::CallDepthExceeded,
+            VmErrorRef::Trap(VmTrap::ControlFlowViolation) => VmTrapKind::ControlFlowViolation,
+            VmErrorRef::Trap(VmTrap::PrivacyViolation) => VmTrapKind::PrivacyViolation,
+            VmErrorRef::Trap(VmTrap::RegisterOutOfBounds) => VmTrapKind::RegisterOutOfBounds,
+            VmErrorRef::Trap(VmTrap::NoritoInvalid) => VmTrapKind::NoritoInvalid,
+            VmErrorRef::Trap(VmTrap::AbiTypeNotAllowed { .. }) => VmTrapKind::AbiTypeNotAllowed,
+            VmErrorRef::Trap(VmTrap::HostOutputBudgetExceeded { .. }) => {
+                VmTrapKind::HostOutputBudgetExceeded
+            }
+            VmErrorRef::Trap(VmTrap::AmxBudgetExceeded { .. }) => VmTrapKind::AmxBudgetExceeded,
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::AllocatorDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::DecodeDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::VerificationDeferred(_)) => VmTrapKind::Other,
+            VmErrorRef::Trap(VmTrap::Metered { .. }) => {
+                unreachable!("as_unmetered peels metered wrappers")
+            }
         }
     }
 }

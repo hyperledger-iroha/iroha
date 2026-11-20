@@ -2,6 +2,7 @@
 
 use super::{capture::*, *};
 use crate::VMError;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_data_model::smart_contract::entrypoint::{
     ENTRYPOINT_ARGUMENT_SCHEMA_HASH_DOMAIN_V1, ENTRYPOINT_RETURN_SCHEMA_HASH_DOMAIN_V1,
@@ -41,7 +42,7 @@ fn widths(
     schema: &EntrypointValueTypeV1,
 ) -> Result<[usize; MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES], VMError> {
     if !schema.validate() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut widths = [0usize; MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES];
     for node in (0..schema.nodes.len()).rev() {
@@ -52,9 +53,9 @@ fn widths(
                 for _ in 0..return_node_child_count(&schema.nodes[node]) {
                     width = width
                         .checked_add(widths[child])
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     child = entrypoint_value_subtree_range_v1(&schema.nodes, child)
-                        .ok_or(VMError::DecodeError)?
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         .end;
                 }
                 width.max(1)
@@ -89,9 +90,13 @@ fn walk<'a>(
     while len != 0 {
         len -= 1;
         let task = stack[len];
-        visited = visited.checked_add(1).ok_or(VMError::OutOfGas)?;
+        visited = visited
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
         let mut push = |task: Visit| -> Result<(), VMError> {
-            *stack.get_mut(len).ok_or(VMError::DecodeError)? = task;
+            *stack
+                .get_mut(len)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))? = task;
             len += 1;
             Ok(())
         };
@@ -100,7 +105,7 @@ fn walk<'a>(
                 destination: task
                     .destination
                     .checked_add(task.stride)
-                    .ok_or(VMError::DecodeError)?,
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                 repeat: task.repeat - 1,
                 ..task
             })?;
@@ -129,11 +134,11 @@ fn walk<'a>(
                     .checked_add(
                         (widths[child] as u64)
                             .checked_mul(8)
-                            .ok_or(VMError::DecodeError)?,
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     )
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 child = entrypoint_value_subtree_range_v1(&schema.nodes, child)
-                    .ok_or(VMError::DecodeError)?
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     .end;
             }
             for child in children[..count].iter().rev() {
@@ -142,13 +147,15 @@ fn walk<'a>(
             continue;
         }
         let atom_number = *atom_index;
-        let atom = atoms.get(atom_number).ok_or(VMError::DecodeError)?;
+        let atom = atoms
+            .get(atom_number)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         *atom_index += 1;
         match (node, atom) {
             (Node::Option | Node::Result, Atom::Tag(tag)) => {
                 let first = task.node + 1;
                 let second = entrypoint_value_subtree_range_v1(&schema.nodes, first)
-                    .ok_or(VMError::DecodeError)?
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     .end;
                 let option = matches!(node, Node::Option);
                 let layout = if option {
@@ -156,7 +163,7 @@ fn walk<'a>(
                 } else {
                     SumLayoutV1::try_new(widths[second] as u64, widths[first] as u64)
                 }
-                .map_err(|_| VMError::DecodeError)?;
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let base = effect(Effect::Sum {
                     destination: task.destination,
                     layout,
@@ -165,7 +172,9 @@ fn walk<'a>(
                 if *tag || !option {
                     push(Visit {
                         node: if *tag { first } else { second },
-                        destination: base.checked_add(8).ok_or(VMError::DecodeError)?,
+                        destination: base
+                            .checked_add(8)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                         repeat: 1,
                         stride: 0,
                     })?;
@@ -174,7 +183,7 @@ fn walk<'a>(
             (Node::List(node), Atom::List(count)) if *count <= node.capacity => {
                 let child = task.node + 1;
                 let layout = ListLayoutV1::try_new(u64::from(node.capacity), widths[child] as u64)
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let base = effect(Effect::List {
                     destination: task.destination,
                     layout,
@@ -184,8 +193,12 @@ fn walk<'a>(
                     push(Visit {
                         node: child,
                         destination: base
-                            .checked_add(layout.slot_offset(0).map_err(|_| VMError::DecodeError)?)
-                            .ok_or(VMError::DecodeError)?,
+                            .checked_add(
+                                layout
+                                    .slot_offset(0)
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
+                            )
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                         repeat: u16::from(*count),
                         stride: (widths[child] * 8) as u64,
                     })?;
@@ -228,7 +241,7 @@ fn walk<'a>(
             (Node::Leaf(kind), Atom::Pointer(envelope)) => {
                 let tlv = crate::pointer_abi::validate_tlv_bytes(envelope)?;
                 if expected_pointer_type(*kind) != Some(tlv.type_id) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 effect(Effect::Pointer {
                     destination: task.destination,
@@ -239,7 +252,7 @@ fn walk<'a>(
             (Node::StateCursor(kind), Atom::Pointer(envelope)) => {
                 crate::state_cursor::validate_cursor_envelope(
                     iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(kind)
-                        .ok_or(VMError::DecodeError)?,
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     envelope,
                 )?;
                 effect(Effect::Pointer {
@@ -248,7 +261,7 @@ fn walk<'a>(
                     envelope,
                 })?;
             }
-            _ => return Err(VMError::DecodeError),
+            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
         }
     }
     Ok(visited)
@@ -266,21 +279,24 @@ impl Quote {
         let bytes = match effect {
             Effect::Sum { layout, .. } => layout
                 .allocation_bytes()
-                .map_err(|_| VMError::DecodeError)?,
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
             Effect::List { layout, .. } => layout
                 .allocation_bytes()
-                .map_err(|_| VMError::DecodeError)?,
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
             Effect::Pointer { envelope, .. } => {
                 self.pointers += 1;
                 self.pointer_bytes = self
                     .pointer_bytes
                     .checked_add(envelope.len() as u64)
-                    .ok_or(VMError::OutOfGas)?;
+                    .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
                 0
             }
             Effect::Scalar { .. } => 0,
         };
-        self.raw_heap = self.raw_heap.checked_add(bytes).ok_or(VMError::OutOfGas)?;
+        self.raw_heap = self
+            .raw_heap
+            .checked_add(bytes)
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
         Ok(0)
     }
     fn gas(&self) -> Result<u64, VMError> {
@@ -289,7 +305,7 @@ impl Quote {
             .and_then(|gas| gas.checked_add(32))
             .and_then(|gas| gas.checked_add(self.raw_heap))
             .and_then(|gas| gas.checked_add(self.pointer_bytes))
-            .ok_or(VMError::OutOfGas)
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))
     }
 }
 enum Meter {
@@ -314,7 +330,7 @@ impl Materializer {
                 Meter::Escrow(available) => available,
             }
         {
-            return Err(VMError::OutOfGas);
+            return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         // Both scratch backings are funded before a TLV body or guest heap is copied.
         let mut lengths =
@@ -348,7 +364,7 @@ impl Materializer {
                     .pointers
                     .as_slice()
                     .get(atom)
-                    .ok_or(VMError::DecodeError)?,
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
             ),
             Effect::Sum {
                 destination,
@@ -358,7 +374,7 @@ impl Materializer {
                 let base = vm.alloc_heap(
                     layout
                         .allocation_bytes()
-                        .map_err(|_| VMError::DecodeError)?,
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                 )?;
                 vm.store_u64(base, u64::from(tag))?;
                 (destination, base)
@@ -371,7 +387,7 @@ impl Materializer {
                 let base = vm.alloc_heap(
                     layout
                         .allocation_bytes()
-                        .map_err(|_| VMError::DecodeError)?,
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                 )?;
                 vm.store_u64(base, u64::from(count))?;
                 vm.store_u64(base + 8, u64::from(layout.capacity()))?;
@@ -400,17 +416,19 @@ pub fn install_captured_arguments(
 ) -> Result<(), VMError> {
     vm.validate_captured_root_schema(Some(schema), result_words)?;
     if !record.belongs_to(budget) {
-        return Err(VMError::ExecutionDeferred(
+        return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::ExecutionDeferral::LocalInvariantViolation,
-        ));
+        )));
     }
     let record = record.get();
     if record.schema_hash
         != funded_schema_hash(schema, ENTRYPOINT_ARGUMENT_SCHEMA_HASH_DOMAIN_V1, budget)?
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    let words = schema.word_count().ok_or(VMError::DecodeError)?;
+    let words = schema
+        .word_count()
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let mut quote = Quote {
         raw_heap: ((words + result_words) * 8) as u64,
         ..Quote::default()
@@ -422,7 +440,7 @@ pub fn install_captured_arguments(
         })?;
     }
     if atom != record.atoms.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let materializer = Materializer::prepare(vm, &record.atoms, &quote, budget, Meter::Debit)?;
     let arguments = vm.alloc_heap((words * 8) as u64)?;
@@ -433,7 +451,11 @@ pub fn install_captured_arguments(
         walk(&field.ty, &record.atoms, &mut atom, destination, |effect| {
             materializer.effect(vm, effect)
         })?;
-        destination += (field.ty.word_count().ok_or(VMError::DecodeError)? * 8) as u64;
+        destination += (field
+            .ty
+            .word_count()
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
+            * 8) as u64;
     }
     vm.retain_captured_root_tables(arguments, words, results, result_words)
 }
@@ -446,7 +468,11 @@ pub fn install_empty_captured_arguments(vm: &mut IVM, result_words: usize) -> Re
     vm.validate_captured_root_schema(None, result_words)?;
     let bytes = (result_words * 8) as u64;
     vm.preflight_host_tlv_allocations_with_reserved_heap(&[], bytes)?;
-    vm.debit_gas(32u64.checked_add(bytes).ok_or(VMError::OutOfGas)?)?;
+    vm.debit_gas(
+        32u64
+            .checked_add(bytes)
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))?,
+    )?;
     let results = vm.alloc_heap(bytes)?;
     vm.retain_captured_root_tables(0, 0, results, result_words)
 }
@@ -468,9 +494,9 @@ pub fn transfer_return_record_funded(
     budget: &AllocationBudget,
 ) -> Result<u64, VMError> {
     if !record.belongs_to(budget) {
-        return Err(VMError::ExecutionDeferred(
+        return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::ExecutionDeferral::LocalInvariantViolation,
-        ));
+        )));
     }
     let record = record.get();
     if schema.word_count() != Some(arity)
@@ -478,7 +504,7 @@ pub fn transfer_return_record_funded(
         || record.schema_hash
             != funded_schema_hash(schema, ENTRYPOINT_RETURN_SCHEMA_HASH_DOMAIN_V1, budget)?
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     validate_return_destination(destination, result_table, arity)?;
     let mut quote = Quote::default();
@@ -487,7 +513,7 @@ pub fn transfer_return_record_funded(
         quote.effect(effect)
     })?;
     if atom != record.atoms.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let materializer = Materializer::prepare(
         destination,
@@ -513,18 +539,18 @@ pub fn validate_return_destination(
     arity: usize,
 ) -> Result<(), VMError> {
     if arity == 0 || arity > ivm_abi::call::MAX_CALL_WORDS_V1 || !result_table.is_multiple_of(8) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let bytes = (arity * 8) as u64;
     let end = result_table
         .checked_add(bytes)
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let heap = result_table >= crate::Memory::HEAP_START
         && end <= crate::Memory::HEAP_START + vm.memory.heap_allocated_len();
     let stack =
         result_table >= crate::Memory::STACK_START && vm.memory.call_frames.entry_pc().is_ok();
     if !heap && !stack {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     vm.memory
         .checked_region_bounds_for(result_table, bytes, crate::error::Perm::WRITE)?;

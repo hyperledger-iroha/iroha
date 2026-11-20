@@ -18,6 +18,7 @@
 //!     .build();
 //! // ... attach host, load programs, run, etc.
 //! ```
+use crate::error::VmTrap;
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
@@ -47,7 +48,7 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if !self.allows_syscall(vm.syscall_policy(), number) {
-            return Err(VMError::UnknownSyscall(number));
+            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
         }
         self.inner.syscall(number, vm)
     }
@@ -81,6 +82,7 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
 mod tests {
     use super::*;
     use crate::PreparedArgumentRecord;
+    use crate::error::VmTrap;
     use iroha_primitives::json::Json;
     use std::sync::Arc;
 
@@ -96,7 +98,7 @@ mod tests {
             _number: u32,
             _vm: crate::host::SyscallQuote<'_>,
         ) -> Result<u64, VMError> {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
 
         fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
@@ -150,7 +152,10 @@ mod tests {
         unpaid.load_program(&program).unwrap();
         unpaid.select_entrypoint("echo").unwrap();
         unpaid.set_host(PreparedHost(prepared));
-        assert!(matches!(unpaid.run(), Err(VMError::DecodeError)));
+        assert!(matches!(
+            unpaid.run(),
+            Err(VMError::Trap(VmTrap::DecodeError))
+        ));
         assert!(unpaid.call_result_word_count().is_err());
         #[cfg(debug_assertions)]
         assert_eq!(crate::argument_record_decode_count(), 1);

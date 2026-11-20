@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -134,7 +135,10 @@ fn delete_role_with_assignees_fails() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_drole = assemble_syscalls(&[syscalls::SYSCALL_DELETE_ROLE]);
     vm.load_program(&prog_drole).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }
 #[test]
 fn grant_nonexistent_role_fails() {
@@ -186,5 +190,8 @@ fn grant_nonexistent_role_fails() {
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
     let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE]);
     vm.load_program(&prog_grole).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

@@ -33,6 +33,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
+use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
 use std::{collections::BTreeMap, sync::Arc};
 
 fn shared_argument_fixture_payload() -> Json {
@@ -1660,7 +1661,7 @@ fn subscription_plan_metadata_rejects_negative_usage_unit_price() {
     let view = state.view();
     assert!(matches!(
         CoreHostImpl::<NoQueryState>::subscription_plan(&view, &plan_id),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -2181,11 +2182,11 @@ fn committed_output_budget_accepts_the_exact_limit_and_refuses_one_over() {
     // The violation is sticky and surfaces to the guest as a deterministic VM error.
     assert!(!host.try_reserve_output(0, 0));
     assert!(matches!((&(host.output_budget_violation()
-                .map(HostOutputBudgetViolation::into_vm_error)), &(ivm::VMError::HostOutputBudgetExceeded {
+                .map(HostOutputBudgetViolation::into_vm_error)), &(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                 resource: ivm::HostOutputResource::Items,
                 attempted: 3,
                 limit: 2,
-            })), (Some(ivm::VMError::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit }), ivm::VMError::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit }) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit));
+            }))), (Some(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit })), ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit })) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit));
 }
 #[test]
 fn bounded_host_stops_unique_durable_state_growth_before_insert() {
@@ -2248,9 +2249,9 @@ fn generic_execution_rejects_execute_instruction_before_operation_specific_admis
     vm.set_register(10, ptr);
     vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
     assert!(
-        matches!((&(host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed {
+        matches!((&(host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed { syscall: __actual_syscall }), ivm::VMError::GenericSyscallNotAllowed { syscall: __expected_syscall }) if __actual_syscall == __expected_syscall)
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __actual_syscall })), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: __expected_syscall })) if __actual_syscall == __expected_syscall)
     );
     assert!(host.queued.is_empty());
 }
@@ -2272,7 +2273,7 @@ fn execute_instruction_syscall_rejects_retired_blob_payload_forms() {
         vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), ptr);
         assert!(host.queued.is_empty());
@@ -2303,7 +2304,7 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
         vm.set_register(11, operation_tag);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(
             host.queued.is_empty(),
@@ -2343,18 +2344,21 @@ fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
             vm.set_register(10, ptr);
             vm.set_register(11, operation_tag);
             let expected = if contract_frame {
-                ivm::VMError::PermissionDenied
+                ivm::VMError::Trap(VmTrap::PermissionDenied)
             } else {
-                ivm::VMError::GenericSyscallNotAllowed {
+                ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                     syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-                }
+                })
             };
             let actual = host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm);
             let equivalent = match (&actual, &expected) {
-                (Err(ivm::VMError::PermissionDenied), ivm::VMError::PermissionDenied) => true,
                 (
-                    Err(ivm::VMError::GenericSyscallNotAllowed { syscall: actual }),
-                    ivm::VMError::GenericSyscallNotAllowed { syscall: expected },
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied),
+                ) => true,
+                (
+                    Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: actual })),
+                    ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: expected }),
                 ) => actual == expected,
                 _ => false,
             };
@@ -2385,7 +2389,7 @@ fn execute_instruction_syscall_rejects_retired_generic_instruction_types() {
     vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(host.queued.is_empty());
 }
@@ -2503,7 +2507,7 @@ fn unaffordable_proof_instruction_preserves_queue_and_verification_latch() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("extreme proof gas exceeds the reserved budget");
-    assert!(matches!(error, ivm::VMError::OutOfGas));
+    assert!(matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(
         vm.remaining_gas(),
         0,
@@ -2780,7 +2784,7 @@ fn execute_instruction_syscall_rejects_unindexed_literal_data_without_host_effec
             &program,
             crate::ivm_test_support::declared_profile(&program)
         ),
-        Err(ivm::VMError::InvalidMetadata)
+        Err(ivm::VMError::Trap(VmTrap::InvalidMetadata))
     ));
     assert!(host.queued.is_empty());
 }
@@ -2859,7 +2863,7 @@ fn create_nfts_for_all_preflights_exact_gas_before_queue_mutation() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("NFT fan-out exceeds the syscall reserve");
-    assert!(matches!(error, ivm::VMError::OutOfGas));
+    assert!(matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(vm.remaining_gas(), 0);
     assert!(host.queued.is_empty(), "must not queue partial fan-out");
     assert_eq!(host.nft_seq, 0, "must not advance the NFT sequence");
@@ -2971,11 +2975,11 @@ fn queued_instruction_budget_exhaustion_is_an_immediate_vm_error() {
     let mut vm = ivm::IVM::new(1_000);
     vm.set_register(10, 3);
     assert!(
-        matches!((&(host.syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm,)), &(ivm::VMError::HostOutputBudgetExceeded {
+        matches!((&(host.syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm,)), &(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                 resource: ivm::HostOutputResource::Items,
                 attempted: 1,
                 limit: 0,
-            })), (Err(ivm::VMError::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit }), ivm::VMError::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit }) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit)
+            }))), (Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit })), ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit })) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit)
     );
     assert!(
         host.queued.is_empty(),
@@ -3031,11 +3035,11 @@ fn fastpq_batch_entry_syscall_returns_transfer_gas() {
         .expect("batch entry");
     for _ in 0..10_000 {
         assert!(
-            matches!((&(host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)), &(ivm::VMError::HostOutputBudgetExceeded {
+            matches!((&(host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)), &(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                     resource: ivm::HostOutputResource::Items,
                     attempted: 2,
                     limit: 1,
-                })), (Err(ivm::VMError::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit }), ivm::VMError::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit }) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit)
+                }))), (Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __actual_resource, attempted: __actual_attempted, limit: __actual_limit })), ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { resource: __expected_resource, attempted: __expected_attempted, limit: __expected_limit })) if __actual_resource == __expected_resource && __actual_attempted == __expected_attempted && __actual_limit == __expected_limit)
         );
     }
     let asset_id = AssetId::of(asset_def, from.clone());
@@ -3290,7 +3294,7 @@ fn transfer_asset_scoped_vm_debits_exact_gas_before_queue_mutation() {
         // the syscall itself, before the native instruction is queued.
         assert!(matches!(
             vm.run_with_host(&mut host),
-            Err(ivm::VMError::OutOfGas)
+            Err(ivm::VMError::Trap(VmTrap::OutOfGas))
         ));
         if available == crate::gas::BASE_TRANSFER {
             assert_eq!(vm.remaining_gas(), 0);
@@ -3332,14 +3336,14 @@ fn transfer_asset_scoped_quote_rejects_invalid_shapes_and_active_batch() {
     host.fastpq_batch_entries = Some(Vec::new());
     assert!(matches!(
         host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     host.fastpq_batch_entries = None;
     let pointer = store_tlv(&mut vm, PointerType::Name, b"not-a-dataspace");
     vm.set_register(14, pointer);
     assert!(matches!(
         host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.remaining_gas(), 1_000, "quote must not debit gas");
     assert!(host.queued.is_empty());
@@ -3374,7 +3378,7 @@ fn transfer_v1_syscall_rejects_outside_an_active_batch() {
     );
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(host.queued.is_empty());
 }
@@ -3453,7 +3457,7 @@ fn transfer_asset_scoped_syscall_rejects_non_dataspace_r14() {
     let err = host
         .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
         .expect_err("wrong r14 pointer type should reject before queueing");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
     assert!(host.queued.is_empty());
 }
 #[test]
@@ -3513,7 +3517,10 @@ fn transfer_asset_scoped_syscall_without_dataspace_is_global_or_rejected() {
                 assert_eq!(host.queued, vec![expected]);
             }
             AssetBalancePolicy::DataspaceRestricted => {
-                assert!(matches!(result, Err(ivm::VMError::NoritoInvalid)));
+                assert!(matches!(
+                    result,
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+                ));
                 assert!(host.queued.is_empty());
             }
         }
@@ -3660,7 +3667,7 @@ fn fastpq_batch_apply_rejects_noncanonical_amount() {
     vm.set_register(10, ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY, &mut vm),
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(host.queued.is_empty());
 }
@@ -3853,7 +3860,7 @@ fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
 fn compute_envelope_hash_rejects_invalid_payload() {
     let err = CoreHost::compute_envelope_hash(b"invalid envelope")
         .expect_err("invalid envelope should fail");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn compute_envelope_hash_accepts_norito_envelope() {
@@ -3867,7 +3874,7 @@ fn compute_envelope_hash_accepts_norito_envelope() {
 fn compute_envelope_hash_rejects_opaque_bytes_unconditionally() {
     assert!(matches!(
         CoreHost::compute_envelope_hash(b"opaque bytes"),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -4059,7 +4066,7 @@ fn resolve_account_alias_syscall_rejects_invalid_alias_literal_without_trimming(
     let err = host
         .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
         .expect_err("invalid alias literal should fail at runtime");
-    assert!(matches!(err, ivm::VMError::DecodeError));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::DecodeError)));
 }
 #[test]
 fn resolve_account_alias_syscall_requires_authoritative_alias_binding() {
@@ -4104,7 +4111,7 @@ fn resolve_account_alias_syscall_requires_authoritative_alias_binding() {
     let err = host
         .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
         .expect_err("primary labels alone must not resolve without a binding");
-    assert!(matches!(err, ivm::VMError::DecodeError));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::DecodeError)));
 }
 #[test]
 fn resolve_account_alias_syscall_requires_dataspace_permission() {
@@ -4149,7 +4156,7 @@ fn resolve_account_alias_syscall_requires_dataspace_permission() {
     let err = host
         .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
         .expect_err("alias resolution should require dataspace permission");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn resolve_account_alias_syscall_reads_current_domain_qualified_binding() {
@@ -4387,7 +4394,7 @@ fn resolve_account_alias_syscall_requires_domain_permission_for_domain_qualified
     let err = host
         .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
         .expect_err("domain-qualified alias resolution should require domain permission");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn resolve_account_alias_syscall_accepts_domain_permission_without_dataspace_permission() {
@@ -4687,7 +4694,7 @@ fn generic_contract_call_rejects_stale_return_schema_binding_before_state_change
         host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(host.durable_state_overlay.is_empty());
     assert!(host.queued.is_empty());
@@ -4745,7 +4752,7 @@ fn typed_contract_call_rejects_forged_caller_scope_before_authorization() {
                 host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
                     .unwrap_err()
                     .as_unmetered(),
-                ivm::VMError::PermissionDenied
+                VmErrorRef::Trap(VmTrap::PermissionDenied)
             ),
             "case {case}"
         );
@@ -4790,7 +4797,7 @@ fn typed_contract_call_rejects_private_witness_callee_before_execution() {
     );
     assert!(matches!(
         result.unwrap_err().as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(effects.is_empty());
     assert!(matches!(vm.load_u64(vm.register(14)), Ok(0)));
@@ -4839,7 +4846,7 @@ fn typed_contract_call_preserves_view_restriction_before_child_effects() {
     );
     assert!(matches!(
         result.unwrap_err().as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(effects.is_empty());
     assert!(matches!(vm.load_u64(vm.register(14)), Ok(0)));
@@ -4944,10 +4951,13 @@ fn nested_contract_return_rejects_private_pointer_memory_with_either_descriptor_
             .expect_err("private payload must not be returned");
         assert!(
             matches!(
-                (&(error.as_unmetered()), &(&ivm::VMError::PrivacyViolation)),
                 (
-                    ivm::VMError::PrivacyViolation,
-                    ivm::VMError::PrivacyViolation
+                    &(error.as_unmetered()),
+                    &(&ivm::VMError::Trap(VmTrap::PrivacyViolation))
+                ),
+                (
+                    VmErrorRef::Trap(VmTrap::PrivacyViolation),
+                    ivm::VMError::Trap(VmTrap::PrivacyViolation)
                 )
             ),
             "private payload rejection must depend on completed table memory, not register tags"
@@ -4983,8 +4993,14 @@ fn nested_contract_return_rejects_repeated_pointer_amplification() {
     let error = ivm::value_record::quote_completed_return_record(&vm, &schema, u64::MAX)
         .expect_err("repeated pointers exceed the canonical return record bound");
     assert!(matches!(
-        (&(error.as_unmetered()), &(&ivm::VMError::DecodeError)),
-        (ivm::VMError::DecodeError, ivm::VMError::DecodeError)
+        (
+            &(error.as_unmetered()),
+            &(&ivm::VMError::Trap(VmTrap::DecodeError))
+        ),
+        (
+            VmErrorRef::Trap(VmTrap::DecodeError),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     assert!(error.metered_gas().is_some_and(|gas| gas > 0));
 }
@@ -5009,8 +5025,14 @@ fn nested_contract_return_rejects_unaffordable_payload_before_clone() {
     let error = ivm::value_record::quote_completed_return_record(&vm, &schema, 1024)
         .expect_err("unaffordable return is rejected before cloning");
     assert!(matches!(
-        (&(error.as_unmetered()), &(&ivm::VMError::OutOfGas)),
-        (ivm::VMError::OutOfGas, ivm::VMError::OutOfGas)
+        (
+            &(error.as_unmetered()),
+            &(&ivm::VMError::Trap(VmTrap::OutOfGas))
+        ),
+        (
+            VmErrorRef::Trap(VmTrap::OutOfGas),
+            ivm::VMError::Trap(VmTrap::OutOfGas)
+        )
     ));
     assert_eq!(error.metered_gas(), Some(1024));
 }
@@ -5243,7 +5265,7 @@ fn dispatched_call_contract_unaffordable_child_leaks_no_output_or_state() {
         &(payload),
         gas_limit,
     );
-    assert!(matches!(result, Err(ivm::VMError::OutOfGas)));
+    assert!(matches!(result, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
     assert!(
         durable_state_overlay.is_empty(),
         "failed child state must roll back"
@@ -5320,14 +5342,14 @@ seiyaku Callee { permission AssetOps;
     );
     let error = result.expect_err("nested assertion should fail the syscall");
     assert!(
-        matches!((&(error.as_unmetered()), &(&ivm::VMError::ContractAbort {
+        matches!((&(error.as_unmetered()), &(&ivm::VMError::Trap(VmTrap::ContractAbort {
                 contract: "Callee".into(),
                 error_type: expected.identity.clone(),
                 schema_hash: expected.schema_hash(),
                 name: "ForcedFailure".to_owned(),
                 code: 1,
                 message: Some("Callee rejected the operation".into()),
-            })), (ivm::VMError::ContractAbort { contract: __actual_contract, error_type: __actual_error_type, schema_hash: __actual_schema_hash, name: __actual_name, code: __actual_code, message: __actual_message }, ivm::VMError::ContractAbort { contract: __expected_contract, error_type: __expected_error_type, schema_hash: __expected_schema_hash, name: __expected_name, code: __expected_code, message: __expected_message }) if __actual_contract == __expected_contract && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_name == __expected_name && __actual_code == __expected_code && __actual_message == __expected_message)
+            }))), (VmErrorRef::Trap(VmTrap::ContractAbort { contract: __actual_contract, error_type: __actual_error_type, schema_hash: __actual_schema_hash, name: __actual_name, code: __actual_code, message: __actual_message }), ivm::VMError::Trap(VmTrap::ContractAbort { contract: __expected_contract, error_type: __expected_error_type, schema_hash: __expected_schema_hash, name: __expected_name, code: __expected_code, message: __expected_message })) if __actual_contract == __expected_contract && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_name == __expected_name && __actual_code == __expected_code && __actual_message == __expected_message)
     );
     assert_eq!(
         crate::execution_attempt::expect_completed_rejection(
@@ -5400,7 +5422,10 @@ seiyaku Callee { permission AssetOps;
         &(Json::new(())),
     );
     let err = denied.expect_err("protected nested entrypoint should require AssetOps");
-    assert!(matches!(err.as_unmetered(), ivm::VMError::PermissionDenied));
+    assert!(matches!(
+        err.as_unmetered(),
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
+    ));
     grant_asset_ops_to_account(&state, &authority, &(caller_contract.subject_id()));
     let (result, vm, durable_state_overlay) = call_contract_syscall(
         &state,
@@ -5456,7 +5481,7 @@ seiyaku Lifecycle {
         let error = result.expect_err("nested calls must not invoke lifecycle hooks");
         assert!(matches!(
             error.as_unmetered(),
-            ivm::VMError::PermissionDenied
+            VmErrorRef::Trap(VmTrap::PermissionDenied)
         ));
         assert!(durable_state_overlay.is_empty());
     }
@@ -5500,7 +5525,7 @@ seiyaku AwaitingHajimari {
     let error = result.expect_err("nested calls must wait for hajimari/始まり");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(durable_state_overlay.is_empty());
 }
@@ -5604,7 +5629,7 @@ seiyaku HeldCallee {
     let error = result.expect_err("nested calls must reject an actively held callee");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert_eq!(
         ivm::argument_record_decode_count(),
@@ -6248,7 +6273,7 @@ seiyaku Callee { permission AssetOps;
         .syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
         .expect_err("invalid UTF-8 must fail typed return validation");
     assert!(
-        matches!(err.as_unmetered(), ivm::VMError::NoritoInvalid),
+        matches!(err.as_unmetered(), VmErrorRef::Trap(VmTrap::NoritoInvalid)),
         "invalid String payload must be rejected by protected return validation: {err:?}",
     );
     assert_eq!(
@@ -6394,7 +6419,7 @@ fn call_contract_syscall_accepts_only_exact_public_authenticated_typed_tables() 
         });
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
-            ivm::VMError::PermissionDenied
+            VmErrorRef::Trap(VmTrap::PermissionDenied)
         ));
     }
     for register in 10..16 {
@@ -6405,7 +6430,7 @@ fn call_contract_syscall_accepts_only_exact_public_authenticated_typed_tables() 
         assert!(
             matches!(
                 result.unwrap_err().as_unmetered(),
-                ivm::VMError::PrivacyViolation
+                VmErrorRef::Trap(VmTrap::PrivacyViolation)
             ),
             "private r{register}"
         );
@@ -6427,14 +6452,14 @@ fn core_host_rejects_raw_private_witness_transport_without_mutation() {
     assert!(
         matches!(
             host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, vm.syscall_quote()),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         "consensus quote preparation must not expose the prover/test witness transport"
     );
     assert!(
         matches!(
             host.syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         "a direct host call must remain fail-closed if entrypoint admission is bypassed"
     );
@@ -6487,7 +6512,7 @@ fn call_contract_syscall_checks_affordability_before_state_lookup_or_decode() {
     assert!(
         matches!(
             host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm),
-            Err(ivm::VMError::OutOfGas)
+            Err(ivm::VMError::Trap(VmTrap::OutOfGas))
         ),
         "unaffordable calls must fail before the absent query state is consulted"
     );
@@ -8903,7 +8928,7 @@ fn production_typed_state_map_scans_and_writes_validate_cntr() {
     vm.set_register(10, base_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(host.durable_state_overlay, before_overlay);
     let bytes_record = before_overlay
@@ -8927,7 +8952,7 @@ fn production_typed_state_map_scans_and_writes_validate_cntr() {
     assert!(
         matches!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
         "a record for bytes must not be staged under an int declaration"
     );
@@ -8936,7 +8961,7 @@ fn production_typed_state_map_scans_and_writes_validate_cntr() {
     vm.set_register(11, malformed_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     ));
     assert_eq!(host.durable_state_overlay, before_overlay);
     assert_eq!(host.state_access_log.read_keys, before_reads);
@@ -9067,12 +9092,12 @@ fn contract_reads_but_cannot_mutate_consensus_conversion_offer() {
         vm.set_register(11, value_ptr);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         vm.set_register(10, path_ptr);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     assert!(host.drain_durable_state_overlay().is_empty());
@@ -9188,7 +9213,7 @@ fn exact_json_getters_accept_only_canonical_strings_through_ledger_host() {
         assert!(
             matches!(
                 host.syscall(syscall, &mut vm),
-                Err(ivm::VMError::DecodeError)
+                Err(ivm::VMError::Trap(VmTrap::DecodeError))
             ),
             "{key} must reject a JSON number token"
         );
@@ -9207,10 +9232,10 @@ fn unassigned_exact_json_getters_fail_before_ledger_host_work() {
         let queued_before = host.queued.len();
         let overlay_before = host.durable_state_overlay.len();
         assert!(
-            matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(ivm::VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+            matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (number))
         );
         assert!(
-            matches!(host.syscall(number, &mut vm), Err(ivm::VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+            matches!(host.syscall(number, &mut vm), Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (number))
         );
         assert_eq!([vm.register(10), vm.register(11)], registers_before);
         assert_eq!(
@@ -9531,7 +9556,7 @@ fn state_get_preflights_gas_before_world_state_output() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("world-state response cost exceeds the syscall reserve");
-    assert!(matches!(error, ivm::VMError::OutOfGas));
+    assert!(matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(
         vm.remaining_gas(),
         15,
@@ -10312,7 +10337,7 @@ fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_respon
     vm.set_register(10, request_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(
         vm.register(10),
@@ -10331,7 +10356,7 @@ fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
     invalid_selector.insert("invalid/election".to_owned(), (2, false, vec![0, 0]));
     assert!(matches!(
         host.set_zk_elections_snapshot(invalid_selector),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert!(
         host.zk_elections.contains_key("valid"),
@@ -10349,7 +10374,7 @@ fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
         invalid.insert(id.to_string(), (options, false, tally));
         assert!(matches!(
             host.set_zk_elections_snapshot(invalid),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(
             host.zk_elections.contains_key("valid"),
@@ -10372,7 +10397,7 @@ fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
             host.vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
                 election_id: ".maximum".to_owned(),
             }),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ),
         "noncanonical requests must fail before lookup or response construction"
     );
@@ -10390,7 +10415,7 @@ fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
             host.vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
                 election_id: id.to_string(),
             }),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             host.zk_elections
@@ -10466,7 +10491,7 @@ fn zk_snapshot_hydration_rejects_invalid_election_selector_without_partial_repla
     let zk_cfg = crate::state::default_zk_config();
     assert!(matches!(
         host.set_zk_snapshots_from_world(&world.view(), &zk_cfg),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(host.zk_roots, roots_before);
     assert_eq!(host.zk_elections, elections_before);
@@ -10532,7 +10557,7 @@ fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
                         &world.view(),
                         &crate::state::default_zk_config(),
                     ),
-                    Err(ivm::VMError::NoritoInvalid)
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
                 ));
             assert_eq!(
                 host.zk_elections.get("prior").cloned(),
@@ -10573,7 +10598,7 @@ fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
         .expect("seed prior snapshot");
     assert!(matches!(
         host.set_zk_snapshots_from_world(&world.view(), &crate::state::default_zk_config(),),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(
         host.zk_elections.get("prior").cloned(),
@@ -10750,13 +10775,13 @@ fn zk_roots_snapshot_uses_profile_empty_root_and_rejects_drift_atomically() {
     drifted.root_history.push([0x66; 32]);
     assert!(matches!(
         host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), drifted)]))),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     let mut missing_current_root = ZkAssetState::default();
     missing_current_root.commitments.push([0x25; 32]);
     assert!(matches!(
         host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), missing_current_root)]))),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     let mut drifted_checkpoint = ZkAssetState::default();
     drifted_checkpoint
@@ -10768,7 +10793,7 @@ fn zk_roots_snapshot_uses_profile_empty_root_and_rejects_drift_atomically() {
         });
     assert!(matches!(
         host.set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), drifted_checkpoint)]))),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     let retained = host
         .roots_get_response(&ivm::zk_verify::RootsGetRequest {
@@ -11302,7 +11327,7 @@ seiyaku PreparedBoundaryArguments {
         .expect("precharge constrained prepared arguments");
     assert!(matches!(
         constrained_vm.run_with_host(&mut constrained_host),
-        Err(VMError::OutOfMemory)
+        Err(VMError::Trap(VmTrap::OutOfMemory))
     ));
     assert_eq!(ivm::argument_record_decode_count(), 1);
     assert!(constrained_vm.call_result_word_count().is_err());
@@ -11338,7 +11363,7 @@ fn get_public_input_missing_name_is_error() {
     let err = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
         .expect_err("missing name should error");
-    assert!(matches!(err, VMError::PermissionDenied));
+    assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn get_public_input_preflights_exact_gas_before_guest_output() {
@@ -11366,7 +11391,7 @@ fn get_public_input_preflights_exact_gas_before_guest_output() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("public input response exceeds the syscall reserve");
-    assert!(matches!(error, ivm::VMError::OutOfGas));
+    assert!(matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(vm.remaining_gas(), 0);
     assert_eq!(vm.register(10), name_ptr, "must not allocate guest output");
     assert_eq!(vm.register(11), 0xfeed, "must not mutate output registers");
@@ -11490,7 +11515,7 @@ fn runtime_obligation_host_refuses_baseline_missing_authority_and_other_subject(
         vm.set_register(11, tag);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(host.queued.is_empty());
         assert_eq!(vm.register(10), pointer);
@@ -11601,7 +11626,10 @@ fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("gas cannot fund the bridge");
-    assert!(matches!(error, ivm::VMError::OutOfGas), "{error:?}");
+    assert!(
+        matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)),
+        "{error:?}"
+    );
     assert_eq!(vm.pc(), syscall_pc, "refused at the bridge SCALL");
     assert_eq!(vm.register(10), request_pointer);
     assert_eq!(vm.register(11), tag);
@@ -11643,11 +11671,11 @@ fn runtime_obligation_host_output_refusal_preserves_original_pointer_and_queue()
         vm.set_register(11, tag);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-            Err(ivm::VMError::HostOutputBudgetExceeded {
+            Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                 resource: ivm::HostOutputResource::Items,
                 attempted: 1,
                 limit: 0,
-            })
+            }))
         ));
         assert_eq!(
             vm.register(10),

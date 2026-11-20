@@ -2,6 +2,7 @@
 
 use super::{tests::*, *};
 use ivm::{encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 
 const OPCODES: [u8; 17] = [
     wide::arithmetic::ADD,
@@ -292,7 +293,7 @@ fn exact_scalar_gas_and_cycle_costs_leave_no_extra_padding_or_uncharged_comparis
         if gas == 88 {
             assert!(matches!(
                 result,
-                Err(CaptureError::Execution(VMError::OutOfGas))
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas)))
             ));
         } else {
             let native = result.unwrap();

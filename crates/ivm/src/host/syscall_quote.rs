@@ -1,6 +1,7 @@
 //! Restricted, side-effect-free view for quoting a host syscall.
 
 use super::{IVM, PointerType, VMError};
+use crate::error::VmTrap;
 
 /// The authenticated image and public request metadata available before the gas debit.
 ///
@@ -57,7 +58,7 @@ impl<'a> SyscallQuote<'a> {
                 crate::IvmEngine::Baseline => crate::registers::BASELINE_REGISTER_COUNT,
             }
         {
-            return Err(VMError::RegisterOutOfBounds);
+            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
         }
         self.vm.ensure_public_register(index)
     }
@@ -104,12 +105,12 @@ impl<'a> SyscallQuote<'a> {
     ) -> Result<super::ZkBatchGasQuote, VMError> {
         let payload = self.quote_tlv_payload_len_at(address, PointerType::NoritoBytes)?;
         if u64::try_from(payload).unwrap_or(u64::MAX) > schedule.max_payload_bytes {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let extent = super::TLV_ENVELOPE_OVERHEAD
             .checked_add(payload)
             .and_then(|len| u64::try_from(len).ok())
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         self.vm.ensure_owned_public_tlv_range(address, extent)?;
         super::quote_zk_batch_at(self.vm, address, schedule)
     }
@@ -237,6 +238,7 @@ impl<'a> SyscallQuote<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn quote_checks_register_geometry_and_privacy_before_reading_guest_values() {
@@ -247,18 +249,18 @@ mod tests {
         let quote = vm.syscall_quote();
         assert!(matches!(
             quote.public_register(12),
-            Err(VMError::PrivacyViolation)
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
         ));
         assert!(matches!(
             quote.public_register(usize::MAX),
-            Err(VMError::RegisterOutOfBounds)
+            Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
         ));
         assert_eq!(quote.public_register(13).unwrap(), 0);
         assert_eq!(quote.remaining_gas(), 100);
         assert_eq!(quote.reserve_available_syscall_gas().unwrap(), 100);
         assert!(matches!(
             quote.reserve_available_syscall_gas_at_least(101),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.register(12), 37);
         assert!(vm.registers.tag(12));
@@ -279,13 +281,13 @@ mod tests {
         );
         assert!(matches!(
             quote.common_syscall_gas_quote(SYSCALL_DEBUG_PRINT),
-            Err(VMError::PrivacyViolation)
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
         ));
         vm.registers.set_tag(11, false);
         assert!(matches!(
             vm.syscall_quote()
                 .common_syscall_gas_quote(SYSCALL_PRIVATE_NUMERIC_VALCOM),
-            Err(VMError::PrivacyViolation)
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
         ));
     }
 }

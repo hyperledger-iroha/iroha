@@ -84,6 +84,7 @@ use iroha_primitives::{
 };
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, RuntimeTemplate, VMError};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -3319,11 +3320,12 @@ pub struct ContractRuntimeExecutionContext {
 }
 /// Add a borrowed metadata clone layout without allocating.
 pub(crate) fn add_clone_bytes(total: &mut usize, bytes: usize) -> Result<(), ivm::VMError> {
-    *total = total
-        .checked_add(bytes)
-        .ok_or(ivm::VMError::AllocationDeferred(
-            iroha_allocation::AllocationRefusal::DemandOverflow,
-        ))?;
+    *total =
+        total
+            .checked_add(bytes)
+            .ok_or(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow,
+            )))?;
     Ok(())
 }
 /// Add the account owner's exact key and member clone layouts.
@@ -3338,7 +3340,7 @@ pub(crate) fn add_account_clone_bytes(
                 result = add_clone_bytes(total, layout.size());
             }
         })
-        .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
     result
 }
 /// Immutable authorization selected before a contract invocation is decoded or executed.
@@ -9594,9 +9596,13 @@ impl Executor {
         let can_upgrade: Permission = executor_permission::executor::CanUpgradeExecutor.into();
         if !is_initial_genesis_context(state_transaction)
             && !authority_has_permission(&state_transaction.world, authority, &can_upgrade)
-                .map_err(|_| ExecutorMigrationError::Rejected(VMError::PermissionDenied))?
+                .map_err(|_| {
+                    ExecutorMigrationError::Rejected(VMError::Trap(VmTrap::PermissionDenied))
+                })?
         {
-            return Err(ExecutorMigrationError::Rejected(VMError::PermissionDenied));
+            return Err(ExecutorMigrationError::Rejected(VMError::Trap(
+                VmTrap::PermissionDenied,
+            )));
         }
         // A replacement can deny the original completion instructions or delete their
         // permissions when its data model is installed. Even identical bytecode reruns
@@ -9657,7 +9663,7 @@ impl Executor {
                     }
                     crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
                         debug!(error = %original, "executor parameter reconciliation rejected");
-                        ExecutorMigrationError::Rejected(VMError::DecodeError)
+                        ExecutorMigrationError::Rejected(VMError::Trap(VmTrap::DecodeError))
                     }
                 })?;
         }
@@ -9714,7 +9720,10 @@ where
     let run_result = ivm.run();
     let gas_used = gas_limit.saturating_sub(ivm.remaining_gas());
     if let Err(err) = run_result {
-        if matches!(err, VMError::ExceededMaxCycles | VMError::OutOfGas) {
+        if matches!(
+            err,
+            VMError::Trap(VmTrap::ExceededMaxCycles) | VMError::Trap(VmTrap::OutOfGas)
+        ) {
             return Ok(ExecutorValidationReport {
                 verdict: Err(ValidationFail::TooComplex),
                 gas_used,
@@ -9832,49 +9841,49 @@ fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
                 reason = %reason,
                 "executor migrate entrypoint rejected migration"
             );
-            VMError::PermissionDenied
+            VMError::Trap(VmTrap::PermissionDenied)
         }
-        ValidationFail::TooComplex => VMError::ExceededMaxCycles,
+        ValidationFail::TooComplex => VMError::Trap(VmTrap::ExceededMaxCycles),
         ValidationFail::IvmAdmission(info) => {
             debug!(
                 info = ?info,
                 "executor migrate entrypoint failed admission checks"
             );
-            VMError::DecodeError
+            VMError::Trap(VmTrap::DecodeError)
         }
         ValidationFail::InstructionFailed(err) => {
             debug!(
                 err = ?err,
                 "executor migrate entrypoint instruction failure"
             );
-            VMError::DecodeError
+            VMError::Trap(VmTrap::DecodeError)
         }
-        ValidationFail::IvmFault(_) => VMError::DecodeError,
-        ValidationFail::SettlementReplay(_) => VMError::PermissionDenied,
+        ValidationFail::IvmFault(_) => VMError::Trap(VmTrap::DecodeError),
+        ValidationFail::SettlementReplay(_) => VMError::Trap(VmTrap::PermissionDenied),
         ValidationFail::ContractRejected(rejection) => {
             debug!(
                 ?rejection,
                 "executor migrate entrypoint returned a declared contract rejection"
             );
-            VMError::PermissionDenied
+            VMError::Trap(VmTrap::PermissionDenied)
         }
         ValidationFail::QueryFailed(err) => {
             debug!(
                 err = ?err,
                 "executor migrate entrypoint query failure"
             );
-            VMError::DecodeError
+            VMError::Trap(VmTrap::DecodeError)
         }
         ValidationFail::InternalError(message) => {
             debug!(
                 message = %message,
                 "executor migrate entrypoint reported internal error"
             );
-            VMError::DecodeError
+            VMError::Trap(VmTrap::DecodeError)
         }
         ValidationFail::AxtReject(ctx) => {
             debug!(?ctx, "executor migrate entrypoint rejected AXT payload");
-            VMError::PermissionDenied
+            VMError::Trap(VmTrap::PermissionDenied)
         }
     }
 }

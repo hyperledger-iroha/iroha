@@ -1,4 +1,5 @@
 //! Retained diagnostic trace and execution behavior controls.
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::any::Any;
 
 use crate::common;
@@ -115,9 +116,9 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
 
     assert!(matches!(
         vm.run_with_host(&mut host),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::error::ExecutionDeferral::LocalInvariantViolation
-        ))
+        )))
     ));
     assert!(vm.last_diagnostic().is_none());
 
@@ -218,17 +219,17 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
 
     assert!(matches!(
         vm.run_with_host(&mut host),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::error::ExecutionDeferral::LocalInvariantViolation
-        ))
+        )))
     ));
     assert!(vm.last_diagnostic().is_none());
     assert!(
         matches!(
             host.nested_result,
-            Some(Err(VMError::ExecutionDeferred(
+            Some(Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::error::ExecutionDeferral::LocalInvariantViolation
-            )))
+            ))))
         ),
         "a moved VM must reject reuse while it carries outer callback ownership"
     );
@@ -249,9 +250,9 @@ fn trace_cleanup_retains_the_first_host_allocation_refusal_in_both_metering_mode
         fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
             vm.set_max_cycles(0);
             vm.set_max_cycles(8);
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 self.refusal.take().expect("first host call"),
-            ))
+            )))
         }
         fn as_any(&mut self) -> &mut dyn Any {
             self
@@ -280,7 +281,7 @@ fn trace_cleanup_retains_the_first_host_allocation_refusal_in_both_metering_mode
         let error = vm.run_with_host(&mut host).unwrap_err();
         assert!(host.refusal.is_none());
         assert!(
-            matches!(error, VMError::AllocationDeferred(ref owner) if owner == &original),
+            matches!(error, VMError::Deferred(VmDeferral::AllocationDeferred(ref owner)) if owner == &original),
             "syscall {syscall}: {error:?}"
         );
         assert!(vm.last_diagnostic().is_none());
@@ -363,9 +364,9 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
         assert!(
             matches!(
                 vm.run_with_host(&mut host),
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::error::ExecutionDeferral::LocalInvariantViolation
-                ))
+                )))
             ),
             "{mutation:?} must invalidate the active proof"
         );
@@ -500,7 +501,10 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
             let mut nested = IVM::new(u64::MAX);
             nested.load_code(&code)?;
             nested.set_register(8, foreign_secret);
-            assert!(matches!(nested.run(), Err(VMError::MissingHalt)));
+            assert!(matches!(
+                nested.run(),
+                Err(VMError::Trap(VmTrap::MissingHalt))
+            ));
             vm.set_register(9, 0xC011_AB1E);
             vm.set_zk_trace_enabled(false);
             Ok(0)
@@ -562,7 +566,7 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
         "callback trace toggle must not truncate the active invocation"
     );
 
-    assert!(matches!(vm.run(), Err(VMError::MissingHalt)));
+    assert!(matches!(vm.run(), Err(VMError::Trap(VmTrap::MissingHalt))));
     assert!(
         common::diagnostic_snapshot(&vm).register_event_count() == 0,
         "an untraced invocation must clear the preceding register log"

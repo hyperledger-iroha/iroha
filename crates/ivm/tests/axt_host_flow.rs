@@ -9,6 +9,7 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::axt::{self, TouchManifest};
+use ivm_abi::error::VmTrap;
 
 fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -52,7 +53,7 @@ fn default_host_accepts_descriptor_and_touch_but_requires_proof() {
     assert!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm).is_ok());
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
 }
 
@@ -64,7 +65,7 @@ fn hosts_reject_retired_handle_syscall_before_input_access() {
     let mut default = DefaultHost::new();
     let before = vm.remaining_gas();
     assert!(
-        matches!(default.syscall(0xB4, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xB4))
+        matches!(default.syscall(0xB4, &mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xB4))
     );
     assert_eq!(vm.remaining_gas(), before);
     let caller = AccountId::new(
@@ -75,7 +76,7 @@ fn hosts_reject_retired_handle_syscall_before_input_access() {
     );
     let mut wsv = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     assert!(
-        matches!(wsv.syscall(0xB4, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xB4))
+        matches!(wsv.syscall(0xB4, &mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xB4))
     );
     assert_eq!(vm.remaining_gas(), before);
 }
@@ -93,10 +94,10 @@ fn default_host_rejects_empty_descriptor_without_mutation() {
     vm.set_register(10, ptr);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
 }

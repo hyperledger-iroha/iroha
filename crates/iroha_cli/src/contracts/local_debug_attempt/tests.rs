@@ -1,5 +1,7 @@
 //! Local refusal identity and ordinary contract-debug outcome regressions.
 
+use ivm::error::VmErrorRef;
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::any::Any;
 
 use iroha_core::smartcontracts::ivm::{
@@ -14,25 +16,25 @@ use ivm::{
 use super::*;
 
 fn assert_debug_error(actual: &VMError, expected: &VMError) {
-    match (actual, expected) {
-        (VMError::AllocationDeferred(a), VMError::AllocationDeferred(e)) => assert_eq!(a, e),
-        (VMError::ExecutionDeferred(a), VMError::ExecutionDeferred(e)) => assert_eq!(a, e),
-        (VMError::UnknownSyscall(a), VMError::UnknownSyscall(e)) => assert_eq!(a, e),
+    assert_eq!(actual.metered_gas(), expected.metered_gas());
+    match (actual.as_unmetered(), expected.as_unmetered()) {
         (
-            VMError::Metered {
-                gas: a,
-                source: actual,
-            },
-            VMError::Metered {
-                gas: e,
-                source: expected,
-            },
-        ) => {
-            assert_eq!(a, e);
-            assert_debug_error(actual, expected);
-        }
-        (VMError::OutOfGas, VMError::OutOfGas)
-        | (VMError::PrivacyViolation, VMError::PrivacyViolation) => {}
+            VmErrorRef::Deferred(VmDeferral::AllocationDeferred(a)),
+            VmErrorRef::Deferred(VmDeferral::AllocationDeferred(e)),
+        ) => assert_eq!(a, e),
+        (
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(a)),
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(e)),
+        ) => assert_eq!(a, e),
+        (
+            VmErrorRef::Trap(VmTrap::UnknownSyscall(a)),
+            VmErrorRef::Trap(VmTrap::UnknownSyscall(e)),
+        ) => assert_eq!(a, e),
+        (VmErrorRef::Trap(VmTrap::OutOfGas), VmErrorRef::Trap(VmTrap::OutOfGas))
+        | (
+            VmErrorRef::Trap(VmTrap::PrivacyViolation),
+            VmErrorRef::Trap(VmTrap::PrivacyViolation),
+        ) => {}
         (actual, expected) => {
             panic!("debug fixture error differs: {actual:?}; expected {expected:?}")
         }
@@ -89,13 +91,13 @@ fn actual_trace_policy_change_cannot_reach_completed_report() {
     assert!(!report_built);
     assert!(match (
         &report.downcast_ref::<VMError>(),
-        &Some(&VMError::ExecutionDeferred(
+        &Some(&VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::TraceOwnerUnavailable
-        ))
+        )))
     ) {
         (
-            Some(VMError::ExecutionDeferred(actual_field_0)),
-            Some(VMError::ExecutionDeferred(expected_field_0)),
+            Some(VMError::Deferred(VmDeferral::ExecutionDeferred(actual_field_0))),
+            Some(VMError::Deferred(VmDeferral::ExecutionDeferred(expected_field_0))),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -112,23 +114,16 @@ fn nested_metered_local_errors_retain_their_original_type_without_gas() {
         ExecutionDeferral::CanonicalHistoryUnavailable,
         ExecutionDeferral::CanonicalHistoryCapacity,
     ] {
-        let error = VMError::Metered {
-            gas: 31,
-            source: Box::new(VMError::Metered {
-                gas: 17,
-                source: Box::new(VMError::ExecutionDeferred(reason)),
-            }),
-        };
+        let error = VMError::metered(
+            31,
+            VMError::metered(17, VMError::Deferred(VmDeferral::ExecutionDeferred(reason))),
+        );
 
         let report = completed(Err(error)).unwrap_err();
         let retained = report.downcast_ref::<VMError>().unwrap();
-        let VMError::Metered { gas: 31, source } = retained else {
-            panic!("outer meter lost");
-        };
-        let VMError::Metered { gas: 17, source } = &**source else {
-            panic!("inner meter lost");
-        };
-        assert!(matches!(&**source, VMError::ExecutionDeferred(actual) if *actual == reason));
+        assert!(
+            matches!(retained, VMError::Deferred(VmDeferral::ExecutionDeferred(actual)) if *actual == reason)
+        );
         assert_eq!(retained.execution_deferral(), Some(reason));
         assert_eq!(retained.metered_gas(), None);
     }
@@ -143,10 +138,10 @@ fn allocation_refusal_retains_the_original_pool_release_observation() {
         .try_reserve_bytes(original.limit_bytes() - baseline)
         .unwrap();
     let refusal = original.try_reserve_bytes(1).unwrap_err();
-    let expected = VMError::AllocationDeferred(refusal.clone());
+    let expected = VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone()));
     let mut host = Host {
         change_mode: false,
-        error: Some(VMError::AllocationDeferred(refusal)),
+        error: Some(VMError::Deferred(VmDeferral::AllocationDeferred(refusal))),
         calls: 0,
     };
     let mut vm = vm();
@@ -164,8 +159,8 @@ fn ordinary_success_and_semantic_faults_remain_completed_outcomes() {
     for fixture in 0..3 {
         let error = match fixture {
             0 => None,
-            1 => Some(VMError::OutOfGas),
-            2 => Some(VMError::PrivacyViolation),
+            1 => Some(VMError::Trap(VmTrap::OutOfGas)),
+            2 => Some(VMError::Trap(VmTrap::PrivacyViolation)),
             _ => unreachable!(),
         };
         let mut vm = vm();
@@ -176,16 +171,15 @@ fn ordinary_success_and_semantic_faults_remain_completed_outcomes() {
         };
         assert!(matches!(
             (fixture, run(&mut vm, &mut host).unwrap()),
-            (0, Ok(())) | (1, Err(VMError::OutOfGas)) | (2, Err(VMError::PrivacyViolation))
+            (0, Ok(()))
+                | (1, Err(VMError::Trap(VmTrap::OutOfGas)))
+                | (2, Err(VMError::Trap(VmTrap::PrivacyViolation)))
         ));
         assert_eq!(host.calls, 1);
     }
-    let semantic = VMError::Metered {
-        gas: 13,
-        source: Box::new(VMError::OutOfGas),
-    };
+    let semantic = VMError::metered(13, VMError::Trap(VmTrap::OutOfGas));
     assert!(matches!(completed(Err(semantic)).unwrap(),
-        Err(VMError::Metered { gas: 13, source }) if matches!(*source, VMError::OutOfGas)));
+        Err(VMError::Trap(VmTrap::Metered { gas: 13, trap })) if matches!(*trap, VmTrap::OutOfGas)));
 }
 
 fn completed_return() -> (IVM, PreparedContractCache, EntrypointValueTypeV1) {
@@ -231,7 +225,7 @@ fn actual_return_refusal_keeps_typed_original_owner_and_retries() {
     let expected = (0..65_536)
         .find_map(|_| match vm.memory.load_u64(vm.register(10)) {
             Ok(_) => None,
-            Err(error @ VMError::AllocationDeferred(_)) => Some(error),
+            Err(error @ VMError::Deferred(VmDeferral::AllocationDeferred(_))) => Some(error),
             Err(error) => panic!("unexpected tracked return-read failure: {error:?}"),
         })
         .expect("tiny fixture exhausts its original read backing");
@@ -292,14 +286,17 @@ fn actual_semantic_return_error_keeps_type_and_full_display_chain() {
 fn borrowed_trap_rendering_uses_exact_original_error_and_success_has_no_trap() {
     let mut vm = vm();
     let source_hash = iroha_crypto::Hash::prehashed(vm.code_hash());
-    let original = VMError::UnknownSyscall(0x7fff);
+    let original = VMError::Trap(VmTrap::UnknownSyscall(0x7fff));
     let mut host = Host {
         change_mode: false,
         error: Some(original),
         calls: 0,
     };
     let error = run(&mut vm, &mut host).unwrap().unwrap_err();
-    assert!(matches!(&error, VMError::UnknownSyscall(0x7fff)));
+    assert!(matches!(
+        &error,
+        VMError::Trap(VmTrap::UnknownSyscall(0x7fff))
+    ));
     assert_eq!(host.calls, 1);
     assert!(
         host.error.is_none(),

@@ -5,6 +5,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{IVM, PointerType, VMError, encoding, host::IVMHost, instruction, syscalls};
+use ivm_abi::error::VmTrap;
 use std::{
     any::Any,
     collections::HashMap,
@@ -31,33 +32,33 @@ impl AssetHost {
     fn decode_account(vm: &IVM, register: usize) -> Result<AccountId, VMError> {
         let tlv = vm.validate_tlv(vm.register(register))?;
         if tlv.type_id != PointerType::AccountId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_asset(vm: &IVM) -> Result<AssetDefinitionId, VMError> {
         let tlv = vm.validate_tlv(vm.register(12))?;
         if tlv.type_id != PointerType::AssetDefinitionId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_amount(vm: &IVM) -> Result<u64, VMError> {
         let tlv = vm.validate_tlv(vm.register(13))?;
         if tlv.type_id != PointerType::Quantity {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let quantity = QuantityValueV1::decode_frame(tlv.payload)
-            .map_err(|_| VMError::DecodeError)?
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
             .into_quantity();
-        u64::try_from(quantity.into_numeric()).map_err(|_| VMError::DecodeError)
+        u64::try_from(quantity.into_numeric()).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_dataspace(vm: &IVM) -> Result<DataSpaceId, VMError> {
         let tlv = vm.validate_tlv(vm.register(14))?;
         if tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
 }
 impl IVMHost for AssetHost {
@@ -68,7 +69,7 @@ impl IVMHost for AssetHost {
     ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED | syscalls::SYSCALL_ABORT => Ok(0),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -84,11 +85,13 @@ impl IVMHost for AssetHost {
                 let mut state = self.state.lock().expect("state mutex poisoned");
                 let from_balance = state.get(&from_key).copied().unwrap_or_default();
                 if from_balance < amount {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 if from_key != to_key {
                     let to_balance = state.get(&to_key).copied().unwrap_or_default();
-                    let updated_to = to_balance.checked_add(amount).ok_or(VMError::DecodeError)?;
+                    let updated_to = to_balance
+                        .checked_add(amount)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     state.insert(from_key, from_balance - amount);
                     state.insert(to_key, updated_to);
                 }
@@ -98,7 +101,7 @@ impl IVMHost for AssetHost {
                 println!("Transaction aborted");
                 Ok(0)
             }
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
     /// Downcast support for hosts with extra methods/state.

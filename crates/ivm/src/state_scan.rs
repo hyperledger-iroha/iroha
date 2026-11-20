@@ -4,6 +4,7 @@
 //! current candidate positions. Overlay tombstones consume the same position
 //! budget as live keys. A full page carries a continuation without probing for
 //! another key; the following page can therefore be empty.
+use crate::error::{VmDeferral, VmTrap};
 use std::ops::{Bound, ControlFlow};
 
 use iroha_allocation::AllocationReservation;
@@ -40,7 +41,7 @@ pub struct StateScanRequest {
 fn payload_at(vm: &IVM, register: usize, maximum: usize) -> Result<&[u8], VMError> {
     let tlv = vm.validate_tlv(vm.register(register))?;
     if tlv.type_id != PointerType::NoritoBytes || tlv.payload.len() > maximum {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(tlv.payload)
 }
@@ -48,7 +49,7 @@ fn payload_at(vm: &IVM, register: usize, maximum: usize) -> Result<&[u8], VMErro
 /// Quote request bytes before inspecting a map, its schema, or any backing state.
 pub fn prepare_minimum(vm: &IVM) -> Result<u64, VMError> {
     if !(1..=64).contains(&vm.register(12)) || (13..=15).any(|reg| vm.register(reg) != 0) {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let path = host::quote_state_path_payload_len_at(vm, vm.register(10))?;
     let cursor = if vm.register(11) == 0 {
@@ -56,7 +57,7 @@ pub fn prepare_minimum(vm: &IVM) -> Result<u64, VMError> {
     } else {
         let len = host::quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
         if len > MAX_STATE_CURSOR_BYTES_V1 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         len
     };
@@ -64,13 +65,15 @@ pub fn prepare_minimum(vm: &IVM) -> Result<u64, VMError> {
 }
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 fn codec_error(error: norito::Error) -> VMError {
     match error {
         norito::Error::AllocationFailed { .. } => unavailable(),
-        _ => VMError::NoritoInvalid,
+        _ => VMError::Trap(VmTrap::NoritoInvalid),
     }
 }
 
@@ -85,9 +88,9 @@ fn decode_request_value<T>(
             reservation,
         )
         .map_err(|error| match error {
-            iroha_allocation::PrepaidSharedError::Reservation(_) => {
-                VMError::ExecutionDeferred(crate::ExecutionDeferral::LocalInvariantViolation)
-            }
+            iroha_allocation::PrepaidSharedError::Reservation(_) => VMError::Deferred(
+                VmDeferral::ExecutionDeferred(crate::ExecutionDeferral::LocalInvariantViolation),
+            ),
             iroha_allocation::PrepaidSharedError::Allocator { .. } => unavailable(),
         })?,
         None => norito::core::DecodeBudgetContext::new(limits),
@@ -103,7 +106,7 @@ impl StateScanRequest {
         let minimum = prepare_minimum(vm)?;
         host::preflight_reserved_syscall_gas(vm, minimum)?;
         if instance.is_empty() || instance.len() > 1024 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let map_payload = payload_at(vm, 10, syscalls::STATE_MAX_PATH_FRAME_BYTES)?;
         let cursor_payload = (vm.register(11) != 0)
@@ -131,22 +134,29 @@ impl StateScanRequest {
             .allocation_budget()
             .map(|pool| pool.try_reserve_bytes(input_bytes))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let map: StatePath = decode_request_value(&mut reservation, map_limits, || {
             norito::decode_canonical_with_limits(map_payload, map_limits)
         })?;
-        let name: Name = map.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
-        let interface = vm.contract_interface().ok_or(VMError::InvalidMetadata)?;
+        let name: Name = map
+            .as_ref()
+            .parse()
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+        let interface = vm
+            .contract_interface()
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         let mut declarations = interface
             .states
             .iter()
             .filter(|state| state.name == name.as_ref());
-        let declaration = declarations.next().ok_or(VMError::NoritoInvalid)?;
+        let declaration = declarations
+            .next()
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         if declarations.next().is_some() {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let EmbeddedStateType::StateMap { key, .. } = &declaration.ty else {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         };
         // The schema is signed and admission-bounded. Charge its full encoding
         // before allocation/hashing, in addition to the public input envelopes.
@@ -171,14 +181,14 @@ impl StateScanRequest {
             .allocation_budget()
             .map(|pool| pool.try_reserve_bytes(scratch_bytes))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let key_schema = ivm_abi::state_value::state_map_key_schema_v1(key).map_err(codec_error)?;
         let key_schema_hash =
             iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(&key_schema)
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         let schema = norito::encode_canonical(&declaration.ty).map_err(codec_error)?;
         if schema.len() > SCHEMA_ENCODING_BOUND {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         // The 256-byte empty-response reservation is an allocation preflight;
         // charge the actual serialized response only when publishing the page.
@@ -198,7 +208,7 @@ impl StateScanRequest {
                 || cursor.schema_hash != schema_hash
                 || cursor.key_schema_hash != key_schema_hash
             {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             host::validate_declared_state_path(vm, &cursor.last_key)?;
             Some(cursor.last_key)
@@ -290,14 +300,14 @@ impl StateScanPage {
         present: bool,
     ) -> Result<ControlFlow<()>, VMError> {
         if self.bounded {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let prefix = self.request.map.as_ref();
         if !relative
             .strip_prefix(prefix)
             .is_some_and(|suffix| suffix.starts_with('/'))
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         if self
             .last
@@ -305,7 +315,7 @@ impl StateScanPage {
             .or(self.request.after.as_ref())
             .is_some_and(|last| relative <= last.as_ref())
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let work = self
             .work_gas
@@ -316,7 +326,9 @@ impl StateScanPage {
             work.saturating_add(self.response_bound as u64)
                 .saturating_add(MAX_STATE_CURSOR_BYTES_V1 as u64),
         )?;
-        let key: StatePath = relative.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let key: StatePath = relative
+            .parse()
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         host::validate_declared_state_path(vm, &key)?;
         if present {
             let (elements, response) = host::state_scan_response_tail_after_item(
@@ -349,12 +361,12 @@ impl StateScanPage {
     pub fn publish(self, vm: &mut IVM) -> Result<u64, VMError> {
         let payload = encode_canonical_norito(&self.selected)?;
         let cursor_payload = if self.bounded {
-            let last = self.last.ok_or(VMError::NoritoInvalid)?;
+            let last = self.last.ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             Some(
                 self.request
                     .cursor(last)
                     .encode_frame()
-                    .map_err(|_| VMError::NoritoInvalid)?,
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )
         } else {
             None
@@ -380,7 +392,7 @@ fn publish_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
     tlv.push(1);
     tlv.extend_from_slice(
         &u32::try_from(payload.len())
-            .map_err(|_| VMError::NoritoInvalid)?
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
             .to_be_bytes(),
     );
     tlv.extend_from_slice(payload);
@@ -411,6 +423,7 @@ pub fn merge_candidates<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmErrorRef, VmTrap};
     use crate::{CoreHost, host::IVMHost};
     use std::collections::BTreeMap;
 
@@ -618,7 +631,7 @@ mod tests {
             .execute_syscall(&mut host, syscalls::SYSCALL_STATE_SCAN)
             .unwrap_err();
         assert!(
-            matches!(error.as_unmetered(), VMError::OutOfGas),
+            matches!(error.as_unmetered(), VmErrorRef::Trap(VmTrap::OutOfGas)),
             "{error:?}"
         );
         assert_eq!(vm.register(10), path);

@@ -1,5 +1,6 @@
 //! Control-flow opcode semantics tests.
 use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 const CLASSIC_ARITH_IMM: u8 = 0x13;
 fn encode_li16(op: u8, rd: u8, imm8: i8) -> u16 {
     ((op & 0xF) as u16) << 12 | ((rd & 0xF) as u16) << 8 | (imm8 as u8 as u16)
@@ -40,7 +41,10 @@ fn jalr_target_addition_wraps_before_alignment() {
     let err = vm
         .run()
         .expect_err("wrapped target lies outside executable memory");
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
     assert_eq!(vm.pc(), 1_u64 << 63);
     assert_eq!(vm.register(3), 4);
 }
@@ -56,7 +60,10 @@ fn huge_program_counter_traps_without_overflow_panic() {
     let err = vm
         .run()
         .expect_err("huge aligned PC must trap instead of panicking");
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }
 #[test]
 fn compressed_forms_are_rejected() {
@@ -67,7 +74,10 @@ fn compressed_forms_are_rejected() {
     let err = vm
         .load_program(&prog)
         .expect_err("compressed forms must be rejected");
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }
 #[test]
 fn jal_skips_next_instruction() {
@@ -124,5 +134,8 @@ fn compressed_ebreak_rejected() {
     let err = vm
         .load_program(&prog)
         .expect_err("compressed ebreak must be rejected");
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }

@@ -4,6 +4,7 @@
 //! into one schema-hashed canonical Norito record. Execution preparation decodes and validates that
 //! complete record once against the authenticated callable schema. Before guest execution the
 //! host materializes aligned, owned word tables in declaration order.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     host::quote_tlv_payload_len_at,
@@ -178,14 +179,14 @@ impl PreparedArgumentRecord {
         vm.debit_gas(
             result_bytes
                 .checked_mul(crate::call_gas::PER_BYTE)
-                .ok_or(VMError::OutOfGas)?,
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?,
         )?;
         let reserved_heap = self
             .inner
             .decode_plan
             .raw_heap_bytes()
             .checked_add(result_bytes)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         vm.preflight_host_tlv_allocations_with_reserved_heap(
             &self.inner.decode_plan.allocation_lengths(),
             reserved_heap,
@@ -214,7 +215,7 @@ impl PreparedArgumentRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`VMError::DecodeError`] if the trusted schema cannot be framed.
+    /// Returns [`crate::error::VmTrap::DecodeError`] if the trusted schema cannot be framed.
     #[doc(hidden)]
     pub fn is_bound_to(
         &self,
@@ -224,7 +225,8 @@ impl PreparedArgumentRecord {
         if self.canonical_bytes() != canonical_record {
             return Ok(false);
         }
-        let canonical_schema = canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?;
+        let canonical_schema =
+            canonical_norito_frame(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         Ok(self.schema_bytes() == canonical_schema)
     }
     /// Debit the complete deterministic decode/materialization cost before guest execution begins.
@@ -235,8 +237,8 @@ impl PreparedArgumentRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`VMError::OutOfGas`] when the invocation cannot afford the prepared record, or
-    /// [`VMError::DecodeError`] if the same VM is charged more than once.
+    /// Returns [`crate::error::VmTrap::OutOfGas`] when the invocation cannot afford the prepared record, or
+    /// [`crate::error::VmTrap::DecodeError`] if the same VM is charged more than once.
     pub fn precharge_vm(&self, vm: &mut IVM) -> Result<(), VMError> {
         vm.prepay_argument_decode(self.inner.decode_plan.gas())
     }
@@ -263,18 +265,19 @@ pub(crate) fn prepare_default_call_arguments(
     let prepared_log = vm.prepare_host_register_log()?;
     let name: Name = ivm_abi::arguments::ENTRYPOINT_ARGUMENT_RECORD_PUBLIC_INPUT_KEY
         .parse()
-        .map_err(|_| VMError::DecodeError)?;
-    let name_payload = canonical_norito_frame(&name).map_err(|_| VMError::DecodeError)?;
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+    let name_payload =
+        canonical_norito_frame(&name).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     let syscall = crate::syscalls::SYSCALL_GET_PUBLIC_INPUT;
     let instruction = crate::encoding::wide::encode_scall(syscall);
-    vm.debit_gas(crate::gas::cost_of(instruction).ok_or(VMError::DecodeError)?)?;
+    vm.debit_gas(crate::gas::cost_of(instruction).ok_or(VMError::Trap(VmTrap::DecodeError))?)?;
     let name_pointer = vm.alloc_host_tlv(&encode_tlv(PointerType::Name, &name_payload)?)?;
     vm.set_register(10, name_pointer);
     vm.execute_syscall_with_register_log(host, syscall, Some(&prepared_log))?;
     let canonical_record = {
         let record = validate_tlv_any_region(vm, vm.register(10), PointerType::NoritoBytes)?;
         if record.payload.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let bound = schema_materialization_bound(schema)?;
         let gas_bound = argument_record_gas_for_schema_bound(
@@ -283,7 +286,7 @@ pub(crate) fn prepare_default_call_arguments(
             bound,
         );
         if gas_bound > vm.gas_remaining {
-            return Err(VMError::OutOfGas);
+            return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         Arc::<[u8]>::from(record.payload)
     };
@@ -294,7 +297,7 @@ pub(crate) fn prepare_default_call_arguments(
 }
 fn result_table_bytes(result_words: usize) -> Result<u64, VMError> {
     if !(1..=ivm_abi::call::MAX_CALL_WORDS_V1).contains(&result_words) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok((result_words * ivm_abi::call::CALL_WORD_BYTES_V1) as u64)
 }
@@ -380,7 +383,7 @@ fn value_materialization_bound(
         let child_count = argument_node_child_count(node);
         let children_start = rendered_len
             .checked_sub(child_count)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let children = &rendered[children_start..rendered_len];
         let bound = match node {
             EntrypointValueTypeNodeV1::Unit
@@ -413,7 +416,7 @@ fn value_materialization_bound(
                     }
                 }),
             EntrypointValueTypeNodeV1::Option => {
-                let child = *children.first().ok_or(VMError::DecodeError)?;
+                let child = *children.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let own_allocation = aggregate_allocation_bytes(1, child.words);
                 SchemaMaterializationBound {
                     words: 1,
@@ -422,8 +425,8 @@ fn value_materialization_bound(
                 }
             }
             EntrypointValueTypeNodeV1::Result => {
-                let first = *children.first().ok_or(VMError::DecodeError)?;
-                let second = *children.get(1).ok_or(VMError::DecodeError)?;
+                let first = *children.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                let second = *children.get(1).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let own_allocation = aggregate_allocation_bytes(1, first.words.max(second.words));
                 SchemaMaterializationBound {
                     words: 1,
@@ -435,7 +438,7 @@ fn value_materialization_bound(
                 }
             }
             EntrypointValueTypeNodeV1::List(list) => {
-                let element = *children.first().ok_or(VMError::DecodeError)?;
+                let element = *children.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let capacity = u64::from(list.capacity);
                 let own_allocation =
                     aggregate_allocation_bytes(2, capacity.saturating_mul(element.words));
@@ -463,12 +466,16 @@ fn value_materialization_bound(
             },
         };
         rendered_len = children_start;
-        let slot = rendered.get_mut(rendered_len).ok_or(VMError::DecodeError)?;
+        let slot = rendered
+            .get_mut(rendered_len)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         *slot = bound;
-        rendered_len = rendered_len.checked_add(1).ok_or(VMError::DecodeError)?;
+        rendered_len = rendered_len
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     }
     if rendered_len != 1 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(rendered[0])
 }
@@ -476,7 +483,7 @@ fn schema_materialization_bound(
     schema: &EntrypointArgumentSchemaV1,
 ) -> Result<SchemaMaterializationBound, VMError> {
     if !schema.validate() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let bound =
         schema
@@ -499,7 +506,7 @@ fn schema_materialization_bound(
     if usize::try_from(bound.words).ok() != schema.word_count()
         || bound.words > u64::try_from(MAX_ENTRYPOINT_ARGUMENT_WORDS).unwrap_or(u64::MAX)
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(bound)
 }
@@ -569,7 +576,7 @@ fn validate_tlv_any_region(
 ) -> Result<Tlv<'_>, VMError> {
     let tlv = vm.validate_tlv(address)?;
     if tlv.type_id != expected {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(tlv)
 }
@@ -606,11 +613,13 @@ fn argument_node_word_count(
         let suppress_words = if offset == 0 {
             false
         } else {
-            let parent = frames.last_mut().ok_or(VMError::DecodeError)?;
+            let parent = frames
+                .last_mut()
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             parent.remaining = parent
                 .remaining
                 .checked_sub(1)
-                .ok_or(VMError::DecodeError)?;
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             parent.suppress_words
         };
         let is_handle = matches!(
@@ -631,7 +640,9 @@ fn argument_node_word_count(
                         | EntrypointValueTypeNodeV1::Enum(_)
                 ))
         {
-            words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+            words = words
+                .checked_add(1)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         }
         let children = argument_node_child_count(node);
         if children != 0 {
@@ -645,7 +656,7 @@ fn argument_node_word_count(
         frames.pop();
     }
     if !frames.is_empty() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     *node_index = end;
     Ok(words)
@@ -659,23 +670,23 @@ where
 {
     norito::decode_canonical_for_admission(payload, norito::canonical_decode_limits(payload.len()))
         .map_err(|error| match error.into_local_refusal() {
-            Ok(original) => VMError::DecodeDeferred(original),
-            Err(_) => VMError::DecodeError,
+            Ok(original) => VMError::Deferred(VmDeferral::DecodeDeferred(original)),
+            Err(_) => VMError::Trap(VmTrap::DecodeError),
         })
 }
 fn decode_schema(payload: &[u8]) -> Result<EntrypointArgumentSchemaV1, VMError> {
     if payload.len() > MAX_ENTRYPOINT_ARGUMENT_SCHEMA_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let schema: EntrypointArgumentSchemaV1 = decode_argument_frame(payload)?;
     if !schema.validate() || schema.fields.len() > MAX_ENTRYPOINT_ARGUMENTS {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(schema)
 }
 fn decode_record(payload: &[u8]) -> Result<EntrypointArgumentRecordV1, VMError> {
     if payload.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     #[cfg(any(test, debug_assertions))]
     RECORD_DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
@@ -691,7 +702,7 @@ fn validate_argument_envelope_payload_lengths(
     if record_bytes > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
         || schema_bytes > MAX_ENTRYPOINT_ARGUMENT_SCHEMA_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -722,25 +733,27 @@ fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
-    decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+    decode_abi_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 pub(crate) fn validate_pointer_payload(
     kind: EntrypointValueKindV1,
     payload: &[u8],
 ) -> Result<(), VMError> {
     match kind {
-        EntrypointValueKindV1::Bool => return Err(VMError::DecodeError),
+        EntrypointValueKindV1::Bool => return Err(VMError::Trap(VmTrap::DecodeError)),
         EntrypointValueKindV1::Int => {
-            IntValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            IntValueV1::decode_frame(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         EntrypointValueKindV1::Decimal => {
-            DecimalValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            DecimalValueV1::decode_frame(payload)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         EntrypointValueKindV1::Quantity => {
-            QuantityValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            QuantityValueV1::decode_frame(payload)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         EntrypointValueKindV1::String => {
-            std::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
+            std::str::from_utf8(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         EntrypointValueKindV1::Json => {
             let _: Json = decode_canonical_norito(payload)?;
@@ -775,10 +788,10 @@ fn validate_pointer_atom(
     kind: EntrypointValueKindV1,
     envelope: &[u8],
 ) -> Result<(), VMError> {
-    let expected = expected_pointer_type(kind).ok_or(VMError::DecodeError)?;
+    let expected = expected_pointer_type(kind).ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
     if tlv.type_id != expected || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     // Exact TLV validation already proves the version, declared length,
     // payload hash, and absence of trailing bytes. Re-encoding would hash the
@@ -797,38 +810,52 @@ fn validate_argument_atoms(
     let mut actions = vec![start];
     let mut cursor = *atom_index;
     while let Some(node_start) = actions.pop() {
-        let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
+        let node = nodes
+            .get(node_start)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         match node {
             EntrypointValueTypeNodeV1::StateCursor(key) => {
                 let Some(EntrypointValueAtomV1::Pointer(envelope)) = atoms.get(cursor) else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
                 ivm_abi::state_cursor::validate_cursor_envelope(
                     iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(key)
-                        .ok_or(VMError::DecodeError)?,
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     envelope,
                 )?;
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             EntrypointValueTypeNodeV1::Unit => {
                 if !matches!(atoms.get(cursor), Some(EntrypointValueAtomV1::Unit)) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             EntrypointValueTypeNodeV1::Error(error) => {
                 let Some(EntrypointValueAtomV1::ErrorCode(code)) = atoms.get(cursor) else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
-                error.variant(*code).ok_or(VMError::DecodeError)?;
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                error
+                    .variant(*code)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             EntrypointValueTypeNodeV1::Enum(descriptor) => {
                 let Some(EntrypointValueAtomV1::EnumCode(code)) = atoms.get(cursor) else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
-                descriptor.variant(*code).ok_or(VMError::DecodeError)?;
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                descriptor
+                    .variant(*code)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             EntrypointValueTypeNodeV1::Struct(node) => {
                 let starts = argument_child_starts(nodes, node_start, node.fields.len())?;
@@ -839,38 +866,55 @@ fn validate_argument_atoms(
                 actions.extend(starts.into_iter().rev());
             }
             EntrypointValueTypeNodeV1::Option => {
-                let EntrypointValueAtomV1::Tag(active) =
-                    atoms.get(cursor).ok_or(VMError::DecodeError)?
+                let EntrypointValueAtomV1::Tag(active) = atoms
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if *active {
-                    actions.push(node_start.checked_add(1).ok_or(VMError::DecodeError)?);
+                    actions.push(
+                        node_start
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                    );
                 }
             }
             EntrypointValueTypeNodeV1::Result => {
-                let EntrypointValueAtomV1::Tag(ok_active) =
-                    atoms.get(cursor).ok_or(VMError::DecodeError)?
+                let EntrypointValueAtomV1::Tag(ok_active) = atoms
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
-                let ok_start = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                let ok_start = node_start
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let err_start = argument_subtree_end(nodes, ok_start)?;
                 actions.push(if *ok_active { ok_start } else { err_start });
             }
             EntrypointValueTypeNodeV1::List(list) => {
-                let EntrypointValueAtomV1::List(item_count) =
-                    atoms.get(cursor).ok_or(VMError::DecodeError)?
+                let EntrypointValueAtomV1::List(item_count) = atoms
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 else {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 };
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if *item_count > list.capacity {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
-                let element_start = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                let element_start = node_start
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let _ = argument_subtree_end(nodes, element_start)?;
                 actions.extend(core::iter::repeat_n(
                     element_start,
@@ -878,14 +922,18 @@ fn validate_argument_atoms(
                 ));
             }
             EntrypointValueTypeNodeV1::Leaf(kind) => {
-                let atom = atoms.get(cursor).ok_or(VMError::DecodeError)?;
-                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                let atom = atoms
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                cursor = cursor
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match (kind, atom) {
                     (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_)) => {}
                     (kind, EntrypointValueAtomV1::Pointer(envelope)) if kind.is_pointer() => {
                         validate_pointer_atom(policy, *kind, envelope)?;
                     }
-                    _ => return Err(VMError::DecodeError),
+                    _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                 }
             }
         }
@@ -903,7 +951,7 @@ fn validate_record_shape(
     if record.schema_hash != entrypoint_argument_schema_hash_v1(schema_bytes)
         || !schema.validate_atoms(&record.atoms)
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut atom_index = 0;
     for field in &schema.fields {
@@ -916,15 +964,15 @@ fn validate_record_shape(
             &mut atom_index,
         )?;
         if node_index != field.ty.nodes.len() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
     }
     if atom_index != record.atoms.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let word_kinds = schema
         .word_kinds_for_atoms(&record.atoms)
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     Ok(word_kinds)
 }
 /// Validate canonical record bytes against an exact compiler-emitted schema.
@@ -936,10 +984,11 @@ pub fn validate_argument_record(
     payload: &[u8],
 ) -> Result<EntrypointArgumentRecordV1, VMError> {
     if !schema.validate() || payload.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let record = decode_record(payload)?;
-    let schema_bytes = canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?;
+    let schema_bytes =
+        canonical_norito_frame(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     validate_record_shape(
         schema,
         &schema_bytes,
@@ -1002,7 +1051,7 @@ fn plan_argument_atoms(
             match frame.completion {
                 Completion::Root => {
                     if !frames.is_empty() {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     final_roots = Some(frame.roots);
                 }
@@ -1012,7 +1061,7 @@ fn plan_argument_atoms(
                     expected_words,
                 } => {
                     if frame.roots.len() != expected_words {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     let index = decoded.len();
                     decoded.push(DecodedArgument::Sum {
@@ -1021,26 +1070,26 @@ fn plan_argument_atoms(
                         active: frame.roots,
                     });
                     let Some(Frame::Plan(parent)) = frames.last_mut() else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
                     parent.roots.push(index);
                 }
                 Completion::ListItem => {
                     let Some(Frame::List(_)) = frames.last() else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
                     let Frame::List(mut list) = frames.pop().expect("list frame exists") else {
                         unreachable!("variant checked");
                     };
                     if frame.roots.len() != list.element_words {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     list.elements.push(frame.roots);
                     if list.remaining_items != 0 {
                         list.remaining_items = list
                             .remaining_items
                             .checked_sub(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let element_start = list.element_start;
                         frames.push(Frame::List(list));
                         frames.push(Frame::Plan(PlanFrame {
@@ -1055,7 +1104,7 @@ fn plan_argument_atoms(
                             elements: list.elements,
                         });
                         let Some(Frame::Plan(parent)) = frames.last_mut() else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         parent.roots.push(index);
                     }
@@ -1066,10 +1115,15 @@ fn plan_argument_atoms(
         let mut spawned = Vec::<Frame>::new();
         {
             let Some(Frame::Plan(frame)) = frames.last_mut() else {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             };
-            let node_start = frame.actions.pop().ok_or(VMError::DecodeError)?;
-            let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
+            let node_start = frame
+                .actions
+                .pop()
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+            let node = nodes
+                .get(node_start)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             match node {
                 EntrypointValueTypeNodeV1::Struct(node) => {
                     if node.fields.is_empty() {
@@ -1085,19 +1139,25 @@ fn plan_argument_atoms(
                     frame.actions.extend(starts.into_iter().rev());
                 }
                 EntrypointValueTypeNodeV1::Option => {
-                    let EntrypointValueAtomV1::Tag(tag) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
+                    let EntrypointValueAtomV1::Tag(tag) = atoms
+                        .get(cursor)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
-                    let child_start = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                    let child_start = node_start
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let mut child_end = child_start;
                     let child_words = argument_node_word_count(nodes, &mut child_end)?;
                     let layout = SumLayoutV1::option(
-                        u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                        u64::try_from(child_words)
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     if *tag {
                         spawned.push(Frame::Plan(PlanFrame {
                             actions: vec![child_start],
@@ -1119,13 +1179,18 @@ fn plan_argument_atoms(
                     }
                 }
                 EntrypointValueTypeNodeV1::Result => {
-                    let EntrypointValueAtomV1::Tag(tag) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
+                    let EntrypointValueAtomV1::Tag(tag) = atoms
+                        .get(cursor)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
-                    let ok_start = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                    let ok_start = node_start
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let mut ok_end = ok_start;
                     let ok_words = argument_node_word_count(nodes, &mut ok_end)?;
                     let mut err_end = ok_end;
@@ -1136,10 +1201,10 @@ fn plan_argument_atoms(
                         (ok_end, err_words)
                     };
                     let layout = SumLayoutV1::try_new(
-                        u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
-                        u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+                        u64::try_from(err_words).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
+                        u64::try_from(ok_words).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     spawned.push(Frame::Plan(PlanFrame {
                         actions: vec![active_start],
                         roots: Vec::with_capacity(active_words),
@@ -1151,23 +1216,29 @@ fn plan_argument_atoms(
                     }));
                 }
                 EntrypointValueTypeNodeV1::List(list) => {
-                    let EntrypointValueAtomV1::List(item_count) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
+                    let EntrypointValueAtomV1::List(item_count) = atoms
+                        .get(cursor)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if *item_count > list.capacity {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
-                    let element_start = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                    let element_start = node_start
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let mut element_end = element_start;
                     let element_words = argument_node_word_count(nodes, &mut element_end)?;
                     let layout = ListLayoutV1::try_new(
                         u64::from(list.capacity),
-                        u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                        u64::try_from(element_words)
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     let item_count = usize::from(*item_count);
                     if item_count != 0 {
                         spawned.push(Frame::List(ListFrame {
@@ -1204,31 +1275,39 @@ fn plan_argument_atoms(
                             EntrypointValueTypeNodeV1::Enum(descriptor),
                             Some(EntrypointValueAtomV1::EnumCode(code)),
                         ) if descriptor.variant(*code).is_some() => u64::from(*code),
-                        _ => return Err(VMError::DecodeError),
+                        _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let index = decoded.len();
                     decoded.push(DecodedArgument::Scalar(scalar));
                     frame.roots.push(index);
                 }
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool) => {
-                    let EntrypointValueAtomV1::Bool(value) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
+                    let EntrypointValueAtomV1::Bool(value) = atoms
+                        .get(cursor)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let index = decoded.len();
                     decoded.push(DecodedArgument::Scalar(u64::from(*value)));
                     frame.roots.push(index);
                 }
                 EntrypointValueTypeNodeV1::Leaf(_) | EntrypointValueTypeNodeV1::StateCursor(_) => {
-                    let EntrypointValueAtomV1::Pointer(envelope) =
-                        atoms.get(cursor).ok_or(VMError::DecodeError)?
+                    let EntrypointValueAtomV1::Pointer(envelope) = atoms
+                        .get(cursor)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     else {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     };
-                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                    cursor = cursor
+                        .checked_add(1)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let index = decoded.len();
                     decoded.push(DecodedArgument::Pointer(envelope.clone()));
                     frame.roots.push(index);
@@ -1237,7 +1316,7 @@ fn plan_argument_atoms(
         }
         frames.extend(spawned);
     }
-    let planned_roots = final_roots.ok_or(VMError::DecodeError)?;
+    let planned_roots = final_roots.ok_or(VMError::Trap(VmTrap::DecodeError))?;
     *node_index = end;
     *atom_index = cursor;
     roots.extend(planned_roots);
@@ -1265,11 +1344,11 @@ fn build_decode_plan(
             &mut roots,
         )?;
         if node_index != field.ty.nodes.len() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
     }
     if atom_index != record.atoms.len() || roots.len() != word_kinds.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let (pointer_envelope_bytes, pointer_allocation_bytes) = decoded
         .iter()
@@ -1287,7 +1366,7 @@ fn build_decode_plan(
             )
         });
     if pointer_envelope_bytes > u64::try_from(record_bytes).unwrap_or(u64::MAX) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let raw_heap_bytes = decoded
         .iter()
@@ -1327,7 +1406,7 @@ fn build_decode_plan(
 ///
 /// # Errors
 ///
-/// Returns [`VMError::OutOfGas`] when the deterministic preparation bound is
+/// Returns [`crate::error::VmTrap::OutOfGas`] when the deterministic preparation bound is
 /// unaffordable, or a decode/ABI/memory error when the bounded record is not a
 /// canonical executable V1 argument record.
 pub fn prepare_argument_record_with_gas_limit(
@@ -1336,12 +1415,12 @@ pub fn prepare_argument_record_with_gas_limit(
     gas_limit: u64,
 ) -> Result<PreparedArgumentRecord, VMError> {
     if canonical_record.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let schema_bound = schema_materialization_bound(schema)?;
     let schema_bytes_len = canonical_norito_frame_len(schema);
     if schema_bytes_len > MAX_ENTRYPOINT_ARGUMENT_SCHEMA_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let gas_bound = argument_record_gas_for_schema_bound(
         canonical_record.len(),
@@ -1349,10 +1428,10 @@ pub fn prepare_argument_record_with_gas_limit(
         schema_bound,
     );
     if gas_bound > gas_limit {
-        return Err(VMError::OutOfGas);
+        return Err(VMError::Trap(VmTrap::OutOfGas));
     }
     let schema_bytes: Arc<[u8]> =
-        Arc::from(canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?);
+        Arc::from(canonical_norito_frame(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?);
     debug_assert_eq!(schema_bytes.len(), schema_bytes_len);
     let record = decode_record(&canonical_record)?;
     let decode_plan = build_decode_plan(
@@ -1363,7 +1442,7 @@ pub fn prepare_argument_record_with_gas_limit(
         canonical_record.len(),
     )?;
     if decode_plan.gas() > gas_bound {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     // The authenticated schema and signed record remain host-owned. Only decoded
     // leaf envelopes and raw argument/aggregate storage consume VM arenas.
@@ -1433,26 +1512,34 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
                 let mut payload = Vec::with_capacity(active.len());
                 for child in active {
                     if *child >= index {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
-                    payload.push(*materialized.get(*child).ok_or(VMError::DecodeError)?);
+                    payload.push(
+                        *materialized
+                            .get(*child)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                    );
                 }
                 crate::sum::allocate_words(vm, *layout, *tag, &payload)
             }
             DecodedArgument::List { layout, elements } => {
-                let width =
-                    usize::try_from(layout.element_words()).map_err(|_| VMError::DecodeError)?;
+                let width = usize::try_from(layout.element_words())
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut words = Vec::with_capacity(elements.len());
                 for element in elements {
                     let mut item = Vec::with_capacity(width);
                     for child in element {
                         if *child >= index {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        item.push(*materialized.get(*child).ok_or(VMError::DecodeError)?);
+                        item.push(
+                            *materialized
+                                .get(*child)
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                        );
                     }
                     if item.len() != width {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     words.push(item);
                 }
@@ -1463,7 +1550,11 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
     }
     let mut words = Vec::with_capacity(plan.roots.len());
     for root in &plan.roots {
-        words.push(*materialized.get(*root).ok_or(VMError::DecodeError)?);
+        words.push(
+            *materialized
+                .get(*root)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+        );
     }
     let table_pointer = if words.is_empty() {
         0
@@ -1481,6 +1572,7 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use ivm_abi::entrypoint::{
         EntrypointArgumentFieldV1, EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1,
         EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
@@ -1595,7 +1687,7 @@ mod tests {
         assert_eq!(vm.register(12) % 8, 0);
         assert!(matches!(
             prepared.install_call_arguments(&mut vm, 32),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -1630,7 +1722,7 @@ mod tests {
         let mut denied_vm = IVM::new(u64::MAX);
         assert!(matches!(
             prepare_default_call_arguments(&mut missing_host, &mut denied_vm, &schema, 1),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
 
@@ -1709,7 +1801,7 @@ mod tests {
         assert!(
             matches!(
                 prepare_default_call_arguments(&mut event_only, &mut denied, &schema, 1),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ),
             "default preparation must not fall back to the firing-event key"
         );
@@ -1729,11 +1821,11 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         assert!(matches!(
             install_empty_call_arguments(&mut vm, 0),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             install_empty_call_arguments(&mut vm, ivm_abi::call::MAX_CALL_WORDS_V1 + 1),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(vm.gas_remaining, u64::MAX);
         install_empty_call_arguments(&mut vm, ivm_abi::call::MAX_CALL_WORDS_V1)
@@ -1877,7 +1969,7 @@ mod tests {
                     &mut node,
                     &mut value
                 ),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
         }
     }
@@ -2045,7 +2137,7 @@ mod tests {
                 Arc::clone(&canonical),
                 quote.saturating_sub(1),
             ),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 0));
         prepare_argument_record_with_gas_limit(&schema, canonical, quote)
@@ -2185,7 +2277,7 @@ mod tests {
         assert!(
             matches!(
                 validate_argument_record(&schema, &alternate),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "the V1 boundary must reject noncanonical bytes even when Norito can decode them"
         );
@@ -2316,7 +2408,7 @@ mod tests {
         let mut allocation_control = vm.try_clone_snapshot().expect("fund VM snapshot");
         assert!(matches!(
             prepared.install_call_arguments(&mut vm, 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(
             vm.memory.heap_allocated_len(),
@@ -2395,7 +2487,7 @@ mod tests {
         let mut allocation_control = vm.try_clone_snapshot().expect("fund VM snapshot");
         assert!(matches!(
             prepared.install_call_arguments(&mut vm, 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.memory.heap_allocated_len(), baseline);
         assert_eq!((vm.register(10), vm.register(11)), (0, 0));
@@ -2530,13 +2622,13 @@ mod tests {
             assert!(
                 matches!(
                     decode_argument_record_gas_quote(&vm),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{label} must fail during header-only preparation"
             );
             assert!(matches!(
                 decode_argument_record(&mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!([vm.register(10), vm.register(11)], registers_before);
             assert_eq!(
@@ -2564,7 +2656,7 @@ mod tests {
         partial_vm.set_register(11, schema_pointer);
         assert!(matches!(
             decode_argument_record(&mut partial_vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut corrupted_vm = IVM::new(u64::MAX);
         let mut corrupted = record_envelope;
@@ -2582,7 +2674,7 @@ mod tests {
             .expect("hash corruption is intentionally checked after bounded preparation");
         assert!(matches!(
             decode_argument_record(&mut corrupted_vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -2809,7 +2901,7 @@ mod tests {
         }));
         assert!(matches!(
             argument_record_from_json(&schema, &overflow),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2858,11 +2950,11 @@ mod tests {
         assert!(!over_limit.validate());
         assert!(matches!(
             validate_argument_record(&over_limit, &encoded),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             argument_record_from_json(&over_limit, &Json::from(norito::json!({ "value": [] }))),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -3009,7 +3101,7 @@ mod tests {
             assert!(
                 matches!(
                     validate_argument_record(&schema, &encoded),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ),
                 "{label} must fail closed"
             );
@@ -3069,7 +3161,7 @@ mod tests {
         assert!(
             matches!(
                 validate_argument_record(&schema, &encoded),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "the first release accepts only the flat list-count tape"
         );
@@ -3189,7 +3281,7 @@ mod tests {
             .expect("forge inactive Option payload");
         assert!(matches!(
             crate::sum::read_words(&vm, list[2][0], option_layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -3213,7 +3305,7 @@ mod tests {
         let mut vm = install_raw_record(&option_schema, &hidden);
         assert!(matches!(
             decode_argument_record(&mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let wrong_hash = EntrypointArgumentRecordV1 {
             schema_hash: [7; 32],
@@ -3222,7 +3314,7 @@ mod tests {
         let mut vm = install_raw_record(&option_schema, &wrong_hash);
         assert!(matches!(
             decode_argument_record(&mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let name_schema = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -3241,7 +3333,7 @@ mod tests {
         let mut vm = install_raw_record(&name_schema, &malformed_name);
         assert!(matches!(
             decode_argument_record(&mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -3260,13 +3352,13 @@ mod tests {
         trailing.push(0);
         assert!(matches!(
             validate_argument_record(&schema, &trailing),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         for end in 0..canonical.len() {
             assert!(
                 matches!(
                     validate_argument_record(&schema, &canonical[..end]),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ),
                 "truncation at byte {end} must fail closed"
             );
@@ -3285,7 +3377,7 @@ mod tests {
         assert!(
             matches!(
                 validate_argument_record(&schema, &forged_count),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "adversarial atom counts must not allocate or panic"
         );
@@ -3343,7 +3435,7 @@ mod tests {
             let payload = Json::from(norito::json!({ "value": value }));
             assert!(matches!(
                 argument_record_from_json(&schema, &payload),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
             RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 0));
         }
@@ -3415,7 +3507,7 @@ mod tests {
                 Arc::clone(&canonical),
                 bound.saturating_sub(1),
             ),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(argument_record_decode_count(), 0);
         let prepared = prepare_argument_record_with_gas_limit(schema, canonical, bound)
@@ -3498,7 +3590,7 @@ mod tests {
         ] {
             assert!(matches!(
                 prepare_argument_record_with_gas_limit(schema, record, quote - 1),
-                Err(VMError::OutOfGas)
+                Err(VMError::Trap(VmTrap::OutOfGas))
             ));
         }
         assert_eq!(argument_record_decode_count(), 0);
@@ -3715,12 +3807,12 @@ mod tests {
         };
         assert!(matches!(
             schema_materialization_bound(&malformed),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         reset_argument_record_decode_count();
         assert!(matches!(
             prepare_argument_record_with_gas_limit(&malformed, Arc::from([]), 0),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             argument_record_decode_count(),
@@ -3828,7 +3920,7 @@ mod tests {
         vm.set_register(11, input_registers.1);
         vm.set_host(crate::host::DefaultHost::new());
         vm.set_gas_limit(5_u64.saturating_add(quote).saturating_sub(1));
-        assert!(matches!(vm.run(), Err(VMError::OutOfGas)));
+        assert!(matches!(vm.run(), Err(VMError::Trap(VmTrap::OutOfGas))));
         RECORD_DECODE_COUNT
             .with(|count| assert_eq!(count.get(), 0, "unaffordable calls must not deserialize"));
         assert_eq!((vm.register(10), vm.register(11)), input_registers);
@@ -3877,7 +3969,7 @@ mod tests {
         vm.set_host(crate::host::DefaultHost::new());
         vm.set_gas_limit(5_u64.saturating_add(quote).saturating_sub(1));
         assert!(
-            matches!(vm.run(), Err(VMError::OutOfGas)),
+            matches!(vm.run(), Err(VMError::Trap(VmTrap::OutOfGas))),
             "gas debit must reject the call before envelope authentication"
         );
         RECORD_DECODE_COUNT.with(|count| {
@@ -3927,7 +4019,10 @@ mod tests {
         assert!(quote > 0);
         assert_eq!((vm.register(10), vm.register(11)), before);
         assert!(
-            matches!(decode_argument_record(&mut vm), Err(VMError::DecodeError)),
+            matches!(
+                decode_argument_record(&mut vm),
+                Err(VMError::Trap(VmTrap::DecodeError))
+            ),
             "schema validation belongs to post-debit execution"
         );
     }
@@ -3961,7 +4056,10 @@ mod tests {
             "header and bounded lengths are sufficient for pre-debit quoting"
         );
         assert!(
-            matches!(decode_argument_record(&mut vm), Err(VMError::NoritoInvalid)),
+            matches!(
+                decode_argument_record(&mut vm),
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
+            ),
             "digest authentication belongs to post-debit execution"
         );
     }
@@ -3988,7 +4086,7 @@ mod tests {
         let oversized: Arc<[u8]> = Arc::from(vec![0_u8; MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES + 1]);
         assert!(matches!(
             prepare_argument_record_with_gas_limit(&schema, oversized, u64::MAX),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 0));
     }
@@ -4034,7 +4132,7 @@ mod tests {
                 Some(ExecutionDeferral::ActiveMemoryCapacity),
                 "canonical prepared record must retain its original enclosing decoder deferral"
             );
-            let VMError::DecodeDeferred(original_refusal) = error else {
+            let VMError::Deferred(VmDeferral::DecodeDeferred(original_refusal)) = error else {
                 panic!("prepared record lost its captured decoder owner");
             };
             assert_eq!(
@@ -4079,7 +4177,7 @@ mod tests {
             })
             .unwrap_err();
         assert!(
-            matches!(invalid, VMError::DecodeError),
+            matches!(invalid, VMError::Trap(VmTrap::DecodeError)),
             "invalid framing remains a protocol rejection"
         );
         assert_eq!(canonical.as_ref(), original_bytes);
@@ -4118,7 +4216,7 @@ mod tests {
                 Some(ExecutionDeferral::ActiveMemoryCapacity),
                 "canonical argument schema must retain its original enclosing decoder deferral"
             );
-            let VMError::DecodeDeferred(original_refusal) = error else {
+            let VMError::Deferred(VmDeferral::DecodeDeferred(original_refusal)) = error else {
                 panic!("argument syscall lost its captured decoder owner");
             };
             assert_eq!(

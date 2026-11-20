@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -97,7 +98,10 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT]);
     vm.load_program(&prog_uacc).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Switch caller to bob to burn NFT
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");

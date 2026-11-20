@@ -62,6 +62,7 @@ use errors::TryWriteError;
 mod state_snapshot_decode_error_tests {
     use super::*;
     use crate::state::deserialize::StateRestoreError;
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn snapshot_reader_preserves_local_resource_errors_and_format_errors() {
@@ -70,11 +71,9 @@ mod state_snapshot_decode_error_tests {
             TryReadError::Serialization(json::Error::InvalidUtf8)
         ));
         assert!(matches!(
-            TryReadError::from(StateRestoreError::VmInitialization(
-                ivm::VMError::ExecutionDeferred(
-                    ivm::error::ExecutionDeferral::AllocationUnavailable
-                )
-            )),
+            TryReadError::from(StateRestoreError::VmInitialization(ivm::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable)
+            ))),
             TryReadError::StateVmInitialization(_)
         ));
         assert!(matches!(

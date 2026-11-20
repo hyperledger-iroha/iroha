@@ -16,6 +16,7 @@ use ivm::{
     syscall_metering::{SyscallCompletion, SyscallMetering, SyscallMeteringPhase},
     syscalls,
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::collections::{BTreeMap, BTreeSet};
 fn program(syscall: u32) -> Vec<u8> {
     let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
@@ -208,10 +209,10 @@ where
         let original_result_register = probe_vm.register(10);
         match probe_vm.run() {
             Ok(()) => Probe::Success,
-            Err(VMError::SyscallOutOfGas {
+            Err(VMError::Trap(VmTrap::SyscallOutOfGas {
                 syscall: failed,
                 phase,
-            }) => {
+            })) => {
                 assert_eq!(failed, syscall);
                 assert_eq!(probe_vm.register(10), original_result_register);
                 let context = probe_vm
@@ -293,7 +294,7 @@ fn abi_contains_exactly_the_61_numeric_calls_and_rejects_retired_numbers() {
         .chain(0x01_0040..=0x01_004d)
     {
         assert!(
-            matches!(host.prepare_syscall(retired, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (retired))
+            matches!(host.prepare_syscall(retired, vm.syscall_quote()), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (retired))
         );
     }
 }
@@ -1007,7 +1008,7 @@ fn checked_int_endpoints_fault_before_output_in_trap_and_status_modes() {
             vm.set_register(14, mode);
             if mode == NUMERIC_FAILURE_TRAP {
                 assert!(
-                    matches!((&(vm.run()), &(VMError::NumericFault(NumericFaultV1::MantissaOverflow))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+                    matches!((&(vm.run()), &(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::MantissaOverflow)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
                     "trap syscall {syscall:#x}"
                 );
             } else {
@@ -1034,7 +1035,7 @@ fn checked_int_zero_divisors_stop_before_arithmetic_in_both_failure_modes() {
             vm.set_register(14, mode);
             if mode == NUMERIC_FAILURE_TRAP {
                 assert!(
-                    matches!((&(vm.run()), &(VMError::NumericFault(NumericFaultV1::DivisionByZero))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+                    matches!((&(vm.run()), &(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::DivisionByZero)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
                     "trap syscall {syscall:#x}"
                 );
             } else {
@@ -1213,7 +1214,9 @@ fn negative_quantity_factors_report_negative_quantity_in_trap_and_status_modes()
                 assert!(
                     matches!(
                         outcome,
-                        Err(VMError::NumericFault(NumericFaultV1::NegativeQuantity))
+                        Err(VMError::Trap(VmTrap::NumericFault(
+                            NumericFaultV1::NegativeQuantity
+                        )))
                     ),
                     "{syscall:#x} must trap with NegativeQuantity"
                 );
@@ -1235,7 +1238,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     malformed.set_register(12, 9);
     malformed.set_register(14, 99);
     assert!(
-        matches!(malformed.run(), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (
+        matches!(malformed.run(), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (
             PointerAbiFaultV1::PayloadHashMismatch
         ))
     );
@@ -1246,9 +1249,11 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     reserved.set_register(11, rhs);
     reserved.set_register(12, 1);
     reserved.set_register(14, 99);
-    assert!(matches!((&(reserved.run()), &(VMError::NumericFault(
+    assert!(
+        matches!((&(reserved.run()), &(VMError::Trap(VmTrap::NumericFault(
             NumericFaultV1::ReservedRegisterNonZero
-        ))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value));
+        )))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
+    );
     let mut failure = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
     let lhs = install_int(&mut failure, &BigInt::one());
     let rhs = install_int(&mut failure, &BigInt::one());
@@ -1256,7 +1261,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     failure.set_register(11, rhs);
     failure.set_register(14, 99);
     assert!(
-        matches!((&(failure.run()), &(VMError::NumericFault(NumericFaultV1::InvalidFailureMode))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+        matches!((&(failure.run()), &(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::InvalidFailureMode)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
     );
     for invalid_tag in [7, u64::MAX] {
         let mut rounding = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
@@ -1269,7 +1274,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
         rounding.set_register(13, invalid_tag);
         rounding.set_register(14, NUMERIC_FAILURE_TRAP);
         assert!(
-            matches!((&(rounding.run()), &(VMError::NumericFault(NumericFaultV1::InvalidRoundingMode))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+            matches!((&(rounding.run()), &(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::InvalidRoundingMode)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
             "rounding tag {invalid_tag} must be rejected"
         );
     }
@@ -1290,7 +1295,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     bad_scale_pointer.set_register(13, u64::MAX);
     bad_scale_pointer.set_register(14, u64::MAX);
     assert!(
-        matches!(bad_scale_pointer.run(), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (
+        matches!(bad_scale_pointer.run(), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (
             PointerAbiFaultV1::PayloadHashMismatch
         ))
     );
@@ -1314,7 +1319,9 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
         vm.set_register(12, scale);
         vm.set_register(13, rounding_tag);
         vm.set_register(14, failure_tag);
-        assert!(matches!(vm.run(), Err(VMError::NumericFault(actual)) if actual == expected));
+        assert!(
+            matches!(vm.run(), Err(VMError::Trap(VmTrap::NumericFault(actual))) if actual == expected)
+        );
     }
     let mut invalid_scale = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
     let lhs = install_decimal(&mut invalid_scale, &Numeric::new(1, 0));
@@ -1339,7 +1346,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     zero_with_bad_mode.set_register(11, rhs);
     zero_with_bad_mode.set_register(14, u64::MAX);
     assert!(
-        matches!((&(zero_with_bad_mode.run()), &(VMError::NumericFault(NumericFaultV1::InvalidFailureMode))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+        matches!((&(zero_with_bad_mode.run()), &(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::InvalidFailureMode)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
     );
     // Required-zero registers have precedence over the rounded conversion's
     // rounding tag because they are earlier in the public register contract.
@@ -1348,9 +1355,11 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     reserved_round.set_register(10, value);
     reserved_round.set_register(11, 1);
     reserved_round.set_register(13, u64::MAX);
-    assert!(matches!((&(reserved_round.run()), &(VMError::NumericFault(
+    assert!(
+        matches!((&(reserved_round.run()), &(VMError::Trap(VmTrap::NumericFault(
             NumericFaultV1::ReservedRegisterNonZero
-        ))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value));
+        )))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
+    );
 }
 #[test]
 fn structural_failure_precedes_canonical_phase_and_body_failure_follows_it() {
@@ -1369,7 +1378,9 @@ fn structural_failure_precedes_canonical_phase_and_body_failure_follows_it() {
     bad_crc.set_register(14, NUMERIC_FAILURE_TRAP);
     assert!(matches!(
         bad_crc.run(),
-        Err(VMError::PointerAbiFault(PointerAbiFaultV1::MalformedFrame))
+        Err(VMError::Trap(VmTrap::PointerAbiFault(
+            PointerAbiFaultV1::MalformedFrame
+        )))
     ));
     let context = bad_crc
         .last_staged_syscall_context()
@@ -1395,7 +1406,7 @@ fn structural_failure_precedes_canonical_phase_and_body_failure_follows_it() {
     noncanonical.set_register(10, pointer);
     noncanonical.set_register(14, NUMERIC_FAILURE_TRAP);
     assert!(
-        matches!(noncanonical.run(), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
+        matches!(noncanonical.run(), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
     );
     let context = noncanonical
         .last_staged_syscall_context()
@@ -1448,10 +1459,10 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         vm.set_register(10, operand);
         vm.set_register(14, NUMERIC_FAILURE_TRAP);
         assert!(
-            matches!((&(vm.run()), &(VMError::SyscallOutOfGas {
+            matches!((&(vm.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
                 syscall,
                 phase: phase.tag(),
-            })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase),
+            }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase),
             "phase {phase:?}"
         );
         assert_eq!(
@@ -1503,10 +1514,12 @@ fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
         .expect("maximum hash operand");
     hash_oog.set_register(10, operand);
     hash_oog.set_register(14, NUMERIC_FAILURE_TRAP);
-    assert!(matches!((&(hash_oog.run()), &(VMError::SyscallOutOfGas {
+    assert!(
+        matches!((&(hash_oog.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
             syscall,
             phase: SyscallMeteringPhase::PayloadHash.tag(),
-        })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase));
+        }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase)
+    );
     let output_charge = context.phase_charge(SyscallMeteringPhase::OutputSerialization);
     let before_output = instruction + context.charged() - output_charge;
     let mut output_oog = vm_for(syscall, before_output + output_charge - 1);
@@ -1515,10 +1528,12 @@ fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
         .expect("maximum output operand");
     output_oog.set_register(10, operand);
     output_oog.set_register(14, NUMERIC_FAILURE_TRAP);
-    assert!(matches!((&(output_oog.run()), &(VMError::SyscallOutOfGas {
+    assert!(
+        matches!((&(output_oog.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
             syscall,
             phase: SyscallMeteringPhase::OutputSerialization.tag(),
-        })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase));
+        }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase)
+    );
     assert_eq!(output_oog.register(10), operand);
 }
 #[test]
@@ -1531,10 +1546,12 @@ fn entry_oog_precedes_staged_numeric_privacy_validation() {
     );
     vm.set_register(10, 1);
     vm.registers.set_tag(10, true);
-    assert!(matches!((&(vm.run()), &(VMError::SyscallOutOfGas {
+    assert!(
+        matches!((&(vm.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
             syscall,
             phase: SyscallMeteringPhase::Entry.tag(),
-        })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase));
+        }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase)
+    );
     let context = vm
         .last_staged_syscall_context()
         .expect("entry OOG staged context");
@@ -1796,10 +1813,10 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
     invalid.set_register(13, u64::MAX);
     invalid.set_register(14, u64::MAX);
     assert!(
-        matches!((&(invalid.run()), &(VMError::SyscallOutOfGas {
+        matches!((&(invalid.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
             syscall,
             phase: SyscallMeteringPhase::PointerHeader.tag(),
-        })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase),
+        }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase),
         "unaffordable operand validation precedes invalid rounding/failure controls"
     );
 }
@@ -1818,7 +1835,7 @@ fn allocation_failure_is_fully_charged_and_never_publishes_result_registers() {
     vm.memory.set_heap_limit(0).expect("disable heap spill");
     vm.set_register(10, operand);
     vm.set_register(14, NUMERIC_FAILURE_TRAP);
-    assert!(matches!(vm.run(), Err(VMError::OutOfMemory)));
+    assert!(matches!(vm.run(), Err(VMError::Trap(VmTrap::OutOfMemory))));
     assert_eq!(vm.register(10), operand);
     let context = vm
         .last_staged_syscall_context()
@@ -2041,7 +2058,7 @@ fn integer_helpers_cover_full_width_results_and_staged_failures() {
             vm.set_register(14, mode);
             if mode == NUMERIC_FAILURE_TRAP {
                 assert!(
-                    matches!((&(vm.run()), &(VMError::NumericFault(fault))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+                    matches!((&(vm.run()), &(VMError::Trap(VmTrap::NumericFault(fault)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
                 );
                 assert_eq!(vm.register(10), pointer);
             } else {
@@ -2101,7 +2118,7 @@ fn assert_int_helper_gas_boundaries(
             Err(fault) => {
                 if mode == NUMERIC_FAILURE_TRAP {
                     assert!(
-                        matches!((&(outcome), &(VMError::NumericFault(fault))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+                        matches!((&(outcome), &(VMError::Trap(VmTrap::NumericFault(fault)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
                     );
                     assert_eq!(vm.register(10), original[0]);
                     assert_eq!(vm.register(11), original[1]);
@@ -2146,10 +2163,12 @@ fn assert_int_helper_gas_boundaries(
             vm.reset_from_runtime_template(&template)
                 .expect("restore same initialized operands");
             vm.set_gas_limit(gas);
-            assert!(matches!((&(vm.run()), &(VMError::SyscallOutOfGas {
+            assert!(
+                matches!((&(vm.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
                     syscall,
                     phase: SyscallMeteringPhase::Arithmetic.tag(),
-                })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase));
+                }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase)
+            );
             assert_eq!(
                 [10, 11, 12, 13, 14].map(|register| vm.register(register)),
                 original,
@@ -2496,10 +2515,12 @@ fn borrowed_numeric_outputs_keep_exact_frames_and_both_output_refusal_boundaries
                 vm.reset_from_runtime_template(&template)
                     .expect("same original input custody");
                 vm.set_gas_limit(gas);
-                assert!(matches!((&(vm.run()), &(VMError::SyscallOutOfGas {
+                assert!(
+                    matches!((&(vm.run()), &(VMError::Trap(VmTrap::SyscallOutOfGas {
                         syscall,
                         phase: SyscallMeteringPhase::OutputSerialization.tag()
-                    })), (Err(VMError::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase }), VMError::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase }) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase));
+                    }))), (Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __actual_syscall, phase: __actual_phase })), VMError::Trap(VmTrap::SyscallOutOfGas { syscall: __expected_syscall, phase: __expected_phase })) if __actual_syscall == __expected_syscall && __actual_phase == __expected_phase)
+                );
                 assert_eq!(
                     [10, 11, 12, 13, 14].map(|register| vm.register(register)),
                     original,
@@ -2560,7 +2581,7 @@ fn conversions_preserve_exact_faults_and_output_in_both_failure_modes() {
             vm.set_register(14, mode);
             if mode == NUMERIC_FAILURE_TRAP {
                 assert!(
-                    matches!((&(vm.run()), &(VMError::NumericFault(fault))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+                    matches!((&(vm.run()), &(VMError::Trap(VmTrap::NumericFault(fault)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
                     "{syscall:#x}"
                 );
                 assert_eq!(vm.register(10), input);
@@ -2612,7 +2633,7 @@ fn conversion_modes_and_reserved_registers_fail_after_authentication_before_arit
         wrong_type.set_register(11, 2);
         wrong_type.set_register(14, 2);
         assert!(
-            matches!(wrong_type.run(), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::WrongType))
+            matches!(wrong_type.run(), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::WrongType))
         );
         assert_eq!(wrong_type.register(10), wrong_input);
         for invalid_register in [11, 12, 13, 14] {
@@ -2636,7 +2657,7 @@ fn conversion_modes_and_reserved_registers_fail_after_authentication_before_arit
                 NumericFaultV1::ReservedRegisterNonZero
             };
             assert!(
-                matches!((&(vm.run()), &(VMError::NumericFault(expected))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+                matches!((&(vm.run()), &(VMError::Trap(VmTrap::NumericFault(expected)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
                 "{syscall:#x}"
             );
             assert_eq!(vm.register(10), input);
@@ -2673,11 +2694,11 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
                 return Ok(0);
             }
             match self.0 {
-                Outcome::Local => Err(VMError::ExecutionDeferred(
+                Outcome::Local => Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
-                )),
+                ))),
                 Outcome::WrongMeter => Ok(1),
-                Outcome::Semantic => Err(VMError::OutOfGas),
+                Outcome::Semantic => Err(VMError::Trap(VmTrap::OutOfGas)),
                 Outcome::PrivateOutput => {
                     vm.registers.set_tag(10, true);
                     Ok(0)
@@ -2719,18 +2740,18 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
             match (outcome, result) {
                 (
                     Outcome::Local,
-                    Ok(Err(VMError::ExecutionDeferred(
+                    Ok(Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                         ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
-                    ))),
+                    )))),
                 )
                 | (
                     Outcome::WrongMeter,
-                    Ok(Err(VMError::SyscallMeteringModeMismatch {
+                    Ok(Err(VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch {
                         syscall: syscalls::SYSCALL_QUANTITY_SUB,
-                    })),
+                    }))),
                 )
-                | (Outcome::Semantic, Ok(Err(VMError::OutOfGas)))
-                | (Outcome::PrivateOutput, Ok(Err(VMError::PrivacyViolation)))
+                | (Outcome::Semantic, Ok(Err(VMError::Trap(VmTrap::OutOfGas))))
+                | (Outcome::PrivateOutput, Ok(Err(VMError::Trap(VmTrap::PrivacyViolation))))
                 | (Outcome::Unwind, Err(_)) => {}
                 _ => panic!("incorrect result for {outcome:?}"),
             }

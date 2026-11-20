@@ -1,4 +1,5 @@
 //! Canonical VRF syscall payloads.
+use crate::error::VmTrap;
 pub use ivm_abi::host_payload::{
     MAX_VRF_VERIFY_BATCH_ITEMS_V1, MAX_VRF_VERIFY_PAYLOAD_BYTES_V1, VRF_VERIFY_DECODE_LIMITS_V1,
     VrfVerifyBatchRequest, VrfVerifyRequest,
@@ -27,7 +28,7 @@ pub fn publish_epoch_seed(
     let gas = epoch_seed_gas(seed.is_some());
     crate::host::preflight_reserved_syscall_gas(vm, gas)?;
     if vm.remaining_gas() < gas {
-        return Err(crate::VMError::OutOfGas);
+        return Err(crate::VMError::Trap(VmTrap::OutOfGas));
     }
     let pointer = if let Some(seed) = seed {
         let mut envelope = [0_u8; 7 + 32 + 32];
@@ -47,6 +48,7 @@ pub fn publish_epoch_seed(
 #[cfg(test)]
 mod epoch_seed_tests {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn epoch_seed_publication_is_fixed_deterministic_and_preserves_other_registers() {
@@ -74,7 +76,7 @@ mod epoch_seed_tests {
         let heap = vm.alloc_heap(0).unwrap();
         assert!(matches!(
             publish_epoch_seed(&mut vm, Some(&[0x42; 32])),
-            Err(crate::VMError::OutOfGas)
+            Err(crate::VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.register(10), 7);
         assert_eq!(vm.register(11), 71);
@@ -90,7 +92,7 @@ mod epoch_seed_tests {
         for seed in [None, Some(&[0x42; 32])] {
             assert!(matches!(
                 publish_epoch_seed(&mut vm, seed),
-                Err(crate::VMError::PrivacyViolation)
+                Err(crate::VMError::Trap(VmTrap::PrivacyViolation))
             ));
             assert_eq!(vm.register(10), 7);
             assert_eq!(vm.register(11), 71);
@@ -114,7 +116,9 @@ mod epoch_seed_tests {
             .expect_err("lookup needs a World snapshot");
         let (gas, error) = error.split_metered();
         assert_eq!(gas, Some(epoch_seed_gas(false)));
-        assert!(matches!(error, crate::VMError::NotImplemented { syscall } if syscall == number));
+        assert!(
+            matches!(error, crate::VMError::Trap(VmTrap::NotImplemented { syscall }) if syscall == number)
+        );
         assert_eq!(vm.register(10), 7);
         assert_eq!(vm.register(11), 71);
     }

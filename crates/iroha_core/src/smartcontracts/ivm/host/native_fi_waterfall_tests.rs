@@ -14,6 +14,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
+use ivm_abi::error::{VmErrorRef, VmTrap};
 
 const SOURCE: &str = r"seiyaku LinkedFiSettlement {
     kotoage fn settle(
@@ -282,7 +283,7 @@ fn linked_fi_and_waterfall_hosts_require_the_actual_controller_frame() {
         let mut absent = CoreHost::new(ALICE_ID.clone());
         assert!(matches!(
             dispatch(call, &mut absent, &vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(absent.queued.is_empty());
         let mut substituted = configured_host();
@@ -293,7 +294,7 @@ fn linked_fi_and_waterfall_hosts_require_the_actual_controller_frame() {
             .contract_subject = ALICE_ID.clone();
         assert!(matches!(
             dispatch(call, &mut substituted, &vm),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(substituted.queued.is_empty());
     }
@@ -311,7 +312,7 @@ fn every_linked_fi_and_waterfall_argument_must_be_public_before_queueing() {
             assert!(
                 matches!(
                     dispatch(call, &mut host, &vm),
-                    Err(ivm::VMError::PrivacyViolation)
+                    Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
                 ),
                 "{call:?} accepted private register {register}"
             );
@@ -456,7 +457,10 @@ fn linked_fi_and_waterfall_hosts_preserve_queue_on_gas_refusal() {
         // instruction lacks one unit: a preceding numeric error cannot pass.
         let (result, _, refused) = run_gas_probe(&program, target, before_target + actual - 1);
         let error = result.expect_err("native instruction cannot exceed its VM budget");
-        assert!(matches!(error.as_unmetered(), ivm::VMError::OutOfGas));
+        assert!(matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::OutOfGas)
+        ));
         assert_eq!(refused.prepared_remaining.get(), Some(actual - 1));
         if let Some(reserved) = refused.invoked_reserve {
             assert!(

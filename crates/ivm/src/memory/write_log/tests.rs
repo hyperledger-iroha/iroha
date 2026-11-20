@@ -4,6 +4,7 @@ use super::*;
 use crate::cache_memory::{
     TestMemoryBudget, refuse_next_owned_allocation_for_test, refuse_next_owned_vec_growth_for_test,
 };
+use crate::error::VmDeferral;
 use std::sync::{Arc, Barrier};
 
 fn log(budget: &TestMemoryBudget) -> WriteLog {
@@ -56,11 +57,15 @@ fn row_and_payload_refusal_preserve_nonempty_contents_and_retry() {
     refuse_next_owned_vec_growth_for_test();
     assert!(matches!(
         log.prepare(9, &[9]).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable
+        ))
     ));
     assert!(matches!(
         allocation_error(OwnedVecGrowthError::AllocationUnavailable),
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable
+        ))
     ));
     assert_eq!(budget.stats().active_bytes, before);
     assert_eq!(&log.rows[..], &*snapshot);

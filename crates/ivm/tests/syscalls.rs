@@ -10,6 +10,7 @@ use ivm::{
     ExecutionSummary, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost, instruction,
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 use std::{cell::Cell, collections::BTreeMap};
@@ -68,7 +69,7 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     bad[ivm::HEADER_ABI_VERSION_OFFSET] = 1; // ABI v1
     let mut vm2 = IVM::new(u64::MAX);
     assert!(
-        matches!(vm2.load_program(&bad), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xDF))
+        matches!(vm2.load_program(&bad), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xDF))
     );
 }
 #[test]
@@ -93,7 +94,10 @@ fn syscall_abort_marks_failure() {
     vm.load_program(&prog).unwrap();
     vm.set_register(10, 0xA11CE);
     let result = vm.run();
-    assert!(matches!(result, Err(VMError::AssertionFailed)));
+    assert!(matches!(
+        result,
+        Err(VMError::Trap(VmTrap::AssertionFailed))
+    ));
     assert_eq!(vm.register(10), 0xA11CE, "abort code must survive in r10");
 }
 #[test]
@@ -170,7 +174,7 @@ fn get_public_input_missing_name_errors() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::PermissionDenied)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::PermissionDenied))));
 }
 #[test]
 fn get_public_input_zero_pointer_errors() {
@@ -180,7 +184,7 @@ fn get_public_input_zero_pointer_errors() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::NoritoInvalid)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::NoritoInvalid))));
 }
 #[test]
 fn add_signatory_syscall_accepts_account_and_json() {
@@ -245,7 +249,7 @@ fn set_account_quorum_rejects_zero() {
     let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::DecodeError)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::DecodeError))));
 }
 struct AddHost;
 impl ivm::IVMHost for AddHost {
@@ -257,7 +261,7 @@ impl ivm::IVMHost for AddHost {
         if number == 1 {
             Ok(0)
         } else {
-            Err(VMError::UnknownSyscall(number))
+            Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
         }
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -267,7 +271,7 @@ impl ivm::IVMHost for AddHost {
             vm.set_register(10, a0.wrapping_add(a1));
             Ok(0)
         } else {
-            Err(VMError::UnknownSyscall(number))
+            Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
         }
     }
     fn as_any(&mut self) -> &mut dyn std::any::Any {
@@ -296,7 +300,7 @@ fn removed_hw_probe_syscalls_reject() {
         let mut vm = IVM::new(u64::MAX);
         let program = assemble_syscall(number);
         assert!(
-            matches!(vm.load_program(&program), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == number)
+            matches!(vm.load_program(&program), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == number)
         );
     }
 }
@@ -315,7 +319,7 @@ fn test_verify_proof_syscall() {
     let err = vm.run().expect_err("VERIFY_PROOF should be unimplemented");
     assert!(matches!(
         err,
-        VMError::NotImplemented { syscall } if syscall == syscalls::SYSCALL_VERIFY_PROOF
+        VMError::Trap(VmTrap::NotImplemented { syscall }) if syscall == syscalls::SYSCALL_VERIFY_PROOF
     ));
 }
 #[test]
@@ -526,7 +530,7 @@ fn test_get_merkle_path_syscall_out_of_bounds() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::MemoryOutOfBounds))));
 }
 #[test]
 fn test_get_merkle_compact_syscall_out_of_bounds() {
@@ -544,7 +548,7 @@ fn test_get_merkle_compact_syscall_out_of_bounds() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::MemoryOutOfBounds))));
 }
 #[test]
 fn test_get_register_merkle_compact_syscall_out_of_bounds() {
@@ -558,5 +562,8 @@ fn test_get_register_merkle_compact_syscall_out_of_bounds() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::RegisterOutOfBounds)));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
+    ));
 }

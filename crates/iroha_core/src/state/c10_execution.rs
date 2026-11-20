@@ -8,6 +8,7 @@ use iroha_data_model::{
     },
     transaction::{TransactionResult, error::TransactionRejectionReason},
 };
+use ivm_abi::error::{VmErrorRef, VmTrap};
 
 use super::StateTransaction;
 use crate::smartcontracts::ivm::projection::c10_admission_error_v1;
@@ -55,7 +56,10 @@ impl StateTransaction<'_, '_> {
             vm.c10_execution_fault(error, IvmFaultPositionV1::ReturnValidation)
         {
             capture.vm_failure = Some(ValidationFailC10V1::IvmFault(fault));
-        } else if !matches!(error.as_unmetered(), ivm::VMError::ContractAbort { .. }) {
+        } else if !matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::ContractAbort { .. })
+        ) {
             self.record_c10_admission_error(error);
         }
     }

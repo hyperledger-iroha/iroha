@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use std::str::FromStr;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -47,7 +48,10 @@ fn register_peer_then_unregister() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_unreg = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_PEER]);
     vm.load_program(&prog_unreg).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Register peer
     vm.memory.preload_input(0, &p).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -83,7 +87,10 @@ fn create_enable_disable_remove_trigger() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_ct = assemble_syscalls(&[syscalls::SYSCALL_CREATE_TRIGGER]);
     vm.load_program(&prog_ct).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
     // Valid create (with name)
     let tr_ok = make_tlv(PointerType::Json as u16, br#"{"name":"t1"}"#);
     vm.memory.preload_input(0, &tr_ok).expect("preload input");
@@ -120,11 +127,17 @@ fn create_enable_disable_remove_trigger() {
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.load_program(&prog_rm).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Toggling unknown trigger should fail
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, 1);
     vm.load_program(&prog_set).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

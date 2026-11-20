@@ -57,6 +57,7 @@ mod zk_hydration_route_tests {
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
+    use ivm_abi::error::VmTrap;
 
     #[inline(never)]
     fn route_state() -> Box<State> {
@@ -270,7 +271,10 @@ mod zk_hydration_route_tests {
             };
             assert_eq!(
                 message,
-                format!("invalid ZK snapshot state: {}", ivm::VMError::NoritoInvalid)
+                format!(
+                    "invalid ZK snapshot state: {}",
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                )
             );
             route_allocation_limit = usize::try_from(budget.consumed_allocated_bytes()).unwrap();
             assert!(!warm.is_execution_deferred());

@@ -3,13 +3,14 @@
 //! A list is not a pointer-ABI envelope. Its handle is the base address of one owned heap
 //! allocation whose exact element shape and capacity come from the compiler-emitted schema. Hosts
 //! must therefore validate the complete range against that schema before reading it.
+use crate::error::VmTrap;
 use crate::{IVM, VMError};
 #[cfg(test)]
 use ivm_abi::list::LIST_HEADER_WORDS_V1;
 use ivm_abi::list::LIST_WORD_BYTES_V1;
 pub use ivm_abi::list::ListLayoutV1;
 fn layout_error() -> VMError {
-    VMError::DecodeError
+    VMError::Trap(VmTrap::DecodeError)
 }
 fn validate_header(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VMError> {
     if !base.is_multiple_of(LIST_WORD_BYTES_V1) {
@@ -221,6 +222,7 @@ pub(crate) const fn capacity_word_offset() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use crate::memory::Memory;
     #[test]
     fn list_roundtrip_uses_one_owned_allocation() {
@@ -246,11 +248,11 @@ mod tests {
         let layout = ListLayoutV1::try_new(2, 2).expect("layout");
         assert!(matches!(
             allocate_words(&mut vm, layout, &[vec![1], vec![2, 3]]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             allocate_words(&mut vm, layout, &[vec![1, 2], vec![3, 4], vec![5, 6]]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             (allocate_words(&mut vm, layout, &[])).expect("expected successful fixture result"),
@@ -266,22 +268,22 @@ mod tests {
             .expect("forge capacity");
         assert!(matches!(
             read_words(&vm, base, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         vm.store_u64(base + capacity_word_offset(), 2)
             .expect("restore capacity");
         vm.store_u64(base, 3).expect("forge length");
         assert!(matches!(
             read_words(&vm, base, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, Memory::HEAP_START + 4096, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, base + 1, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -490,11 +492,11 @@ mod tests {
         let before = read_words(&vm, base, layout).expect("read before");
         assert!(matches!(
             try_set_words(&mut vm, base, layout, 0, &[9]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             try_push_words(&mut vm, base, layout, &[9]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             (read_words(&vm, base, layout)).expect("expected successful fixture result"),

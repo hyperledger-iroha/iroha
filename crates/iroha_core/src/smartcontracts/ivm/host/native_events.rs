@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_data_model::smart_contract::event::{ContractEmissionV1, ContractEventDescriptorV1};
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn event_context<'a>(
@@ -21,7 +22,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             self.execution_class,
             HostExecutionClass::Contract | HostExecutionClass::LocalContractDebug
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let ordinal = vm.public_register(10)?;
         for register in [11, 12] {
@@ -30,45 +31,45 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let authorization = self
             .current_entrypoint_authorization
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         if context.contract_address != authorization.contract_address
             || context.entrypoint != authorization.entrypoint
             || self.authority != authorization.authority
             || Hash::prehashed(vm.code_hash()) != authorization.code_hash
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let interface = vm
             .contract_interface()
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         let (entrypoint, descriptor) = interface
             .entrypoints
             .iter()
             .enumerate()
             .find(|(_, entrypoint)| entrypoint.name == authorization.entrypoint)
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         if matches!(
             descriptor.kind,
             iroha_data_model::smart_contract::manifest::EntryPointKind::View
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        let event = u32::try_from(ordinal).map_err(|_| ivm::VMError::DecodeError)?;
+        let event = u32::try_from(ordinal).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let definition = interface
             .events
             .get(event as usize)
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         if !definition.validate() {
-            return Err(ivm::VMError::InvalidMetadata);
+            return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
         }
         Ok((
             context,
             authorization,
-            u32::try_from(entrypoint).map_err(|_| ivm::VMError::InvalidMetadata)?,
+            u32::try_from(entrypoint).map_err(|_| ivm::VMError::Trap(VmTrap::InvalidMetadata))?,
             event,
             definition,
         ))
@@ -86,7 +87,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 
     pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
         let (_, _, _, _, definition) = self.event_context(vm.syscall_quote())?;
-        let words = usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+        let words = usize::try_from(vm.register(12))
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let gas = ivm::value_record::quote_value_record(
             vm,
             &definition.payload_type,
@@ -100,7 +102,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             // Finish any earlier instruction batch before inserting this emission.
             self.flush_pending_fastpq_batch();
             self.queued.try_reserve(1).map_err(|_| {
-                ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
+                ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ivm::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
             let (context, authorization, entrypoint, event, definition) =
                 self.event_context(vm.syscall_quote())?;
@@ -114,13 +118,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 &authorization.authority,
                 definition,
                 vm.register(11),
-                usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?,
+                usize::try_from(vm.register(12))
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?,
             )?;
             if !self.try_reserve_serialized_output(&emission.value, 1) {
                 self.ensure_output_budget()?;
-                return Err(ivm::VMError::ExecutionDeferred(
+                return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::ExecutionDeferral::LocalInvariantViolation,
-                ));
+                )));
             }
             self.queued.push(QueuedEffect {
                 payload: QueuedEffectPayload::Emission(emission),

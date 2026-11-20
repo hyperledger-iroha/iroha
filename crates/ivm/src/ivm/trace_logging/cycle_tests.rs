@@ -1,6 +1,7 @@
 //! Cycle-root admission before ordinary instruction and padding effects.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr},
@@ -65,7 +66,7 @@ fn refused_first_root_backing_preserves_instruction_gas_and_state() {
     original.set_limit_bytes(baseline + shell + rows - 1);
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == rows
     ));
     assert_eq!(vm.pc, pc);
@@ -110,7 +111,7 @@ fn twelve_cycle_instruction_admits_all_rows_before_overshooting_one_cycle_limit(
         let start = vm.pc;
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExceededMaxCycles)
+            Err(VMError::Trap(VmTrap::ExceededMaxCycles))
         ));
         assert_eq!(vm.pc, start + 4);
         assert_eq!(vm.cycles, 12);
@@ -147,7 +148,7 @@ fn padding_refusal_precedes_cycle_and_gas_then_exact_retry_matches() {
     original.set_limit_bytes(limit - 1);
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == 9 * row
     ));
     assert!(vm.halted);
@@ -194,7 +195,7 @@ fn known_padding_out_of_gas_keeps_its_existing_outcome_without_root_growth() {
     original.set_limit_bytes(baseline + shell + rows + delta_bytes(1));
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     ));
     assert_eq!(vm.cycles, 9);
     assert_eq!(vm.gas_remaining, 3);
@@ -226,7 +227,7 @@ fn warm_reset_retires_cycle_backing_but_keeps_original_pool_binding() {
     let invocation = vm.begin_trace_invocation().unwrap();
     assert!(matches!(
         vm.prepare_trace_instruction(&invocation, encode_halt(), |_| Ok(())),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(original.reserved_bytes(), baseline);
     original.set_limit_bytes(baseline + 4 * size_of::<zk::StepEntry>() + delta_bytes(3));

@@ -12,6 +12,7 @@ use ivm::{
     syscall_metering::SyscallMetering,
     syscalls,
 };
+use ivm_abi::error::{VmErrorRef, VmTrap};
 use std::str::FromStr;
 fn sample_account() -> AccountId {
     let public_key = PublicKey::from_str(
@@ -25,7 +26,7 @@ fn wsv_host() -> WsvHost {
 }
 fn assert_not_unknown_syscall(result: Result<u64, VMError>, host_name: &str, number: u32) {
     if let Err(error) = result
-        && let VMError::UnknownSyscall(actual) = error.as_unmetered()
+        && let VmErrorRef::Trap(VmTrap::UnknownSyscall(actual)) = error.as_unmetered()
     {
         panic!("{host_name} returned UnknownSyscall({actual:#x}) for ABI v1 syscall {number:#x}");
     }
@@ -86,7 +87,10 @@ where
         .syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
         .expect_err("empty FastPQ batch is rejected after fixed scope gas");
     assert_eq!(error.metered_gas(), Some(gas::G_FASTPQ_BATCH));
-    assert!(matches!(error.as_unmetered(), VMError::DecodeError));
+    assert!(matches!(
+        error.as_unmetered(),
+        VmErrorRef::Trap(VmTrap::DecodeError)
+    ));
 }
 fn bytes_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -143,11 +147,11 @@ where
         let mut host = make_host();
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     let mut vm = IVM::new(u64::MAX);
@@ -177,11 +181,11 @@ where
     let mut host = make_host();
     assert!(matches!(
         host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote()),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]

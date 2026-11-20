@@ -50,7 +50,7 @@ const PRIVACY_MARKERS: [&str; 6] = [
     ".tag(",
     ".set_tag(",
     ".set_tag_observed(",
-    "VMError::PrivacyViolation",
+    "VmTrap::PrivacyViolation",
     "private_memory_bytes",
     "has_private(",
 ];
@@ -512,7 +512,9 @@ fn vm_error_impl_ranges(code: &str) -> Vec<(usize, usize)> {
         };
         let header = code[start..open].trim_end();
         let self_type = header.rsplit([' ', ':']).next().unwrap_or_default();
-        if header.contains([';', '(', ')']) || !matches!(self_type, "VMError" | "VmDeferral") {
+        if header.contains([';', '(', ')'])
+            || !matches!(self_type, "VMError" | "VmTrap" | "VmDeferral")
+        {
             continue;
         }
         if let Some(close) = matching_close(code, open) {
@@ -615,12 +617,15 @@ pub(super) fn constructed_vm_errors(code: &str, variants: &[&str]) -> BTreeSet<S
         }
     };
     let mut aliases = BTreeSet::new();
-    for ty in ["VMError", "VmDeferral"] {
+    for ty in ["VMError", "VmTrap", "VmDeferral"] {
         let prefix = format!("{ty}::");
         for start in boundary_matches(code, &prefix) {
             if import_use_start(code, start).is_none() {
                 // TryFrom moves an existing owner between boundaries.
-                if ty == "VmDeferral" && identifier_at(code, start + prefix.len()) == "try_from" {
+                let name = identifier_at(code, start + prefix.len());
+                if (ty == "VmDeferral" && name == "try_from")
+                    || (ty == "VMError" && matches!(name, "Trap" | "Deferred"))
+                {
                     continue;
                 }
                 record(start, start + prefix.len(), true);
@@ -636,7 +641,10 @@ pub(super) fn constructed_vm_errors(code: &str, variants: &[&str]) -> BTreeSet<S
         let rest = code[start + 5 + alias.len()..].trim_start();
         let aliases_the_type = rest.strip_prefix('=').is_some_and(|target| {
             let target = target.split(';').next().unwrap_or_default().trim();
-            matches!(target.rsplit("::").next(), Some("VMError" | "VmDeferral"))
+            matches!(
+                target.rsplit("::").next(),
+                Some("VMError" | "VmTrap" | "VmDeferral")
+            )
         });
         if aliases_the_type {
             aliases.insert(alias.to_owned());
@@ -653,7 +661,7 @@ pub(super) fn constructed_vm_errors(code: &str, variants: &[&str]) -> BTreeSet<S
             record(open + start, open + start + "Self::".len(), false);
         }
     }
-    for (names, (from, to)) in ["VMError::", "VmDeferral::"]
+    for (names, (from, to)) in ["VmTrap::", "VmDeferral::"]
         .into_iter()
         .flat_map(|prefix| variant_imports(code, variants, prefix))
     {
@@ -853,10 +861,20 @@ pub(super) struct RegionSurface {
     pub(super) code: String,
 }
 
+/// Leaf traps, local refusals and VM error helper calls visible in a region.
+fn error_tokens(source: &str) -> BTreeSet<String> {
+    let mut tokens = tokens_after(source, "VMError::");
+    tokens.remove("Trap");
+    tokens.remove("Deferred");
+    tokens.extend(tokens_after(source, "VmTrap::"));
+    tokens.extend(tokens_after(source, "VmDeferral::"));
+    tokens
+}
+
 /// Collect the fault surface of one region of comment-free source.
 pub(super) fn region_surface(code: &str) -> RegionSurface {
     RegionSurface {
-        direct_traps: tokens_after(code, "VMError::"),
+        direct_traps: error_tokens(code),
         fallible_helpers: fallible_calls(code),
         calls: called_names(code),
         err_arguments: err_arguments(code),
@@ -993,8 +1011,8 @@ pub(super) fn interpreter_dispatch(text: &str, helpers: &[&str]) -> InterpreterD
         .into_iter()
         .map(|(head, body)| {
             let body = strip_line_comments(&body);
-            let mut direct_traps = tokens_after(&head, "VMError::");
-            direct_traps.extend(tokens_after(&body, "VMError::"));
+            let mut direct_traps = error_tokens(&head);
+            direct_traps.extend(error_tokens(&body));
             InterpreterArm {
                 names: opcode_tokens(&head)
                     .into_iter()
@@ -1180,7 +1198,7 @@ impl IVM {
             let fetched = self.fetch_instruction()?;
             match wide_op {
                 instruction::wide::arithmetic::ADD => {
-                    // VMError::OutOfMemory in prose is not a trap.
+                    // VmTrap::OutOfMemory in prose is not a trap.
                     let tag = self.zk_join_tags(a, b)?;
                     self.zk_apply_tag(rd, tag);
                     continue;
@@ -1197,7 +1215,7 @@ impl IVM {
                 }
             }
         }
-        if short { return Err(VMError::OutOfGas); }
+        if short { return Err(VMError::Trap(VmTrap::OutOfGas)); }
         if let Some(error) = self.contract_abort_error.clone() {
             Err(error.into_vm_error())
         } else {
@@ -1263,7 +1281,7 @@ impl IVM {
     fn comment_stripping_keeps_code_and_string_slashes() {
         let text = "\
 let a = 1; // VMError::OutOfGas
-/// Returns [`VMError::DecodeError`].
+/// Returns [`crate::error::VmTrap::DecodeError`].
 let url = \"http://example\"; // trailing
 let quote = '\"'; // after a quote character
 ";
@@ -1323,7 +1341,7 @@ impl Vm {
     #[test]
     fn err_arguments_report_stored_and_bound_errors() {
         let code = "\
-if short { return Err(VMError::OutOfGas); }
+if short { return Err(VMError::Trap(VmTrap::OutOfGas)); }
 match outcome { Err(payload) => resume(payload), Ok(value) => value }
 Err(self.stored.clone())
 ";
@@ -1367,11 +1385,11 @@ Err(self.stored.clone())
         // Constructions in every expression position.
         assert_eq!(
             constructed(
-                "return Err(VMError::OutOfGas);\n\
-                 let e = x.ok_or(VMError::DecodeError)?;\n\
-                 y.map_err(|_| crate::VMError::NoritoInvalid)?;\n\
-                 z.map_err(VMError::InvalidOpcode);\n\
-                 if c { VMError::PermissionDenied } else { other }\n"
+                "return Err(VmTrap::OutOfGas);\n\
+                 let e = x.ok_or(VmTrap::DecodeError)?;\n\
+                 y.map_err(|_| crate::VmTrap::NoritoInvalid)?;\n\
+                 z.map_err(VmTrap::InvalidOpcode);\n\
+                 if c { VmTrap::PermissionDenied } else { other }\n"
             ),
             [
                 "DecodeError",
@@ -1385,23 +1403,23 @@ Err(self.stored.clone())
         assert!(
             constructed(
                 "match e {\n\
-                     VMError::OutOfGas | VMError::OutOfMemory => 1,\n\
-                     Err(VMError::Metered { gas, source }) if gas > 0 => 2,\n\
-                     VMError::InvalidOpcode(op) => 3,\n\
+                     VmTrap::OutOfGas | VmTrap::OutOfMemory => 1,\n\
+                     Err(VmTrap::Metered { gas, source }) if gas > 0 => 2,\n\
+                     VmTrap::InvalidOpcode(op) => 3,\n\
                  }\n\
-                 if let Err(VMError::DecodeError) = result {}\n\
-                 let ok = matches!(result, Err(VMError::NoritoInvalid));\n\
-                 let VMError::Metered { gas, .. } = wrapped else { return };\n"
+                 if let Err(VmTrap::DecodeError) = result {}\n\
+                 let ok = matches!(result, Err(VmTrap::NoritoInvalid));\n\
+                 let VmTrap::Metered { gas, .. } = wrapped else { return };\n"
             )
             .is_empty()
         );
         // Comparisons and equality assertions.
         assert!(
             constructed(
-                "if result == Err(VMError::OutOfGas) {}\n\
-                 if error != &VMError::DecodeError {}\n\
-                 if error == ivm::VMError::NoritoInvalid { return; }\n\
-                 assert_eq!(run(), Err(VMError::PermissionDenied));\n"
+                "if result == Err(VmTrap::OutOfGas) {}\n\
+                 if error != &VmTrap::DecodeError {}\n\
+                 if error == ivm::VmTrap::NoritoInvalid { return; }\n\
+                 assert_eq!(run(), Err(VmTrap::PermissionDenied));\n"
             )
             .is_empty()
         );
@@ -1409,9 +1427,9 @@ Err(self.stored.clone())
         // operator is still a construction.
         assert_eq!(
             constructed(
-                "let a = matches!(wrap(VMError::OutOfGas), Wrapped(_));\n\
-                 let b = left == right && check(VMError::DecodeError);\n\
-                 Err(VMError::NoritoInvalid) => return Err(VMError::PermissionDenied),\n"
+                "let a = matches!(wrap(VmTrap::OutOfGas), Wrapped(_));\n\
+                 let b = left == right && check(VmTrap::DecodeError);\n\
+                 Err(VmTrap::NoritoInvalid) => return Err(VmTrap::PermissionDenied),\n"
             ),
             ["DecodeError", "OutOfGas", "PermissionDenied"]
         );
@@ -1426,7 +1444,7 @@ Err(self.stored.clone())
             ["Metered", "NotImplemented", "helper:brand_new"]
         );
         // An unknown variant behind the type's own path is still reported.
-        assert_eq!(constructed("Err(VMError::BrandNew)"), ["BrandNew"]);
+        assert_eq!(constructed("Err(VmTrap::BrandNew)"), ["BrandNew"]);
     }
 
     #[test]
@@ -1437,7 +1455,7 @@ Err(self.stored.clone())
         };
         assert_eq!(
             constructed(
-                "use ivm::{VMError as IvmError, Other};\n\
+                "use ivm::{VmTrap as IvmError, Other};\n\
                  fn f() -> IvmError { IvmError::OutOfGas }\n\
                  fn g(e: &IvmError) -> bool { matches!(e, IvmError::DecodeError) }\n"
             ),
@@ -1446,7 +1464,7 @@ Err(self.stored.clone())
         assert_eq!(
             constructed(
                 "impl TryFrom<u8> for Kind {\n\
-                     type Error = VMError;\n\
+                     type Error = VmTrap;\n\
                      fn try_from(v: u8) -> Result<Self, Self::Error> { Err(Error::DecodeError) }\n\
                  }\n"
             ),
@@ -1454,7 +1472,7 @@ Err(self.stored.clone())
         );
         assert_eq!(
             constructed(
-                "impl VMError {\n\
+                "impl VmTrap {\n\
                      pub fn not_implemented(gas: u64) -> Self {\n\
                          Self::metered(gas, Self::NotImplemented { syscall: 0 })\n\
                      }\n\
@@ -1471,7 +1489,7 @@ Err(self.stored.clone())
         assert_eq!(
             constructed(
                 "fn reason(error: &VMError) -> u8 {\n\
-                     use ivm::VMError::*;\n\
+                     use ivm::VmTrap::*;\n\
                      match error { OutOfGas => 1, Metered { .. } | DecodeError => 2, _ => 3 }\n\
                  }\n\
                  fn build() -> Kind { Kind::DecodeError }\n\
@@ -1479,10 +1497,10 @@ Err(self.stored.clone())
             ),
             Vec::<String>::new()
         );
-        assert!(constructed("use ivm::VMError::DecodeError;\nfn f() {}\n").is_empty());
+        assert!(constructed("use ivm::VmTrap::DecodeError;\nfn f() {}\n").is_empty());
         assert_eq!(
             constructed(
-                "use ivm::VMError::{DecodeError, OutOfGas};\n\
+                "use ivm::VmTrap::{DecodeError, OutOfGas};\n\
                  fn build(short: bool) -> VMError {\n\
                      if short { OutOfGas } else { DecodeError }\n\
                  }\n\
@@ -1508,14 +1526,15 @@ self.unlisted_helper();
         assert!(tag_surface("self.pc = self.pc.wrapping_add(4);", &helpers).is_empty());
         let code = "\
 fn reads(&self) -> bool { self.registers.tag(1) }
-fn traps() -> VMError { VMError::PrivacyViolation }
+fn traps() -> VMError { VMError::Trap(VmTrap::PrivacyViolation) }
 fn plain(&self) -> u64 { self.pc }
 ";
         assert_eq!(
             privacy_functions(code).into_iter().collect::<Vec<_>>(),
             ["reads", "traps"]
         );
-        let surface = region_surface("let x = self.load(a)?; return Err(VMError::OutOfGas);");
+        let surface =
+            region_surface("let x = self.load(a)?; return Err(VMError::Trap(VmTrap::OutOfGas));");
         assert_eq!(surface.direct_traps.len(), 1);
         assert!(surface.fallible_helpers.contains("load"));
         assert!(surface.calls.contains("load"));

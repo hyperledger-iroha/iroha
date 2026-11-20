@@ -1,6 +1,7 @@
 //! Register logger admission, invocation identity and host-callback custody.
 
 use super::{HostRegisterLogIsolation, IVM, VMError, zk};
+use crate::error::VmDeferral;
 mod event_counts;
 pub(crate) use event_counts::RootArguments;
 
@@ -53,9 +54,9 @@ impl IVM {
             self.reg_log = None;
             self.clear_zk_trace_logs();
             self.memory.clear_tracking();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let replacement = zk::SharedRegLog::try_new(self.memory.allocation_budget())?;
         if let Some(previous) = &self.reg_log {
@@ -109,9 +110,9 @@ impl IVM {
                 stale_log.lock().scrub();
             }
             self.clear_zk_trace_logs();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let detached_log = zk::SharedRegLog::try_new(self.memory.allocation_budget())?;
         Ok(PreparedHostRegisterLog {
@@ -134,9 +135,9 @@ impl IVM {
             return if active.is_none() {
                 Ok(None)
             } else {
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     crate::error::ExecutionDeferral::LocalInvariantViolation,
-                ))
+                )))
             };
         };
         if !active
@@ -155,9 +156,9 @@ impl IVM {
             isolation.invocation_log.lock().scrub();
             isolation.detached_log.lock().scrub();
             self.clear_zk_trace_logs();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         self.reg_log = Some(isolation.detached_log.clone());
         self.host_trace_log_detached = true;
@@ -195,9 +196,9 @@ impl IVM {
             self.host_trace_log_detached = false;
             self.clear_zk_trace_logs();
             self.host_trace_invocation_log = None;
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         isolation.detached_log.lock().scrub();
         self.host_trace_log_detached = false;

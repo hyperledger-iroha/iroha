@@ -10,6 +10,7 @@
 //! * **Output** – read/write buffer beginning at `0x0021_0000`.
 //! * **Stack** – starts at `0x0030_0000`; ABI V1 derives a deterministic
 //!   64&nbsp;KiB–4&nbsp;MiB active limit from the invocation gas budget.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     branch_hint::{likely, unlikely},
     byte_merkle_tree::ByteMerkleTree,
@@ -217,7 +218,7 @@ impl Memory {
         recorder: DiagnosticMemoryAccessRecorder,
     ) -> Result<(), VMError> {
         if self.diagnostic_access_recorder.is_some() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         self.diagnostic_access_recorder = Some(recorder);
         Ok(())
@@ -271,9 +272,9 @@ impl Memory {
         let demand = heap_rows
             .checked_add(code_len.max(self.code_length as usize))
             .and_then(|rows| rows.checked_add(output_rows))
-            .ok_or(VMError::ExecutionDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable,
-            ))?;
+            )))?;
         recorder.ensure_remaining(demand)
     }
 
@@ -402,7 +403,9 @@ impl Memory {
                             budget,
                             ByteMerkleTree::memory_plan(leaves)?,
                         )
-                        .map_err(VMError::AllocationDeferred)?;
+                        .map_err(|cause| {
+                            VMError::Deferred(VmDeferral::AllocationDeferred(cause))
+                        })?;
                         ByteMerkleTree::new_funded(leaves, MERKLE_CHUNK_BYTES, &mut credit)?
                     }
                     None => ByteMerkleTree::new(leaves, MERKLE_CHUNK_BYTES)?,
@@ -445,9 +448,9 @@ impl Memory {
         self.dirty
     }
     fn merkle_leaf_index(&self, addr: u64) -> Result<usize, VMError> {
-        let addr = usize::try_from(addr).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let addr = usize::try_from(addr).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if addr >= self.data.len() {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         Ok(addr / 32)
     }
@@ -456,7 +459,7 @@ impl Memory {
     /// memory image.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. In particular, the exclusive end address is not rounded into the final tree leaf.
     /// Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_path(&mut self, addr: u64) -> Result<Vec<[u8; 32]>, VMError> {
@@ -468,7 +471,7 @@ impl Memory {
     /// Pending writes are committed first to keep the root/path in sync.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_root_and_path(
         &mut self,
@@ -484,7 +487,7 @@ impl Memory {
     /// only to that path fragment and is not a membership commitment.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_compact(
         &mut self,
@@ -492,7 +495,8 @@ impl Memory {
         depth_cap: Option<usize>,
     ) -> Result<(CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>), VMError> {
         let leaf_index = self.merkle_leaf_index(addr)?;
-        let leaf_index = u32::try_from(leaf_index).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let leaf_index =
+            u32::try_from(leaf_index).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         let (full_root, path) = self.merkle_root_and_path(addr)?;
         let mut depth = path.len().min(32);
         if let Some(cap) = depth_cap {
@@ -592,7 +596,7 @@ impl Memory {
     /// immutable ABI stack policy in `IvmConfig`.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` is outside the
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `stack_limit` is outside the
     /// ABI V1 range, is not exactly aligned, or the resulting memory geometry
     /// is not representable on the host. Local allocation refusal defers execution.
     /// Only the image and its two leaf bitmaps are allocated here; the Merkle
@@ -600,7 +604,9 @@ impl Memory {
     pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
         let data = crate::cache_memory::OwnedAllocation::try_zeroed(total_size).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         Self::new_with_image(
             stack_limit,
@@ -616,16 +622,19 @@ impl Memory {
         budget: &AllocationBudget,
     ) -> Result<Self, VMError> {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let leaf_count = total_size.div_ceil(MERKLE_CHUNK_BYTES).max(1);
         let mut plan = ExecutionMemoryPlan::array::<u8>(total_size).map_err(|_| unavailable())?;
         for _ in 0..2 {
             plan.include_child(DirtyChunks::memory_plan(leaf_count)?)
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let image = ExecutionBuffer::zeroed(total_size, &mut lease).map_err(|_| unavailable())?;
         Self::new_with_image(
             stack_limit,
@@ -640,13 +649,13 @@ impl Memory {
         if !(Self::MIN_STACK_SIZE..=Self::STACK_SIZE).contains(&stack_limit)
             || !stack_limit.is_multiple_of(Self::STACK_ALIGNMENT)
         {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let total_size = Memory::STACK_START
             .checked_add(stack_limit)
             .and_then(|size| size.checked_add(Memory::STACK_SLOP))
-            .ok_or(VMError::MemoryOutOfBounds)?;
-        usize::try_from(total_size).map_err(|_| VMError::MemoryOutOfBounds)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        usize::try_from(total_size).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
 
     fn new_with_image(
@@ -693,12 +702,14 @@ impl Memory {
     /// Preload data into the input region. Used by tests/host before execution.
     pub fn preload_input(&mut self, offset: u64, bytes: &[u8]) -> Result<(), VMError> {
         if offset > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let len = bytes.len() as u64;
-        let end_off = offset.checked_add(len).ok_or(VMError::MemoryOutOfBounds)?;
+        let end_off = offset
+            .checked_add(len)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if end_off > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let start = (Memory::INPUT_START + offset) as usize;
         let end = start + bytes.len();
@@ -726,37 +737,40 @@ impl Memory {
         align: u64,
     ) -> Result<u64, VMError> {
         if !align.is_power_of_two() {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let mask = align - 1;
         let off = cursor
             .checked_add(mask)
             .map(|value| value & !mask)
-            .ok_or(VMError::MemoryOutOfBounds)?;
-        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryOutOfBounds)?;
-        let end = off.checked_add(len).ok_or(VMError::MemoryOutOfBounds)?;
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        let len =
+            u64::try_from(bytes.len()).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        let end = off
+            .checked_add(len)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if end > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         self.preload_input(off, bytes)?;
         *cursor = end;
         Memory::INPUT_START
             .checked_add(off)
-            .ok_or(VMError::MemoryOutOfBounds)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
     #[inline]
     pub fn alloc(&mut self, size: u64) -> Result<u64, VMError> {
         let aligned = size
             .checked_add(7)
             .map(|v| v & !7)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if aligned != 0 {
             let new_alloc = self
                 .heap_alloc
                 .checked_add(aligned)
-                .ok_or(VMError::OutOfMemory)?;
+                .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
             if unlikely(new_alloc > self.heap_limit) {
-                return Err(VMError::OutOfMemory);
+                return Err(VMError::Trap(VmTrap::OutOfMemory));
             }
             let addr = Memory::HEAP_START + self.heap_alloc;
             self.heap_alloc = new_alloc;
@@ -770,16 +784,16 @@ impl Memory {
         let aligned = additional
             .checked_add(7)
             .map(|v| v & !7)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if aligned == 0 {
             return Ok(self.heap_limit);
         }
         let new_limit = self
             .heap_limit
             .checked_add(aligned)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if unlikely(new_limit > self.heap_max_limit) {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_limit = new_limit;
         Ok(self.heap_limit)
@@ -799,7 +813,7 @@ impl Memory {
     /// Override the active heap limit, keeping the already-allocated region valid.
     pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > self.heap_max_limit {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_limit = limit;
         Ok(())
@@ -810,7 +824,7 @@ impl Memory {
     /// use it to apply deterministic governance limits before guest execution.
     pub fn set_heap_max_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_max_limit = limit;
         self.heap_limit = self.heap_limit.min(limit);
@@ -854,19 +868,20 @@ impl Memory {
     /// The complete request is validated before any bytes or metadata change.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when the program overlaps the
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when the program overlaps the
     /// heap boundary or is not representable in the physical memory image.
     pub fn load_code(&mut self, code: &[u8]) -> Result<(), VMError> {
         let len = code.len();
         let code_region_end = usize::try_from(Memory::HEAP_START)
-            .map_err(|_| VMError::MemoryOutOfBounds)?
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?
             .min(self.data.len());
         if len > code_region_end {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
-        let old_len = usize::try_from(self.code_length).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let old_len = usize::try_from(self.code_length)
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if old_len > code_region_end {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let modified_len = len.max(old_len);
         if let Some(recorder) = &self.diagnostic_access_recorder {
@@ -917,16 +932,16 @@ impl Memory {
             if likely(perm.contains(required)) {
                 Ok(())
             } else {
-                Err(VMError::MemoryAccessViolation {
+                Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                     addr: addr as u32,
                     perm: required,
-                })
+                }))
             }
         } else {
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: addr as u32,
                 perm: required,
-            })
+            }))
         }
     }
     /// Load an 8-bit value from memory.
@@ -946,7 +961,9 @@ impl Memory {
     ) -> Result<[u8; N], VMError> {
         debug_assert!(matches!(N, 4 | 8 | 16));
         if unlikely(!addr.is_multiple_of(N as u64)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, N as u32, Perm::READ)?;
         self.record_exclusive_read_range(addr, N as u64, kind)?;
@@ -974,7 +991,9 @@ impl Memory {
         kind: DiagnosticMemoryAccessKind,
     ) -> Result<u32, VMError> {
         if unlikely(!addr.is_multiple_of(4)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 4, Perm::READ)?;
         let bytes: [u8; 4] = self.data[addr as usize..addr as usize + 4]
@@ -1007,20 +1026,27 @@ impl Memory {
         pc: u64,
         instruction: u32,
     ) -> Result<(), VMError> {
-        let end = pc.checked_add(4).ok_or(VMError::DecodeError)?;
+        let end = pc
+            .checked_add(4)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         // The prepared-program owner already authenticates the instruction
         // boundary relative to its admitted executable origin. A variable-size
         // contract prefix can place that origin at any physical byte alignment.
         if end > self.code_length {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
-        let start = usize::try_from(pc).map_err(|_| VMError::DecodeError)?;
+        let start = usize::try_from(pc).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let bytes = self
             .data
-            .get(start..start.checked_add(4).ok_or(VMError::DecodeError)?)
-            .ok_or(VMError::DecodeError)?;
+            .get(
+                start
+                    ..start
+                        .checked_add(4)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            )
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         if bytes != instruction.to_le_bytes() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         recorder.record_read(pc, bytes, DiagnosticMemoryAccessKind::InstructionFetch)
     }
@@ -1028,7 +1054,9 @@ impl Memory {
     #[inline]
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
         if unlikely(!addr.is_multiple_of(8)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 8, Perm::READ)?;
         self.record_read_range(addr, 8, DiagnosticMemoryAccessKind::Read)?;
@@ -1045,11 +1073,11 @@ impl Memory {
             .region_perm(address, 8)
             .is_some_and(|perm| perm.contains(Perm::READ))
         {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let bytes = self.data[address as usize..address as usize + 8]
             .try_into()
-            .map_err(|_| VMError::MemoryOutOfBounds)?;
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         self.record_read_range(address, 8, DiagnosticMemoryAccessKind::CallResultRead)?;
         Ok((address, u64::from_le_bytes(bytes)))
     }
@@ -1057,7 +1085,9 @@ impl Memory {
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
         if unlikely(!addr.is_multiple_of(16)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 16, Perm::READ)?;
         let bytes: [u8; 16] = self.data[addr as usize..addr as usize + 16]
@@ -1069,9 +1099,11 @@ impl Memory {
     /// Copy `out.len()` bytes starting at `addr` into `out`.
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
-        let len = u64::try_from(out.len()).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: Perm::READ,
+        let len = u64::try_from(out.len()).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::READ,
+            })
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::READ)?;
         self.record_read_range(addr, len, DiagnosticMemoryAccessKind::HostRead)?;
@@ -1085,16 +1117,20 @@ impl Memory {
         len: u64,
         required: Perm,
     ) -> Result<(usize, usize), VMError> {
-        let violation = || VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: required,
+        let violation = || {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: required,
+            })
         };
         let len_u32 = u32::try_from(len).map_err(|_| violation())?;
         self.check_perm(addr, len_u32, required)?;
         let start = usize::try_from(addr).map_err(|_| violation())?;
-        let len_usize = usize::try_from(len).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: required,
+        let len_usize = usize::try_from(len).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: required,
+            })
         })?;
         let Some(end) = start.checked_add(len_usize) else {
             return Err(violation());
@@ -1126,9 +1162,11 @@ impl Memory {
     /// Copy bytes from `bytes` into memory starting at `addr`.
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
-        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: Perm::WRITE,
+        let len = u64::try_from(bytes.len()).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::WRITE,
+            })
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, len)?;
@@ -1155,7 +1193,9 @@ impl Memory {
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(4)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 4, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 4)?;
@@ -1171,7 +1211,9 @@ impl Memory {
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(8)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 8, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 8)?;
@@ -1187,7 +1229,9 @@ impl Memory {
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(16)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 16, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 16)?;
@@ -1341,20 +1385,20 @@ impl Memory {
     /// The caller holds exclusive VM access until the clone is complete.
     pub(crate) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::array::<u8>(self.data.len())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(DirtyChunks::memory_plan(self.dirty_chunks.chunks())?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(DirtyChunks::memory_plan(self.modified_chunks.chunks())?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(self.read_log.lock().memory_plan()?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(self.write_log.lock().memory_plan()?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         // A copy holds Merkle storage only if this image has allocated its own;
         // otherwise it admits it, like this image, on its first root request.
         if let Some(tree) = &self.tree {
             plan.include_child(ByteMerkleTree::memory_plan(tree.leaf_count())?)
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         Ok(plan)
     }
@@ -1366,8 +1410,11 @@ impl Memory {
         &self,
         mut lease: Option<&mut ExecutionMemoryLease>,
     ) -> Result<Self, VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         if !self.call_frames.is_empty() {
             return Err(unavailable());
         }
@@ -1538,8 +1585,11 @@ impl Memory {
         len: u64,
         kind: DiagnosticMemoryAccessKind,
     ) -> Result<(), VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         #[cfg(test)]
         if REFUSE_NEXT_READ_TRACKING.with(|refuse| refuse.replace(false)) {
             return Err(unavailable());
@@ -1561,8 +1611,11 @@ impl Memory {
         addr: u64,
         bytes: &[u8],
     ) -> Result<WriteLogEntry, VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let copied = self.with_exclusive_write_log(|log| log.prepare(addr, bytes))?;
         let start = usize::try_from(addr).map_err(|_| unavailable())?;
         let end = start.checked_add(bytes.len()).ok_or_else(unavailable)?;
@@ -1621,10 +1674,10 @@ impl Memory {
             // Relaxed monotonic append: allow forward writes at or beyond the
             // current cursor; disallow rewinding into already-written region.
             if off < self.output_cursor {
-                return Err(VMError::MemoryAccessViolation {
+                return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                     addr: addr as u32,
                     perm: Perm::WRITE,
-                });
+                }));
             }
             let new_end = off.saturating_add(len);
             return Ok(self.output_cursor.max(new_end));
@@ -1635,6 +1688,7 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::merkle_utils::compute_memory_leaf_digest;
     use iroha_crypto::{Hash, HashOf, MerkleProof};
 
@@ -1700,7 +1754,7 @@ mod tests {
         let top = Memory::STACK_START + 128;
         assert!(matches!(
             memory.call_frames.prepare_root(top, &callable, tables, top),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), base_bytes);
         budget.set_limit_bytes(base_bytes + frame_backing_bytes + 17);
@@ -1773,7 +1827,7 @@ mod tests {
         let budget = AllocationBudget::new(fixed_bytes - 1);
         assert!(matches!(
             Memory::new_with_stack_limit_funded(stack_limit, &budget),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         budget.set_limit_bytes(fixed_bytes);
@@ -1785,7 +1839,7 @@ mod tests {
         memory.preload_input(0, &[0xa5; 129]).unwrap();
         assert!(matches!(
             memory.store_u64(Memory::STACK_START, 0x1234),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         let log_bytes = 4 * std::mem::size_of::<WriteLogEntry>() + 8;
         budget.set_limit_bytes(fixed_bytes + log_bytes);
@@ -1796,9 +1850,9 @@ mod tests {
         let pending = memory.dirty_chunks.len();
         assert!(matches!(
             memory.root(),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::Capacity { .. }
-            ))
+            )))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert_eq!(memory.dirty_chunks.len(), pending);
@@ -1870,9 +1924,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START + 4, 9),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.root().unwrap(), root);
         assert_eq!(memory.output_used_len(), 4);
@@ -1906,9 +1960,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u8(next, 0x5a),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 0);
         assert_eq!(memory.root().unwrap(), initial_root);
@@ -1924,9 +1978,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_bytes(next, &[0xa5, 0xc3, 0x7e]),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 1);
         assert_eq!(memory.read_output_used(), &[0x5a]);
@@ -1943,9 +1997,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u32(next, 0x1234_5678),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 4);
         memory.store_u32(next, 0x1234_5678).unwrap();
@@ -1954,9 +2008,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u64(next, 0x0102_0304_0506_0708),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 8);
         memory.store_u64(next, 0x0102_0304_0506_0708).unwrap();
@@ -1965,9 +2019,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u128(next, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f000),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 16);
         memory
@@ -1990,18 +2044,18 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START, 8),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
         assert_eq!(memory.output_used_len(), 1);
         assert_eq!(memory.read_output_used(), &[7]);
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START + 1, 8),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 1);
     }
@@ -2014,13 +2068,13 @@ mod tests {
         REFUSE_NEXT_READ_TRACKING.with(|v| v.set(true));
         assert!(matches!(
             memory.load_guest_word::<8>(addr + 1, DiagnosticMemoryAccessKind::Read),
-            Err(VMError::MisalignedAccess { .. })
+            Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
         ));
         assert!(matches!(
             memory.load_guest_word::<8>(addr, DiagnosticMemoryAccessKind::Read),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(memory.try_read_log_snapshot().unwrap().is_empty());
         assert_eq!(
@@ -2060,9 +2114,9 @@ mod tests {
             REFUSE_NEXT_READ_TRACKING.set(true);
             assert!(matches!(
                 read(&memory),
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     crate::error::ExecutionDeferral::AllocationUnavailable
-                ))
+                )))
             ));
             assert!(
                 memory
@@ -2076,9 +2130,9 @@ mod tests {
         REFUSE_NEXT_READ_TRACKING.set(true);
         assert!(matches!(
             memory.load_bytes(address, &mut output),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(output, [0xa5, 0xc3]);
         assert!(
@@ -2091,16 +2145,16 @@ mod tests {
         REFUSE_NEXT_READ_TRACKING.set(true);
         assert!(matches!(
             memory.load_u8(0),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
         assert!(matches!(
             memory.load_u8(address),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(
             memory
@@ -2142,9 +2196,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.load_u8(address),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(
             memory
@@ -2293,10 +2347,10 @@ mod tests {
         assert_eq!(memory.code_len(), 0);
         assert!(matches!(
             memory.load_u8(0),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
 
         let boundary = usize::try_from(Memory::HEAP_START).unwrap();
@@ -2313,7 +2367,7 @@ mod tests {
         let invalid = vec![0x5A; boundary + 1];
         assert!(matches!(
             memory.load_code(&invalid),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert_eq!(memory.code_len(), Memory::HEAP_START);
         assert_eq!(
@@ -2605,12 +2659,12 @@ mod tests {
         // Offset equal to INPUT_SIZE should be rejected even for empty writes.
         assert!(matches!(
             mem.preload_input(Memory::INPUT_SIZE, &[1]),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         // Writing past the end should also fail.
         assert!(matches!(
             mem.preload_input(Memory::INPUT_SIZE - 1, &[1, 2]),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     /// VM stage of the resource contract (`specs/zk_resource_contract.json`, groups
@@ -2633,11 +2687,11 @@ mod tests {
         over.push(0xA5);
         assert!(matches!(
             mem.preload_input(0, &over),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             mem.preload_input(1, &window),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         // The heap holds exactly HEAP_MAX_SIZE bytes.
         let mut mem = Memory::new();
@@ -2645,19 +2699,25 @@ mod tests {
             (mem.alloc(Memory::HEAP_MAX_SIZE)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.alloc(1), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.grow_heap(1), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.grow_heap(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         let mut mem = Memory::new();
         assert!(matches!(
             mem.alloc(Memory::HEAP_MAX_SIZE + 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         // A governed heap limit below the ABI maximum is enforced the same way and cannot
         // be raised above the ABI maximum or grown past by the guest.
         let mut mem = Memory::new();
         assert!(matches!(
             mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE + 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE)
             .expect("the ABI maximum itself");
@@ -2666,8 +2726,14 @@ mod tests {
             (mem.alloc(4_096)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.alloc(8), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.grow_heap(8), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.grow_heap(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         // No guest region, nor all of them together, holds a 9,437,184-byte proof: large
         // proofs reach a contract only through host-held attachment handles (I.2).
         const {
@@ -2689,7 +2755,7 @@ mod tests {
             let mut cursor = 1;
             assert!(matches!(
                 mem.input_write_aligned(&mut cursor, &[0xA5], align),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert_eq!(cursor, 1, "failed allocation must preserve the cursor");
         }
@@ -2697,7 +2763,7 @@ mod tests {
         let mut cursor = u64::MAX;
         assert!(matches!(
             mem.input_write_aligned(&mut cursor, &[0xA5], 8),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert_eq!(cursor, u64::MAX);
         assert_eq!(
@@ -2709,7 +2775,10 @@ mod tests {
     #[test]
     fn alloc_rejects_overflow_sizes() {
         let mut mem = Memory::new();
-        assert!(matches!(mem.alloc(u64::MAX), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(u64::MAX),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         // Heap cursor should remain unchanged after failure.
         assert_eq!(mem.heap_alloc, 0);
         let small = mem.alloc(16).expect("small allocation succeeds");
@@ -2726,8 +2795,14 @@ mod tests {
             (mem.alloc(64)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.grow_heap(8), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.alloc(1), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.grow_heap(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.alloc(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
     }
     #[test]
     fn grow_heap_rejects_overflow() {
@@ -2735,7 +2810,10 @@ mod tests {
         mem.set_heap_limit(Memory::HEAP_MAX_SIZE - 64)
             .expect("lower heap limit before bounded grow");
         let original_limit = mem.heap_limit();
-        assert!(matches!(mem.grow_heap(u64::MAX), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.grow_heap(u64::MAX),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         assert_eq!(mem.heap_limit(), original_limit);
         // Growing within bounds still works.
         mem.grow_heap(32).expect("bounded grow succeeds");
@@ -2748,7 +2826,10 @@ mod tests {
         mem.store_u128(base, 0x0123_4567_89AB_CDEF_0123_4567_89AB_CDEF)
             .expect("initial append succeeds");
         let err = mem.store_u128(base, 0xDEAD_BEEF_DEAD_BEEF_DEAD_BEEF_DEAD_BEEF);
-        assert!(matches!(err, Err(VMError::MemoryAccessViolation { .. })));
+        assert!(matches!(
+            err,
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
+        ));
         mem.store_u128(base + 16, 0x1111_2222_3333_4444_5555_6666_7777_8888)
             .expect("append at cursor succeeds");
     }
@@ -2758,10 +2839,10 @@ mod tests {
         let err = mem.load_region(Memory::HEAP_START, u64::from(u32::MAX) + 1);
         assert!(matches!(
             err,
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
     }
     #[test]
@@ -2771,17 +2852,17 @@ mod tests {
         let mut output = [0_u8; 2];
         assert!(matches!(
             mem.load_bytes(final_heap_byte, &mut output),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
         assert!(matches!(
             mem.store_bytes(final_heap_byte, &[1, 2]),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
     }
     #[test]
@@ -2819,17 +2900,17 @@ mod tests {
         let err = mem.store_u8(mem.stack_top(), 1);
         assert!(matches!(
             err,
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
     }
     #[test]
     fn explicit_unaligned_stack_limit_is_rejected() {
         assert!(matches!(
             Memory::new_with_stack_limit(0x60a04),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     #[test]
@@ -2846,19 +2927,19 @@ mod tests {
 
         assert!(matches!(
             Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE - 1),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(0),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(Memory::STACK_SIZE + 1),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(u64::MAX),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     #[test]
@@ -2872,15 +2953,15 @@ mod tests {
         for invalid in [memory.stack_top(), u64::MAX] {
             assert!(matches!(
                 memory.merkle_path(invalid),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert!(matches!(
                 memory.merkle_root_and_path(invalid),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert!(matches!(
                 memory.merkle_compact(invalid, None),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
         }
     }
@@ -3098,7 +3179,7 @@ mod tests {
         let end = untouched.data.len() as u64;
         assert!(matches!(
             untouched.merkle_path(end),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(!untouched.merkle_storage_allocated());
     }
@@ -3111,9 +3192,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.root(),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert!(memory.dirty_for_testing());
@@ -3139,9 +3220,9 @@ mod tests {
         crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
         assert!(matches!(
             memory.root(),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert_eq!(memory.dirty_chunks.len(), 1);
@@ -3151,13 +3232,13 @@ mod tests {
         budget.set_limit_bytes(reserved + tree_bytes - 1);
         assert!(matches!(
             memory.root(),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::Capacity { .. }
-            ))
+            )))
         ));
         assert!(matches!(
             memory.merkle_path(Memory::INPUT_START),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert_eq!(memory.dirty_chunks.len(), 1);

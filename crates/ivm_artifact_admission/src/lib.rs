@@ -16,6 +16,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
+use ivm_abi::error::VmTrap;
 use ivm_abi::{
     SyscallPolicy, VMError,
     axt::{AxtDescriptor, ProofBlob, validate_descriptor, validate_proof_blob},
@@ -314,14 +315,12 @@ fn parse_contract_metadata_for_profile(
     profile: ivm_abi::IvmProfileId,
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
     ProgramMetadata::parse_for_profile(artifact, profile).map_err(|error| match error {
-        VMError::ArtifactAbiHashMismatch { expected, actual } => {
+        VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) => {
             ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
-        other if other.execution_deferral().is_some() => {
-            ContractArtifactError::preparation("metadata parse", other)
-        }
-        other if profile == ivm_abi::IvmProfileId::C10_ABI_V1 => {
-            ContractArtifactError::c10_metadata(other)
+        local @ VMError::Deferred(_) => ContractArtifactError::preparation("metadata parse", local),
+        VMError::Trap(trap) if profile == ivm_abi::IvmProfileId::C10_ABI_V1 => {
+            ContractArtifactError::c10_metadata(trap)
         }
         other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
@@ -622,6 +621,7 @@ fn schedule_manifest_state_type_name<'a>(
 mod tests {
     use super::*;
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
+    use ivm_abi::error::{VmDeferral, VmTrap};
     use ivm_abi::{
         axt::{AxtDescriptor, AxtTouchSpec, ProofBlob},
         metadata::EmbeddedStateFieldDescriptor,
@@ -727,7 +727,7 @@ mod tests {
         let error = verify_contract_artifact_with_memory_budget(&artifact, &budget).unwrap_err();
         assert!(matches!(
             error.try_into_local_vm_error(),
-            Ok(VMError::AllocationDeferred(_))
+            Ok(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         budget.set_limit_bytes(1024 * 1024);
@@ -772,7 +772,10 @@ mod tests {
             retained.execution_deferral(),
             Some(ivm_abi::error::ExecutionDeferral::ActiveMemoryCapacity)
         );
-        assert!(matches!(retained, VMError::DecodeDeferred(_)));
+        assert!(matches!(
+            retained,
+            VMError::Deferred(VmDeferral::DecodeDeferred(_))
+        ));
         let retry =
             verify_contract_artifact(&artifact).expect("retry unchanged canonical artifact");
         assert_eq!(retry.code_hash, baseline.code_hash);
@@ -842,7 +845,10 @@ mod tests {
             retained.execution_deferral(),
             Some(ivm_abi::error::ExecutionDeferral::ActiveMemoryCapacity)
         );
-        assert!(matches!(retained, VMError::DecodeDeferred(_)));
+        assert!(matches!(
+            retained,
+            VMError::Deferred(VmDeferral::DecodeDeferred(_))
+        ));
         assert_eq!(
             parse_contract_metadata_for_profile(&artifact, ivm_abi::IvmProfileId::C10_ABI_V1)
                 .unwrap()
@@ -1003,7 +1009,7 @@ mod tests {
                         PointerType::AxtDescriptor,
                         &encoded(&descriptor)
                     ),
-                    Err(VMError::InvalidMetadata)
+                    Err(VMError::Trap(VmTrap::InvalidMetadata))
                 ),
                 "invalid descriptor must fail shared artifact admission: {descriptor:?}"
             );
@@ -1031,7 +1037,7 @@ mod tests {
             ivm_abi::codec::encode_canonical_norito(&malformed).expect("canonical malformed frame");
         assert!(matches!(
             literal::validate_literal_payload(PointerType::AxtAnchoredSpendV1, &malformed),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
         assert_eq!(
             PointerType::from_u16(0x000C),
@@ -1055,7 +1061,7 @@ mod tests {
         };
         assert!(matches!(
             literal::validate_literal_payload(PointerType::ProofBlob, &encoded_value(&empty_proof)),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
     }
     fn encoded_value<T: NoritoSerialize>(value: &T) -> Vec<u8> {

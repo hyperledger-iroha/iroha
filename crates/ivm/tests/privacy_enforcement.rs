@@ -9,6 +9,7 @@ use ivm::{
     pointer_abi::PointerType,
     syscalls,
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use ivm_abi::private_input::PrivateInputRecordV1;
 use std::{any::Any, cell::Cell};
 fn meta_with_mode(mode: u8) -> ProgramMetadata {
@@ -122,7 +123,7 @@ fn branch_on_private_fails() {
     vm.set_register(2, 5);
     vm.registers.set_tag(2, false);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::PrivacyViolation)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::PrivacyViolation))));
 }
 #[test]
 fn escrow_and_merkle_host_boundaries_reject_private_secondary_arguments() {
@@ -138,7 +139,7 @@ fn escrow_and_merkle_host_boundaries_reject_private_secondary_arguments() {
         vm.set_register(private_register, 7);
         vm.registers.set_tag(private_register, true);
         assert!(
-            matches!(vm.run(), Err(VMError::PrivacyViolation)),
+            matches!(vm.run(), Err(VMError::Trap(VmTrap::PrivacyViolation))),
             "syscall {syscall:#x} accepted private r{private_register} across the public host boundary"
         );
     }
@@ -156,7 +157,7 @@ fn load_private_address_fails() {
     vm.set_register(1, Memory::HEAP_START);
     vm.registers.set_tag(1, true);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::PrivacyViolation)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::PrivacyViolation))));
 }
 #[test]
 fn wide_shift_with_mixed_tags_produces_a_private_result() {
@@ -250,7 +251,7 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
             vm.registers.set_tag(1, true);
             vm.registers.set_tag(2, true);
             assert!(
-                matches!(vm.run(), Err(VMError::PrivacyViolation)),
+                matches!(vm.run(), Err(VMError::Trap(VmTrap::PrivacyViolation))),
                 "opcode {opcode:#x} exposed a private value-dependent outcome for {numerator}/{denominator}"
             );
             let remaining = vm.remaining_gas();
@@ -272,7 +273,10 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
         vm.load_program(&program).expect("load private abs fixture");
         vm.set_register(1, value);
         vm.registers.set_tag(1, true);
-        assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
+        assert!(matches!(
+            vm.run(),
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
+        ));
     }
 }
 #[test]
@@ -301,7 +305,7 @@ fn wide_cmov_secret_condition_fails() {
     vm.set_register(2, 1);
     vm.registers.set_tag(2, true);
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
+    assert!(matches!(err, VMError::Trap(VmTrap::PrivacyViolation)));
 }
 #[test]
 fn wide_jal_clears_tag() {
@@ -326,7 +330,7 @@ fn wide_jalr_secret_target_fails() {
     vm.set_register(1, 0);
     vm.registers.set_tag(1, true);
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
+    assert!(matches!(err, VMError::Trap(VmTrap::PrivacyViolation)));
 }
 #[test]
 fn private_input_syscall_marks_result_private() {
@@ -354,7 +358,7 @@ fn private_input_syscall_requires_zk_execution_mode() {
     let error = vm
         .run()
         .expect_err("non-ZK execution must not consume private input");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
     assert_eq!(vm.register(10), 0);
     assert!(!vm.registers.tag(10));
 }
@@ -446,7 +450,7 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
         ) -> Result<u64, VMError> {
             assert_eq!(vm.public_register(10)?, 0);
             vm.ensure_public_register(10)?;
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         }
         fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
             panic!("failed preparation must not execute the host")
@@ -488,14 +492,19 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
         vm.registers.set_tag(10, true);
         assert!(matches!(
             (vm.run(), expected),
-            (Err(VMError::DecodeError), VMError::DecodeError)
-                | (Err(VMError::OutOfGas), VMError::OutOfGas)
+            (
+                Err(VMError::Trap(VmTrap::DecodeError)),
+                VMError::Trap(VmTrap::DecodeError)
+            ) | (
+                Err(VMError::Trap(VmTrap::OutOfGas)),
+                VMError::Trap(VmTrap::OutOfGas)
+            )
         ));
         assert_eq!(vm.register(10), 0x00C0_FFEE);
         assert!(vm.registers.tag(10));
     }
-    assert_restored(PrepareFailureHost, VMError::DecodeError);
-    assert_restored(UnaffordableHost, VMError::OutOfGas);
+    assert_restored(PrepareFailureHost, VMError::Trap(VmTrap::DecodeError));
+    assert_restored(UnaffordableHost, VMError::Trap(VmTrap::OutOfGas));
 }
 #[test]
 fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
@@ -524,7 +533,10 @@ fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
     vm.load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_CURRENT_TIME_MS)]))
         .expect("load private host-output fixture");
     vm.set_host(PrivateOutputHost);
-    assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::Trap(VmTrap::PrivacyViolation))
+    ));
     assert!(vm.registers.tag(10), "the VM must not launder the host tag");
 }
 #[test]
@@ -541,7 +553,10 @@ fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
         let error = vm
             .run()
             .expect_err("private public-sink argument must trap");
-        assert!(matches!(error, VMError::PrivacyViolation), "sink {sink:#x}");
+        assert!(
+            matches!(error, VMError::Trap(VmTrap::PrivacyViolation)),
+            "sink {sink:#x}"
+        );
     }
 }
 #[test]
@@ -690,7 +705,10 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
         .load_program(&decimal_artifact)
         .expect("load decimal commitment artifact");
     common::select_kotodama_entrypoint(&mut wrong_kind, &decimal_artifact, "commitment");
-    assert!(matches!(wrong_kind.run(), Err(VMError::NoritoInvalid)));
+    assert!(matches!(
+        wrong_kind.run(),
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
+    ));
     assert_eq!(
         wrong_kind.alloc_heap(1).expect("probe untouched heap"),
         Memory::HEAP_START + ivm_abi::call::CALL_WORD_BYTES_V1 as u64,
@@ -713,7 +731,7 @@ fn derived_private_results_cannot_reach_public_syscall_sinks() {
     let error = vm
         .run()
         .expect_err("arithmetic-derived secret must not reach a public syscall");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
 }
 #[test]
 fn private_stack_spill_cannot_launder_a_syscall_argument() {
@@ -731,7 +749,7 @@ fn private_stack_spill_cannot_launder_a_syscall_argument() {
     let error = vm
         .run()
         .expect_err("a stack roundtrip must preserve the private tag");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
     assert!(vm.registers.tag(10));
 }
 #[test]
@@ -760,7 +778,7 @@ fn private_stack_envelope_cannot_be_published_through_a_public_pointer() {
     let error = vm
         .run()
         .expect_err("private envelope bytes must not cross the public host boundary");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
     assert!(
         !vm.registers.tag(10),
         "the pointer register itself is public"
@@ -827,26 +845,38 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
         )
     };
     let (public_result, public_prepares, public_calls, envelope_len, public_gas) = run(None);
-    assert!(matches!(public_result, Err(VMError::OutOfGas)));
+    assert!(matches!(
+        public_result,
+        Err(VMError::Trap(VmTrap::OutOfGas))
+    ));
     assert_eq!(public_prepares, 1);
     assert_eq!(public_calls, 0);
     let (unrelated_result, unrelated_prepares, unrelated_calls, _, unrelated_gas) =
         run(Some(envelope_len));
-    assert!(matches!(unrelated_result, Err(VMError::OutOfGas)));
+    assert!(matches!(
+        unrelated_result,
+        Err(VMError::Trap(VmTrap::OutOfGas))
+    ));
     assert_eq!(unrelated_prepares, 1);
     assert_eq!(unrelated_calls, 0);
     assert_eq!(unrelated_gas, public_gas);
     let overlapping_offset = 7 + 512 * 1024;
     let (overlap_result, overlap_prepares, overlap_calls, _, overlap_gas) =
         run(Some(overlapping_offset));
-    assert!(matches!(overlap_result, Err(VMError::PrivacyViolation)));
+    assert!(matches!(
+        overlap_result,
+        Err(VMError::Trap(VmTrap::PrivacyViolation))
+    ));
     assert_eq!(overlap_prepares, 0);
     assert_eq!(overlap_calls, 0);
     assert_eq!(overlap_gas, public_gas);
     for boundary_offset in [0, envelope_len - 1] {
         let (boundary_result, boundary_prepares, boundary_calls, _, boundary_gas) =
             run(Some(boundary_offset));
-        assert!(matches!(boundary_result, Err(VMError::PrivacyViolation)));
+        assert!(matches!(
+            boundary_result,
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
+        ));
         assert_eq!(boundary_prepares, 0);
         assert_eq!(boundary_calls, 0);
         assert_eq!(boundary_gas, public_gas);
@@ -871,7 +901,7 @@ fn private_store_outside_the_stack_is_rejected() {
         let error = vm
             .run()
             .expect_err("private stores outside the stack must trap");
-        assert!(matches!(error, VMError::PrivacyViolation));
+        assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
     }
 }
 #[test]
@@ -879,7 +909,7 @@ fn partial_public_overwrite_does_not_declassify_a_private_stack_word() {
     let mut vm = vm_with_private_stack_word();
     vm.store_u32(Memory::STACK_START, 0).unwrap();
     let error = vm.run().expect_err("mixed-visibility words must trap");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    assert!(matches!(error, VMError::Trap(VmTrap::PrivacyViolation)));
 }
 #[test]
 fn complete_public_overwrite_clears_private_stack_range() {
@@ -1015,9 +1045,9 @@ fn non_zk_run_rejects_injected_private_register_state() {
 
     assert!(matches!(
         vm.run(),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::error::ExecutionDeferral::LocalInvariantViolation
-        ))
+        )))
     ));
     assert!(vm.last_diagnostic().is_none());
 }
@@ -1041,6 +1071,6 @@ fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     assert!(vm.registers.tag(3));
     assert!(matches!(
         vm.ensure_public_register(3),
-        Err(VMError::PrivacyViolation)
+        Err(VMError::Trap(VmTrap::PrivacyViolation))
     ));
 }

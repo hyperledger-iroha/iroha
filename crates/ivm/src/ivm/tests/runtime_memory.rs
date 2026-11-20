@@ -1,6 +1,7 @@
 //! Allocation ownership, VM baselines, and independent snapshot regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     error::VmBudgetSnapshot,
     ivm::snapshot::{checked_allocation_bytes, contract_debug_allocation_bytes},
@@ -16,9 +17,9 @@ fn allow_exact_invocation_shell(vm: &mut IVM, budget: &AllocationBudget) {
     budget.set_limit_bytes(occupied + shell - 1);
     assert!(matches!(
         vm.run(),
-        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
             requested_bytes, ..
-        })) if requested_bytes == shell
+        }))) if requested_bytes == shell
     ));
     assert_eq!(vm.execution_summary().unwrap(), before);
     assert_eq!(budget.reserved_bytes(), occupied);
@@ -129,17 +130,17 @@ fn funded_runtime_template_refusal_retry_and_final_owner_use_original_pool() {
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.try_runtime_template(),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), original_bytes);
     budget.set_limit_bytes(original_bytes + template_bytes - 1);
     assert!(matches!(
         vm.try_runtime_template(),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), original_bytes);
     assert_eq!(vm.remaining_gas(), gas);
@@ -182,9 +183,9 @@ fn funded_runtime_template_partial_copy_refusal_refunds_original_lease() {
     PrivateMemoryRanges::refuse_next_copy_for_testing();
     assert!(matches!(
         vm.try_runtime_template(),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), original_bytes);
     let template = vm.try_runtime_template().unwrap();
@@ -298,7 +299,7 @@ fn funded_private_tlv_interval_refusal_preserves_heap_and_guest_state() {
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.alloc_host_private_tlv(&[1, 2, 3]),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(vm.memory.heap_allocated_len(), heap);
     assert_eq!(vm.remaining_gas(), gas);
@@ -358,7 +359,10 @@ fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas(
         assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
         assert_eq!(vm.pc, ordinary.pc);
         assert_eq!(budget.reserved_bytes(), reserved + row_bytes);
-        assert!(matches!(vm.run(), Err(VMError::AllocationDeferred(_))));
+        assert!(matches!(
+            vm.run(),
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+        ));
         assert_eq!(budget.reserved_bytes(), reserved + row_bytes);
         allow_exact_invocation_shell(&mut vm, &budget);
         vm.run().unwrap();
@@ -400,7 +404,7 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.store_u64(Memory::STACK_START, 0x1234),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(vm.pc, pc);
@@ -638,9 +642,9 @@ fn child_call_return_slot_refusal_precedes_frame_and_gas_mutation() {
     REFUSE_CALL_RETURN_RESERVATION_FOR_TEST.with(|refuse| refuse.set(true));
     assert!(matches!(
         vm.begin_child_call(prefix_len as u64),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.remaining_gas(), gas);
     assert!(vm.memory.call_frames.is_empty());
@@ -660,7 +664,7 @@ fn funded_child_return_backing_defers_before_gas_and_keeps_its_charge() {
     let gas = vm.remaining_gas();
     assert!(matches!(
         vm.begin_child_call(prefix_len as u64),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(vm.remaining_gas(), gas);
     assert!(vm.memory.call_frames.is_empty());
@@ -819,9 +823,9 @@ fn worker_nested_private_range_snapshots_refuse_and_retry_without_mutation() {
     REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(false));
     assert!(matches!(
         refused,
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.private_memory_bytes, original);
     let worker = vm
@@ -839,9 +843,9 @@ fn worker_private_range_copy_refusal_leaves_source_intact() {
     PrivateMemoryRanges::refuse_next_copy_for_testing();
     assert!(matches!(
         vm.try_clone_snapshot(),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.private_memory_bytes, before);
     assert_eq!(
@@ -893,18 +897,18 @@ fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() 
     let insufficient = AllocationBudget::new(image_bytes + bitmap_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &insufficient),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(insufficient.reserved_bytes(), 0);
 
     let tree_insufficient = AllocationBudget::new(image_bytes + bitmap_bytes + register_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &tree_insufficient),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(tree_insufficient.reserved_bytes(), 0);
 
@@ -913,9 +917,9 @@ fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() 
     let shell_insufficient = AllocationBudget::new(total_bytes - 1);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &shell_insufficient),
-        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
             requested_bytes, ..
-        })) if requested_bytes == shell_bytes
+        }))) if requested_bytes == shell_bytes
     ));
     assert_eq!(shell_insufficient.reserved_bytes(), 0);
     let budget = AllocationBudget::new(total_bytes);
@@ -925,9 +929,9 @@ fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() 
     assert_eq!(vm.memory.stack_limit(), stack_limit);
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &budget),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     let code = crate::encoding::wide::encode_halt().to_le_bytes();
     vm.load_code(&code).unwrap();
@@ -941,9 +945,9 @@ fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() 
     budget.set_limit_bytes(total_bytes + shell_bytes - 1);
     assert!(matches!(
         vm.run(),
-        Err(VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
             requested_bytes, ..
-        })) if requested_bytes == shell_bytes
+        }))) if requested_bytes == shell_bytes
     ));
     assert_eq!(vm.remaining_gas(), gas_limit);
     assert!(!vm.memory.merkle_storage_allocated());
@@ -958,7 +962,7 @@ fn funded_vm_admits_image_at_construction_and_merkle_storage_at_first_request() 
     let before_root = budget.reserved_bytes();
     assert!(matches!(
         vm.memory.root(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), before_root);
     budget.set_limit_bytes(before_root + tree_bytes);
@@ -987,9 +991,9 @@ fn snapshot_refusal_preserves_original_vm() {
     REFUSE_WORKER_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(false));
     assert!(matches!(
         refused,
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.remaining_gas(), before_gas);
     assert_eq!(vm.register(7), 91);
@@ -1006,9 +1010,9 @@ fn diagnostic_snapshot_refusal_preserves_original_diagnostic() {
     REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(false));
     assert!(matches!(
         refused,
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.remaining_gas(), before_gas);
     assert_eq!(vm.last_diagnostic, Some(sample_worker_diagnostic()));
@@ -1026,9 +1030,9 @@ fn trace_snapshot_refusal_preserves_original_trace() {
     REFUSE_TRACE_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(false));
     assert!(matches!(
         refused,
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.remaining_gas(), before_gas);
     assert_eq!(vm.pc_trace.as_slice(), &[4]);
@@ -1045,9 +1049,9 @@ fn snapshot_refusal_keeps_the_host_and_allows_retry() {
     REFUSE_WORKER_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(false));
     assert!(matches!(
         refused,
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(vm.remaining_gas(), before_gas);
     assert!(vm.host_mut_any().is_some());
@@ -1083,7 +1087,7 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.memory.load_bytes(Memory::INPUT_START, &mut output),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(output, [0xa5; 8]);
     // Existing history is observed without a new funded snapshot under refusal.
@@ -1094,11 +1098,11 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     // Address/alignment errors still precede local allocation admission.
     assert!(matches!(
         vm.memory.load_u8(u64::MAX),
-        Err(VMError::MemoryAccessViolation { .. })
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
     ));
     assert!(matches!(
         vm.memory.load_u64(Memory::INPUT_START + 1),
-        Err(VMError::MisalignedAccess { .. })
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
     ));
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(vm.pc, pc);
@@ -1189,7 +1193,10 @@ fn funded_non_zk_merkle_syscall_defers_on_pool_admission_and_replays_whole() {
     let error = vm
         .run()
         .expect_err("the pool cannot admit the Merkle storage");
-    assert!(matches!(error, VMError::AllocationDeferred(_)), "{error:?}");
+    assert!(
+        matches!(error, VMError::Deferred(VmDeferral::AllocationDeferred(_))),
+        "{error:?}"
+    );
     assert!(error.execution_deferral().is_some() && error.fault_kind().is_none());
     // The syscall published nothing; the earlier write is intact.
     assert!(!vm.memory.merkle_storage_allocated());

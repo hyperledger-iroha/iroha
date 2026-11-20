@@ -2,6 +2,7 @@
 
 use super::div_rem::attempted;
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn single(
     opcode: u8,
@@ -340,7 +341,7 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
         let mut recorder = DiagnosticStepRecorder::try_new(128, &budget).unwrap();
         assert!(matches!(
             vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-            Err(ivm::VMError::ExceededMaxCycles)
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
         ));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];

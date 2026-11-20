@@ -6,6 +6,7 @@
 //! architectural registers after the initial complete 256-register image; r0 is immutable.
 //! Invalid register geometry remains the ordinary interpreter's error, not a new trace fault.
 
+use crate::error::VmTrap;
 use ivm_abi::baseline::instruction::wide;
 
 use crate::{VMError, registers::BASELINE_REGISTER_COUNT};
@@ -106,7 +107,7 @@ pub(in crate::ivm) fn instruction(word: u32, vector_length: usize) -> Result<usi
         | z::ASSERT
         | z::ASSERT_EQ
         | z::ASSERT_RANGE => 0,
-        _ => return Err(VMError::InvalidOpcode((word & 0xffff) as u16)),
+        _ => return Err(VMError::Trap(VmTrap::InvalidOpcode((word & 0xffff) as u16))),
     })
 }
 

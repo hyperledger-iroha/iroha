@@ -27,8 +27,7 @@ pub enum ExecutionPhase {
 /// identity. It authorizes a fresh local attempt, never a transaction rejection.
 #[derive(Debug)]
 pub struct ExecutionDeferred {
-    reason: ExecutionDeferral,
-    original: VmDeferral,
+    cause: VmDeferral,
     phase: Option<ExecutionPhase>,
 }
 
@@ -112,8 +111,8 @@ impl ExecutionDeferred {
     }
 
     /// The VM-facing local reason, without erasing this owner's retry evidence.
-    pub const fn reason(&self) -> ExecutionDeferral {
-        self.reason
+    pub fn reason(&self) -> ExecutionDeferral {
+        self.cause.reason()
     }
 
     /// Borrow the original allocation refusal and its pre-probe release observation.
@@ -122,7 +121,7 @@ impl ExecutionDeferred {
     /// refusal, arithmetic overflow, or demand exceeding the configured pool
     /// limit cannot be cured by waiting on an invented notification.
     pub fn allocation_refusal(&self) -> Option<&iroha_allocation::AllocationRefusal> {
-        match &self.original {
+        match &self.cause {
             VmDeferral::AllocationDeferred(original) => Some(original),
             _ => None,
         }
@@ -130,7 +129,7 @@ impl ExecutionDeferred {
 
     /// Borrow the original physical allocator failure, without inventing a pool wake.
     pub fn allocator_refusal(&self) -> Option<&iroha_allocation::AllocatorRefusal> {
-        match &self.original {
+        match &self.cause {
             VmDeferral::AllocatorDeferred(original) => Some(original),
             _ => None,
         }
@@ -139,7 +138,7 @@ impl ExecutionDeferred {
     /// Borrow the captured decoder cause, including its original opaque scope identity.
     /// No pool release observation is created by retaining this decoder owner.
     pub fn decode_refusal(&self) -> Option<&norito::core::DecodeLocalRefusal> {
-        match &self.original {
+        match &self.cause {
             VmDeferral::DecodeDeferred(original) => Some(original),
             VmDeferral::VerificationDeferred(original) => original.decode_refusal(),
             _ => None,
@@ -148,7 +147,7 @@ impl ExecutionDeferred {
 
     /// Borrow the full native verifier cause without a second retry owner.
     pub fn verification_refusal(&self) -> Option<&ivm::error::VerificationRefusal> {
-        match &self.original {
+        match &self.cause {
             VmDeferral::VerificationDeferred(original) => Some(original),
             _ => None,
         }
@@ -166,17 +165,13 @@ impl ExecutionDeferred {
     /// Move this owner through a VM host boundary without losing its release source.
     /// Native finalizer provenance stays outside the VM error surface.
     pub fn into_vm_error(self) -> VMError {
-        self.original.into()
+        self.cause.into()
     }
 }
 
 impl From<VmDeferral> for ExecutionDeferred {
-    fn from(original: VmDeferral) -> Self {
-        Self {
-            reason: original.reason(),
-            original,
-            phase: None,
-        }
+    fn from(cause: VmDeferral) -> Self {
+        Self { cause, phase: None }
     }
 }
 
@@ -235,7 +230,7 @@ impl core::fmt::Display for ExecutionDeferred {
         if self.phase == Some(ExecutionPhase::NativeLaneFinalizer) {
             formatter.write_str("native lane finalizer: ")?;
         }
-        match &self.original {
+        match &self.cause {
             VmDeferral::AllocationDeferred(refusal) => refusal.fmt(formatter),
             VmDeferral::AllocatorDeferred(original) => original.fmt(formatter),
             VmDeferral::DecodeDeferred(original) => original.fmt(formatter),
@@ -255,7 +250,7 @@ impl core::fmt::Display for ExecutionDeferred {
 
 impl std::error::Error for ExecutionDeferred {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.original {
+        match &self.cause {
             VmDeferral::AllocationDeferred(original) => Some(original),
             VmDeferral::AllocatorDeferred(original) => Some(original),
             VmDeferral::DecodeDeferred(original) => Some(original),
@@ -898,25 +893,23 @@ impl crate::state::StateTransaction<'_, '_> {
 #[cfg(test)]
 mod tests {
     use ivm::error::VMError;
+    use ivm_abi::error::{VmDeferral, VmTrap};
     include!("execution_attempt/json_scoped_tests.rs");
     #[test]
     fn structured_local_host_causes_survive_vm_and_core_custody() {
         use super::{ExecutionAttemptState, ExecutionDeferred};
         for original in [
-            VMError::HostUnavailable,
-            VMError::SyscallGasQuoteExceeded {
+            VMError::Deferred(VmDeferral::HostUnavailable),
+            VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
                 quoted: 7,
                 actual: 13,
-            },
-            VMError::SyscallMeteringModeMismatch { syscall: 57 },
+            }),
+            VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { syscall: 57 }),
         ] {
             let expected = original.to_string();
             let mut state = ExecutionAttemptState::Ready;
-            let owner = ExecutionDeferred::try_from_vm_error(VMError::Metered {
-                gas: 81,
-                source: Box::new(original),
-            })
-            .unwrap();
+            let owner =
+                ExecutionDeferred::try_from_vm_error(VMError::metered(81, original)).unwrap();
             state.record(owner);
             state.record(ivm::error::ExecutionDeferral::CanonicalHistoryUnavailable);
             let returned = state.take_owner().unwrap().into_vm_error();
@@ -924,11 +917,11 @@ mod tests {
             assert_eq!(returned.metered_gas(), None);
             assert!(state.take_owner().is_none());
         }
-        let metered = VMError::metered(19, VMError::InvalidOpcode(17));
+        let metered = VMError::metered(19, VMError::Trap(VmTrap::InvalidOpcode(17)));
         let completed = ExecutionDeferred::try_from_vm_error(metered).unwrap_err();
         assert!(matches!(
             completed.split_metered(),
-            (Some(19), VMError::InvalidOpcode(17))
+            (Some(19), VMError::Trap(VmTrap::InvalidOpcode(17)))
         ));
     }
 
@@ -964,7 +957,8 @@ mod tests {
             retained.allocator_refusal().unwrap().buffer_error(),
             Some(iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 8 })
         ));
-        let VMError::AllocatorDeferred(original) = retained.into_vm_error() else {
+        let VMError::Deferred(VmDeferral::AllocatorDeferred(original)) = retained.into_vm_error()
+        else {
             panic!("original buffer error crosses VM boundary")
         };
         assert!(matches!(
@@ -1025,7 +1019,8 @@ mod tests {
                 requested_bytes: 64
             })
         ));
-        let VMError::AllocatorDeferred(original) = reason.into_vm_error() else {
+        let VMError::Deferred(VmDeferral::AllocatorDeferred(original)) = reason.into_vm_error()
+        else {
             panic!("original buffer cause")
         };
         assert!(matches!(
@@ -1079,7 +1074,9 @@ mod tests {
             };
             assert_eq!(retained.reason(), ExecutionDeferral::AllocationUnavailable);
             assert!(retained.allocation_refusal().is_none());
-            let VMError::AllocatorDeferred(original) = retained.into_vm_error() else {
+            let VMError::Deferred(VmDeferral::AllocatorDeferred(original)) =
+                retained.into_vm_error()
+            else {
                 panic!("original lower error retained")
             };
             if shared {
@@ -1155,7 +1152,9 @@ mod tests {
             };
             assert_eq!(retained.reason(), ExecutionDeferral::AllocationUnavailable);
             assert!(retained.allocation_refusal().is_none());
-            let VMError::AllocatorDeferred(original) = retained.into_vm_error() else {
+            let VMError::Deferred(VmDeferral::AllocatorDeferred(original)) =
+                retained.into_vm_error()
+            else {
                 panic!("original lower error retained")
             };
             if shared {
@@ -1807,8 +1806,8 @@ mod tests {
             impossible_observation.as_ref()
         );
         assert!(matches!(
-            ExecutionDeferred::try_from_vm_error(ivm::VMError::OutOfMemory),
-            Err(ivm::VMError::OutOfMemory)
+            ExecutionDeferred::try_from_vm_error(ivm::VMError::Trap(VmTrap::OutOfMemory)),
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
     }
 
@@ -1833,7 +1832,9 @@ mod tests {
         ));
         let mut transaction = block.transaction();
         assert!(!transaction.is_execution_deferred());
-        let refusal = ivm::VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity);
+        let refusal = ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::ActiveMemoryCapacity,
+        ));
         transaction.vm_error_to_validation_fail(refusal, |_| {
             panic!("local refusal cannot enter deterministic mapper")
         });
@@ -1843,9 +1844,10 @@ mod tests {
             ExecutionDeferral::ActiveMemoryCapacity
         );
         assert_eq!(transaction.last_tx_gas_used, 0);
-        let failure = transaction.vm_error_to_validation_fail(ivm::VMError::OutOfMemory, |error| {
-            iroha_data_model::ValidationFail::NotPermitted(error.to_string())
-        });
+        let failure = transaction
+            .vm_error_to_validation_fail(ivm::VMError::Trap(VmTrap::OutOfMemory), |error| {
+                iroha_data_model::ValidationFail::NotPermitted(error.to_string())
+            });
         assert!(matches!(
             failure,
             iroha_data_model::ValidationFail::NotPermitted(_)
@@ -1870,11 +1872,8 @@ mod tests {
         use mv::storage::StorageReadOnly as _;
 
         let reason = ExecutionDeferral::TraceOwnerUnavailable;
-        let original = ivm::VMError::ExecutionDeferred(reason);
-        let wrapped = ivm::VMError::Metered {
-            gas: 91,
-            source: Box::new(original),
-        };
+        let original = ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(reason));
+        let wrapped = ivm::VMError::metered(91, original);
         assert_eq!(wrapped.metered_gas(), None);
         let attempt = super::vm_attempt_error(wrapped, |_| {
             panic!("trace custody refusal must not enter the rejection mapper")
@@ -1885,7 +1884,9 @@ mod tests {
         assert_eq!(retained.reason(), reason);
         assert!(retained.allocation_refusal().is_none());
         let returned_vm = retained.into_vm_error();
-        assert!(matches!(&returned_vm, VMError::ExecutionDeferred(found) if *found == reason));
+        assert!(
+            matches!(&returned_vm, VMError::Deferred(VmDeferral::ExecutionDeferred(found)) if *found == reason)
+        );
 
         let owner = iroha_test_samples::ALICE_ID.clone();
         let state = State::new_for_testing(
@@ -1947,9 +1948,11 @@ mod tests {
         for (context, metadata) in [("generic-program", false), ("generic-trigger", true)] {
             for allocation in [true, false] {
                 let original = if allocation {
-                    VMError::AllocationDeferred(refusal.clone())
+                    VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone()))
                 } else {
-                    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+                    VMError::Deferred(VmDeferral::ExecutionDeferred(
+                        ExecutionDeferral::AllocationUnavailable,
+                    ))
                 };
                 let expected_reason = original.execution_deferral().unwrap();
                 let mut transaction = block.transaction();
@@ -1971,7 +1974,7 @@ mod tests {
         }
         let mut transaction = block.transaction();
         let malformed = transaction.program_analysis_error_to_validation_fail(
-            ProgramAnalysisError::Decode(ivm::VMError::DecodeError),
+            ProgramAnalysisError::Decode(ivm::VMError::Trap(VmTrap::DecodeError)),
             "generic-program",
         );
         assert!(matches!(
@@ -2117,9 +2120,9 @@ mod tests {
         assert!(matches!(
             ExecutionAttemptError::Rejected(3_u8).into_vm_error(|value| {
                 assert_eq!(value, 3);
-                ivm::VMError::PermissionDenied
+                ivm::VMError::Trap(VmTrap::PermissionDenied)
             }),
-            ivm::VMError::PermissionDenied
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         ));
     }
 }
@@ -2308,7 +2311,9 @@ fn prepared_penalty_action_attempt_retains_exact_capacity_and_allocator_causes()
         };
         assert_eq!(retained.reason(), ExecutionDeferral::AllocationUnavailable);
         assert!(retained.allocation_refusal().is_none());
-        let ivm::VMError::AllocatorDeferred(original) = retained.into_vm_error() else {
+        let ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(original)) =
+            retained.into_vm_error()
+        else {
             panic!("original action allocator transport")
         };
         if control {
@@ -2391,7 +2396,9 @@ fn prepared_parent_service_attempt_preserves_original_capacity_and_allocator_fie
         };
         assert_eq!(retained.reason(), ExecutionDeferral::AllocationUnavailable);
         assert!(retained.allocation_refusal().is_none());
-        let ivm::VMError::AllocatorDeferred(original) = retained.into_vm_error() else {
+        let ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(original)) =
+            retained.into_vm_error()
+        else {
             panic!("typed allocator transport")
         };
         if control {

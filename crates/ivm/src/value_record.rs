@@ -3,6 +3,7 @@
     clippy::result_large_err,
     reason = "Return decoding moves the original VM allocation refusal and retry owner by value; boxing this error would allocate on the memory-exhaustion path"
 )]
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     IVM, PointerType,
     codec::{decode_canonical_norito, encode_canonical_norito},
@@ -196,9 +197,9 @@ impl ReturnRecordBudget {
                 return Err(handle_decode_error(
                     word_index,
                     "value capture",
-                    crate::VMError::ExecutionDeferred(
+                    crate::VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::LocalInvariantViolation,
-                    ),
+                    )),
                 ));
             }
             Ok(bytes)
@@ -208,9 +209,9 @@ impl ReturnRecordBudget {
                 handle_decode_error(
                     word_index,
                     "value capture",
-                    crate::VMError::ExecutionDeferred(
+                    crate::VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::AllocationUnavailable,
-                    ),
+                    )),
                 )
             })?;
             owned.extend_from_slice(bytes);
@@ -430,7 +431,7 @@ fn handle_decode_error(
             word_index,
             reason: error,
         }
-    } else if matches!(error, crate::VMError::PrivacyViolation) {
+    } else if matches!(error, crate::VMError::Trap(VmTrap::PrivacyViolation)) {
         EntrypointReturnDecodeError::Privacy {
             word_index,
             reason: error,
@@ -459,9 +460,9 @@ impl EntrypointReturnDecodeError {
             Self::RecordTooLarge { max_bytes, .. }
                 if max_bytes < MAX_ENTRYPOINT_RETURN_RECORD_BYTES =>
             {
-                crate::VMError::OutOfGas
+                crate::VMError::Trap(VmTrap::OutOfGas)
             }
-            _ => crate::VMError::DecodeError,
+            _ => crate::VMError::Trap(VmTrap::DecodeError),
         }
     }
 }
@@ -1683,6 +1684,7 @@ pub fn decode_entrypoint_return(
 mod tests {
     use super::*;
     use crate::IVMHost;
+    use crate::error::VmDeferral;
     use iroha_crypto::Hash;
     use iroha_data_model::smart_contract::entrypoint::{
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
@@ -2992,13 +2994,13 @@ mod tests {
                 panic!("return reader must not stringify an unfinished attempt");
             };
             assert_eq!(*word_index, expected_word);
-            let crate::VMError::DecodeDeferred(original) = reason else {
+            let crate::VMError::Deferred(VmDeferral::DecodeDeferred(original)) = reason else {
                 panic!("retain the actual opaque decoder owner");
             };
             let retained = original.clone();
             norito::core::with_decode_limits_scope(limit, || {
                 assert!(
-                    matches!(error.into_nested_vm_error(), crate::VMError::DecodeDeferred(__actual_error_field) if __actual_error_field == (retained))
+                    matches!(error.into_nested_vm_error(), crate::VMError::Deferred(VmDeferral::DecodeDeferred(__actual_error_field)) if __actual_error_field == (retained))
                 );
             });
         }

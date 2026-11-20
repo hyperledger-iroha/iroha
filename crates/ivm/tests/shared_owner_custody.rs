@@ -1,5 +1,6 @@
 //! Observe actual shared-cache backing deallocation before reservation refunds.
 
+use ivm_abi::error::VmDeferral;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::{
@@ -398,9 +399,9 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     let refused = iroha_allocation::AllocationBudget::new(image_and_bitmap_bytes - 1);
     assert!(matches!(
         ivm::IVM::try_new_with_memory_budget(gas, &refused),
-        Err(ivm::VMError::AllocationDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(refused.reserved_bytes(), 0);
     assert_eq!(
@@ -438,9 +439,9 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     budget.set_limit_bytes(before_root + tree_bytes - 1);
     assert!(matches!(
         vm.memory.root(),
-        Err(ivm::VMError::AllocationDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }
-        )) if requested_bytes == tree_bytes
+        ))) if requested_bytes == tree_bytes
     ));
     assert_eq!(budget.reserved_bytes(), before_root);
     assert!(!vm.memory.merkle_storage_allocated());
@@ -466,7 +467,7 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.memory.store_u8(ivm::Memory::HEAP_START, 0xa5),
-        Err(ivm::VMError::AllocationDeferred(_))
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     // Only the one-byte write payload needs new credit; the existing log row,
     // bitmaps, leaves and canonical nodes already own their backing.
@@ -545,7 +546,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         0,
         "admission precedes actual backing allocation"
     );
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(budget.reserved_bytes(), base);
     assert!(matches!(vm.memory.load_u8(ivm::Memory::STACK_START), Ok(0)));
@@ -576,7 +580,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         .memory
         .store_bytes(ivm::Memory::STACK_START + 4 * 32, &[0x5a; PAYLOAD]);
     assert_eq!(stop_log_requests(), 2);
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(LOG_ROW_POINTER.load(SeqCst), original_rows);
     assert_eq!(budget.reserved_bytes(), occupied);
     assert!(matches!(
@@ -610,7 +617,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         3,
         "rows, one payload, then allocator refusal"
     );
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(LOG_PAYLOAD_POINTER.load(SeqCst), 0);
     assert!(
         LOG_PAYLOAD_SCRUBBED.load(SeqCst),
@@ -638,7 +648,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         0,
         "independent clone cannot bypass original finite pool"
     );
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
 
     LOG_ROW_POINTER.store(snapshot_rows, SeqCst);
     LOG_PAYLOAD_POINTER.store(snapshot[0].bytes().as_ptr() as usize, SeqCst);

@@ -275,7 +275,7 @@ fn stream_token_custody_generic_classes_reject_state_before_namespace_dispatch()
             ] {
                 vm.set_register(10, path_ptr);
                 assert!(
-                    matches!((&(host.syscall(syscall, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed { syscall })), (Err(ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0)
+                    matches!((&(host.syscall(syscall, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0})), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0)
                 );
             }
         }
@@ -311,11 +311,11 @@ fn stream_token_custody_debug_syscalls_cannot_mutate_delete_or_disclose_native_s
                 matches!(
                     (
                         &(host.syscall(syscall, &mut vm)),
-                        &(ivm::VMError::PermissionDenied)
+                        &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                     ),
                     (
-                        Err(ivm::VMError::PermissionDenied),
-                        ivm::VMError::PermissionDenied
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                        ivm::VMError::Trap(VmTrap::PermissionDenied)
                     )
                 ),
                 "{path}: {syscall}"
@@ -409,11 +409,11 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
                         &invalid,
                         crate::ivm_test_support::declared_profile(&invalid)
                     )),
-                    &(ivm::VMError::InvalidMetadata)
+                    &(ivm::VMError::Trap(VmTrap::InvalidMetadata))
                 ),
                 (
-                    Err(ivm::VMError::InvalidMetadata),
-                    ivm::VMError::InvalidMetadata
+                    Err(ivm::VMError::Trap(VmTrap::InvalidMetadata)),
+                    ivm::VMError::Trap(VmTrap::InvalidMetadata)
                 )
             ),
             "native path cannot acquire scalar declaration authority: {path}"
@@ -434,10 +434,10 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         if namespace_only.contains(path) {
             assert!(
                 matches!(
-                    (&(typed_value), &(ivm::VMError::NoritoInvalid)),
+                    (&(typed_value), &(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
                     (
-                        Err(ivm::VMError::NoritoInvalid),
-                        ivm::VMError::NoritoInvalid
+                        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
+                        ivm::VMError::Trap(VmTrap::NoritoInvalid)
                     )
                 ),
                 "namespace-only descendant is not a declared Bytes state"
@@ -471,20 +471,20 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
                         | ivm_sys::SYSCALL_STATE_HAS
                         | ivm_sys::SYSCALL_STATE_LEN
                 ) {
-                ivm::VMError::NoritoInvalid
+                ivm::VMError::Trap(VmTrap::NoritoInvalid)
             } else {
-                ivm::VMError::PermissionDenied
+                ivm::VMError::Trap(VmTrap::PermissionDenied)
             };
             let actual = host.syscall(syscall, &mut vm);
             assert!(
                 matches!(
                     (&actual, &expected),
                     (
-                        Err(ivm::VMError::NoritoInvalid),
-                        ivm::VMError::NoritoInvalid
+                        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
+                        ivm::VMError::Trap(VmTrap::NoritoInvalid)
                     ) | (
-                        Err(ivm::VMError::PermissionDenied),
-                        ivm::VMError::PermissionDenied
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                        ivm::VMError::Trap(VmTrap::PermissionDenied)
                     )
                 ),
                 "{path}: {syscall}: {actual:?} != {expected:?}"
@@ -494,10 +494,10 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         let count = host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm);
         if namespace_only.contains(path) {
             assert!(matches!(
-                (&(count), &(ivm::VMError::NoritoInvalid)),
+                (&(count), &(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
                 (
-                    Err(ivm::VMError::NoritoInvalid),
-                    ivm::VMError::NoritoInvalid
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
                 )
             ));
         } else {
@@ -563,10 +563,10 @@ fn stream_token_custody_namespace_scan_rejects_a_declared_opaque_map() {
         let result = host.syscall(ivm_sys::SYSCALL_STATE_SCAN, &mut vm);
         if opaque {
             assert!(matches!(
-                (&(result), &(ivm::VMError::PermissionDenied)),
+                (&(result), &(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ));
         } else {
@@ -609,11 +609,11 @@ fn stream_token_custody_native_state_survives_debug_apply_and_export_refusal() {
             assert!(matches!(
                 (
                     &(host.syscall(syscall, &mut vm)),
-                    &(ivm::VMError::PermissionDenied)
+                    &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ));
         }

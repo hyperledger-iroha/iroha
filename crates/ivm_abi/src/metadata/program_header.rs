@@ -1,6 +1,7 @@
 //! Borrowed fixed-header admission before any owned contract-section decoding.
 
 use super::*;
+use crate::error::VmTrap;
 
 /// Fixed-header validation tied to the original immutable artifact borrow.
 /// This is a dispatch hint, not contract, section, literal or opcode admission.
@@ -64,22 +65,22 @@ pub(super) fn parse(
     syscall_policy: crate::SyscallPolicy,
 ) -> Result<ParsedProgramHeader<'_>, VMError> {
     if bytes.len() < HEADER_SIZE {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let magic = &bytes[0..4];
     let version_major = bytes[4];
     if magic != MAGIC {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let abi_version = bytes[HEADER_ABI_VERSION_OFFSET];
     let abi_hash: [u8; 32] = bytes[HEADER_ABI_HASH_OFFSET..HEADER_SIZE]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let version_minor = bytes[5];
     let mode = bytes[6];
     let max_cycles_bytes: [u8; 8] = bytes[HEADER_BUDGET_OFFSET..HEADER_ABI_VERSION_OFFSET]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let max_cycles = u64::from_le_bytes(max_cycles_bytes);
     // Validate consensus-visible header policy in stable precedence order:
     // version, unknown feature bits, ABI version, ZK cycle bound, ABI hash.
@@ -94,47 +95,47 @@ pub(super) fn parse(
     //   Gas is the only execution budget and is supplied by the caller.
     const KNOWN_MODE_BITS: u8 = mode::ZK;
     if version_major != 1 || version_minor != 1 {
-        return Err(VMError::UnsupportedProgramVersion {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramVersion {
             major: version_major,
             minor: version_minor,
-        });
+        }));
     }
     let unsupported_feature_bits = mode & !KNOWN_MODE_BITS;
     if unsupported_feature_bits != 0 {
-        return Err(VMError::UnsupportedProgramFeatureBits {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
             bits: unsupported_feature_bits,
-        });
+        }));
     }
     if abi_version != 1 {
-        return Err(VMError::UnsupportedProgramAbiVersion {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramAbiVersion {
             version: abi_version,
-        });
+        }));
     }
     match (mode & mode::ZK != 0, max_cycles) {
-        (true, 0) => return Err(VMError::MissingMaxCycles),
+        (true, 0) => return Err(VMError::Trap(VmTrap::MissingMaxCycles)),
         (false, max_cycles) if max_cycles != 0 => {
-            return Err(VMError::MaxCyclesWithoutZk { max_cycles });
+            return Err(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles }));
         }
         _ => {}
     }
     let expected = crate::syscalls::compute_c10_abi_hash(syscall_policy);
     if abi_hash != expected {
-        return Err(VMError::ArtifactAbiHashMismatch {
+        return Err(VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
             expected,
             actual: abi_hash,
-        });
+        }));
     }
     let image_len = bytes
         .len()
         .checked_sub(HEADER_SIZE)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     // This is the C10 parser: the header belongs to the C10 profile of the policy, whatever
     // engine `IvmProfileId::of_policy` binds that policy to.
     let profile = crate::IvmProfileId::of_engine_policy(crate::IvmEngine::C10, syscall_policy)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     Ok(ParsedProgramHeader {
         bytes,
         profile,
@@ -159,61 +160,61 @@ pub(super) fn parse(
 pub(super) fn parse_baseline(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
     use crate::baseline as base;
     if bytes.len() < base::HEADER_SIZE {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let magic = &bytes[0..4];
     let version_major = bytes[4];
     if magic != MAGIC {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let abi_version = bytes[base::HEADER_ABI_VERSION_OFFSET];
     let abi_hash: [u8; 32] = bytes[base::HEADER_ABI_HASH_OFFSET..base::HEADER_SIZE]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let version_minor = bytes[5];
     let mode = bytes[6];
     let vector_length = bytes[base::HEADER_VECTOR_LENGTH_OFFSET];
     let max_cycles_bytes: [u8; 8] = bytes
         [base::HEADER_BUDGET_OFFSET..base::HEADER_ABI_VERSION_OFFSET]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let max_cycles = u64::from_le_bytes(max_cycles_bytes);
     if version_major != 1 || version_minor != 1 {
-        return Err(VMError::UnsupportedProgramVersion {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramVersion {
             major: version_major,
             minor: version_minor,
-        });
+        }));
     }
     let unsupported_feature_bits = mode & !base::mode::KNOWN;
     if unsupported_feature_bits != 0 {
-        return Err(VMError::UnsupportedProgramFeatureBits {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
             bits: unsupported_feature_bits,
-        });
+        }));
     }
     if abi_version != 1 {
-        return Err(VMError::UnsupportedProgramAbiVersion {
+        return Err(VMError::Trap(VmTrap::UnsupportedProgramAbiVersion {
             version: abi_version,
-        });
+        }));
     }
     if vector_length > base::VECTOR_LENGTH_MAX {
-        return Err(VMError::ProgramVectorLengthTooLarge {
+        return Err(VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
             vector_length,
             max_allowed: base::VECTOR_LENGTH_MAX,
-        });
+        }));
     }
     let expected = base::abi_hash();
     if abi_hash != expected {
-        return Err(VMError::ArtifactAbiHashMismatch {
+        return Err(VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
             expected,
             actual: abi_hash,
-        });
+        }));
     }
     let image_len = bytes
         .len()
         .checked_sub(base::HEADER_SIZE)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     Ok(ParsedProgramHeader {
         bytes,
@@ -233,6 +234,7 @@ pub(super) fn parse_baseline(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VM
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn header_borrows_original_bytes_and_does_not_admit_a_truncated_cntr() {
@@ -243,7 +245,7 @@ mod tests {
         assert!(header.declares_contract_interface());
         assert!(matches!(
             header.parse_sections().unwrap_err(),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
         let header = ProgramMetadata::default().encode();
         let parsed = ProgramMetadata::parse_header(&header).unwrap();
@@ -264,7 +266,7 @@ mod tests {
             ProgramMetadata::parse_header(&bytes)
         });
         assert!(
-            matches!((&(outcome.unwrap_err()), &(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })), (VMError::UnsupportedProgramVersion { major: __actual_major, minor: __actual_minor }, VMError::UnsupportedProgramVersion { major: __expected_major, minor: __expected_minor }) if __actual_major == __expected_major && __actual_minor == __expected_minor)
+            matches!((&(outcome.unwrap_err()), &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 2, minor: 1 }))), (VMError::Trap(VmTrap::UnsupportedProgramVersion { major: __actual_major, minor: __actual_minor }), VMError::Trap(VmTrap::UnsupportedProgramVersion { major: __expected_major, minor: __expected_minor })) if __actual_major == __expected_major && __actual_minor == __expected_minor)
         );
     }
     #[test]
@@ -309,35 +311,42 @@ mod tests {
         };
         assert!(matches!(
             parse(&bytes),
-            Err(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })
+            Err(VMError::Trap(VmTrap::UnsupportedProgramVersion {
+                major: 2,
+                minor: 1
+            }))
         ));
         bytes[4] = 1;
         assert!(matches!(
             parse(&bytes),
-            Err(VMError::UnsupportedProgramFeatureBits { bits: 0x80 })
+            Err(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
+                bits: 0x80
+            }))
         ));
         bytes[6] = base::mode::ZK | base::mode::VECTOR;
         assert!(matches!(
             parse(&bytes),
-            Err(VMError::UnsupportedProgramAbiVersion { version: 3 })
+            Err(VMError::Trap(VmTrap::UnsupportedProgramAbiVersion {
+                version: 3
+            }))
         ));
         bytes[base::HEADER_ABI_VERSION_OFFSET] = 1;
         assert!(matches!(
             parse(&bytes),
-            Err(VMError::ProgramVectorLengthTooLarge {
+            Err(VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
                 vector_length: 65,
                 max_allowed: 64
-            })
+            }))
         ));
         bytes[base::HEADER_VECTOR_LENGTH_OFFSET] = 0;
         bytes[base::HEADER_ABI_HASH_OFFSET] ^= 1;
         assert!(matches!(
             parse(&bytes),
-            Err(VMError::ArtifactAbiHashMismatch { .. })
+            Err(VMError::Trap(VmTrap::ArtifactAbiHashMismatch { .. }))
         ));
         assert!(matches!(
             parse(&header[..base::HEADER_SIZE - 1]),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
     }
 
@@ -350,7 +359,7 @@ mod tests {
         .encode();
         assert!(matches!(
             ProgramMetadata::parse_header(&zk_without_bound),
-            Err(VMError::MissingMaxCycles)
+            Err(VMError::Trap(VmTrap::MissingMaxCycles))
         ));
         let bound_without_zk = ProgramMetadata {
             max_cycles: 7,
@@ -359,7 +368,7 @@ mod tests {
         .encode();
         assert!(matches!(
             ProgramMetadata::parse_header(&bound_without_zk),
-            Err(VMError::MaxCyclesWithoutZk { max_cycles: 7 })
+            Err(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 7 }))
         ));
         for metadata in [
             ProgramMetadata::default(),
@@ -393,11 +402,11 @@ mod tests {
                 });
                 assert!(matches!(
                     header.unwrap_err(),
-                    VMError::UnsupportedProgramVersion { major: 1, minor: 0 }
+                    VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 0 })
                 ));
                 assert!(matches!(
                     sections.unwrap_err(),
-                    VMError::UnsupportedProgramVersion { major: 1, minor: 0 }
+                    VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 0 })
                 ));
             }
         }

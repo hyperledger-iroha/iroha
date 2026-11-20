@@ -1,6 +1,7 @@
 //! Actual lifecycle owners under exhausted ordinary credit and bounded diagnostics.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{
     Memory,
     encoding::wide,
@@ -155,7 +156,7 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
             .install_diagnostic_access_recorder(diagnostic.shared())
             .unwrap();
         assert!(
-            matches!(transition(&mut vm, action), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(transition(&mut vm, action), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             )),
             "{action:?}"
@@ -198,9 +199,9 @@ fn invalid_range_rejects_before_zeroing_an_earlier_valid_range() {
         let root = vm.memory.root().unwrap();
         assert!(matches!(
             transition(&mut vm, action),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::LocalInvariantViolation
-            ))
+            )))
         ));
         assert_secret_bytes(&vm);
         assert_eq!(vm.private_memory_bytes, ranges);

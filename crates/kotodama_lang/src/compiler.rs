@@ -1884,6 +1884,7 @@ pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
 #[cfg(test)]
 mod test_mode_tests {
     use super::*;
+    use ivm_abi::error::VmTrap;
     #[test]
     fn production_mode_rejects_test_functions_instead_of_stripping_them() {
         let src = include_str!("compiler/fixtures/v1/c175.ko");
@@ -1913,7 +1914,9 @@ mod test_mode_tests {
         stale_abi[17] ^= 1;
         assert!(matches!(
             ProgramMetadata::parse(&stale_abi),
-            Err(ivm_abi::VMError::ArtifactAbiHashMismatch { .. })
+            Err(ivm_abi::VMError::Trap(
+                VmTrap::ArtifactAbiHashMismatch { .. }
+            ))
         ));
         assert!(
             report

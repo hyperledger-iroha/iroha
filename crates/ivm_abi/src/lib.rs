@@ -30,7 +30,7 @@ pub mod state_value;
 pub mod sum;
 pub mod syscalls;
 pub mod upgrade;
-pub use error::{HostOutputResource, Perm, VMError};
+pub use error::{HostOutputResource, Perm, VMError, VmDeferral, VmErrorRef, VmTrap};
 pub use profile::{HeaderLayout, IvmEngine, IvmProfileId};
 /// Named host policy authenticated by the fixed program header's exact ABI hash.
 /// Both policies use first-release ABI version 1. [`IvmProfileId::of_policy`] binds each policy

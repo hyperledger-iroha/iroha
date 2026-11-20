@@ -4,12 +4,13 @@ use super::{CoreHostImpl, QueryStateAccess};
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1;
 use ivm::{IVM, PointerType, VMError};
+use ivm_abi::error::VmTrap;
 
 fn envelope_bytes(payload_bytes: usize) -> Result<usize, VMError> {
-    u32::try_from(payload_bytes).map_err(|_| VMError::NoritoInvalid)?;
+    u32::try_from(payload_bytes).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     payload_bytes
         .checked_add(ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1)
-        .ok_or(VMError::NoritoInvalid)
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))
 }
 
 /// Emit the sole Core TLV layout directly into the caller's backing owner.
@@ -18,7 +19,8 @@ fn write_tlv_payload(
     payload: &[u8],
     mut append: impl FnMut(&[u8]) -> Result<(), VMError>,
 ) -> Result<(), VMError> {
-    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut header = [0_u8; 7];
     header[..2].copy_from_slice(&(pointer_type as u16).to_be_bytes());
     header[2] = 1;

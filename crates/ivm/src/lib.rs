@@ -190,8 +190,9 @@ pub use crate::{
     },
     decoder::decode,
     error::{
-        ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
-        VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
+        ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmDeferral,
+        VmErrorRef, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation, VmTrap,
+        VmTrapKind,
     },
     execution_summary::{BaselineExecutionSummary, EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},

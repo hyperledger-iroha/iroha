@@ -1,4 +1,5 @@
 use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 const CLASSIC_LOAD_OPCODE: u32 = 0x03;
 const CLASSIC_STORE_OPCODE: u32 = 0x23;
 fn classic_load(rd: u8, rs1: u8, imm12: i16, funct3: u8) -> u32 {
@@ -46,7 +47,10 @@ fn wide_load_store_alignment() {
     vm_store.set_register(2, Memory::HEAP_START);
     vm_store.set_register(3, 0xABCDu64);
     let res = vm_store.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
     // Prepare memory so an aligned store succeeds, then attempt a misaligned load.
     let mut vm_load = IVM::new(256);
     vm_load.load_program(&bytes).expect("load aligned program");
@@ -63,7 +67,10 @@ fn wide_load_store_alignment() {
         .expect("load misaligned program");
     vm_load.set_register(2, Memory::HEAP_START);
     let res = vm_load.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
 }
 #[test]
 fn classic_halfword_ops_rejected() {
@@ -79,7 +86,7 @@ fn classic_halfword_ops_rejected() {
     let err = vm
         .load_program(&bytes)
         .expect_err("classic halfword ops must be rejected");
-    assert!(matches!(err, VMError::InvalidOpcode(_)));
+    assert!(matches!(err, VMError::Trap(VmTrap::InvalidOpcode(_))));
 }
 #[test]
 fn classic_byte_ops_rejected() {
@@ -94,7 +101,7 @@ fn classic_byte_ops_rejected() {
     let err = vm
         .load_program(&bytes)
         .expect_err("classic byte ops must be rejected");
-    assert!(matches!(err, VMError::InvalidOpcode(_)));
+    assert!(matches!(err, VMError::Trap(VmTrap::InvalidOpcode(_))));
 }
 #[test]
 fn classic_misaligned_halfword_ops_rejected() {
@@ -109,5 +116,5 @@ fn classic_misaligned_halfword_ops_rejected() {
     let err = vm
         .load_program(&bytes)
         .expect_err("classic misaligned halfword ops must be rejected");
-    assert!(matches!(err, VMError::InvalidOpcode(_)));
+    assert!(matches!(err, VMError::Trap(VmTrap::InvalidOpcode(_))));
 }

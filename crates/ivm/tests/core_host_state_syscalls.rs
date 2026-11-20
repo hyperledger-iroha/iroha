@@ -5,6 +5,7 @@ use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
     EmbeddedStateType, IVM, Memory, PointerType, ProgramMetadata, VMError, state_value, syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -142,7 +143,7 @@ fn core_host_state_syscalls_require_pointers() {
     let err = host
         .syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
         .expect_err("state get without path should fail");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
     let path_tlv = state_path_tlv("foo");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let set_prog = state_program("foo", true);
@@ -152,14 +153,14 @@ fn core_host_state_syscalls_require_pointers() {
     let err = host
         .syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
         .expect_err("state set without value should fail");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
     let del_prog = state_program("foo", true);
     vm.set_register(10, 0);
     vm.load_program(&del_prog).expect("load del");
     let err = host
         .syscall(syscalls::SYSCALL_STATE_DEL, &mut vm)
         .expect_err("state del without path should fail");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn core_host_state_get_spills_to_heap_when_input_bump_is_full() {

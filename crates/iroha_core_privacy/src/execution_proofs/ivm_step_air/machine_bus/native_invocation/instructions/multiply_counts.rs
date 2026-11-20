@@ -2,6 +2,7 @@
 
 use super::{tests::*, *};
 use ivm::{encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 
 const PRODUCTS: [u8; 4] = [
     wide::arithmetic::MUL,
@@ -382,7 +383,7 @@ fn three_and_six_gas_operations_still_retire_exactly_one_cycle() {
         if gas == 107 {
             assert!(matches!(
                 result,
-                Err(CaptureError::Execution(VMError::OutOfGas))
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas)))
             ));
         } else {
             let native = result.unwrap();

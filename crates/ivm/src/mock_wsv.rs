@@ -1,3 +1,4 @@
+use crate::error::{VmDeferral, VmTrap};
 #[cfg(test)]
 use crate::memory::Memory;
 use crate::{
@@ -100,7 +101,7 @@ impl AssetDefinition {
 /// CoreHost also uses, so both hosts accept and reject exactly the same calls.
 ///
 /// # Errors
-/// Returns [`VMError::DecodeError`] for an invalid display name or a word
+/// Returns [`crate::error::VmTrap::DecodeError`] for an invalid display name or a word
 /// outside the encoding, as CoreHost does.
 fn decode_asset_registration(
     name: &[u8],
@@ -112,7 +113,7 @@ fn decode_asset_registration(
         spec_word,
         mintable_word,
     )
-    .map_err(|_| VMError::DecodeError)
+    .map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 /// NFT state tracking the current owner, stored metadata, and the issuing authority.
 #[derive(Clone, Debug)]
@@ -547,14 +548,20 @@ impl MockWorldStateView {
         out
     }
     pub fn sc_set<P: AsRef<str>>(&mut self, path: P, value: Vec<u8>) -> Result<(), VMError> {
-        let path: StatePath = path.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
+        let path: StatePath = path
+            .as_ref()
+            .parse()
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("sc_set: {path} -> {value:?}");
         }
         self.state_overlay.set(&path, value)
     }
     pub fn sc_del<P: AsRef<str>>(&mut self, path: P) -> Result<(), VMError> {
-        let path: StatePath = path.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
+        let path: StatePath = path
+            .as_ref()
+            .parse()
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         self.state_overlay.del(&path)
     }
     pub fn sc_snapshot(&self) -> DurableStateSnapshot {
@@ -1987,7 +1994,8 @@ impl WsvHost {
     fn asset_definition_query(&self, vm: &mut IVM) -> Result<u64, VMError> {
         let id = self.decode_asset_reg(vm, 11)?;
         let input_len = vm.validate_tlv(vm.register(11))?.payload.len();
-        let layout = crate::sum::SumLayoutV1::option(7).map_err(|_| VMError::DecodeError)?;
+        let layout =
+            crate::sum::SumLayoutV1::option(7).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let Some(definition) = self.wsv.asset_definitions.get(&id) else {
             let gas = Self::state_query_gas(input_len);
             preflight_reserved_syscall_gas(vm, gas)?;
@@ -1999,10 +2007,10 @@ impl WsvHost {
         // caller-selected scale would conceal precision failures in pool tests.
         let scale = iroha_primitives::numeric_abi::IntValueV1::try_new(0.into())
             .and_then(|value| value.encode_frame())
-            .map_err(|_| VMError::NoritoInvalid)?;
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         let quantity = QuantityValueV1::new(definition.total_supply.clone())
             .encode_frame()
-            .map_err(|_| VMError::NoritoInvalid)?;
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         let metadata = Json::from(njson::Value::Object(njson::Map::new()));
         let leaves = [
             (
@@ -2029,7 +2037,8 @@ impl WsvHost {
         for (index, (kind, payload)) in leaves.iter().enumerate() {
             pointers[index] = Self::alloc_tlv_payload(vm, *kind, payload)?;
         }
-        let optional = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+        let optional =
+            crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let description = crate::sum::allocate_words(vm, optional, 0, &[])?;
         let numeric_scale = crate::sum::allocate_words(vm, optional, 1, &[pointers[4]])?;
         let words = [
@@ -2261,9 +2270,11 @@ impl WsvHost {
                     binding.dataspace_id?,
                 ))
             });
-        let scope = matching.next().ok_or(VMError::PermissionDenied)?;
+        let scope = matching
+            .next()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if matching.any(|candidate| candidate != scope) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(scope)
     }
@@ -2293,16 +2304,16 @@ impl WsvHost {
         self.zk_verified_tally
     }
     fn decode_account_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_asset_payload(&self, payload: &[u8]) -> Result<AssetDefinitionId, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_domain_payload(&self, payload: &[u8]) -> Result<DomainId, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_nft_payload(&self, payload: &[u8]) -> Result<NftId, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     /// Decode an `AccountId` from a provenance-valid V1 TLV pointer.
     fn decode_account_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
@@ -2319,7 +2330,7 @@ impl WsvHost {
             );
         }
         if tlv.type_id != PointerType::AccountId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.decode_account_payload(tlv.payload)
     }
@@ -2331,14 +2342,14 @@ impl WsvHost {
         let subject = self.decode_account_subject_reg(vm, reg)?;
         self.wsv
             .canonical_account_id_for_subject(&subject)
-            .ok_or(VMError::DecodeError)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))
     }
     /// Decode an `AssetDefinitionId` from a provenance-valid V1 TLV pointer.
     fn decode_asset_reg(&self, vm: &IVM, reg: usize) -> Result<AssetDefinitionId, VMError> {
         let v = vm.register(reg);
         let tlv = vm.validate_tlv(v)?;
         if tlv.type_id != PointerType::AssetDefinitionId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.decode_asset_payload(tlv.payload)
     }
@@ -2346,19 +2357,20 @@ impl WsvHost {
         let v = vm.register(reg);
         let tlv = vm.validate_tlv(v)?;
         if tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        decode_canonical_norito::<DataSpaceId>(tlv.payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito::<DataSpaceId>(tlv.payload)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     /// Decode one canonical V1 `quantity` argument from a register.
     fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Quantity, VMError> {
         let tlv = vm.validate_tlv(vm.register(reg))?;
         if tlv.type_id != PointerType::Quantity {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         QuantityValueV1::decode_frame(tlv.payload)
             .map(QuantityValueV1::into_quantity)
-            .map_err(|_| VMError::DecodeError)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     /// Decode NftId from a register that may be an INPUT TLV pointer.
     fn decode_nft_reg(&self, vm: &IVM, reg: usize) -> Result<NftId, VMError> {
@@ -2376,7 +2388,7 @@ impl WsvHost {
             );
         }
         if tlv.type_id != PointerType::NftId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.decode_nft_payload(tlv.payload)
     }
@@ -2384,7 +2396,7 @@ impl WsvHost {
         if self.fastpq_batch_entries.is_some() {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         self.fastpq_batch_entries = Some(Vec::new());
@@ -2392,7 +2404,7 @@ impl WsvHost {
     }
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if self.fastpq_batch_entries.is_none() {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let from = self.decode_account_reg(vm, 10)?;
         let to = self.decode_account_reg(vm, 11)?;
@@ -2408,11 +2420,14 @@ impl WsvHost {
         let Some(entries) = self.fastpq_batch_entries.take() else {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         };
         if entries.is_empty() {
-            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::Trap(VmTrap::DecodeError),
+            ));
         }
         for (from, to, asset, amount) in entries {
             if !self.wsv.transfer(
@@ -2422,24 +2437,24 @@ impl WsvHost {
                 asset.clone(),
                 amount,
             ) {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         Ok(gas::G_FASTPQ_BATCH)
     }
     fn apply_fastpq_batch_tlv(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if self.fastpq_batch_entries.is_some() {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let batch: TransferAssetBatch =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         if batch.entries().is_empty() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let entry_count = batch.entries().len();
         for entry in batch.entries() {
@@ -2452,7 +2467,7 @@ impl WsvHost {
                 entry.asset_definition().clone(),
                 entry.amount().clone(),
             ) {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         Ok(Self::mutation_batch_gas(entry_count))
@@ -2461,7 +2476,7 @@ impl WsvHost {
         if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
             VMError::metered_not_implemented(MUTATION_GAS, number)
         } else {
-            VMError::UnknownSyscall(number)
+            VMError::Trap(VmTrap::UnknownSyscall(number))
         }
     }
     fn axt_expiry_slot_with_skew(&self, expiry_slot: u64) -> u64 {
@@ -2474,17 +2489,17 @@ impl WsvHost {
     }
     fn validate_axt_proof(&self, dsid: DataSpaceId, proof: &ProofBlob) -> Result<(), VMError> {
         let Some(policy) = self.wsv.axt_policies.get(&dsid) else {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         };
         if policy.manifest_root.iter().all(|byte| *byte == 0) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         axt::validate_proof_blob(proof)?;
         if let Some(expiry_slot) = proof.expiry_slot {
             let expiry_with_skew = self.axt_expiry_slot_with_skew(expiry_slot);
             let current_slot = policy.current_slot;
             if current_slot > 0 && current_slot > expiry_with_skew {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
         }
         let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload)?;
@@ -2495,31 +2510,35 @@ impl WsvHost {
         )?;
         // The mock WSV host can diagnose envelope routing, but it does not link
         // the real FastPQ verifier. Proof-consuming calls therefore fail closed.
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     }
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         self.refresh_axt_policy();
         let tlv = vm.validate_tlv(vm.register(10))?;
         if tlv.type_id != PointerType::AxtDescriptor {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = Self::axt_gas(tlv.payload.len());
         let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
-        let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
+        let binding =
+            axt::compute_binding(&descriptor).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         Ok(gas)
     }
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
+        let state = self
+            .axt_state
+            .as_mut()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let ds_tlv = vm.validate_tlv(vm.register(10))?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let mut gas_len = ds_tlv.payload.len();
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let manifest_ptr = vm.register(11);
         let manifest = if manifest_ptr == 0 {
@@ -2530,7 +2549,7 @@ impl WsvHost {
         } else {
             let manifest_tlv = vm.validate_tlv(manifest_ptr)?;
             if manifest_tlv.type_id != PointerType::NoritoBytes {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
             decode_canonical_norito(manifest_tlv.payload)?
@@ -2541,19 +2560,22 @@ impl WsvHost {
         Ok(Self::axt_gas(gas_len))
     }
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state_view = self.axt_state.as_ref().ok_or(VMError::PermissionDenied)?;
+        let state_view = self
+            .axt_state
+            .as_ref()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let ds_tlv = vm.validate_tlv(vm.register(10))?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state_view.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
             if !self.wsv.axt_policies.contains_key(&dsid) {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             let state = self.axt_state.as_mut().expect("axt_state checked above");
             state.record_proof(dsid, None, None)?;
@@ -2561,7 +2583,7 @@ impl WsvHost {
         }
         let proof_tlv = vm.validate_tlv(proof_ptr)?;
         if proof_tlv.type_id != PointerType::ProofBlob {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = Self::verify_gas(proof_tlv.payload.len());
         let proof: ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
@@ -2572,7 +2594,10 @@ impl WsvHost {
         Ok(gas)
     }
     fn handle_axt_commit(&mut self) -> Result<u64, VMError> {
-        let state = self.axt_state.take().ok_or(VMError::PermissionDenied)?;
+        let state = self
+            .axt_state
+            .take()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let gas = Self::axt_commit_gas(&state);
         match state.validate_commit() {
             Ok(()) => Ok(gas),
@@ -2584,12 +2609,12 @@ impl WsvHost {
     }
     fn handle_submit_ballot(&mut self, instr: &DMZk::SubmitBallot) -> Result<u64, VMError> {
         let Some(expected_hash) = self.zk_verified_ballot.pop_front() else {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         };
         let mut proof = instr.ballot_proof().clone();
         match proof.envelope_hash {
             Some(hash) if hash != expected_hash => {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             None => {
                 proof.envelope_hash = Some(expected_hash);
@@ -2605,18 +2630,18 @@ impl WsvHost {
         if ok {
             Ok(Self::mutation_gas(0))
         } else {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
     }
     #[cfg(test)]
     fn handle_finalize_election(&mut self, instr: &DMZk::FinalizeElection) -> Result<u64, VMError> {
         let Some(expected_hash) = self.zk_verified_tally.take() else {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         };
         let mut proof = instr.tally_proof().clone();
         match proof.envelope_hash {
             Some(hash) if hash != expected_hash => {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             None => {
                 proof.envelope_hash = Some(expected_hash);
@@ -2629,7 +2654,7 @@ impl WsvHost {
         if ok {
             Ok(Self::mutation_gas(0))
         } else {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
     }
     /// Decode a DomainId from a provenance-valid pointer-ABI TLV register.
@@ -2647,7 +2672,7 @@ impl WsvHost {
             );
         }
         if tlv.type_id != PointerType::DomainId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.decode_domain_payload(tlv.payload)
     }
@@ -2659,7 +2684,7 @@ impl WsvHost {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
         out.push(1);
-        let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+        let len = u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(payload);
         let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
@@ -2667,14 +2692,14 @@ impl WsvHost {
         vm.alloc_host_tlv(&out)
     }
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_name_reg(&self, vm: &IVM, reg: usize) -> Result<Name, VMError> {
         let v = vm.register(reg);
         let resolved = crate::core_host::CoreHost::resolve_code_tlv_addr(vm, v);
         let tlv = vm.validate_tlv(resolved)?;
         if tlv.type_id != PointerType::Name {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.decode_name_payload(tlv.payload)
     }
@@ -2684,10 +2709,10 @@ impl WsvHost {
         if tlv.type_id != PointerType::NoritoBytes
             || tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         crate::host::validate_state_path(&path)?;
         Ok((path, tlv.payload.len()))
     }
@@ -2731,23 +2756,23 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         return Ok(PermissionToken::SetAccountDetail(id));
     }
     if let Some(rest) = s.strip_prefix("register_zk_asset:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
+        let id = AssetDefinitionId::parse_address_literal(rest)
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         return Ok(PermissionToken::RegisterZkAsset(id));
     }
     if let Some(rest) = s.strip_prefix("mint_asset:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
+        let id = AssetDefinitionId::parse_address_literal(rest)
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         return Ok(PermissionToken::MintAsset(id));
     }
     if let Some(rest) = s.strip_prefix("burn_asset:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
+        let id = AssetDefinitionId::parse_address_literal(rest)
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         return Ok(PermissionToken::BurnAsset(id));
     }
     if let Some(rest) = s.strip_prefix("transfer_asset:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
+        let id = AssetDefinitionId::parse_address_literal(rest)
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         return Ok(PermissionToken::TransferAsset(id));
     }
     if s == "manage_roles" {
@@ -2763,7 +2788,7 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         return Ok(PermissionToken::ManagePeers);
     }
     if s.is_empty() {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(PermissionToken::Custom(s.to_string()))
 }
@@ -2779,7 +2804,7 @@ const AXT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 /// Decode one canonical pointer-ABI `Json` payload.
 fn parse_json_value(bytes: &[u8]) -> Result<njson::Value, VMError> {
     let json: Json = decode_canonical_norito(bytes)?;
-    njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)
+    njson::from_str(json.get()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Parse a canonical pointer-ABI `Json` payload and return selected field contents.
 fn parse_json_string(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
@@ -2792,7 +2817,7 @@ fn parse_json_string(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
             return Ok(str_val.to_string());
         }
     }
-    Err(VMError::NoritoInvalid)
+    Err(VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Parse a canonical pointer-ABI `Json` payload and extract a string array.
 fn parse_json_string_array(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, VMError> {
@@ -2803,13 +2828,13 @@ fn parse_json_string_array(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, V
         keys.iter()
             .find_map(|key| map.get(*key))
             .and_then(njson::Value::as_array)
-            .ok_or(VMError::NoritoInvalid)?
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?
     } else {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     };
     let mut out = Vec::with_capacity(array.len());
     for item in array {
-        let s = item.as_str().ok_or(VMError::NoritoInvalid)?;
+        let s = item.as_str().ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         out.push(s.to_string());
     }
     Ok(out)
@@ -2820,12 +2845,12 @@ fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
             raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
                 .map(|address| address.subject_id())
         })
-        .map_err(|_| VMError::NoritoInvalid)
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Parse a peer identifier from a canonical `Json` payload.
 fn parse_peer(bytes: &[u8]) -> Result<Peer, VMError> {
     let peer = parse_json_string(bytes, &["peer"])?;
-    Peer::from_str(&peer).map_err(|_| VMError::NoritoInvalid)
+    Peer::from_str(&peer).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 fn parse_permission_name_payload(bytes: &[u8]) -> Result<PermissionToken, VMError> {
     let name: Name = decode_canonical_norito(bytes)?;
@@ -2970,7 +2995,7 @@ impl IVMHost for WsvHost {
 
             crate::syscalls::SYSCALL_CORE_QUERY_GET => {
                 let tag = ivm_abi::core_query::CoreQueryEntityTagV1::try_from(vm.register(10))
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 if tag == ivm_abi::core_query::CoreQueryEntityTagV1::AssetDefinition {
                     self.asset_definition_query(vm)
                 } else {
@@ -3053,15 +3078,15 @@ impl IVMHost for WsvHost {
                 }
                 let p_val = vm.validate_tlv(vm.register(11))?;
                 if p_val.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 // Enforce pointer-ABI policy for the value type
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, p_val.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: p_val.type_id as u16,
-                    });
+                    }));
                 }
                 let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
@@ -3135,7 +3160,7 @@ impl IVMHost for WsvHost {
                             vm,
                             key.as_ref()
                                 .strip_prefix(&namespace)
-                                .ok_or(VMError::DecodeError)?,
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             key.as_ref().len(),
                             present,
                         )?
@@ -3190,25 +3215,25 @@ impl IVMHost for WsvHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let name: Name = decode_canonical_norito(tlv.payload)?;
                 let Some(bytes) = self.public_inputs.get(&name) else {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 };
                 let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                 let gas = PUBLIC_INPUT_GAS_BASE
@@ -3227,18 +3252,18 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_JSON_ENCODE => {
                 let tlv = vm.validate_tlv(vm.register(10))?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let input_len = tlv.payload.len();
-                let json: iroha_primitives::json::Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: iroha_primitives::json::Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let body = encode_canonical_norito(&json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -3259,11 +3284,11 @@ impl IVMHost for WsvHost {
                 }
                 let tlv = vm.validate_tlv(addr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let input_len = tlv.payload.len();
-                let json: iroha_primitives::json::Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: iroha_primitives::json::Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let body = encode_canonical_norito(&json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -3299,33 +3324,33 @@ impl IVMHost for WsvHost {
                 let json_tlv = vm.validate_tlv(json_addr)?;
                 let key_tlv = vm.validate_tlv(key_addr)?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: json_tlv.type_id as u16,
-                    });
+                    }));
                 }
                 if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: key_tlv.type_id as u16,
-                    });
+                    }));
                 }
-                let json: Json =
-                    decode_canonical_norito(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = decode_canonical_norito(json_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut input_len = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
                 let value: njson::Value = json
                     .try_into_any_norito()
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut obj = match value {
                     njson::Value::Object(map) => map,
-                    _ => return Err(VMError::DecodeError),
+                    _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                 };
-                let key_name: Name =
-                    decode_canonical_norito(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let key_name: Name = decode_canonical_norito(key_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let field = match number {
                     crate::syscalls::SYSCALL_JSON_SET_I64 => {
                         input_len = input_len.saturating_add(core::mem::size_of::<i64>());
@@ -3336,20 +3361,20 @@ impl IVMHost for WsvHost {
                             crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(12));
                         let value_tlv = vm.validate_tlv(value_addr)?;
                         if value_tlv.type_id != PointerType::AccountId {
-                            return Err(VMError::NoritoInvalid);
+                            return Err(VMError::Trap(VmTrap::NoritoInvalid));
                         }
                         if !pointer_abi::is_type_allowed_for_policy(policy, value_tlv.type_id) {
-                            return Err(VMError::AbiTypeNotAllowed {
+                            return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                                 abi: vm.abi_version(),
                                 type_id: value_tlv.type_id as u16,
-                            });
+                            }));
                         }
                         input_len = input_len.saturating_add(value_tlv.payload.len());
                         let account: AccountId = decode_canonical_norito(value_tlv.payload)
-                            .map_err(|_| VMError::DecodeError)?;
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         njson::Value::from(account.to_string())
                     }
-                    _ => return Err(VMError::UnknownSyscall(number)),
+                    _ => return Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
                 };
                 obj.insert(key_name.to_string(), field);
                 let out_json = Json::from(njson::Value::Object(obj));
@@ -3374,10 +3399,10 @@ impl IVMHost for WsvHost {
                 let tlv = vm.validate_tlv(addr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let payload_len = tlv.payload.len();
                 vm.set_register(10, payload_len as u64);
@@ -3395,18 +3420,18 @@ impl IVMHost for WsvHost {
                 }
                 let tlv = vm.validate_tlv(addr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let input_len = tlv.payload.len();
-                let nm: iroha_model_base::name::Name =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let nm: iroha_model_base::name::Name = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let body = encode_canonical_norito(&nm)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
@@ -3422,15 +3447,15 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_POINTER_TO_NORITO => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = vm.validate_tlv(ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 crate::numeric_tlv::validate_numeric_frame_if_needed(tlv.type_id, tlv.payload)?;
                 let mut body = Vec::with_capacity(2 + 1 + 4 + tlv.payload.len() + 32);
@@ -3462,29 +3487,29 @@ impl IVMHost for WsvHost {
                     .into_iter()
                     .any(|kind| vm.register(11) == u64::from(kind as u16))
                     {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     vm.set_register(10, 0);
                     return Ok(Self::pointer_gas(0));
                 }
                 let tlv = vm.validate_tlv(addr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let encoded_len = tlv.payload.len();
                 let policy = vm.syscall_policy();
-                let expected =
-                    u16::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+                let expected = u16::try_from(vm.register(11))
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 let inner = pointer_abi::validate_tlv_bytes(tlv.payload)
-                    .map_err(|_| VMError::NoritoInvalid)?;
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if expected != 0 && expected != inner.type_id as u16 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if !pointer_abi::is_type_allowed_for_policy(policy, inner.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: inner.type_id as u16,
-                    });
+                    }));
                 }
                 crate::numeric_tlv::validate_numeric_frame_if_needed(inner.type_id, inner.payload)?;
                 let mut out = Vec::with_capacity(7 + inner.payload.len() + 32);
@@ -3581,7 +3606,7 @@ impl IVMHost for WsvHost {
                     let tlv = vm.validate_tlv(src)?;
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     if envelope_len > self.zk_cfg.max_envelope_bytes {
-                        return Err(VMError::PermissionDenied);
+                        return Err(VMError::Trap(VmTrap::PermissionDenied));
                     }
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
@@ -3589,7 +3614,7 @@ impl IVMHost for WsvHost {
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 if total > self.zk_cfg.max_envelope_bytes {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
                 vm.set_register(10, dst);
@@ -3601,10 +3626,10 @@ impl IVMHost for WsvHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let _: QueryRequest = decode_canonical_norito(tlv.payload)?;
-                Err(VMError::NotImplemented { syscall: number })
+                Err(VMError::Trap(VmTrap::NotImplemented { syscall: number }))
             }
             // Decode bounded proof envelopes; standalone hosts cannot authorize proofs.
             syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
@@ -3616,7 +3641,7 @@ impl IVMHost for WsvHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let gas = Self::verify_gas(tlv.payload.len());
                 if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
@@ -3650,7 +3675,7 @@ impl IVMHost for WsvHost {
                 let tlv = vm.validate_tlv(p)?;
                 let instruction_gas = Self::mutation_gas(tlv.payload.len());
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let ib: DMInstructionBox = decode_canonical_norito(tlv.payload)?;
                 let any = (&*ib) as &dyn iroha_data_model::isi::Instruction;
@@ -3658,14 +3683,14 @@ impl IVMHost for WsvHost {
                 match vm.register(11) {
                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
                         let Some(instr) = any_ref.downcast_ref::<DMZk::SubmitBallot>() else {
-                            return Err(VMError::PermissionDenied);
+                            return Err(VMError::Trap(VmTrap::PermissionDenied));
                         };
                         self.handle_submit_ballot(instr)?;
                         Ok(instruction_gas)
                     }
                     // Contracts record no SCCP messages (specs/sccp.md §4.4): the retired
                     // operation tag 2 fails like every other unknown tag.
-                    _ => Err(VMError::PermissionDenied),
+                    _ => Err(VMError::Trap(VmTrap::PermissionDenied)),
                 }
             }
             // ZK read-only syscalls for shielded ledger/elections
@@ -3673,12 +3698,14 @@ impl IVMHost for WsvHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let input_len = tlv.payload.len();
                 let req: crate::zk_verify::RootsGetRequest = decode_canonical_norito(tlv.payload)?;
-                let asset: AssetDefinitionId =
-                    req.asset_id.parse().map_err(|_| VMError::NoritoInvalid)?;
+                let asset: AssetDefinitionId = req
+                    .asset_id
+                    .parse()
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 let (latest, roots, height) = self.wsv.get_roots(&asset, req.max as usize);
                 let resp = crate::zk_verify::RootsGetResponse {
                     latest,
@@ -3703,21 +3730,21 @@ impl IVMHost for WsvHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let input_len = tlv.payload.len();
                 let req: crate::zk_verify::VoteGetTallyRequest =
                     decode_canonical_norito(tlv.payload)?;
                 if !req.is_valid_v1() {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let (finalized, tally) = if let Some(e) = self.wsv.elections.get(&req.election_id) {
                     DMZk::validate_election_tally_v1(e.options, e.tally.len())
-                        .map_err(|_| VMError::NoritoInvalid)?;
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                     e.tally
                         .iter()
                         .try_fold(0_u128, |total, weight| total.checked_add(*weight))
-                        .ok_or(VMError::NoritoInvalid)?;
+                        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                     (e.finalized, e.tally.clone())
                 } else {
                     (false, Vec::new())
@@ -3742,7 +3769,7 @@ impl IVMHost for WsvHost {
                 let v = vm.register(10);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let peer = parse_peer(tlv.payload)?;
                 self.wsv.peers.insert(peer);
@@ -3753,13 +3780,13 @@ impl IVMHost for WsvHost {
                 let v = vm.register(10);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let peer = parse_peer(tlv.payload)?;
                 if self.wsv.peers.remove(&peer) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_CREATE_TRIGGER => {
@@ -3767,7 +3794,7 @@ impl IVMHost for WsvHost {
                 let v = vm.register(10);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let name = parse_json_string(tlv.payload, &["name"])?;
                 self.wsv
@@ -3781,14 +3808,14 @@ impl IVMHost for WsvHost {
                 let v = vm.register(10);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let name = self.decode_name_payload(tlv.payload)?;
                 if self.wsv.triggers.remove(name.as_ref()).is_some() {
                     self.wsv.trigger_authorities.remove(name.as_ref());
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
@@ -3796,7 +3823,7 @@ impl IVMHost for WsvHost {
                 let v = vm.register(10);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let name = self.decode_name_payload(tlv.payload)?;
                 let enable = vm.register(11) != 0;
@@ -3806,27 +3833,27 @@ impl IVMHost for WsvHost {
                         &PermissionToken::ModifyTriggerMetadata(name.clone()),
                     )
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 if let Some(e) = self.wsv.triggers.get_mut(name.as_ref()) {
                     *e = enable;
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let req: scode::DeactivateContractInstance = decode_canonical_norito(tlv.payload)?;
                 let instance = self
                     .wsv
                     .contract_instances
                     .get_mut(req.contract_address())
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 if instance.lifecycle.owner
                     != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
                         self.caller.clone(),
@@ -3834,20 +3861,20 @@ impl IVMHost for WsvHost {
                     || instance.lifecycle.revision != *req.expected_revision()
                     || instance.lifecycle.active_code_hash.is_none()
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 instance.lifecycle.revision = instance
                     .lifecycle
                     .revision
                     .checked_add(1)
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 instance.lifecycle.active_code_hash = None;
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
                 // Installed mock artifacts always include the authenticated declaration table;
                 // deleting code independently of that retained fixture would create invalid state.
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             }
             syscalls::SYSCALL_REGISTER_DOMAIN => {
                 // r10=&DomainId TLV; caller must have RegisterDomain
@@ -3855,7 +3882,7 @@ impl IVMHost for WsvHost {
                 if self.wsv.register_domain(&self.caller, id) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_REGISTER_ACCOUNT => {
@@ -3864,7 +3891,7 @@ impl IVMHost for WsvHost {
                 if self.wsv.register_account(&self.caller, id) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_ADD_SIGNATORY => {
@@ -3872,19 +3899,19 @@ impl IVMHost for WsvHost {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                let json: Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let signatory: PublicKey =
-                    njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+                let json: Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                let signatory: PublicKey = njson::from_str(json.get())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if self
                     .wsv
                     .add_signatory(&self.caller, &account, signatory.to_string())
                 {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_REMOVE_SIGNATORY => {
@@ -3892,57 +3919,60 @@ impl IVMHost for WsvHost {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                let json: Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let signatory: PublicKey =
-                    njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+                let json: Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                let signatory: PublicKey = njson::from_str(json.get())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 let key = signatory.to_string();
                 if self.wsv.remove_signatory(&self.caller, &account, &key) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
                 // r10 = &AccountId; r11 = quorum
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let quorum_raw = vm.register(11);
-                let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
-                let quorum = NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
+                let quorum_u16 =
+                    u16::try_from(quorum_raw).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                let quorum =
+                    NonZeroU16::new(quorum_u16).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if self
                     .wsv
                     .set_account_quorum(&self.caller, &account, u32::from(quorum.get()))
                 {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let key_tlv = vm.validate_tlv(vm.register(11))?;
                 if key_tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let key = self.decode_name_payload(key_tlv.payload)?;
                 let val_tlv = vm.validate_tlv(vm.register(12))?;
                 if val_tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                let json: Json =
-                    decode_canonical_norito(val_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let value: njson::Value =
-                    njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
-                let minified = njson::to_vec(&value).map_err(|_| VMError::NoritoInvalid)?;
+                let json: Json = decode_canonical_norito(val_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                let value: njson::Value = njson::from_str(json.get())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+                let minified =
+                    njson::to_vec(&value).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if self
                     .wsv
                     .set_account_detail(&self.caller, &account, key.as_ref(), minified)
                 {
                     Ok(Self::mutation_gas(val_tlv.payload.len()))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
@@ -3954,14 +3984,14 @@ impl IVMHost for WsvHost {
                     match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
                         PointerType::Name | PointerType::Blob => {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        _ => return Err(VMError::NoritoInvalid),
+                        _ => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
                     }
                 };
                 let name_tlv = vm.validate_tlv(vm.register(11))?;
                 if name_tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let registration =
                     decode_asset_registration(name_tlv.payload, vm.register(12), vm.register(13))?;
@@ -3976,7 +4006,7 @@ impl IVMHost for WsvHost {
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => {
@@ -3985,21 +4015,24 @@ impl IVMHost for WsvHost {
                 let expected_revision = vm.register(12);
                 let availability_flags = vm.register(13);
                 if availability_flags & !0b11 != 0 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let incoming = availability_flags & 0b01 != 0;
                 let outgoing = availability_flags & 0b10 != 0;
-                let option_layout =
-                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let option_layout = crate::sum::SumLayoutV1::option(1)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let (has_reason, reason_words) =
                     crate::sum::read_words(vm, vm.register(14), option_layout)?;
                 if has_reason {
-                    let reason_ptr = reason_words.first().copied().ok_or(VMError::DecodeError)?;
+                    let reason_ptr = reason_words
+                        .first()
+                        .copied()
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let reason = vm.validate_tlv(reason_ptr)?;
                     if reason.type_id != PointerType::Blob
                         || core::str::from_utf8(reason.payload).is_err()
                     {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                 }
                 let permission = PermissionToken::SetAssetTransferAvailability {
@@ -4010,7 +4043,7 @@ impl IVMHost for WsvHost {
                     || !self.wsv.account_is_linked(&account)
                     || !self.wsv.asset_definitions.contains_key(&asset_definition)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let key = (
                     MockWorldStateView::account_subject(&account),
@@ -4025,11 +4058,11 @@ impl IVMHost for WsvHost {
                 if current_revision != expected_revision
                     || (current_incoming == incoming && current_outgoing == outgoing)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let next_revision = current_revision
                     .checked_add(1)
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 self.wsv
                     .asset_transfer_availability
                     .insert(key, (next_revision, incoming, outgoing));
@@ -4038,19 +4071,22 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT => {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_definition = self.decode_asset_reg(vm, 11)?;
-                let layout =
-                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let layout = crate::sum::SumLayoutV1::option(1)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let (is_some, words) = crate::sum::read_words(vm, vm.register(12), layout)?;
                 let limit = if is_some {
-                    let pointer = words.first().copied().ok_or(VMError::DecodeError)?;
+                    let pointer = words
+                        .first()
+                        .copied()
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let tlv = vm.validate_tlv(pointer)?;
                     if tlv.type_id != PointerType::Quantity {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     Some(
                         QuantityValueV1::decode_frame(tlv.payload)
                             .map(QuantityValueV1::into_quantity)
-                            .map_err(|_| VMError::DecodeError)?,
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )
                 } else {
                     None
@@ -4063,7 +4099,7 @@ impl IVMHost for WsvHost {
                     || !self.wsv.account_is_linked(&account)
                     || !self.wsv.asset_definitions.contains_key(&asset_definition)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 self.wsv.asset_holding_limits.insert(
                     (
@@ -4077,19 +4113,22 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_definition = self.decode_asset_reg(vm, 11)?;
-                let layout =
-                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let layout = crate::sum::SumLayoutV1::option(1)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let (is_some, words) = crate::sum::read_words(vm, vm.register(12), layout)?;
                 let cap = if is_some {
-                    let pointer = words.first().copied().ok_or(VMError::DecodeError)?;
+                    let pointer = words
+                        .first()
+                        .copied()
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let tlv = vm.validate_tlv(pointer)?;
                     if tlv.type_id != PointerType::Quantity {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     Some(
                         QuantityValueV1::decode_frame(tlv.payload)
                             .map(QuantityValueV1::into_quantity)
-                            .map_err(|_| VMError::DecodeError)?,
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )
                 } else {
                     None
@@ -4105,7 +4144,7 @@ impl IVMHost for WsvHost {
                     || !self.wsv.account_is_linked(&account)
                     || !self.wsv.asset_definitions.contains_key(&asset_definition)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 self.wsv.asset_transfer_daily_limits.insert(
                     (
@@ -4146,16 +4185,16 @@ impl IVMHost for WsvHost {
                 let tlv = vm.validate_tlv(resolved)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 if !matches!(
                     tlv.type_id,
                     PointerType::Blob | PointerType::NoritoBytes | PointerType::Json
                 ) {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if crate::dev_env::debug_wsv_enabled() {
                     let message = if tlv.type_id == PointerType::Json {
@@ -4217,7 +4256,7 @@ impl IVMHost for WsvHost {
                 let contract = self
                     .contract_runtime_address
                     .as_ref()
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 let payload = encode_canonical_norito(&contract.subject_id())?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, pointer);
@@ -4237,17 +4276,18 @@ impl IVMHost for WsvHost {
                 let alias_pointer = vm.register(10);
                 let alias_tlv = vm.validate_tlv(alias_pointer)?;
                 if alias_tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let alias_input_len = alias_tlv.payload.len();
                 let alias = String::from_utf8(alias_tlv.payload.to_vec())
-                    .map_err(|_| VMError::DecodeError)?;
-                Self::parse_account_alias_scope(&alias).map_err(|_| VMError::NoritoInvalid)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                Self::parse_account_alias_scope(&alias)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 let account = self
                     .account_aliases
                     .get(&alias)
                     .map(|binding| binding.account.clone())
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 let payload = encode_canonical_norito(&account)?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, pointer);
@@ -4266,7 +4306,7 @@ impl IVMHost for WsvHost {
                             .wsv
                             .has_permission(&self.caller, &PermissionToken::ManagePermissions)
                         {
-                            return Err(VMError::PermissionDenied);
+                            return Err(VMError::Trap(VmTrap::PermissionDenied));
                         }
                         parse_permission_name_payload(tlv.payload)?
                     }
@@ -4275,7 +4315,8 @@ impl IVMHost for WsvHost {
                         // generic mock management grant cannot spend another account's bucket.
                         let value = parse_json_value(tlv.payload)?;
                         let permission: iroha_data_model::permission::Permission =
-                            njson::from_value(value).map_err(|_| VMError::NoritoInvalid)?;
+                            njson::from_value(value)
+                                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                         match permission.name() {
                             "CanTransferAsset" => {
                                 #[derive(norito::derive::JsonDeserialize)]
@@ -4286,9 +4327,9 @@ impl IVMHost for WsvHost {
                                 let payload: TransferPayload = permission
                                     .payload()
                                     .try_into_any_norito()
-                                    .map_err(|_| VMError::NoritoInvalid)?;
+                                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                                 if payload.asset.account() != &self.caller {
-                                    return Err(VMError::PermissionDenied);
+                                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                                 }
                                 PermissionToken::TransferAssetBucket(payload.asset)
                             }
@@ -4301,11 +4342,11 @@ impl IVMHost for WsvHost {
                                 let payload: TriggerPayload = permission
                                     .payload()
                                     .try_into_any_norito()
-                                    .map_err(|_| VMError::NoritoInvalid)?;
+                                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                                 if self.wsv.trigger_authorities.get(payload.trigger.as_ref())
                                     != Some(&self.caller)
                                 {
-                                    return Err(VMError::PermissionDenied);
+                                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                                 }
                                 if permission.name() == "CanExecuteTrigger" {
                                     PermissionToken::ExecuteTrigger(payload.trigger)
@@ -4313,10 +4354,10 @@ impl IVMHost for WsvHost {
                                     PermissionToken::ModifyTriggerMetadata(payload.trigger)
                                 }
                             }
-                            _ => return Err(VMError::PermissionDenied),
+                            _ => return Err(VMError::Trap(VmTrap::PermissionDenied)),
                         }
                     }
-                    _ => return Err(VMError::NoritoInvalid),
+                    _ => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
                 };
                 if tlv.type_id == PointerType::Json {
                     let exists = self
@@ -4325,7 +4366,7 @@ impl IVMHost for WsvHost {
                         .get(&MockWorldStateView::account_subject(&subject))
                         .is_some_and(|permissions| permissions.contains(&token));
                     if exists == (number == syscalls::SYSCALL_GRANT_PERMISSION) {
-                        return Err(VMError::PermissionDenied);
+                        return Err(VMError::Trap(VmTrap::PermissionDenied));
                     }
                 }
                 if number == syscalls::SYSCALL_GRANT_PERMISSION {
@@ -4342,8 +4383,10 @@ impl IVMHost for WsvHost {
                 let contract = self
                     .contract_runtime_address
                     .clone()
-                    .ok_or(VMError::PermissionDenied)?;
-                let interface = vm.contract_interface().ok_or(VMError::InvalidMetadata)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
+                let interface = vm
+                    .contract_interface()
+                    .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
                 let declared = interface.permissions.iter().any(|declaration| {
                     declaration.name == permission
                         && matches!(
@@ -4352,19 +4395,19 @@ impl IVMHost for WsvHost {
                         )
                 });
                 if !declared || self.caller != contract.subject_id() {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let token = PermissionToken::ContractPermission {
                     contract,
                     permission,
                 };
                 if !self.wsv.has_permission(&self.caller, &token) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let is_grant = number == syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION;
                 let exists = self.wsv.has_permission(&subject, &token);
                 if exists == is_grant {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 if is_grant {
                     self.wsv.grant_permission(&subject, token);
@@ -4378,7 +4421,7 @@ impl IVMHost for WsvHost {
                     .wsv
                     .has_permission(&self.caller, &PermissionToken::ManageRoles)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 // r10 = &Name (role), r11 = &Json (perm set)
                 let rname = self.decode_name_reg(vm, 10)?.to_string();
@@ -4386,7 +4429,7 @@ impl IVMHost for WsvHost {
                     let v = vm.register(11);
                     let tlv = vm.validate_tlv(v)?;
                     if tlv.type_id != PointerType::Json {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let mut set = HashSet::new();
                     for name in parse_json_string_array(tlv.payload, &["perms", "permissions"])? {
@@ -4399,7 +4442,7 @@ impl IVMHost for WsvHost {
                     Ok(Self::mutation_gas(0))
                 } else {
                     eprintln!("[wsv] create_role permission denied for {rname}");
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_DELETE_ROLE => {
@@ -4407,14 +4450,14 @@ impl IVMHost for WsvHost {
                     .wsv
                     .has_permission(&self.caller, &PermissionToken::ManageRoles)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 // r10 = &Name
                 let rname = self.decode_name_reg(vm, 10)?.to_string();
                 if self.wsv.delete_role(&rname) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_GRANT_ROLE => {
@@ -4422,7 +4465,7 @@ impl IVMHost for WsvHost {
                     .wsv
                     .has_permission(&self.caller, &PermissionToken::ManageRoles)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 // r10 = &AccountId, r11=&Name
                 let subj = self.decode_account_subject_reg(vm, 10)?;
@@ -4430,7 +4473,7 @@ impl IVMHost for WsvHost {
                 if self.wsv.grant_role(&subj, &rname) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_REVOKE_ROLE => {
@@ -4438,26 +4481,26 @@ impl IVMHost for WsvHost {
                     .wsv
                     .has_permission(&self.caller, &PermissionToken::ManageRoles)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.revoke_role(&subj, &rname) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_entries.is_some() {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 if self.fastpq_batch_entries.is_some() {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let from_id = self.decode_canonical_account_reg(vm, 10)?;
                 let to_id = self.decode_canonical_account_reg(vm, 11)?;
@@ -4472,7 +4515,7 @@ impl IVMHost for WsvHost {
                 // Every definition modeled by this fixture host has Global policy.
                 // Like the native host, reject an explicit scope even when it is 0.
                 if scope != AssetBalanceScope::Global {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let transfers_external_bucket = MockWorldStateView::account_subject(&from_id)
                     != MockWorldStateView::account_subject(&self.caller);
@@ -4486,7 +4529,7 @@ impl IVMHost for WsvHost {
                     if !self.wsv.has_permission(&self.caller, &exact)
                         && !self.wsv.has_permission(&self.caller, &definition_wide)
                     {
-                        return Err(VMError::PermissionDenied);
+                        return Err(VMError::Trap(VmTrap::PermissionDenied));
                     }
                 }
                 // The bucket permission checked above authorizes an external-bucket transfer.
@@ -4500,7 +4543,7 @@ impl IVMHost for WsvHost {
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
@@ -4512,12 +4555,12 @@ impl IVMHost for WsvHost {
                 let amount = self.decode_amount_reg(vm, 12)?;
                 let token = PermissionToken::MintAsset(asset_id.clone());
                 if !self.wsv.has_permission(&self.caller, &token) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 if self.wsv.mint(&self.caller, account_id, asset_id, amount) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_BURN_ASSET => {
@@ -4529,33 +4572,33 @@ impl IVMHost for WsvHost {
                 {
                     let token = PermissionToken::BurnAsset(asset_id.clone());
                     if !self.wsv.has_permission(&self.caller, &token) {
-                        return Err(VMError::PermissionDenied);
+                        return Err(VMError::Trap(VmTrap::PermissionDenied));
                     }
                 }
                 if self.wsv.burn(&self.caller, account_id, asset_id, amount) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_UNREGISTER_ASSET => {
                 let asset_id = self.decode_asset_reg(vm, 10)?;
                 if !self.wsv.unregister_asset_definition(&asset_id) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
                 let subject = self.decode_account_subject_reg(vm, 10)?;
                 if !self.wsv.unregister_account_subject(&subject) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_UNREGISTER_DOMAIN => {
                 let dom = self.decode_domain_reg(vm, 10)?;
                 if !self.wsv.unregister_domain(&dom) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 Ok(Self::mutation_gas(0))
             }
@@ -4563,7 +4606,7 @@ impl IVMHost for WsvHost {
                 let domain = self.decode_domain_reg(vm, 10)?;
                 let destination = self.decode_account_subject_reg(vm, 11)?;
                 if !self.wsv.transfer_domain(&self.caller, &domain, destination) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 Ok(Self::mutation_gas(0))
             }
@@ -4578,18 +4621,18 @@ impl IVMHost for WsvHost {
                         MockWorldStateView::account_subject(&account_id),
                     );
                     if !self.wsv.has_permission(&authority, &token) {
-                        return Err(VMError::PermissionDenied);
+                        return Err(VMError::Trap(VmTrap::PermissionDenied));
                     }
                 }
                 if let Some(b) = self.wsv.balance_checked(&authority, &account_id, &asset_id) {
                     let payload = QuantityValueV1::new(b)
                         .encode_frame()
-                        .map_err(|_| VMError::NoritoInvalid)?;
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                     let p = Self::alloc_tlv_payload(vm, PointerType::Quantity, &payload)?;
                     vm.set_register(10, p);
                     Ok(Self::singular_query_gas(payload.len()))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_NFT_MINT_ASSET => {
@@ -4598,7 +4641,7 @@ impl IVMHost for WsvHost {
                 if self.wsv.create_nft(owner, self.caller.clone(), nft) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
@@ -4608,7 +4651,7 @@ impl IVMHost for WsvHost {
                 if self.wsv.transfer_nft(&self.caller, from, to, &nft) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_NFT_SET_METADATA => {
@@ -4617,17 +4660,17 @@ impl IVMHost for WsvHost {
                 let v = vm.register(12);
                 let tlv = vm.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                let _: Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let _: Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 if self
                     .wsv
                     .set_nft_metadata(&self.caller, &nft, key, tlv.payload.to_vec())
                 {
                     Ok(Self::mutation_gas(tlv.payload.len()))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_NFT_BURN_ASSET => {
@@ -4635,13 +4678,15 @@ impl IVMHost for WsvHost {
                 if self.wsv.burn_nft(&self.caller, &nft) {
                     Ok(Self::mutation_gas(0))
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => Err(VMError::PermissionDenied),
+            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
+                Err(VMError::Trap(VmTrap::PermissionDenied))
+            }
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(),
             _ => Err(Self::unsupported_syscall_error(number)),
         }
@@ -4692,7 +4737,7 @@ impl IVMHost for WsvHost {
     fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
         let saved = snapshot
             .downcast_ref::<WsvHostSnapshot>()
-            .ok_or(VMError::HostUnavailable)?;
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         self.restore_state(saved)
     }
     fn access_logging_supported(&self) -> bool {
@@ -4703,6 +4748,7 @@ impl IVMHost for WsvHost {
 #[cfg(test)]
 mod tests_peer_json {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn parse_peer_accepts_canonical_string_and_wrapped_json() {
         const SAMPLE: &str =
@@ -4722,17 +4768,21 @@ mod tests_peer_json {
     fn parse_peer_rejects_raw_and_missing_payload() {
         assert!(matches!(
             parse_peer(br#"{"peer":"not-a-frame"}"#),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let missing =
             Json::from_str_norito(r#"{"not_peer":true}"#).expect("missing-peer Json value");
         let missing = encode_canonical_norito(&missing).expect("canonical missing-peer Json");
-        assert!(matches!(parse_peer(&missing), Err(VMError::NoritoInvalid)));
+        assert!(matches!(
+            parse_peer(&missing),
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
+        ));
     }
 }
 #[cfg(test)]
 mod tests_axt_policy_snapshot {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn default_space_directory_axt_policy_is_empty() {
@@ -4763,7 +4813,7 @@ mod tests_axt_policy_snapshot {
 
         assert!(matches!(
             host.validate_axt_proof(dsid, &proof),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
 
@@ -4857,6 +4907,7 @@ mod tests_axt_policy_snapshot {
 mod tests_governance_elections {
     use super::*;
     use crate::Memory;
+    use crate::error::VmTrap;
     use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     fn vote_vk_id() -> VerifyingKeyId {
         VerifyingKeyId::new("mock/governance-fixture", "governance_vote_vk")
@@ -5204,7 +5255,7 @@ mod tests_governance_elections {
         assert_eq!(election.tally, vec![4, 6]);
         let res_second = host.handle_finalize_election(&fin);
         assert!(
-            matches!(res_second, Err(VMError::PermissionDenied)),
+            matches!(res_second, Err(VMError::Trap(VmTrap::PermissionDenied))),
             "res_second: {res_second:?}"
         );
     }
@@ -5231,7 +5282,7 @@ mod tests_governance_elections {
             tally_proof,
         };
         let res = host.handle_finalize_election(&fin);
-        assert!(matches!(res, Err(VMError::PermissionDenied)));
+        assert!(matches!(res, Err(VMError::Trap(VmTrap::PermissionDenied))));
         let election = host.wsv.elections.get("e-mismatch").unwrap();
         assert!(!election.finalized);
         assert!(
@@ -5309,7 +5360,7 @@ mod tests_governance_elections {
                 .unwrap() as *mut WsvHost;
             (*host_ptr).syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         };
-        assert!(matches!(res, Err(VMError::PermissionDenied)));
+        assert!(matches!(res, Err(VMError::Trap(VmTrap::PermissionDenied))));
         let host_ref = vm.host_mut_any().unwrap();
         let host = host_ref.downcast_ref::<WsvHost>().unwrap();
         assert_eq!(host.wsv.elections.get("e1").unwrap().ciphertexts.len(), 0);
@@ -5382,7 +5433,10 @@ mod tests_governance_elections {
             let host = host_ref.downcast_mut::<WsvHost>().unwrap();
             host.handle_submit_ballot(&submit_bad)
         };
-        assert!(matches!(res_bad, Err(VMError::PermissionDenied)));
+        assert!(matches!(
+            res_bad,
+            Err(VMError::Trap(VmTrap::PermissionDenied))
+        ));
         {
             let host_ref = vm.host_mut_any().unwrap();
             let host = host_ref.downcast_ref::<WsvHost>().unwrap();
@@ -5444,7 +5498,7 @@ mod tests_governance_elections {
                 .expect("WsvHost");
             host.handle_finalize_election(&fe)
         };
-        assert!(matches!(res, Err(VMError::PermissionDenied)));
+        assert!(matches!(res, Err(VMError::Trap(VmTrap::PermissionDenied))));
     }
 }
 #[cfg(test)]
@@ -5524,6 +5578,7 @@ mod tests_nft_decode {
 #[cfg(test)]
 mod tests_null_decode {
     use super::*;
+    use crate::error::VmTrap;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
 
@@ -5660,7 +5715,7 @@ mod tests_null_decode {
             assert!(
                 matches!(
                     call_syscall(&mut vm, syscalls::SYSCALL_POINTER_FROM_NORITO),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "numeric {kind:?} cannot decode from null"
             );
@@ -5834,7 +5889,7 @@ mod tests_null_decode {
         vm.set_register(11, signatory_ptr);
         let err = call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY)
             .expect_err("malformed account payload should be rejected");
-        assert!(matches!(err, VMError::DecodeError));
+        assert!(matches!(err, VMError::Trap(VmTrap::DecodeError)));
     }
     #[test]
     fn get_account_balance_syscall_accepts_account_id_payloads() {
@@ -6080,7 +6135,7 @@ mod tests_null_decode {
             assert!(
                 matches!(
                     call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "invalid stored tally must fail closed"
             );
@@ -6145,7 +6200,7 @@ mod tests_null_decode {
         vm.set_register(10, request_ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             vm.register(10),
@@ -6173,7 +6228,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         let err = call_syscall(&mut vm, syscalls::SYSCALL_INPUT_PUBLISH_TLV)
             .expect_err("oversized tlv should be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
     }
     #[test]
     fn input_publish_tlv_charges_envelope_bytes() {
@@ -6249,7 +6304,7 @@ mod tests_null_decode {
         let err = host
             .syscall(syscalls::SYSCALL_CREATE_ROLE, &mut vm)
             .expect_err("create_role must require ManageRoles");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
         assert!(!host.wsv.roles.contains_key("operator"));
         let account_payload = norito::to_bytes(&caller).expect("encode account id");
         let account_ptr = vm
@@ -6265,7 +6320,7 @@ mod tests_null_decode {
         let err = host
             .syscall(syscalls::SYSCALL_GRANT_PERMISSION, &mut vm)
             .expect_err("grant_permission must require ManagePermissions");
-        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
         assert!(!host.wsv.has_permission(
             &caller,
             &PermissionToken::Custom("BenefitSpend".to_string())
@@ -6342,9 +6397,9 @@ mod tests_null_decode {
         let ambient_probe = vec!["ambient".to_owned(), "layout".to_owned()];
         let ambient_before = norito::to_bytes(&ambient_probe).expect("encode ambient probe");
         assert!(
-            matches!((&(call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)), &(VMError::NotImplemented {
+            matches!((&(call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)), &(VMError::Trap(VmTrap::NotImplemented {
                 syscall: syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
-            })), (Err(VMError::NotImplemented { syscall: __actual_syscall }), VMError::NotImplemented { syscall: __expected_syscall }) if __actual_syscall == __expected_syscall)
+            }))), (Err(VMError::Trap(VmTrap::NotImplemented { syscall: __actual_syscall })), VMError::Trap(VmTrap::NotImplemented { syscall: __expected_syscall })) if __actual_syscall == __expected_syscall)
         );
         assert_eq!(
             norito::to_bytes(&ambient_probe).expect("re-encode ambient probe"),
@@ -6363,7 +6418,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Json, &canonical_payload))
@@ -6371,7 +6426,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let wrong_payload = encode_canonical_norito(&Json::from(norito::json::Value::Object(
             norito::json::Map::new(),
@@ -6383,7 +6438,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0xFF]))
@@ -6391,7 +6446,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -6427,7 +6482,7 @@ mod tests_null_decode {
             assert!(
                 matches!(
                     call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "tag {tag} must not execute RecordSccpMessage"
             );
@@ -6510,7 +6565,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let alternate_payload = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -6524,7 +6579,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Json, &boxed_payload))
@@ -6532,7 +6587,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let wrong_payload = encode_canonical_norito(&Json::from(norito::json::Value::Object(
             norito::json::Map::new(),
@@ -6544,7 +6599,7 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let canonical_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &boxed_payload))
@@ -6556,7 +6611,7 @@ mod tests_null_decode {
             assert!(
                 matches!(
                     call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 "tag {tag} must not authorize SubmitBallot"
             );
@@ -6580,7 +6635,7 @@ mod tests_null_decode {
         vm.set_register(11, syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         assert!(matches!(
             call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert_eq!(
             vm.host_mut_any()
@@ -6799,20 +6854,20 @@ mod tests_null_decode {
         }
         assert!(matches!(
             invoke(true, true, None, None),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(matches!(
             invoke(false, false, None, None),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(matches!(
             invoke(false, true, Some(11), None),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         for dataspace in [0, 10] {
             assert!(matches!(
                 invoke(false, true, Some(dataspace), Some(dataspace)),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ));
         }
         assert!(invoke(false, true, None, None).is_ok());
@@ -6976,7 +7031,7 @@ mod tests_null_decode {
         assert!(
             matches!(
                 call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_INT),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
         );
@@ -7041,7 +7096,11 @@ mod tests_null_decode {
             let err = call_syscall(&mut vm, syscalls::SYSCALL_POINTER_FROM_NORITO)
                 .expect_err("pointer transport must reject a noncanonical Int frame");
             assert!(
-                matches!(err, VMError::PointerAbiFault(_) | VMError::NoritoInvalid),
+                matches!(
+                    err,
+                    VMError::Trap(VmTrap::PointerAbiFault(_))
+                        | VMError::Trap(VmTrap::NoritoInvalid)
+                ),
                 "malformed numeric frame {label} yielded {err:?}"
             );
         }
@@ -7078,7 +7137,7 @@ mod tests_null_decode {
             assert!(
                 matches!(
                     call_syscall(&mut vm, syscalls::SYSCALL_NAME_DECODE),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ),
                 "{label} must not be accepted as a first-release Name frame"
             );
@@ -7106,7 +7165,7 @@ mod tests_null_decode {
             vm.set_register(10, ptr);
             assert!(matches!(
                 call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!(vm.register(10), ptr);
         }
@@ -7203,7 +7262,7 @@ mod tests_null_decode {
         vm.set_register(11, p_blob);
         let err = call_syscall(&mut vm, syscalls::SYSCALL_SCHEMA_DECODE)
             .expect_err("blob should be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
+        assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
     }
     #[test]
     fn wsv_schema_helpers_charge_payload_bytes() {
@@ -7336,7 +7395,7 @@ mod tests_null_decode {
         let error = execution_host
             .syscall(syscalls::SYSCALL_JSON_ENCODE, &mut vm)
             .expect_err("malformed JSON is rejected after debit preparation");
-        assert!(matches!(error, VMError::DecodeError));
+        assert!(matches!(error, VMError::Trap(VmTrap::DecodeError)));
     }
     #[test]
     fn bounded_prepare_rejects_forged_extent_without_cloning_or_mutation() {
@@ -7418,7 +7477,7 @@ mod tests_null_decode {
             .try_write_log_snapshot()
             .expect("allocate write-log snapshot");
         let error = vm.run().expect_err("bounded quote must be unaffordable");
-        assert!(matches!(error, VMError::OutOfGas));
+        assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
         assert_eq!(vm.register(10), name_pointer);
         assert_eq!(
             vm.memory
@@ -7516,7 +7575,7 @@ mod tests_null_decode {
         // A present negative amount is malformed input, never an absent field.
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -7562,7 +7621,10 @@ mod tests_null_decode {
                 .unwrap_or_else(|error| panic!("store {label} quantity: {error:?}"));
             vm.set_register(12, pointer);
             assert!(
-                matches!(host.decode_amount_reg(&vm, 12), Err(VMError::NoritoInvalid)),
+                matches!(
+                    host.decode_amount_reg(&vm, 12),
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
+                ),
                 "{label} bytes must not acquire pointer provenance"
             );
         }
@@ -7575,7 +7637,7 @@ mod tests_null_decode {
         vm.set_register(12, corrupted_ptr);
         assert!(matches!(
             host.decode_amount_reg(&vm, 12),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let legacy_numeric = Numeric::new(125_u32, 2);
         let legacy_payload = norito::to_bytes(&legacy_numeric).expect("encode legacy Numeric");
@@ -7585,7 +7647,7 @@ mod tests_null_decode {
         vm.set_register(12, legacy_ptr);
         assert!(matches!(
             host.decode_amount_reg(&vm, 12),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let wrong_schema_numeric = Numeric::new(1_250_u32, 3);
         let wrong_schema_ptr = vm
@@ -7597,7 +7659,7 @@ mod tests_null_decode {
         vm.set_register(12, wrong_schema_ptr);
         assert!(matches!(
             host.decode_amount_reg(&vm, 12),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -7712,7 +7774,7 @@ mod tests_null_decode {
         let error = execution_host
             .syscall(syscalls::SYSCALL_STATE_COUNT, &mut vm)
             .expect_err("malformed StatePath must be rejected by the state scan");
-        assert!(matches!(error, VMError::DecodeError));
+        assert!(matches!(error, VMError::Trap(VmTrap::DecodeError)));
         assert!(execution_host.actual_access.read_keys.is_empty());
     }
     #[test]
@@ -7743,6 +7805,7 @@ mod tests_null_decode {
 #[cfg(test)]
 mod read_deferral_tests {
     use super::*;
+    use crate::error::VmDeferral;
 
     #[test]
     fn asset_registration_returns_read_refusal_without_retrying_an_alternate_decoder() {
@@ -7757,7 +7820,7 @@ mod read_deferral_tests {
         budget.set_limit_bytes(budget.reserved_bytes());
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_REGISTER_ASSET, &mut vm),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(vm.register(10), crate::Memory::INPUT_START);
     }
@@ -7766,6 +7829,7 @@ mod read_deferral_tests {
 #[cfg(test)]
 mod tests_core_asset_definition {
     use super::*;
+    use crate::error::VmTrap;
     use ivm_abi::core_query::CoreQueryEntityTagV1;
 
     fn fixture() -> (AccountId, AssetDefinitionId) {
@@ -7877,7 +7941,7 @@ mod tests_core_asset_definition {
         vm.set_register(10, 999);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_CORE_QUERY_GET, &mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
         assert!(
@@ -7894,7 +7958,7 @@ mod tests_core_asset_definition {
         vm.set_register(11, pointer);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_CORE_QUERY_GET, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(host.wsv.asset_definitions.is_empty());
     }
@@ -7903,6 +7967,7 @@ mod tests_core_asset_definition {
 #[cfg(test)]
 mod tests_asset_registration_and_scope {
     use super::*;
+    use crate::error::VmTrap;
     use iroha_data_model::asset::definition::ivm_registration;
 
     fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -7990,7 +8055,7 @@ mod tests_asset_registration_and_scope {
             }
             assert!(matches!(
                 register(&mut host, b"Rose", 0, 0),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert!(host.wsv.asset_definition_registration(&asset()).is_none());
         }
@@ -8042,7 +8107,7 @@ mod tests_asset_registration_and_scope {
             let mut host = registering_host();
             assert!(matches!(
                 register(&mut host, name, spec_word, mintable_word),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
             assert_eq!(host.wsv.asset_definition_registration(&asset()), None);
             assert!(decode_asset_registration(name, spec_word, mintable_word).is_err());

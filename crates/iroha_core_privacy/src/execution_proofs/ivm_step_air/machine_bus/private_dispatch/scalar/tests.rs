@@ -11,6 +11,7 @@ use ivm::{
     },
     host::DefaultHost,
 };
+use ivm_abi::error::VmTrap;
 
 /// Canonical register-form word: unary formats reserve the rs2 field, so it is zero.
 fn register_word(opcode: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
@@ -330,8 +331,11 @@ fn typed_unit_schema_charges_its_node_at_return_only() {
     // Unit-word validation debit. It must not publish a completed root return.
     let (_, recorder, outcome) = shifts::capture(&[], &[], total_gas - 1, cycles);
     assert!(matches!(
-        (&(outcome), &(ivm::VMError::OutOfGas)),
-        (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+        (&(outcome), &(ivm::VMError::Trap(VmTrap::OutOfGas))),
+        (
+            Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+            ivm::VMError::Trap(VmTrap::OutOfGas)
+        )
     ));
     let terminal = recorder.records().last().unwrap();
     assert_eq!(terminal.before.gas_remaining, 1 + validation_gas);

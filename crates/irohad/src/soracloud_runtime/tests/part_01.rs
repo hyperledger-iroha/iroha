@@ -579,11 +579,11 @@ fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
         let mut vm = IVM::new(u64::MAX);
         assert!(matches!(
             host.prepare_syscall(syscall, vm.syscall_quote()),
-            Err(VMError::UnknownSyscall(actual)) if actual == syscall
+            Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == syscall
         ));
         assert!(matches!(
             host.syscall(syscall, &mut vm),
-            Err(VMError::UnknownSyscall(actual)) if actual == syscall
+            Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == syscall
         ));
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
@@ -591,7 +591,7 @@ fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
         vm.load_code(&code)?;
         assert!(matches!(
             vm.run_with_host(&mut host),
-            Err(VMError::UnknownSyscall(actual)) if actual == syscall
+            Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == syscall
         ));
     }
     Ok(())

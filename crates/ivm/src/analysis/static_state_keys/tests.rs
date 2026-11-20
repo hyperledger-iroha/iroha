@@ -2,6 +2,7 @@
 
 use super::super::static_state_literals::TestLiterals;
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::instruction::wide;
 
 fn decoded(numbers: &[u32]) -> Vec<DecodedOp> {
@@ -122,7 +123,7 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
         + "state:Map/00ff".len();
     budget.set_limit_bytes(scratch_bytes + output_bytes - 1);
     assert!(
-        matches!(scratch.finish(&literals, &budget), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == output_bytes)
+        matches!(scratch.finish(&literals, &budget), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == output_bytes)
     );
     assert_eq!(budget.reserved_bytes(), 0);
     budget.set_limit_bytes(scratch_bytes + output_bytes);
@@ -134,7 +135,7 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
     let zero = AllocationBudget::new(0);
     assert!(matches!(
         KeyScratch::new(crate::IvmEngine::C10, &code, &zero),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     let empty = KeyScratch::new(crate::IvmEngine::C10, &[], &zero)
         .unwrap()
@@ -166,7 +167,7 @@ fn first_site_key_remains_after_ambiguity_and_different_exact_key_is_rejected() 
     let different = Descriptor::new(StaticStatePath::Literal(1), read, &literals).unwrap();
     assert!(matches!(
         scratch.record(0, different, &literals),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(
         Descriptor::new(
@@ -207,9 +208,9 @@ fn zero_retention_and_each_partial_output_failure_reclaim_only_original_pool() {
         } else {
             assert!(matches!(
                 result,
-                Ok(Err(VMError::ExecutionDeferred(
+                Ok(Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ExecutionDeferral::AllocationUnavailable
-                )))
+                ))))
             ));
         }
         assert_eq!(OUTPUT_FAULT.get(), 0);

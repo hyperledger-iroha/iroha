@@ -1,6 +1,7 @@
 //! Original capture admission, immutable checkpoint and final-owner regressions.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::zk::trace_storage::{PANIC_AFTER_COPY, REFUSE_ALLOCATION};
 use iroha_allocation::AllocationRefusal;
 use std::{
@@ -149,7 +150,7 @@ fn combine_prepays_old_and_new_peak_and_keeps_refused_checkpoints() {
     let expected = original.try_reserve_bytes(wanted).unwrap_err();
     let refusal = a.try_combine(&b).unwrap_err();
     assert!(
-        matches!(refusal, VMError::AllocationDeferred(__actual_error_field) if __actual_error_field == (expected))
+        matches!(refusal, VMError::Deferred(VmDeferral::AllocationDeferred(__actual_error_field)) if __actual_error_field == (expected))
     );
     assert_eq!(original.reserved_bytes(), before);
     assert!(Owner::ptr_eq(&a.0, &checkpoint.0));
@@ -188,7 +189,9 @@ fn foreign_empty_and_standalone_owners_never_substitute_for_original_credit() {
     let foreign_delta = DeltaTraceLog::new(Some(&foreign));
     assert!(matches!(
         RuntimeTraceCapture::try_capture(&pcs, &foreign_delta).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
     ));
     assert_eq!(
         (original.reserved_bytes(), foreign.reserved_bytes()),
@@ -202,15 +205,21 @@ fn foreign_empty_and_standalone_owners_never_substitute_for_original_credit() {
     let before = (original.reserved_bytes(), foreign.reserved_bytes());
     assert!(matches!(
         a.try_combine(&b).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
     ));
     assert!(matches!(
         a.try_combine(&local).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
     ));
     assert!(matches!(
         local.try_combine(&a).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
     ));
     assert_eq!(
         (original.reserved_bytes(), foreign.reserved_bytes()),
@@ -219,9 +228,9 @@ fn foreign_empty_and_standalone_owners_never_substitute_for_original_credit() {
     original.set_limit_bytes(0);
     assert!(matches!(
         a.try_combine(&a),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(original.reserved_bytes(), before.0);
     drop((a, b, local));
@@ -239,14 +248,18 @@ fn partial_allocator_refusal_and_private_copy_unwind_keep_sources_and_credit() {
     REFUSE_SHELL.set(true);
     assert!(matches!(
         RuntimeTraceCapture::try_capture(&pcs, &delta).unwrap_err(),
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable
+        ))
     ));
     assert_eq!(original.reserved_bytes(), before);
     for stage in 1..=3 {
         REFUSE_ALLOCATION.set(stage);
         assert!(matches!(
             RuntimeTraceCapture::try_capture(&pcs, &delta).unwrap_err(),
-            VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable
+            ))
         ));
         assert_eq!(original.reserved_bytes(), before);
     }
@@ -266,9 +279,9 @@ fn partial_allocator_refusal_and_private_copy_unwind_keep_sources_and_credit() {
     REFUSE_ALLOCATION.set(3);
     assert!(matches!(
         capture.try_combine(&capture),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(original.reserved_bytes(), retained);
     assert_eq!(capture.delta(1).unwrap().changes[6], (7, 13, false));
@@ -344,9 +357,9 @@ fn checked_public_layout_overflow_is_not_allocator_fallback() {
     ] {
         assert!(matches!(
             geometry.plan(),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::DemandOverflow
-            ))
+            )))
         ));
     }
 }

@@ -1,6 +1,7 @@
 //! Exact read-row admission, diagnostic atomicity and original-owner lifetime.
 
 use super::*;
+use crate::error::VmDeferral;
 use std::sync::{Arc, Barrier};
 
 fn append(log: &mut ReadLog, addr: u64) {
@@ -15,7 +16,7 @@ fn exact_growth_keeps_old_rows_until_publication_and_admits_overlap() {
     let mut log = ReadLog::with_memory_budget(&budget);
     assert!(matches!(
         log.prepare_growth(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(log.capacity(), 0);
@@ -27,7 +28,7 @@ fn exact_growth_keeps_old_rows_until_publication_and_admits_overlap() {
     budget.set_limit_bytes(12 * row - 1);
     assert!(matches!(
         log.prepare_growth(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(log.as_ptr(), pointer);
     assert_eq!(log.len(), 4);
@@ -61,7 +62,7 @@ fn independent_snapshots_and_clones_keep_the_original_finite_pool() {
     append(&mut log, 7);
     assert!(matches!(
         log.try_snapshot(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     budget.set_limit_bytes(5 * row);
     let snapshot = log.try_snapshot().unwrap();
@@ -69,7 +70,7 @@ fn independent_snapshots_and_clones_keep_the_original_finite_pool() {
     assert_ne!(snapshot.as_ptr(), log.as_ptr());
     assert!(matches!(
         snapshot.try_clone(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     budget.set_limit_bytes(6 * row);
     let clone = snapshot.try_clone().unwrap();
@@ -82,7 +83,7 @@ fn independent_snapshots_and_clones_keep_the_original_finite_pool() {
     budget.set_limit_bytes(0);
     assert!(matches!(
         snapshot.try_clone(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     drop(snapshot);
     assert_eq!(budget.reserved_bytes(), row);
@@ -246,9 +247,9 @@ fn diagnostic_refusal_preserves_rows_capacity_and_caller_output() {
         let mut output = [0xa5; 2];
         assert!(matches!(
             memory.load_bytes(Memory::OUTPUT_START, &mut output),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity
-            ))
+            )))
         ));
         assert_eq!(output, [0xa5; 2]);
         assert!(recorder.is_empty());

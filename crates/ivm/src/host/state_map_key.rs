@@ -1,6 +1,7 @@
 //! One canonical durable-record representation for scalar and tuple map keys.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::metadata::EmbeddedStateType as Embedded;
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES, StateValueAtomV1 as Atom,
@@ -9,12 +10,14 @@ use ivm_abi::state_value::{
 };
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn codec_error(error: norito::Error) -> VMError {
     match error {
         norito::Error::AllocationFailed { .. } => unavailable(),
-        _ => VMError::NoritoInvalid,
+        _ => VMError::Trap(VmTrap::NoritoInvalid),
     }
 }
 fn visit_key_type(ty: &Embedded, mut visit: impl FnMut(Node)) -> Result<usize, VMError> {
@@ -26,18 +29,18 @@ fn visit_key_type(ty: &Embedded, mut visit: impl FnMut(Node)) -> Result<usize, V
         let ty = pending[pending_len];
         count += 1;
         if count > MAX_STATE_VALUE_NODES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let kind = match ty {
             Embedded::Tuple(items) => {
                 if items.len() < 2 || items.len() > MAX_STATE_VALUE_NODES - count {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let end = pending_len
                     .checked_add(items.len())
-                    .ok_or(VMError::NoritoInvalid)?;
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 if end > MAX_STATE_VALUE_NODES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 for item in items.iter().rev() {
                     pending[pending_len] = item;
@@ -61,7 +64,7 @@ fn visit_key_type(ty: &Embedded, mut visit: impl FnMut(Node)) -> Result<usize, V
             Embedded::NftId => Kind::NftId,
             Embedded::Name => Kind::Name,
             Embedded::DataSpaceId => Kind::DataSpaceId,
-            _ => return Err(VMError::NoritoInvalid),
+            _ => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
         };
         visit(Node::Leaf(kind));
     }
@@ -83,7 +86,7 @@ pub(crate) fn state_map_key_schema(ty: &Embedded) -> Result<StateValueSchemaV1, 
 /// one bounded scope funded from the executing VM's original allocation pool.
 pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Result<(), VMError> {
     if bytes.is_empty() || bytes.len() > syscalls::STATE_MAP_MAX_KEY_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let limits = norito::canonical_decode_limits(bytes.len());
     // The schema has no owned names or nested collections. Besides its exact
@@ -102,11 +105,11 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
             )
         })
         .transpose()
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
     let schema = super::state_map_key_schema(ty)?;
     let schema_bytes = norito::encode_canonical(&schema).map_err(codec_error)?;
     if schema_bytes.len() > MAX_STATE_VALUE_SCHEMA_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let expected_hash = state_value_schema_hash_v1(&schema_bytes);
     let context = match reservation.as_mut() {
@@ -115,9 +118,9 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
             reservation,
         )
         .map_err(|error| match error {
-            iroha_allocation::PrepaidSharedError::Reservation(_) => {
-                VMError::ExecutionDeferred(crate::ExecutionDeferral::LocalInvariantViolation)
-            }
+            iroha_allocation::PrepaidSharedError::Reservation(_) => VMError::Deferred(
+                VmDeferral::ExecutionDeferred(crate::ExecutionDeferral::LocalInvariantViolation),
+            ),
             iroha_allocation::PrepaidSharedError::Allocator { .. } => unavailable(),
         })?,
         None => norito::core::DecodeBudgetContext::new(limits),
@@ -125,7 +128,7 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
     context.with(|| {
         let record = decode_canonical_state_value_record_v1(bytes).map_err(codec_error)?;
         if record.schema_hash != expected_hash {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let mut atoms = record.atoms.iter();
         for node in &schema.nodes {
@@ -134,7 +137,7 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
             };
             match (kind, atoms.next()) {
                 (Kind::Bool, Some(Atom::Bool(_))) => {}
-                (Kind::Bool, _) => return Err(VMError::NoritoInvalid),
+                (Kind::Bool, _) => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
                 (_, Some(Atom::Pointer(envelope))) => {
                     // Numeric keys retain the exact authenticated-envelope fault
                     // contract used by scalar ingress and persisted-key iteration.
@@ -154,11 +157,11 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
                         )?,
                     }
                 }
-                _ => return Err(VMError::NoritoInvalid),
+                _ => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
             }
         }
         if atoms.next().is_some() {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(())
     })

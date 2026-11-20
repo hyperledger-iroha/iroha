@@ -320,7 +320,7 @@ fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
     let error = vm
         .run_with_host(&mut host)
         .expect_err("proof gas exceeds the pre-debited reserve");
-    assert!(matches!(error, ivm::VMError::OutOfGas));
+    assert!(matches!(error, ivm::VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(
         vm.remaining_gas(),
         15,
@@ -401,7 +401,7 @@ fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
     vm.set_gas_limit(quote);
     assert!(matches!(
         vm.run_with_host(&mut host),
-        Err(ivm::VMError::OutOfGas)
+        Err(ivm::VMError::Trap(VmTrap::OutOfGas))
     ));
     assert_eq!(vm.register(10), pointer);
     assert_eq!(vm.register(11), 0xfeed);
@@ -852,7 +852,10 @@ fn zk_syscalls_preserve_original_decode_refusal_without_register_or_latch_public
         let error =
             norito::core::with_decode_limits_scope(limit, || host.syscall(syscall, &mut vm))
                 .unwrap_err();
-        assert!(matches!(error, ivm::VMError::DecodeDeferred(_)));
+        assert!(matches!(
+            error,
+            ivm::VMError::Deferred(VmDeferral::DecodeDeferred(_))
+        ));
         assert_eq!(error.fault_kind(), None);
         assert_eq!(error.metered_gas(), None);
         assert_eq!(
@@ -926,7 +929,7 @@ fn gas_refusal_precedes_queue_publication_and_preflight_charge() {
         assert_eq!(vm.remaining_gas(), u64::MAX);
         assert_eq!(error.fault_kind(), None);
         assert_eq!(error.metered_gas(), None);
-        let ivm::VMError::VerificationDeferred(original) = error else {
+        let ivm::VMError::Deferred(VmDeferral::VerificationDeferred(original)) = error else {
             panic!("lost original gas decoder owner");
         };
         let original = original.into_decode_refusal().unwrap();
@@ -1006,7 +1009,10 @@ fn gas_refusal_preserves_pending_artifacts_for_unchanged_retry() {
         panic!("gas refusal became a wire rejection")
     };
     let moved = original.into_vm_error();
-    assert!(matches!(moved, ivm::VMError::VerificationDeferred(_)));
+    assert!(matches!(
+        moved,
+        ivm::VMError::Deferred(VmDeferral::VerificationDeferred(_))
+    ));
     assert_eq!(moved.fault_kind(), None);
     assert_eq!(moved.metered_gas(), None);
     assert_eq!(host.queued.len(), 1);

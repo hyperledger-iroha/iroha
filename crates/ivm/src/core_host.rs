@@ -3,6 +3,7 @@
 //! This host does not execute real ISI. It only validates the pointer-ABI
 //! arguments and returns success. It is intended for end-to-end tests that
 //! exercise TLV validation from VM bytecode through host dispatch.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError, gas,
     host::{
@@ -140,7 +141,7 @@ impl CoreHost {
     /// the authenticated contract address.
     pub fn set_state_instance(&mut self, instance: String) -> Result<(), VMError> {
         if instance.is_empty() || instance.len() > 1024 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.state_instance = instance;
         Ok(())
@@ -348,19 +349,19 @@ impl CoreHost {
         });
     }
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
-        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_state_path_tlv(&self, vm: &IVM, pointer: u64) -> Result<(StatePath, usize), VMError> {
         if pointer == 0 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let tlv = self.decode_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
         if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         crate::host::validate_state_path(&path)?;
         crate::host::validate_declared_state_path(vm, &path)?;
         Ok((path, path_len))
@@ -371,15 +372,15 @@ impl CoreHost {
         pointer: u64,
     ) -> Result<(StatePath, usize), VMError> {
         if pointer == 0 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let tlv = self.decode_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
         if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         crate::host::validate_state_path(&path)?;
         crate::host::validate_declared_state_scan_path(vm, &path)?;
         Ok((path, path_len))
@@ -446,27 +447,31 @@ impl CoreHost {
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let tlv = vm.validate_tlv(vm.register(10))?;
         if tlv.type_id != PointerType::AxtDescriptor {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = Self::axt_gas(tlv.payload.len());
         let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
-        let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
+        let binding =
+            axt::compute_binding(&descriptor).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         self.reset_axt_proof_cache_for_slot(self.max_policy_slot());
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         self.axt_active = true;
         Ok(gas)
     }
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
+        let state = self
+            .axt_state
+            .as_mut()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let ds_tlv = vm.validate_tlv(vm.register(10))?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let mut gas_len = ds_tlv.payload.len();
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let manifest_ptr = vm.register(11);
         let manifest = if manifest_ptr == 0 {
@@ -477,7 +482,7 @@ impl CoreHost {
         } else {
             let manifest_tlv = vm.validate_tlv(manifest_ptr)?;
             if manifest_tlv.type_id != PointerType::NoritoBytes {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
             decode_canonical_norito(manifest_tlv.payload)?
@@ -489,23 +494,23 @@ impl CoreHost {
     }
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let Some(state_view) = self.axt_state.as_ref() else {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         };
         let ds_tlv = vm.validate_tlv(vm.register(10))?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state_view.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let policy = self
             .policy_entry_for(dsid)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         self.reset_axt_proof_cache_for_slot(Some(policy.current_slot));
         if policy.manifest_root.iter().all(|byte| *byte == 0) {
             self.axt_proof_cache.remove(&dsid);
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
@@ -516,7 +521,7 @@ impl CoreHost {
         }
         let proof_tlv = vm.validate_tlv(proof_ptr)?;
         if proof_tlv.type_id != PointerType::ProofBlob {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let proof: axt::ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
         axt::validate_proof_blob(&proof)?;
@@ -528,7 +533,7 @@ impl CoreHost {
             && entry.digest == digest
             && entry.is_applicable_for_slot(Some(policy.current_slot), Some(policy.manifest_root))
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let envelope = match decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload) {
             Ok(envelope) => envelope,
@@ -541,7 +546,7 @@ impl CoreHost {
                     Some(policy.manifest_root),
                     false,
                 );
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
         };
         if let Some(expiry_slot) = expiry_with_skew
@@ -556,7 +561,7 @@ impl CoreHost {
                 Some(policy.manifest_root),
                 false,
             );
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if let Err(err) = axt::preflight_fastpq_v1_proof_envelope_for_manifest(
             &envelope,
@@ -583,14 +588,14 @@ impl CoreHost {
         );
         // This standalone shim can preflight AXT FastPQ metadata, but it has no
         // FastPQ verifier callback. Do not turn preflight into acceptance.
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     }
     fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, VMError> {
         let gas = self
             .axt_state
             .as_ref()
             .map(Self::axt_commit_gas)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         preflight_reserved_syscall_gas(vm, gas)?;
         let state = self
             .axt_state
@@ -616,7 +621,7 @@ impl CoreHost {
         if self.fastpq_batch_active {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         self.fastpq_batch_active = true;
@@ -625,7 +630,7 @@ impl CoreHost {
     }
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         Self::expect_tlv(vm, 10, PointerType::AccountId)?;
         Self::expect_tlv(vm, 11, PointerType::AccountId)?;
@@ -638,12 +643,15 @@ impl CoreHost {
         if !self.fastpq_batch_active {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         if !self.fastpq_batch_has_entries {
             self.fastpq_batch_active = false;
-            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::Trap(VmTrap::DecodeError),
+            ));
         }
         self.fastpq_batch_active = false;
         self.fastpq_batch_has_entries = false;
@@ -651,17 +659,17 @@ impl CoreHost {
     }
     fn apply_fastpq_batch(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let batch: TransferAssetBatch =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         if batch.entries().is_empty() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(MUTATION_GAS.saturating_mul(u64::try_from(batch.entries().len()).unwrap_or(u64::MAX)))
     }
@@ -669,7 +677,7 @@ impl CoreHost {
         if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
             VMError::metered_not_implemented(MUTATION_GAS, number)
         } else {
-            VMError::UnknownSyscall(number)
+            VMError::Trap(VmTrap::UnknownSyscall(number))
         }
     }
     fn resolve_literal_pointer(vm: &IVM, address: u64) -> Option<u64> {
@@ -686,7 +694,7 @@ impl CoreHost {
         }
         // Enforce exact type match for the syscall argument position
         if tlv.type_id != ty {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(())
     }
@@ -699,11 +707,11 @@ impl CoreHost {
         let addr = Self::resolve_code_tlv_addr(vm, vm.register(reg));
         let tlv = vm.validate_tlv(addr)?;
         if tlv.type_id != PointerType::Quantity {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         QuantityValueV1::decode_frame(tlv.payload)
             .map(drop)
-            .map_err(|_| VMError::DecodeError)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     pub(crate) fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
         let input_lo = Memory::INPUT_START;
@@ -722,7 +730,7 @@ impl CoreHost {
         let resolved = Self::resolve_code_tlv_addr(vm, addr);
         let tlv = vm.validate_tlv(resolved)?;
         if tlv.type_id != expected {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(tlv)
     }
@@ -730,7 +738,7 @@ impl CoreHost {
         let mut out = Vec::with_capacity(7 + payload.len() + IrohaHash::LENGTH);
         out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         out.push(1);
-        let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+        let len = u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(payload);
         let h: [u8; 32] = IrohaHash::new(payload).into();
@@ -744,7 +752,7 @@ impl CoreHost {
         let mut out = Vec::with_capacity(7 + payload.len() + IrohaHash::LENGTH);
         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
         out.push(1);
-        let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+        let len = u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(payload);
         let h: [u8; IrohaHash::LENGTH] = IrohaHash::new(payload).into();
@@ -842,7 +850,7 @@ impl CoreHost {
             return if nullable {
                 Ok(0)
             } else {
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             };
         }
         let payload_len = match quote_tlv_payload_len_at(vm, pointer, expected) {
@@ -857,7 +865,7 @@ impl CoreHost {
             }
         };
         if payload_len > maximum_payload_len {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(payload_len)
     }
@@ -871,7 +879,7 @@ impl CoreHost {
     }
     fn validate_codec_output_payload_len(payload_len: usize) -> Result<(), VMError> {
         if payload_len > gas::HOST_CODEC_MAX_OUTPUT_BYTES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(())
     }
@@ -996,7 +1004,7 @@ impl CoreHost {
         if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
             || base_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(Self::path_gas(
             page_len.saturating_add(base_len),
@@ -1028,7 +1036,7 @@ impl IVMHost for CoreHost {
                     PointerType::Name,
                 )?;
                 if input > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 Self::path_gas(input, syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES)
             }
@@ -1081,7 +1089,7 @@ impl IVMHost for CoreHost {
             | syscalls::SYSCALL_SCHEMA_DECODE
             | syscalls::SYSCALL_SCHEMA_INFO => vm
                 .schema_gas_quote(number)?
-                .ok_or(VMError::UnknownSyscall(number))?,
+                .ok_or(VMError::Trap(VmTrap::UnknownSyscall(number)))?,
             syscalls::SYSCALL_ALLOC => crate::host::allocation_gas(vm.public_register(10)?),
             syscalls::SYSCALL_AXT_COMMIT => {
                 vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
@@ -1187,7 +1195,7 @@ impl IVMHost for CoreHost {
                 let path_ptr = vm.register(10);
                 let val_ptr = vm.register(11);
                 if path_ptr == 0 || val_ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let (path, path_len) = self.decode_state_path_tlv(vm, path_ptr)?;
                 let p_val = self.decode_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
@@ -1299,7 +1307,7 @@ impl IVMHost for CoreHost {
                 let name_tlv = self.decode_tlv(vm, vm.register(10), PointerType::Name)?;
                 let input_len = name_tlv.payload.len();
                 if input_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let name = self.decode_name_payload(name_tlv.payload)?;
                 let path = StatePath::from(name);
@@ -1338,18 +1346,18 @@ impl IVMHost for CoreHost {
                 }
                 let tlv = vm.validate_tlv(r10_before)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let input_len = tlv.payload.len();
-                let json: Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let body = encode_canonical_norito(&json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -1378,8 +1386,8 @@ impl IVMHost for CoreHost {
                 }
                 let tlv = self.decode_tlv(vm, r10_before, PointerType::NoritoBytes)?;
                 let input_len = tlv.payload.len();
-                let json: Json =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let body = encode_canonical_norito(&json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -1414,18 +1422,18 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_JSON_SET_I64 | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
                 let json_tlv = self.decode_tlv(vm, vm.register(10), PointerType::Json)?;
                 let key_tlv = self.decode_tlv(vm, vm.register(11), PointerType::Name)?;
-                let json: Json =
-                    decode_canonical_norito(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = decode_canonical_norito(json_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut input_len = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
                 let value: njson::Value = json
                     .try_into_any_norito()
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut obj = match value {
                     njson::Value::Object(map) => map,
-                    _ => return Err(VMError::DecodeError),
+                    _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                 };
-                let key_name: Name =
-                    decode_canonical_norito(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let key_name: Name = decode_canonical_norito(key_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let field = match number {
                     syscalls::SYSCALL_JSON_SET_I64 => {
                         input_len = input_len.saturating_add(core::mem::size_of::<i64>());
@@ -1436,10 +1444,10 @@ impl IVMHost for CoreHost {
                             self.decode_tlv(vm, vm.register(12), PointerType::AccountId)?;
                         input_len = input_len.saturating_add(value_tlv.payload.len());
                         let account: AccountId = decode_canonical_norito(value_tlv.payload)
-                            .map_err(|_| VMError::DecodeError)?;
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         njson::Value::from(account.to_string())
                     }
-                    _ => return Err(VMError::UnknownSyscall(number)),
+                    _ => return Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
                 };
                 obj.insert(key_name.to_string(), field);
                 let out_json = Json::from(njson::Value::Object(obj));
@@ -1466,10 +1474,10 @@ impl IVMHost for CoreHost {
                 let tlv = vm.validate_tlv(addr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let payload_len = tlv.payload.len();
                 vm.set_register(10, payload_len as u64);
@@ -1494,8 +1502,8 @@ impl IVMHost for CoreHost {
                 let s_tlv = self.decode_tlv(vm, vm.register(10), PointerType::Name)?;
                 let v_tlv = self.decode_tlv(vm, vm.register(11), PointerType::Json)?;
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
-                let json: Json =
-                    decode_canonical_norito(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = decode_canonical_norito(v_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let input_len = v_tlv.payload.len();
                 if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1526,7 +1534,7 @@ impl IVMHost for CoreHost {
                     }
                     Ok(gas)
                 } else {
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 }
             }
             syscalls::SYSCALL_SCHEMA_DECODE => {
@@ -1543,10 +1551,10 @@ impl IVMHost for CoreHost {
                     );
                 }
                 if let Some(min) = self.schema.decode_to_json(&schema, b_tlv.payload) {
-                    let json_str =
-                        core::str::from_utf8(&min).map_err(|_| VMError::NoritoInvalid)?;
-                    let json =
-                        Json::from_str_norito(json_str).map_err(|_| VMError::NoritoInvalid)?;
+                    let json_str = core::str::from_utf8(&min)
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+                    let json = Json::from_str_norito(json_str)
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                     let body = encode_canonical_norito(&json)?;
                     Self::validate_codec_output_payload_len(body.len())?;
                     let gas = Self::schema_gas(input_len, body.len());
@@ -1562,7 +1570,7 @@ impl IVMHost for CoreHost {
                     vm.set_register(10, p);
                     Ok(gas)
                 } else {
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 }
             }
             syscalls::SYSCALL_SCHEMA_INFO => {
@@ -1574,13 +1582,15 @@ impl IVMHost for CoreHost {
                 let family = self
                     .schema
                     .resolve_family(raw)
-                    .ok_or(VMError::NoritoInvalid)?;
-                let (cur_name, cur_info) =
-                    self.schema.current(&family).ok_or(VMError::NoritoInvalid)?;
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
+                let (cur_name, cur_info) = self
+                    .schema
+                    .current(&family)
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 let list = self
                     .schema
                     .list_versions(&family)
-                    .ok_or(VMError::NoritoInvalid)?;
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 let current = {
                     let mut map = njson::Map::new();
                     map.insert("name".to_owned(), njson::Value::from(cur_name));
@@ -1630,19 +1640,19 @@ impl IVMHost for CoreHost {
                 }
                 let tlv = vm.validate_tlv(r10_before)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 // Enforce ABI policy allows NoritoBytes as input
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let input_len = tlv.payload.len();
-                let name: Name =
-                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let name: Name = decode_canonical_norito(tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 // Build a host-owned Name TLV using the normalized form.
                 let body = encode_canonical_norito(&name)?;
                 Self::validate_codec_output_payload_len(body.len())?;
@@ -1660,16 +1670,16 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_POINTER_TO_NORITO => {
                 let original = vm.register(10);
                 if original == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let ptr = Self::resolve_code_tlv_addr(vm, original);
                 let tlv = vm.validate_tlv(ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 crate::numeric_tlv::validate_numeric_frame_if_needed(tlv.type_id, tlv.payload)?;
                 let mut body = Vec::with_capacity(2 + 1 + 4 + tlv.payload.len() + 32);
@@ -1700,7 +1710,7 @@ impl IVMHost for CoreHost {
                     .into_iter()
                     .any(|kind| vm.register(11) == u64::from(kind as u16))
                     {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     vm.set_register(10, 0);
                     return Ok(Self::pointer_gas(0));
@@ -1713,16 +1723,16 @@ impl IVMHost for CoreHost {
                     let inner = pointer_abi::validate_tlv_bytes(tlv.payload)?;
                     (inner.type_id, inner.version, inner.payload.to_vec())
                 };
-                let expected =
-                    u16::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+                let expected = u16::try_from(vm.register(11))
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if expected != 0 && expected != inner_type as u16 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if !pointer_abi::is_type_allowed_for_policy(policy, inner_type) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: inner_type as u16,
-                    });
+                    }));
                 }
                 crate::numeric_tlv::validate_numeric_frame_if_needed(inner_type, &inner_payload)?;
                 let mut out = Vec::with_capacity(7 + inner_payload.len() + 32);
@@ -1795,10 +1805,10 @@ impl IVMHost for CoreHost {
                 let tlv = vm.validate_tlv(Self::resolve_code_tlv_addr(vm, ptr))?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 match tlv.type_id {
                     PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
@@ -1820,13 +1830,13 @@ impl IVMHost for CoreHost {
                         }
                         Ok(debug_log_gas(tlv.payload.len()))
                     }
-                    _ => Err(VMError::NoritoInvalid),
+                    _ => Err(VMError::Trap(VmTrap::NoritoInvalid)),
                 }
             }
             syscalls::SYSCALL_SM3_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1839,7 +1849,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_SHA256_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1851,7 +1861,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_SHA3_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1863,7 +1873,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_BLAKE2B256_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1875,7 +1885,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_KECCAK256_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1887,7 +1897,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_IROHA_HASH => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let payload_len = tlv.payload.len();
@@ -1939,7 +1949,7 @@ impl IVMHost for CoreHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    Err(VMError::PermissionDenied)
+                    Err(VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
@@ -1982,8 +1992,8 @@ impl IVMHost for CoreHost {
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                let resolved =
-                    Self::resolve_literal_pointer(vm, original).ok_or(VMError::NoritoInvalid)?;
+                let resolved = Self::resolve_literal_pointer(vm, original)
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
@@ -1994,8 +2004,8 @@ impl IVMHost for CoreHost {
                 // Return the domainless account subject so contracts can compare
                 // authority() against AccountId literals and stored AccountId state.
                 const ACCOUNT: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-                let authority =
-                    AccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
+                let authority = AccountId::parse_encoded(ACCOUNT)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 let payload = encode_canonical_norito(&authority)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -2025,7 +2035,9 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => Err(VMError::PermissionDenied),
+            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
+                Err(VMError::Trap(VmTrap::PermissionDenied))
+            }
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
             _ => Err(Self::unsupported_syscall_error(number)),
         }
@@ -2063,7 +2075,7 @@ impl IVMHost for CoreHost {
     fn restore(&mut self, snapshot: &dyn core::any::Any) -> Result<(), VMError> {
         let saved = snapshot
             .downcast_ref::<CoreHostSnapshot>()
-            .ok_or(VMError::HostUnavailable)?;
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         self.state.restore(&saved.state)?;
         self.axt_state = saved.axt_state.clone();
         self.axt_policy = Arc::clone(&saved.axt_policy);
@@ -2089,6 +2101,7 @@ impl IVMHost for CoreHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmErrorRef, VmTrap};
     use crate::{IVM, encoding, instruction, syscalls};
     use ivm_abi::metadata::{
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
@@ -2197,7 +2210,7 @@ mod tests {
         vm.set_register(11, key_pointer);
         host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm)?;
         let output = vm.validate_tlv(vm.register(10))?;
-        norito::decode_from_bytes(output.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(output.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_typed_map_page_key(
         vm: &mut IVM,
@@ -2416,7 +2429,7 @@ mod tests {
         let err = CoreHost::expect_tlv(&vm, 10, PointerType::NoritoBytes).unwrap_err();
         assert!(matches!(
             err,
-            VMError::AbiTypeNotAllowed { abi: 2, type_id }
+            VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 2, type_id })
                 if type_id == PointerType::NoritoBytes as u16
         ));
     }
@@ -2483,7 +2496,7 @@ mod tests {
         vm.set_register(13, legacy_ptr);
         assert!(matches!(
             CoreHost::expect_amount(&vm, 13),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let malformed_payload =
             norito::to_bytes(&Numeric::new(1_250_u32, 3)).expect("encode malformed quantity");
@@ -2493,7 +2506,7 @@ mod tests {
         vm.set_register(13, noncanonical_ptr);
         assert!(matches!(
             CoreHost::expect_amount(&vm, 13),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2512,7 +2525,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            VMError::AbiTypeNotAllowed { abi: 2, type_id }
+            VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 2, type_id })
                 if type_id == PointerType::NoritoBytes as u16
         ));
     }
@@ -2647,7 +2660,7 @@ mod tests {
             let bytes = norito::to_bytes(&malformed).expect("canonical i64");
             assert!(matches!(
                 build_typed_map_path(&mut vm, &mut host, "flags", &bytes),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!(host.state_paths(), paths_before);
         }
@@ -2688,7 +2701,7 @@ mod tests {
         vm.set_register(12, 0);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), invalid_page_ptr);
         assert_eq!(host.state_paths(), paths_before);
@@ -2752,7 +2765,7 @@ mod tests {
         let mut execution_host = host.clone();
         assert!(matches!(
             execution_host.syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &mut vm),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2783,7 +2796,7 @@ mod tests {
         vm.set_register(12, 0);
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -2800,7 +2813,7 @@ mod tests {
                     "values",
                     &canonical_int,
                 ),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "schema-bound key helpers must fail closed without CNTR metadata"
         );
@@ -2810,7 +2823,7 @@ mod tests {
         assert!(
             matches!(
                 build_typed_map_path(&mut vm, &mut host, "values", &[0x11]),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "the key carrier itself must be a canonical record"
         );
@@ -2820,15 +2833,15 @@ mod tests {
         );
         assert!(matches!(
             build_typed_map_path(&mut vm, &mut host, "values", &truncated),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
-            ))
+            )))
         ));
         assert!(matches!(
             decode_typed_map_page_key(&mut vm, &mut host, "values", &truncated),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
-            ))
+            )))
         ));
         let decimal = state_value_record(
             &EmbeddedStateType::Int,
@@ -2838,10 +2851,10 @@ mod tests {
             )],
         );
         assert!(
-            matches!(build_typed_map_path(&mut vm, &mut host, "values", &decimal), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::WrongType))
+            matches!(build_typed_map_path(&mut vm, &mut host, "values", &decimal), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::WrongType))
         );
         assert!(
-            matches!(decode_typed_map_page_key(&mut vm, &mut host, "values", &decimal), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::WrongType)),
+            matches!(decode_typed_map_page_key(&mut vm, &mut host, "values", &decimal), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::WrongType)),
             "iteration must not surface a cross-typed persisted key"
         );
         let mut noncanonical_body = Vec::new();
@@ -2857,10 +2870,10 @@ mod tests {
             )],
         );
         assert!(
-            matches!(build_typed_map_path(&mut vm, &mut host, "values", &noncanonical), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
+            matches!(build_typed_map_path(&mut vm, &mut host, "values", &noncanonical), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
         );
         assert!(
-            matches!(decode_typed_map_page_key(&mut vm, &mut host, "values", &noncanonical), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::NonCanonical)),
+            matches!(decode_typed_map_page_key(&mut vm, &mut host, "values", &noncanonical), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::NonCanonical)),
             "iteration must not surface a noncanonical persisted key"
         );
         let base: Name = "values".parse().expect("map base");
@@ -2873,7 +2886,7 @@ mod tests {
         let noncanonical_path = crate::host::canonical_state_map_path(&base, &noncanonical)
             .expect("build adversarial alternate path bytes");
         assert!(
-            matches!(set_raw_state_path(&mut vm, &mut host, &noncanonical_path, b"alternate"), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::NonCanonical)),
+            matches!(set_raw_state_path(&mut vm, &mut host, &noncanonical_path, b"alternate"), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::NonCanonical)),
             "direct raw STATE_SET must not bypass typed map-key validation"
         );
         assert_eq!(host.state_paths(), vec![canonical_path.to_string()]);
@@ -2907,7 +2920,7 @@ mod tests {
         assert!(
             matches!(
                 build_typed_map_path(&mut name_vm, &mut CoreHost::new(), "values", &blob_key,),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "pointer-compatible bytes cannot cross a declared key type"
         );
@@ -2928,7 +2941,10 @@ mod tests {
             let path_ptr = alloc_state_path(&mut vm, &base);
             vm.set_register(10, path_ptr);
             assert!(
-                matches!(host.syscall(syscall, &mut vm), Err(VMError::NoritoInvalid)),
+                matches!(
+                    host.syscall(syscall, &mut vm),
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
+                ),
                 "value syscall {syscall:#x} must reject a bare StateMap base"
             );
             assert_eq!(vm.register(10), path_ptr, "failure must publish no output");
@@ -2940,7 +2956,7 @@ mod tests {
         assert!(
             matches!(
                 host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "STATE_SET must not conflate a map collection with one map value"
         );
@@ -2962,7 +2978,7 @@ mod tests {
         let wrong_schema = int_state_value_record(7);
         assert!(matches!(
             set_raw_state_path(&mut vm, &mut host, &path, &wrong_schema),
-            Err(VMError::DecodeError | VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::DecodeError) | VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut wrong_hash: ivm_abi::state_value::StateValueRecordV1 =
             norito::decode_from_bytes(&valid_value).expect("decode valid state record");
@@ -2970,7 +2986,7 @@ mod tests {
         let wrong_hash = norito::to_bytes(&wrong_hash).expect("encode wrong-hash record");
         assert!(matches!(
             set_raw_state_path(&mut vm, &mut host, &path, &wrong_hash),
-            Err(VMError::DecodeError | VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::DecodeError) | VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let wrong_pointer = state_value_record(
             &EmbeddedStateType::Bytes,
@@ -2982,7 +2998,7 @@ mod tests {
         for malformed in [wrong_pointer.as_slice(), &[0xff][..]] {
             assert!(matches!(
                 set_raw_state_path(&mut vm, &mut host, &path, malformed),
-                Err(VMError::DecodeError | VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::DecodeError) | VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
         assert_eq!(
@@ -3004,7 +3020,7 @@ mod tests {
         vm.set_register(10, path_ptr);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm),
-            Err(VMError::DecodeError | VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::DecodeError) | VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             vm.register(10),
@@ -3069,7 +3085,7 @@ mod tests {
         vm.set_gas_limit(combined.saturating_sub(1));
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_STATE_COUNT),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(host.state_scan_examined.load(Ordering::Relaxed), 0);
         assert!(host.access_log.read_keys.is_empty());
@@ -3107,7 +3123,7 @@ mod tests {
         vm.set_gas_limit(reserve);
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_STATE_COUNT),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(
             host.state_scan_examined.load(Ordering::Relaxed),
@@ -3142,7 +3158,7 @@ mod tests {
         let error = vm
             .execute_syscall(&mut host, syscalls::SYSCALL_STATE_GET)
             .expect_err("response cost exceeds the available syscall reserve");
-        assert!(matches!(error, VMError::OutOfGas));
+        assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
         assert_eq!(
             vm.remaining_gas(),
             0,
@@ -3220,7 +3236,7 @@ mod tests {
                     );
                     let log = host.finish_tx().expect("finish the read transaction");
                     if available < actual {
-                        assert!(matches!(result, Err(VMError::OutOfGas)));
+                        assert!(matches!(result, Err(VMError::Trap(VmTrap::OutOfGas))));
                         assert_eq!(vm.register(10), path_ptr);
                         assert_eq!(vm.register(11), 0xfeed);
                         assert!(log.read_keys.is_empty());
@@ -3332,7 +3348,7 @@ mod tests {
         vm.set_gas_limit(available);
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_STATE_GET),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.remaining_gas(), available);
         assert_eq!(vm.register(10), path_ptr);
@@ -3391,7 +3407,7 @@ mod tests {
         let error = vm
             .execute_syscall(&mut host, syscalls::SYSCALL_STATE_SET)
             .expect_err("the state quote is one gas beyond the syscall budget");
-        assert!(matches!(error, VMError::OutOfGas));
+        assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
         assert!(host.state.keys().next().is_none());
         assert!(host.access_log.read_keys.is_empty());
         assert!(host.access_log.write_keys.is_empty());
@@ -3548,7 +3564,7 @@ mod tests {
                 syscalls::SYSCALL_SCHEMA_ENCODE,
                 wrong_type_vm.syscall_quote()
             ),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut malformed_vm = IVM::new(10_000);
         let schema_ptr = malformed_vm
@@ -3585,7 +3601,7 @@ mod tests {
             assert!(
                 matches!(
                     host.prepare_syscall(syscalls::SYSCALL_JSON_DECODE, vm.syscall_quote()),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{label} pointer types must fail closed before gas debit"
             );
@@ -3703,7 +3719,7 @@ mod tests {
                 matches!(
                     CoreHost::new()
                         .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, vm.syscall_quote()),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{label} bytes must fail during quote preparation"
             );
@@ -3717,7 +3733,7 @@ mod tests {
             assert!(
                 matches!(
                     CoreHost::new().syscall(syscalls::SYSCALL_JSON_GET_JSON, &mut vm),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "{label} bytes must fail during execution"
             );
@@ -3742,7 +3758,7 @@ mod tests {
         assert!(matches!(
             CoreHost::new()
                 .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, partial_vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut corrupted_vm = IVM::new(u64::MAX);
         let mut corrupted = json_envelope;
@@ -3765,7 +3781,7 @@ mod tests {
         let registers_before = [corrupted_vm.register(10), corrupted_vm.register(11)];
         assert!(matches!(
             CoreHost::new().syscall(syscalls::SYSCALL_JSON_GET_JSON, &mut corrupted_vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             [corrupted_vm.register(10), corrupted_vm.register(11)],
@@ -3822,7 +3838,7 @@ mod tests {
             assert!(
                 matches!(
                     host.prepare_syscall(number, vm.syscall_quote()),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "oversized owned payload for syscall {number:#x} must fail before debit"
             );
@@ -3859,7 +3875,7 @@ mod tests {
             assert!(
                 matches!(
                     host.prepare_syscall(number, vm.syscall_quote()),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "oversized literal payload for syscall {number:#x} must fail before debit"
             );
@@ -3972,7 +3988,7 @@ mod tests {
         let error = vm
             .run_with_host(&mut host)
             .expect_err("schema response exceeds the syscall reserve");
-        assert!(matches!(error, VMError::OutOfGas));
+        assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
         assert_eq!(
             vm.remaining_gas(),
             20 - gas::cost_of(scall).expect("SCALL is scheduled"),
@@ -4118,7 +4134,7 @@ mod tests {
         assert!(
             matches!(
                 host.syscall(syscalls::SYSCALL_JSON_GET_INT, &mut vm),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
         );
@@ -4184,7 +4200,7 @@ mod tests {
             assert!(
                 matches!(
                     CoreHost::new().syscall(syscalls::SYSCALL_NAME_DECODE, &mut vm),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ),
                 "{label} must not be accepted as a first-release Name frame"
             );
@@ -4286,7 +4302,7 @@ mod tests {
         vm.set_gas_limit(quote - 1);
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.register(10), base_ptr);
         assert_eq!(vm.register(11), key_ptr);
@@ -4309,7 +4325,7 @@ mod tests {
         let host = CoreHost::new();
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -4441,14 +4457,14 @@ mod tests {
             assert!(
                 matches!(
                     host.prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote()),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "quote accepted forged pointer 0x{forged:016x}"
             );
             assert!(
                 matches!(
                     host.syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "dispatch accepted forged pointer 0x{forged:016x}"
             );
@@ -4546,11 +4562,11 @@ mod tests {
         vm.set_register(11, PointerType::Name as u64);
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), retired_carrier_ptr);
         vm.set_register(10, 0);
@@ -4571,7 +4587,7 @@ mod tests {
             assert!(
                 matches!(
                     host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "numeric {kind:?} cannot decode from null"
             );
@@ -4607,7 +4623,7 @@ mod tests {
             vm.set_register(10, ptr);
             assert!(matches!(
                 host.syscall(syscalls::SYSCALL_JSON_DECODE, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!(vm.register(10), ptr);
         }
@@ -4765,7 +4781,10 @@ mod tests {
             // A present JSON number token is malformed input for an exact
             // getter, never an absent field.
             assert!(
-                matches!(host.syscall(syscall, &mut vm), Err(VMError::DecodeError)),
+                matches!(
+                    host.syscall(syscall, &mut vm),
+                    Err(VMError::Trap(VmTrap::DecodeError))
+                ),
                 "{key} must reject a JSON number token"
             );
         }
@@ -4820,7 +4839,7 @@ mod tests {
                 .expect("allocate write-log snapshot");
             assert!(matches!(
                 vm.run_with_host(&mut host),
-                Err(VMError::OutOfGas)
+                Err(VMError::Trap(VmTrap::OutOfGas))
             ));
             assert_eq!(vm.remaining_gas(), quote - 1);
             assert_eq!([vm.register(10), vm.register(11)], registers_before);
@@ -4845,10 +4864,10 @@ mod tests {
             let heap_before = vm.memory.heap_allocated_len();
             let gas_before = vm.remaining_gas();
             assert!(
-                matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+                matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (number))
             );
             assert!(
-                matches!(host.syscall(number, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+                matches!(host.syscall(number, &mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (number))
             );
             assert_eq!([vm.register(10), vm.register(11)], registers_before);
             assert_eq!(vm.memory.heap_allocated_len(), heap_before);
@@ -4901,7 +4920,10 @@ mod tests {
         let err = host
             .syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
             .expect_err("ending empty batch should fail");
-        assert!(matches!(err.as_unmetered(), VMError::DecodeError));
+        assert!(matches!(
+            err.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::DecodeError)
+        ));
         assert_eq!(err.metered_gas(), Some(gas::G_FASTPQ_BATCH));
     }
     #[test]

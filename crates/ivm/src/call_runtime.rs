@@ -1,6 +1,7 @@
 //! Interpreter transitions for the sole authenticated V1 table-call convention.
 
 use super::IVM;
+use crate::error::VmTrap;
 use crate::{IVMHost, PointerType, VMError};
 use ivm_abi::{
     call::{CallTypeNodeV1, EmbeddedCallableV1},
@@ -27,31 +28,31 @@ impl IVM {
         result_words: usize,
     ) -> Result<(), VMError> {
         if self.captured_root_tables.is_some() || self.has_prepaid_argument_decode() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let index = self.callable_index(self.pc)?;
         let interface = self
             .contract_interface
             .as_ref()
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let callable = &interface.callables[index];
         let entrypoint = interface
             .entrypoints
             .iter()
             .find(|entry| entry.entry_pc == callable.entry_pc)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if entrypoint.argument_schema.as_ref() != schema
             || result_words == 0
             || self
                 .call_layouts
                 .as_ref()
-                .ok_or(VMError::DecodeError)?
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 .callable(index)?
                 .frame
                 .result_words
                 != result_words
         {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(())
     }
@@ -63,7 +64,7 @@ impl IVM {
         result_words: usize,
     ) -> Result<(), VMError> {
         if self.captured_root_tables.is_some() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         self.captured_root_tables = Some(CapturedRootTables {
             pc: self.pc,
@@ -90,11 +91,11 @@ impl IVM {
                     .iter()
                     .find(|entry| entry.name == name)
             })
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let pc = self
             .program_prefix_len
             .checked_add(entrypoint.entry_pc)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         self.set_program_counter(pc)
     }
 
@@ -117,13 +118,13 @@ impl IVM {
     fn callable_index(&self, pc: u64) -> Result<usize, VMError> {
         let relative = pc
             .checked_sub(self.program_prefix_len)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         self.contract_interface
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callables
             .binary_search_by_key(&relative, |entry| entry.entry_pc)
-            .map_err(|_| VMError::DecodeError)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
 
     pub(super) fn begin_root_call(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
@@ -134,19 +135,19 @@ impl IVM {
         let interface = self
             .contract_interface
             .clone()
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let callable = &interface.callables[index];
         let layout = self
             .call_layouts
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callable(index)?;
         let entrypoint = interface
             .entrypoints
             .iter()
             .find(|entry| entry.entry_pc == callable.entry_pc);
         if entrypoint.is_none() && !self.allow_koto_test_syscalls {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let schema = entrypoint.and_then(|entry| entry.argument_schema.as_ref());
         let captured = self.captured_root_tables.take();
@@ -154,7 +155,7 @@ impl IVM {
             .as_ref()
             .is_some_and(|captured| captured.pc != self.pc)
         {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let prepared = if schema.is_some() && captured.is_none() {
             let _metadata_mask = crate::zk::RegLoggerGuard::mask();
@@ -179,7 +180,7 @@ impl IVM {
                 if prepared.word_count() != layout.frame.argument_words
                     || !prepared.is_bound_to(schema, prepared.canonical_bytes())?
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 prepared.install_call_arguments(self, layout.frame.result_words)?;
             } else {
@@ -192,7 +193,7 @@ impl IVM {
             }
         } else {
             if layout.frame.argument_words != 0 {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             crate::argument_record::install_empty_call_arguments(self, layout.frame.result_words)?;
         }
@@ -229,12 +230,12 @@ impl IVM {
             .contract_interface
             .as_ref()
             .map(crate::cache_memory::SharedValue::transient)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let callable = &interface.callables[index];
         let layout = self
             .call_layouts
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callable(index)?;
         // Fund the protected return slot before validating tables debits gas
         // or entering the child frame mutates its ownership bitmap.
@@ -263,14 +264,14 @@ impl IVM {
         let index = self
             .contract_interface
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callables
             .binary_search_by_key(&callable.entry_pc, |entry| entry.entry_pc)
-            .map_err(|_| VMError::DecodeError)?;
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let layout = self
             .call_layouts
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callable(index)?;
         self.zk_require_public_trap_operands(&[10, 11, 12, 13, 31])?;
         let argument = self.registers.get(10);
@@ -281,7 +282,7 @@ impl IVM {
             || !results.is_multiple_of(8)
             || (layout.frame.argument_words == 0 && argument != 0)
         {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         if root {
             if layout.frame.argument_words != 0 {
@@ -305,19 +306,19 @@ impl IVM {
             .contract_interface
             .as_ref()
             .map(crate::cache_memory::SharedValue::transient)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let index = interface
             .callables
             .binary_search_by_key(&entry_pc, |entry| entry.entry_pc)
-            .map_err(|_| VMError::DecodeError)?;
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let callable = &interface.callables[index];
         let layout = self
             .call_layouts
             .as_ref()
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .callable(index)?;
         if self.registers.get(11) != layout.frame.result_words as u64 {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let result_base = self.registers.get(10);
         self.validate_call_values(&callable.results, layout.results, result_base, true)?;
@@ -338,7 +339,7 @@ impl IVM {
         role: &CallTypeNodeV1,
     ) -> Result<(), VMError> {
         if self.memory_load_privacy_tag(address, 8)? != role.is_private() {
-            return Err(VMError::PrivacyViolation);
+            return Err(VMError::Trap(VmTrap::PrivacyViolation));
         }
         match role {
             CallTypeNodeV1::Unit if word == 0 => Ok(()),
@@ -366,7 +367,9 @@ impl IVM {
                 Ok(())
             }
             CallTypeNodeV1::Leaf(kind) if *kind != EntrypointValueKindV1::Bool => {
-                let expected = role.pointer_type().ok_or(VMError::DecodeError)?;
+                let expected = role
+                    .pointer_type()
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 self.validate_call_pointer_role(word, Some(expected as u16), None, Some(*kind))
             }
             CallTypeNodeV1::Pointer(expected) => self.validate_call_pointer(word, Some(*expected)),
@@ -375,7 +378,7 @@ impl IVM {
             CallTypeNodeV1::SecretNumeric(expected) => {
                 self.validate_secret_call_pointer(word, *expected)
             }
-            _ => Err(VMError::DecodeError),
+            _ => Err(VMError::Trap(VmTrap::DecodeError)),
         }
     }
 
@@ -410,23 +413,23 @@ impl IVM {
             || (expected.is_none()
                 && !matches!(tlv.type_id, PointerType::Name | PointerType::NoritoBytes))
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         if let Some(key) = cursor_key {
             let cursor =
                 iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(
                     tlv.payload,
                 )
-                .map_err(|_| VMError::NoritoInvalid)?;
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
             if Some(cursor.key_schema_hash)
                 != iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(key)
             {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
         }
         if let Some(kind) = leaf_kind {
             return crate::argument_record::validate_pointer_payload(kind, tlv.payload)
-                .map_err(|_| VMError::NoritoInvalid);
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid));
         }
         if matches!(
             tlv.type_id,
@@ -447,7 +450,7 @@ impl IVM {
             Some(PointerType::Int) => MAX_INT_FRAME_BYTES_V1,
             Some(PointerType::Decimal) => MAX_DECIMAL_FRAME_BYTES_V1,
             Some(PointerType::Quantity) => MAX_QUANTITY_FRAME_BYTES_V1,
-            _ => return Err(VMError::DecodeError),
+            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
         } as u64
             + 39;
         // The public declared numeric type determines the charge, never secret envelope length.
@@ -458,7 +461,7 @@ impl IVM {
             header[3], header[4], header[5], header[6],
         ])) + 39;
         if total > maximum {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.ensure_owned_tlv_range(word, total)?;
         if self
@@ -466,13 +469,13 @@ impl IVM {
             .intersection_len(Self::memory_privacy_range(word, total)?)
             != total
         {
-            return Err(VMError::PrivacyViolation);
+            return Err(VMError::Trap(VmTrap::PrivacyViolation));
         }
         let envelope = self.memory.load_region(word, total)?;
         if crate::private_input::validate_private_numeric_envelope(envelope)?.pointer_type() as u16
             != expected
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(())
     }
@@ -481,6 +484,7 @@ impl IVM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use crate::{ProgramMetadata, host::DefaultHost};
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
@@ -573,7 +577,10 @@ mod tests {
             if u32::try_from(ordinal).is_ok() {
                 result.unwrap();
             } else {
-                assert!(matches!(result, Err(VMError::DecodeError)), "{result:?}");
+                assert!(
+                    matches!(result, Err(VMError::Trap(VmTrap::DecodeError))),
+                    "{result:?}"
+                );
             }
         }
     }
@@ -591,7 +598,7 @@ mod tests {
         for word in [u64::from(u32::MAX) + 1, u64::MAX] {
             assert!(matches!(
                 vm.validate_call_word(address, word, &CallTypeNodeV1::PendingAction),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
         }
         assert!(
@@ -604,7 +611,7 @@ mod tests {
                 7,
                 &CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
 
@@ -636,7 +643,7 @@ mod tests {
         for word in [0, 2, u64::from(u32::MAX) + 1, u64::MAX] {
             assert!(matches!(
                 vm.validate_call_word(address, word, &role),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
         }
     }
@@ -666,11 +673,11 @@ mod tests {
         vm.load_program(&code).unwrap();
         assert!(matches!(
             vm.select_entrypoint("helper"),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert!(matches!(
             vm.select_entrypoint("missing"),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         vm.select_entrypoint("main").unwrap();
         vm.run().unwrap();
@@ -699,21 +706,24 @@ mod tests {
         vm.registers.set(11, 1);
         assert!(matches!(
             vm.finish_call(),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         vm.store_u64(result, 2).unwrap();
-        assert!(matches!(vm.finish_call(), Err(VMError::DecodeError)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::Trap(VmTrap::DecodeError))
+        ));
         vm.store_u64(result, 1).unwrap();
         vm.registers.set(10, result + 8);
         assert!(matches!(
             vm.finish_call(),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         vm.registers.set(10, result);
         vm.registers.set(11, 0);
         assert!(matches!(
             vm.finish_call(),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         vm.registers.set(11, 1);
         vm.finish_call().unwrap();
@@ -723,7 +733,7 @@ mod tests {
     #[test]
     fn root_preparation_and_result_validation_debit_before_work() {
         let mut vm = boolean_root(7);
-        assert!(matches!(vm.run(), Err(VMError::OutOfGas)));
+        assert!(matches!(vm.run(), Err(VMError::Trap(VmTrap::OutOfGas))));
         assert_eq!(vm.memory.heap_allocated_len(), 0);
         assert!(vm.call_result_word_count().is_err());
 
@@ -734,7 +744,10 @@ mod tests {
         vm.registers.set(10, result);
         vm.registers.set(11, 1);
         vm.set_gas_limit(7);
-        assert!(matches!(vm.finish_call(), Err(VMError::OutOfGas)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::Trap(VmTrap::OutOfGas))
+        ));
         assert!(vm.call_result_word_count().is_err());
     }
 
@@ -752,12 +765,12 @@ mod tests {
         assert_eq!(before - vm.remaining_gas(), 16 + 39 + 5);
         assert!(matches!(
             vm.validate_call_pointer(pointer, Some(PointerType::Int as u16)),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         vm.set_gas_limit(16 + 39 + 4);
         assert!(matches!(
             vm.validate_call_pointer(pointer, Some(PointerType::Blob as u16)),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         let pointer = vm
             .alloc_host_tlv(
@@ -767,7 +780,7 @@ mod tests {
         vm.set_gas_limit(100_000);
         assert!(matches!(
             vm.validate_call_pointer(pointer, Some(PointerType::Int as u16)),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
 
@@ -792,7 +805,7 @@ mod tests {
                 slot,
                 invalid_pointer,
                 &CallTypeNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)] })
-            ), Err(VMError::NoritoInvalid)));
+            ), Err(VMError::Trap(VmTrap::NoritoInvalid))));
         assert_eq!(
             before - vm.remaining_gas(),
             crate::call_gas::pointer(invalid_payload.len() as u64).unwrap()
@@ -911,7 +924,7 @@ mod tests {
         let before = vm.remaining_gas();
         assert!(matches!(
             vm.validate_call_tables(&callable, true),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             before - vm.remaining_gas(),
@@ -965,7 +978,7 @@ mod tests {
         let target = vm.program_prefix_len + child.entry_pc;
         assert!(matches!(
             vm.begin_child_call(target),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             (vm.memory.call_frames.entry_pc()).expect("expected successful fixture result"),
@@ -979,7 +992,10 @@ mod tests {
         );
         vm.store_u64(child_results, wrong).unwrap();
         vm.registers.set(10, child_results);
-        assert!(matches!(vm.finish_call(), Err(VMError::NoritoInvalid)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
+        ));
         assert_eq!(
             (vm.memory.call_frames.entry_pc()).expect("expected successful fixture result"),
             child.entry_pc
@@ -1012,7 +1028,10 @@ mod tests {
         vm.registers.set(10, tables.result_base);
         vm.registers.set(11, tables.result_words);
         let before = vm.remaining_gas();
-        assert!(matches!(vm.finish_call(), Err(VMError::NoritoInvalid)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
+        ));
         assert_eq!(
             before - vm.remaining_gas(),
             crate::call_gas::NODE + crate::call_gas::WORD + cost
@@ -1057,18 +1076,18 @@ mod tests {
                     pointer,
                     &CallTypeNodeV1::Leaf(EntrypointValueKindV1::Int)
                 ),
-                Err(VMError::PrivacyViolation)
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
             ));
             assert!(matches!(
                 vm.validate_call_pointer(pointer, Some(PointerType::Int as u16)),
-                Err(VMError::PrivacyViolation)
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
             ));
         }
         assert_eq!(costs, vec![16 + 39 + MAX_INT_FRAME_BYTES_V1 as u64; 2]);
         vm.store_u8(slot, 0).unwrap();
         assert!(matches!(
             vm.validate_call_word(slot, 0, &CallTypeNodeV1::Unit),
-            Err(VMError::PrivacyViolation)
+            Err(VMError::Trap(VmTrap::PrivacyViolation))
         ));
     }
 }

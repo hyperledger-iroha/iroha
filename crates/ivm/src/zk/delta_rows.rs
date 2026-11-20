@@ -8,6 +8,7 @@ use super::{
     RegisterState,
     trace_storage::{TraceCell, TraceRows, check_scope, next_capacity, overflow},
 };
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
@@ -157,9 +158,9 @@ impl DeltaTraceLog {
         self.validate_scope(scope)?;
         if self.pending.is_some() || rows == 0 || first_changes > width || repeated_changes > width
         {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            ));
+            )));
         }
         let first = if continues { first_changes } else { width };
         let slots = (rows - 1)
@@ -190,16 +191,16 @@ impl DeltaTraceLog {
         if grow_rows {
             plan.include_child(
                 ExecutionMemoryPlan::array::<Row>(row_capacity)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             )
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         if grow_changes {
             plan.include_child(
                 ExecutionMemoryPlan::array::<(usize, u64, bool)>(change_capacity)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             )
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         if !grow_rows && !grow_changes {
             return Ok(());
@@ -209,7 +210,7 @@ impl DeltaTraceLog {
             .as_ref()
             .map(|original| ExecutionMemoryLease::reserve(original, plan))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         // Allocate/copy both replacements before changing either live owner.
         let mut new_rows = if grow_rows {
             Some(TraceRows::allocate(row_capacity, lease.as_mut())?)
@@ -340,12 +341,12 @@ impl DeltaTraceLog {
     /// Exact retained physical capacities independent of logical change counts.
     pub(crate) fn allocated_bytes(&self) -> Result<usize, VMError> {
         let mut plan = ExecutionMemoryPlan::array::<Row>(self.rows.capacity())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(
             ExecutionMemoryPlan::array::<(usize, u64, bool)>(self.changes.capacity())
-                .map_err(VMError::AllocationDeferred)?,
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         Ok(plan.requested_bytes())
     }
     fn clear_last(&mut self) {

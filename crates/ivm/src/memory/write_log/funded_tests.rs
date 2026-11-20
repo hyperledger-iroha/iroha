@@ -1,6 +1,7 @@
 //! Original finite-pool admission, independent copies and final-owner release.
 
 use super::*;
+use crate::error::VmDeferral;
 use std::sync::{Arc, Barrier};
 
 fn append(log: &mut WriteLog, address: u64, bytes: &[u8]) {
@@ -24,7 +25,7 @@ fn exact_append_admission_refuses_before_rows_or_payload_and_preserves_nonempty_
     let mut log = WriteLog::with_memory_budget(&budget);
     assert!(matches!(
         log.prepare(3, &[1, 2]),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(log.rows.capacity(), 0);
@@ -38,7 +39,7 @@ fn exact_append_admission_refuses_before_rows_or_payload_and_preserves_nonempty_
     budget.set_limit_bytes(0);
     assert!(matches!(
         log.prepare(4, &[9]),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(log.rows.as_ptr(), rows);
     assert_eq!(log.rows[0].bytes().as_ptr(), payload);
@@ -64,7 +65,7 @@ fn growth_precharges_old_new_overlap_and_keeps_existing_payload_pointers() {
     budget.set_limit_bytes(old + 8 * row); // One payload byte short, including overlap.
     assert!(matches!(
         log.prepare(9, &[9]),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(log.rows.as_ptr(), previous);
     assert_eq!(log.rows.len(), 4);
@@ -90,7 +91,7 @@ fn snapshots_and_clone_reserve_exact_independent_storage_from_original_pool() {
     budget.set_limit_bytes(original + copy_bytes - 1);
     assert!(matches!(
         log.try_snapshot(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), original);
     budget.set_limit_bytes(original + copy_bytes);
@@ -100,7 +101,7 @@ fn snapshots_and_clone_reserve_exact_independent_storage_from_original_pool() {
     assert_ne!(snapshot[0].bytes().as_ptr(), log.rows[0].bytes().as_ptr());
     assert!(matches!(
         snapshot.try_clone(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     budget.set_limit_bytes(original + 2 * copy_bytes);
     let clone = snapshot.try_clone().unwrap();

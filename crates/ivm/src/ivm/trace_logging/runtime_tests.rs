@@ -6,6 +6,7 @@ use super::{
     tests::{GAS, LIMIT, state},
     *,
 };
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     PreparedArgumentRecord, ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
@@ -44,11 +45,11 @@ impl IVMHost for UnreachedRootHost {
     }
     fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         self.quotes.set(self.quotes.get() + 1);
-        Err(VMError::AssertionFailed)
+        Err(VMError::Trap(VmTrap::AssertionFailed))
     }
     fn syscall(&mut self, _: u32, _: &mut IVM) -> Result<u64, VMError> {
         self.calls += 1;
-        Err(VMError::AssertionFailed)
+        Err(VMError::Trap(VmTrap::AssertionFailed))
     }
     fn as_any(&mut self) -> &mut dyn Any {
         self
@@ -87,9 +88,9 @@ fn first_runtime_row_refuses_before_strict_default_argument_metadata_or_effects(
         };
         assert!(matches!(
             vm.run_with_host(&mut host),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::Capacity { .. }
-            ))
+            )))
         ));
         assert_eq!(state(&vm), before);
         assert_eq!(
@@ -158,7 +159,7 @@ fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
         let initial = vm.pc;
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExceededMaxCycles)
+            Err(VMError::Trap(VmTrap::ExceededMaxCycles))
         ));
         assert_eq!(vm.cycles, cycles);
         assert_eq!(vm.pc, initial + 4);
@@ -270,7 +271,7 @@ fn actual_non_zk_host_mode_replacement_is_local_refusal_not_unfunded_append() {
     vm.set_zk_mode(false).unwrap();
     let start = vm.pc;
     assert!(
-        matches!(vm.run_with_host(&mut TraceMutatingHost), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(vm.run_with_host(&mut TraceMutatingHost), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
@@ -294,7 +295,9 @@ fn actual_zk_host_custody_violation_is_a_local_invariant_deferral() {
     let error = vm.run_with_host(&mut TraceMutatingHost).unwrap_err();
     assert!(matches!(
         error,
-        VMError::ExecutionDeferred(crate::error::ExecutionDeferral::LocalInvariantViolation)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::LocalInvariantViolation
+        ))
     ));
     assert_eq!(
         error.execution_deferral(),
@@ -347,7 +350,7 @@ fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect()
         calls: 0,
     };
     assert!(matches!(vm.run_with_host(&mut host),
-        Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 })))
         if requested_bytes == 8 * std::mem::size_of::<u64>()));
     assert_eq!(host.calls, 1);
     assert_eq!(vm.trace_pcs(), &[start, start + 4, start + 8, start + 12]);
@@ -381,13 +384,13 @@ fn payable_padding_refuses_before_effects_but_unpayable_padding_preserves_oog() 
         if payable {
             assert!(matches!(
                 outcome,
-                Err(VMError::AllocationDeferred(
+                Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                     AllocationRefusal::ExceedsLimit { .. }
-                ))
+                )))
             ));
             assert_eq!((vm.cycles, vm.gas_remaining), (1, 63));
         } else {
-            assert!(matches!(outcome, Err(VMError::OutOfGas)));
+            assert!(matches!(outcome, Err(VMError::Trap(VmTrap::OutOfGas))));
             assert_eq!((vm.cycles, vm.gas_remaining), (64, 62));
         }
         assert_eq!(host.calls, 1);

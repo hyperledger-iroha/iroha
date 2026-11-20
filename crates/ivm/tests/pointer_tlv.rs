@@ -1,6 +1,7 @@
 use crate::common;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{Memory, PointerType};
+use ivm_abi::error::VmTrap;
 fn valid_account_id_literal() -> Vec<u8> {
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -56,7 +57,7 @@ fn reject_hash_mismatch() {
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -72,7 +73,7 @@ fn reject_oob_length() {
     mem.preload_input(0, &hdr).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -82,7 +83,7 @@ fn reject_unknown_type() {
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -93,7 +94,7 @@ fn reject_wrong_version() {
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
         mem.validate_tlv(Memory::INPUT_START),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -106,6 +107,6 @@ fn reject_wrong_region() {
     mem.store_bytes(heap_addr, &tlv).unwrap();
     assert!(matches!(
         mem.validate_tlv(heap_addr),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }

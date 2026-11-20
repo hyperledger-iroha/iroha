@@ -53,6 +53,7 @@ use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
+use ivm_abi::error::{VmErrorRef, VmTrap};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 #[cfg(test)]
@@ -4041,6 +4042,7 @@ mod tests_overlay_manifest {
     use iroha_primitives::json::Json;
     use iroha_primitives::nonzero;
     use iroha_test_samples::gen_account_in;
+    use ivm_abi::error::{VmDeferral, VmTrap};
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -4243,7 +4245,8 @@ mod tests_overlay_manifest {
                 .may_change_with_live_state()
         );
         assert!(
-            OverlayBuildError::IvmRun(ivm::VMError::PermissionDenied).may_change_with_live_state()
+            OverlayBuildError::IvmRun(ivm::VMError::Trap(VmTrap::PermissionDenied))
+                .may_change_with_live_state()
         );
         assert!(!OverlayBuildError::IvmHeaderParse.may_change_with_live_state());
         assert!(
@@ -4251,7 +4254,8 @@ mod tests_overlay_manifest {
                 .may_change_with_live_state()
         );
         assert!(
-            !OverlayBuildError::IvmLoad(ivm::VMError::InvalidMetadata).may_change_with_live_state()
+            !OverlayBuildError::IvmLoad(ivm::VMError::Trap(VmTrap::InvalidMetadata))
+                .may_change_with_live_state()
         );
         assert!(
             !OverlayBuildError::StateRequiredSyscall(ivm::syscalls::SYSCALL_AXT_BEGIN)
@@ -4909,15 +4913,21 @@ mod tests_overlay_manifest {
                 .expect_err("state-free execution must apply the generic syscall profile");
             assert!(match (
                 &(error),
-                &(OverlayBuildError::IvmLoad(ivm::VMError::GenericSyscallNotAllowed { syscall }))
+                &(OverlayBuildError::IvmLoad(ivm::VMError::Trap(
+                    VmTrap::GenericSyscallNotAllowed { syscall }
+                )))
             ) {
                 (
-                    OverlayBuildError::IvmLoad(ivm::VMError::GenericSyscallNotAllowed {
-                        syscall: actual_field_0,
-                    }),
-                    OverlayBuildError::IvmLoad(ivm::VMError::GenericSyscallNotAllowed {
-                        syscall: expected_field_0,
-                    }),
+                    OverlayBuildError::IvmLoad(ivm::VMError::Trap(
+                        VmTrap::GenericSyscallNotAllowed {
+                            syscall: actual_field_0,
+                        },
+                    )),
+                    OverlayBuildError::IvmLoad(ivm::VMError::Trap(
+                        VmTrap::GenericSyscallNotAllowed {
+                            syscall: expected_field_0,
+                        },
+                    )),
                 ) => actual_field_0 == expected_field_0,
                 _ => false,
             });
@@ -6954,10 +6964,10 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
         let original = budget.try_reserve_bytes(1).unwrap_err();
         let error = map_artifact_admission_error(ivm::ContractArtifactError::preparation(
             "instruction admission",
-            ivm::VMError::AllocationDeferred(original.clone()),
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(original.clone())),
         ));
         assert!(
-            matches!(error, OverlayBuildError::IvmLoad(ivm::VMError::AllocationDeferred(ref retained)) if retained == &original)
+            matches!(error, OverlayBuildError::IvmLoad(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(ref retained))) if retained == &original)
         );
         let invalid = ivm::ContractArtifactError::invalid("missing canonical instruction");
         let diagnostic = invalid.to_string();
@@ -7344,7 +7354,7 @@ fn validate_c10_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmi
     match (meta.mode & ivm::ivm_mode::ZK != 0, meta.max_cycles) {
         (true, 0) => Err(IvmAdmissionError::MissingMaxCycles),
         (false, max_cycles) if max_cycles != 0 => Err(IvmAdmissionError::BytecodeDecodingFailed(
-            ivm::VMError::MaxCyclesWithoutZk { max_cycles }.to_string(),
+            ivm::VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles }).to_string(),
         )),
         _ => Ok(()),
     }
@@ -8875,12 +8885,12 @@ fn run_vm(vm: &mut ivm::IVM) -> Result<(), OverlayBuildError> {
     clear_axt_reject(vm);
     match vm.run() {
         Ok(()) => Ok(()),
-        Err(ivm::VMError::AmxBudgetExceeded {
+        Err(ivm::VMError::Trap(VmTrap::AmxBudgetExceeded {
             dataspace,
             stage,
             elapsed_ms,
             budget_ms,
-        }) => {
+        })) => {
             let violation = AmxBudgetViolation {
                 dataspace,
                 stage,
@@ -8894,7 +8904,7 @@ fn run_vm(vm: &mut ivm::IVM) -> Result<(), OverlayBuildError> {
         Err(err) => {
             if matches!(
                 err.as_unmetered(),
-                ivm::VMError::HostOutputBudgetExceeded { .. }
+                VmErrorRef::Trap(VmTrap::HostOutputBudgetExceeded { .. })
             ) {
                 return Err(OverlayBuildError::IvmRun(err));
             }
@@ -8926,12 +8936,12 @@ fn finish_vm_run_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAcces
 ) -> Result<(), OverlayBuildError> {
     match result {
         Ok(()) => Ok(()),
-        Err(ivm::VMError::AmxBudgetExceeded {
+        Err(ivm::VMError::Trap(VmTrap::AmxBudgetExceeded {
             dataspace,
             stage,
             elapsed_ms,
             budget_ms,
-        }) => {
+        })) => {
             let violation = AmxBudgetViolation {
                 dataspace,
                 stage,
@@ -8945,7 +8955,7 @@ fn finish_vm_run_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAcces
         Err(err) => {
             if matches!(
                 err.as_unmetered(),
-                ivm::VMError::HostOutputBudgetExceeded { .. }
+                VmErrorRef::Trap(VmTrap::HostOutputBudgetExceeded { .. })
             ) {
                 return Err(OverlayBuildError::IvmRun(err));
             }

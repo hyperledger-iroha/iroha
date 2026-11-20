@@ -1,6 +1,7 @@
 //! Real VM logger admission, detached custody and final TLS release regressions.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{ProgramMetadata, cache_memory, error::ExecutionDeferral, host::DefaultHost};
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
 use std::{
@@ -66,7 +67,7 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
     let shell = zk::SharedRegLog::allocation_layout().size();
     budget.set_limit_bytes(baseline + shell - 1);
     assert!(matches!(vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(budget.reserved_bytes(), baseline);
     assert_eq!(vm.execution_summary().unwrap(), before);
@@ -86,9 +87,9 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
     cache_memory::with_refused_shared_allocation_for_test(|| {
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(budget.reserved_bytes(), baseline);
@@ -130,9 +131,9 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     cache_memory::with_refused_shared_allocation_for_test(|| {
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation
-            ))
+            )))
         ));
         assert!(vm.reg_log.is_none());
         assert!(vm.host_trace_invocation_log.is_none());
@@ -140,9 +141,9 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
         // The failure path never attempted even an untracked replacement shell.
         assert!(matches!(
             zk::SharedRegLog::try_new(None),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(budget.reserved_bytes(), baseline);
@@ -150,7 +151,7 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     assert_eq!(vm.execution_summary().unwrap().register_log_len, 0);
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     drop(vm);
     assert_eq!(

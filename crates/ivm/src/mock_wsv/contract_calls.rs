@@ -1,6 +1,7 @@
 //! Admitted contract fixtures and typed calls for the local diagnostic WSV.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{PreparedContract, value_record};
 use iroha_data_model::smart_contract::{
     ContractArtifactId, ContractLifecycleControlV1,
@@ -52,7 +53,7 @@ pub fn contract_state_path(
 ) -> Result<StatePath, VMError> {
     format!("{}{logical}", contract_state_namespace(address))
         .parse()
-        .map_err(|_| VMError::NoritoInvalid)
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 fn contract_state_namespace(address: &ContractAddress) -> String {
     format!(
@@ -96,7 +97,9 @@ impl WsvHost {
         pending: Option<EntryPointKind>,
         profile: crate::IvmProfileId,
     ) -> Result<(), VMError> {
-        lifecycle.validate().map_err(|_| VMError::InvalidMetadata)?;
+        lifecycle
+            .validate()
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
         let prepared = crate::prepare_contract_with_memory_budget_for_profile(
             &artifact,
             &self.contract_execution_budget,
@@ -116,10 +119,10 @@ impl WsvHost {
                         .any(|entry| entry.kind == kind)
             })
         {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::Trap(VmTrap::InvalidMetadata));
         }
         let artifact_id = ContractArtifactId::for_address(&address, prepared.code_hash())
-            .map_err(|_| VMError::InvalidMetadata)?;
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
         Self::materialize_subject_account(&mut self.wsv, &address.subject_id());
         // Materialize the signed manifest's trigger ownership for native permission
         // diagnostics. Scheduling remains outside this local test host.
@@ -136,7 +139,7 @@ impl WsvHost {
                     .get(&id)
                     .is_some_and(|owner| owner != &authority)
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let enabled_key: Name = "__enabled".parse().expect("static metadata name");
                 let enabled = trigger
@@ -145,7 +148,7 @@ impl WsvHost {
                     .map(|value| {
                         value
                             .try_into_any_norito::<bool>()
-                            .map_err(|_| VMError::NoritoInvalid)
+                            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
                     })
                     .transpose()?
                     .unwrap_or(true);
@@ -192,7 +195,7 @@ impl WsvHost {
             .wsv
             .contract_instances
             .get(address)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if instance.lifecycle.owner
             != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
                 authority.clone(),
@@ -201,16 +204,16 @@ impl WsvHost {
             || instance.lifecycle.active_code_hash.is_none()
             || instance.pending.is_some()
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let mut lifecycle = instance.lifecycle.clone();
         lifecycle.revision = lifecycle
             .revision
             .checked_add(1)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let previous = self
             .contract_fixture(address)
-            .ok_or(VMError::InvalidMetadata)?;
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         // A replacement is admitted under the profile its predecessor runs; the upgrade path does
         // not move a contract between engines.
         let replacement = crate::prepare_contract_with_memory_budget_for_profile(
@@ -220,13 +223,13 @@ impl WsvHost {
         )
         .map_err(|error| error.into_vm_error())?;
         if previous.code_hash() == replacement.code_hash() {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         ivm_abi::upgrade::validate_contract_upgrade(
             previous.contract_interface(),
             replacement.contract_interface(),
         )
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
         self.validate_contract_fixture_state(address)?;
         let pending = replacement
             .contract_interface()
@@ -237,7 +240,7 @@ impl WsvHost {
         lifecycle.active_code_hash = Some(replacement.code_hash());
         lifecycle.retained_code_hash = Some(replacement.code_hash());
         let artifact_id = ContractArtifactId::for_address(address, replacement.code_hash())
-            .map_err(|_| VMError::InvalidMetadata)?;
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
         self.wsv.contract_artifacts.insert(artifact_id, replacement);
         self.wsv
             .contract_instances
@@ -270,7 +273,7 @@ impl WsvHost {
             .as_ref()
             .is_some_and(|address| self.contract_fixture(address).is_none())
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         self.contract_fixture_state_scope = address;
         Ok(())
@@ -290,10 +293,10 @@ impl WsvHost {
             .wsv
             .contract_instances
             .get(address)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if instance.pending != Some(expected_kind) || instance.lifecycle.active_code_hash.is_none()
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         self.validate_contract_fixture_state(address)?;
         self.wsv
@@ -313,21 +316,24 @@ impl WsvHost {
     ) -> Result<(), VMError> {
         let artifact = self
             .contract_fixture(address)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         for state in &artifact.contract_interface().states {
             if matches!(state.ty, crate::EmbeddedStateType::StateMap { .. }) {
                 continue;
             }
-            let logical: StatePath = state.name.parse().map_err(|_| VMError::InvalidMetadata)?;
+            let logical: StatePath = state
+                .name
+                .parse()
+                .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
             let path = contract_state_path(address, &logical)?;
             let value = match self.state_overlay.get(&path) {
                 Some(Some(value)) => value.as_slice(),
-                Some(None) => return Err(VMError::PermissionDenied),
+                Some(None) => return Err(VMError::Trap(VmTrap::PermissionDenied)),
                 None => self
                     .wsv
                     .state_overlay
                     .value_payload_ref(&path)?
-                    .ok_or(VMError::PermissionDenied)?,
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?,
             };
             crate::host::validate_persisted_state_value_payload(&state.ty, value)?;
         }
@@ -354,20 +360,20 @@ impl WsvHost {
         let address = self
             .contract_runtime_address
             .as_ref()
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let entrypoint = self
             .contract_runtime_entrypoint
             .as_ref()
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let instance = self
             .wsv
             .contract_instances
             .get(address)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if instance.lifecycle.active_code_hash != Some(CryptoHash::prehashed(vm.code_hash()))
             || self.caller != address.subject_id()
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let entry = vm
             .contract_interface()
@@ -377,7 +383,7 @@ impl WsvHost {
                     .iter()
                     .find(|entry| &entry.name == entrypoint)
             })
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         Ok((address.clone(), entry.kind))
     }
     pub(super) fn quote_contract_call(vm: crate::host::SyscallQuote<'_>) -> Result<usize, VMError> {
@@ -392,13 +398,16 @@ impl WsvHost {
             || vm.public_register(13)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
             || (vm.public_register(12)? == 0) != (vm.public_register(13)? == 0)
         {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         vm.validate_return_destination(
             vm.public_register(14)?,
-            usize::try_from(vm.public_register(15)?).map_err(|_| VMError::DecodeError)?,
+            usize::try_from(vm.public_register(15)?)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
         )?;
-        address.checked_add(binding).ok_or(VMError::OutOfGas)
+        address
+            .checked_add(binding)
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))
     }
     fn authorize_fixture(
         &self,
@@ -410,7 +419,7 @@ impl WsvHost {
             .wsv
             .contract_instances
             .get(address)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         if instance.lifecycle.active_code_hash != Some(artifact.code_hash())
             || instance
                 .lifecycle
@@ -423,18 +432,20 @@ impl WsvHost {
                 EntryPointKind::Hajimari | EntryPointKind::Kaizen
             )
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let token = match &entry.authorization {
             EntrypointAuthorizationV1::Anyone => return Ok(()),
-            EntrypointAuthorizationV1::RuntimeLifecycle => return Err(VMError::PermissionDenied),
+            EntrypointAuthorizationV1::RuntimeLifecycle => {
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
+            }
             EntrypointAuthorizationV1::Permission(name) => {
                 let declaration = artifact
                     .contract_interface()
                     .permissions
                     .iter()
                     .find(|permission| &permission.name == name)
-                    .ok_or(VMError::InvalidMetadata)?;
+                    .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
                 match &declaration.scope {
                     ContractPermissionScopeV1::Instance => PermissionToken::ContractPermission {
                         contract: address.clone(),
@@ -449,7 +460,7 @@ impl WsvHost {
         if self.wsv.has_permission(&self.caller, &token) {
             Ok(())
         } else {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
     }
     pub(super) fn call_contract(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
@@ -463,32 +474,34 @@ impl WsvHost {
         boundary_gas: &mut u64,
     ) -> Result<u64, VMError> {
         if self.contract_ancestors.len() >= MAX_NESTED_CALLS {
-            return Err(VMError::CallDepthExceeded);
+            return Err(VMError::Trap(VmTrap::CallDepthExceeded));
         }
         let (caller, caller_kind) = self.authenticated_caller(vm)?;
         let request_bytes = Self::quote_contract_call(vm.syscall_quote())?;
         *boundary_gas = gas::syscall_byte_gas(gas::G_CALL_CONTRACT, request_bytes, 0);
         preflight_reserved_syscall_gas(vm, *boundary_gas)?;
         if vm.remaining_gas() < *boundary_gas {
-            return Err(VMError::OutOfGas);
+            return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         let literal = std::str::from_utf8(vm.validate_tlv(vm.register(10))?.payload)
-            .map_err(|_| VMError::DecodeError)?;
-        let address: ContractAddress = literal.parse().map_err(|_| VMError::PermissionDenied)?;
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        let address: ContractAddress = literal
+            .parse()
+            .map_err(|_| VMError::Trap(VmTrap::PermissionDenied))?;
         if address.as_ref() != literal {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         if caller == address || self.contract_ancestors.contains(&address) {
-            return Err(VMError::ReentrantCall);
+            return Err(VMError::Trap(VmTrap::ReentrantCall));
         }
         let binding = ContractCallBindingV1::from_bytes(vm.validate_tlv(vm.register(11))?.payload)
-            .map_err(|_| VMError::DecodeError)?;
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let artifact = self
             .contract_fixture(&address)
-            .ok_or(VMError::PermissionDenied)?
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?
             .clone();
         if artifact.code_hash() != binding.code_hash {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         *boundary_gas = boundary_gas.saturating_add(
             gas::CONSERVATIVE_SYSCALL_INPUT_MULTIPLIER
@@ -496,27 +509,29 @@ impl WsvHost {
         );
         preflight_reserved_syscall_gas(vm, *boundary_gas)?;
         if vm.remaining_gas() < *boundary_gas {
-            return Err(VMError::OutOfGas);
+            return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         let entry = artifact
             .contract_interface()
             .entrypoints
             .get(binding.entrypoint as usize)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let is_view = entry.kind == EntryPointKind::View;
         if (caller_kind == EntryPointKind::View && !is_view)
             || artifact.entrypoint_requires_private_inputs(&entry.name) != Some(false)
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         self.authorize_fixture(&address, entry, &artifact)?;
         let schema = entry
             .return_schema
             .as_ref()
-            .ok_or(VMError::InvalidMetadata)?;
-        let result_words = schema.word_count().ok_or(VMError::InvalidMetadata)?;
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
+        let result_words = schema
+            .word_count()
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         if vm.register(15) != result_words as u64 {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let destination = vm.register(14);
         let budget = self.contract_execution_budget.clone();
@@ -530,7 +545,7 @@ impl WsvHost {
             )?;
             *boundary_gas = boundary_gas
                 .checked_add(quote.gas)
-                .ok_or(VMError::OutOfGas)?;
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             Some(value_record::capture_argument_record_funded(
                 vm,
                 schema,
@@ -540,7 +555,7 @@ impl WsvHost {
             )?)
         } else {
             if vm.register(13) != 0 {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             None
         };
@@ -581,7 +596,7 @@ impl WsvHost {
             address.clone(),
             entry.name.clone(),
         )
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
         self.public_inputs.clear();
         self.fastpq_batch_entries = None;
         self.contract_ancestors.push(caller);
@@ -602,7 +617,7 @@ impl WsvHost {
                 value_record::quote_completed_return_record(&child, schema, child.remaining_gas())?;
             *boundary_gas = boundary_gas
                 .checked_add(quote.gas)
-                .ok_or(VMError::OutOfGas)?;
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             let returned_error = crate::sum::entrypoint_return_is_error(&child, schema)?;
             let captured = value_record::capture_completed_return_funded(&child, schema, &budget)?;
             let transfer = value_record::transfer_return_record_funded(
@@ -616,7 +631,7 @@ impl WsvHost {
             )?;
             *boundary_gas = boundary_gas
                 .checked_add(transfer)
-                .ok_or(VMError::OutOfGas)?;
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             Ok(returned_error)
         })();
         *boundary_gas = boundary_gas.saturating_add(if reserve == 0 { 0 } else { spent });
@@ -652,22 +667,24 @@ impl WsvHost {
     pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, VMError> {
         let (contract, kind) = self.authenticated_caller(vm)?;
         if kind == EntryPointKind::View {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         for register in 10..=12 {
             vm.ensure_public_register(register)?;
         }
-        let ordinal = usize::try_from(vm.register(10)).map_err(|_| VMError::DecodeError)?;
+        let ordinal =
+            usize::try_from(vm.register(10)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let artifact = self
             .contract_fixture(&contract)
-            .ok_or(VMError::PermissionDenied)?
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?
             .clone();
         let definition = artifact
             .contract_interface()
             .events
             .get(ordinal)
-            .ok_or(VMError::DecodeError)?;
-        let words = usize::try_from(vm.register(12)).map_err(|_| VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+        let words =
+            usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let quote = value_record::quote_value_record(
             vm,
             &definition.payload_type,
@@ -685,7 +702,9 @@ impl WsvHost {
                 &self.contract_execution_budget,
             )?;
             self.contract_events.try_reserve(1).map_err(|_| {
-                VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
             Ok(payload)
         })();

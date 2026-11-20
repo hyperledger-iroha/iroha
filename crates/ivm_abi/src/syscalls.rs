@@ -830,7 +830,7 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
 /// This function centralizes the mapping between `ProgramMetadata.abi_version` and the set of
 /// syscalls available to programs compiled against that ABI. Hosts should call this before
 /// attempting to handle a syscall to ensure stable first-release behavior; unknown or disallowed
-/// numbers must be rejected with `VMError::UnknownSyscall`.
+/// numbers must be rejected with `VmTrap::UnknownSyscall`.
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
 }

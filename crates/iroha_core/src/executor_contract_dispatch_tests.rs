@@ -1,3 +1,4 @@
+use ivm_abi::error::VmTrap;
 #[test]
 fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_without_main() {
     let (program, expected_entrypoint_pc) =
@@ -497,7 +498,7 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
         assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
         assert!(matches!(
             runtime.memory.alloc(SMALL_HEAP_LIMIT + 8),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
     }
     {
@@ -1468,7 +1469,7 @@ fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
         .expect_err("direct migration must enforce executor-upgrade authority");
     assert!(matches!(
         error,
-        ExecutorMigrationError::Rejected(VMError::PermissionDenied)
+        ExecutorMigrationError::Rejected(VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(!state_transaction.is_execution_deferred());
     assert!(matches!(executor, super::Executor::Initial));

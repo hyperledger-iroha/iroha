@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -262,7 +263,7 @@ fn wsv_state_ingress_rejects_oversized_raw_payload() {
             "bad",
             vec![0u8; syscalls::STATE_MAX_VALUE_BYTES.saturating_add(1)],
         ),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -448,7 +449,7 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
     vm.set_register(11, PointerType::Blob as u64);
     assert!(matches!(
         IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.register(10), retired_blob_carrier_ptr);
 }

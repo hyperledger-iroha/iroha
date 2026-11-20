@@ -1,6 +1,7 @@
 //! Borrowed source identity, inline snapshot lifetime and fresh-attempt clearing.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     encoding::wide::encode_halt,
     metadata::{EmbeddedContractDebugInfoV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1},
@@ -31,7 +32,7 @@ fn source_views_borrow_the_original_and_snapshot_resolves_its_own_owner() {
     let mut vm = IVM::try_new(100).unwrap();
     vm.load_code(&encode_halt().to_le_bytes()).unwrap();
     vm.contract_debug = Some(debug());
-    vm.capture_trap(&VMError::UnknownSyscall(0x7fff));
+    vm.capture_trap(&VMError::Trap(VmTrap::UnknownSyscall(0x7fff)));
     let diagnostic = vm.last_diagnostic().unwrap();
     let source = diagnostic.source.unwrap();
     let original = &vm.contract_debug.as_ref().unwrap().source_map[0];
@@ -71,17 +72,20 @@ fn failed_run_load_and_reset_clear_stale_context_before_local_preflight() {
     let original = AllocationBudget::new(128 * 1024 * 1024);
     let mut vm = IVM::try_new_with_memory_budget(100, &original).unwrap();
     vm.load_code(&encode_halt().to_le_bytes()).unwrap();
-    vm.capture_trap(&VMError::OutOfGas);
+    vm.capture_trap(&VMError::Trap(VmTrap::OutOfGas));
     let gas = vm.remaining_gas();
     original.set_limit_bytes(0);
-    assert!(matches!(vm.run(), Err(VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(vm.remaining_gas(), gas);
     assert!(vm.last_diagnostic().is_none());
-    vm.capture_trap(&VMError::InvalidMetadata);
+    vm.capture_trap(&VMError::Trap(VmTrap::InvalidMetadata));
     assert!(vm.load_program(&[]).is_err());
     assert!(vm.last_diagnostic().is_none());
     original.set_limit_bytes(128 * 1024 * 1024);
-    vm.capture_trap(&VMError::OutOfGas);
+    vm.capture_trap(&VMError::Trap(VmTrap::OutOfGas));
     vm.reset().unwrap();
     assert!(vm.last_diagnostic().is_none());
     vm.run().unwrap();
@@ -94,20 +98,17 @@ fn inline_capture_keeps_exact_budget_and_omits_local_error_graphs() {
     vm.load_code(&encode_halt().to_le_bytes()).unwrap();
     vm.gas_remaining = 41;
     vm.cycles = 7;
-    vm.capture_trap(&VMError::Metered {
-        gas: 5,
-        source: Box::new(VMError::OutOfGas),
-    });
+    vm.capture_trap(&VMError::metered(5, VMError::Trap(VmTrap::OutOfGas)));
     let diagnostic = vm.last_diagnostic().unwrap();
     assert_eq!(diagnostic.trap_kind, VmTrapKind::OutOfGas);
     assert_eq!(diagnostic.budget.gas_used, 59);
     assert_eq!(diagnostic.budget.cycles, 7);
-    let error = VMError::Metered {
-        gas: 5,
-        source: Box::new(VMError::ExecutionDeferred(
+    let error = VMError::metered(
+        5,
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::TraceOwnerUnavailable,
         )),
-    };
+    );
     vm.capture_trap(&error);
     assert!(vm.last_diagnostic().is_none());
     assert!(error.execution_deferral().is_some());
@@ -155,12 +156,12 @@ fn local_invariants_never_capture_a_canonical_fault() {
     let mut vm = IVM::try_new(100).unwrap();
     vm.load_code(&encode_halt().to_le_bytes()).unwrap();
     for error in [
-        VMError::HostUnavailable,
-        VMError::SyscallGasQuoteExceeded {
+        VMError::Deferred(VmDeferral::HostUnavailable),
+        VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
             quoted: 1,
             actual: 2,
-        },
-        VMError::SyscallMeteringModeMismatch { syscall: 1 },
+        }),
+        VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { syscall: 1 }),
     ] {
         vm.capture_trap(&error);
         assert!(vm.last_diagnostic().is_none());
@@ -175,9 +176,15 @@ fn local_invariants_never_capture_a_canonical_fault() {
 fn boundary_fault_preserves_initialization_and_local_custody_never_becomes_a_fault() {
     let mut vm = IVM::try_new(100).unwrap();
     vm.load_code(&encode_halt().to_le_bytes()).unwrap();
-    vm.record_boundary_fault(&VMError::OutOfGas, IvmFaultPositionV1::Initialization);
+    vm.record_boundary_fault(
+        &VMError::Trap(VmTrap::OutOfGas),
+        IvmFaultPositionV1::Initialization,
+    );
     let fault = vm
-        .execution_fault(&VMError::OutOfGas, IvmFaultPositionV1::ReturnValidation)
+        .execution_fault(
+            &VMError::Trap(VmTrap::OutOfGas),
+            IvmFaultPositionV1::ReturnValidation,
+        )
         .unwrap();
     assert_eq!(fault.site.position, IvmFaultPositionV1::Initialization);
     assert!(vm.last_diagnostic().unwrap().source.is_none());
@@ -207,11 +214,11 @@ fn c10_only_faults_keep_the_original_nested_instruction_and_deferrals_have_no_si
     let position = IvmFaultPositionV1::Execute { pc_offset: 4 };
     for (error, kind) in [
         (
-            VMError::ControlFlowViolation,
+            VMError::Trap(VmTrap::ControlFlowViolation),
             IvmFaultKindC10V1::ControlFlowViolation,
         ),
         (
-            VMError::RegisterIntegerOverflow,
+            VMError::Trap(VmTrap::RegisterIntegerOverflow),
             IvmFaultKindC10V1::Numeric(NumericFaultC10V1::RegisterIntegerOverflow),
         ),
     ] {
@@ -227,7 +234,9 @@ fn c10_only_faults_keep_the_original_nested_instruction_and_deferrals_have_no_si
             Some(expected)
         );
     }
-    let refusal = VMError::ExecutionDeferred(crate::ExecutionDeferral::ActiveMemoryCapacity);
+    let refusal = VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::ExecutionDeferral::ActiveMemoryCapacity,
+    ));
     parent.capture_trap(&refusal);
     assert!(parent.last_diagnostic().is_none());
     assert!(parent.c10_execution_fault(&refusal, position).is_none());

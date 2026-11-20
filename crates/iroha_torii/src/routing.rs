@@ -19482,6 +19482,7 @@ fn query_multisig_proposals(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
+    use ivm_abi::error::{VmDeferral, VmTrap};
     use super::*;
     #[test]
     fn local_contract_authorization_refusal_is_transport_capacity_not_a_completed_denial() {
@@ -19605,12 +19606,12 @@ mod multisig_contract_call_tests {
         let held = pool.try_reserve_bytes(8).unwrap();
         let refusal = pool.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
-        let converted = contract_vm_attempt_error(ivm::VMError::AllocationDeferred(refusal), |_| panic!("local refusal cannot be formatted as a completed VM error"));
+        let converted = contract_vm_attempt_error(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(refusal)), |_| panic!("local refusal cannot be formatted as a completed VM error"));
         let ExecutionAttemptError::<()>::Deferred(owner) = converted else { panic!("original refusal remains local") };
         assert_eq!(owner.allocation_refusal(), Some(&expected));
         drop(held);
         assert_eq!(pool.reserved_bytes(), 0);
-        assert!(matches!(contract_vm_attempt_error(ivm::VMError::PermissionDenied, |error| error), ExecutionAttemptError::Rejected(ivm::VMError::PermissionDenied)));
+        assert!(matches!(contract_vm_attempt_error(ivm::VMError::Trap(VmTrap::PermissionDenied), |error| error), ExecutionAttemptError::Rejected(ivm::VMError::Trap(VmTrap::PermissionDenied))));
     }
 
     #[test]

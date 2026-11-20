@@ -945,3 +945,13 @@ The CLI accepts `koto test --trace` and `koto test trace`. The
 both forms. The November 18 coffee fixture yielded the same 71 rows with both spellings.
 The full Core, services, strict workspace and decoder release gates have separate
 revision-specific receipts in `artifacts/continuation-20261114/qualification-20261118.md`.
+
+### Node-local VM error ownership
+
+The Rust engine returns `VMError::Trap(VmTrap)` for deterministic execution and admission
+failures. A metered trap owns another `VmTrap` and its deterministic gas. An unfinished
+invocation returns `VMError::Deferred(VmDeferral)`. The deferral owns the original allocation,
+decoder, verifier or host cause and carries no charge. Core moves that cause through the
+disposable transaction and keeps its local phase when present. The proof coverage inventory
+records the owner family for every leaf. Baseline and C10 each project their deterministic
+failures onto their governed result definitions.

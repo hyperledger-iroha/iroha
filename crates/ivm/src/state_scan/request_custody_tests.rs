@@ -1,6 +1,7 @@
 //! Scan input custody, refusal, and continuation lifetime regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationBudget;
 
 const POOL_BYTES: usize = 256 * 1024 * 1024;
@@ -34,7 +35,10 @@ fn request_refusals_retry_original_pool_and_retain_only_input_custody() {
             Ok(_) => panic!("request unexpectedly fit insufficient allocation budget"),
             Err(error) => error,
         };
-        assert!(matches!(error, VMError::AllocationDeferred(_)), "{error:?}");
+        assert!(
+            matches!(error, VMError::Deferred(VmDeferral::AllocationDeferred(_))),
+            "{error:?}"
+        );
         assert_eq!(pool.reserved_bytes(), baseline);
         assert_eq!(vm.register(10), input);
         assert_eq!(vm.register(11), 0);
@@ -84,7 +88,7 @@ fn resumed_cursor_key_remains_funded_and_invalid_cursor_refunds_inputs() {
         Ok(_) => panic!("cursor accepted a different instance"),
         Err(error) => error,
     };
-    assert!(matches!(error, VMError::NoritoInvalid));
+    assert!(matches!(error, VMError::Trap(VmTrap::NoritoInvalid)));
     assert_eq!((vm.register(10), vm.register(11)), inputs);
     assert_eq!(pool.reserved_bytes(), baseline);
     drop(vm);
@@ -112,10 +116,12 @@ fn input_decoder_preserves_local_allocator_failures_and_releases_context() {
         if allocator_refusal {
             assert!(matches!(
                 actual,
-                VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::ExecutionDeferral::AllocationUnavailable
+                ))
             ));
         } else {
-            assert!(matches!(actual, VMError::NoritoInvalid));
+            assert!(matches!(actual, VMError::Trap(VmTrap::NoritoInvalid)));
         }
         assert_eq!(
             pool.reserved_bytes(),
@@ -168,7 +174,10 @@ fn dispatched_local_refusal_preserves_inputs_and_does_not_refund_unmetered_work(
         host.entered,
         "exercise the request refusal after dispatch admission"
     );
-    assert!(matches!(error, VMError::AllocationDeferred(_)), "{error:?}");
+    assert!(
+        matches!(error, VMError::Deferred(VmDeferral::AllocationDeferred(_))),
+        "{error:?}"
+    );
     assert_eq!(
         vm.remaining_gas(),
         0,

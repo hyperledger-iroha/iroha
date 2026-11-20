@@ -3,6 +3,7 @@
 
 use super::*;
 use ivm::{IvmEngine, IvmProfileId};
+use ivm_abi::error::VmTrap;
 
 const BASELINE: IvmProfileId = IvmProfileId::BASELINE_ABI_V1;
 const NAMED: IvmProfileId = IvmProfileId::C10_RUNTIME_LIFECYCLE;
@@ -16,7 +17,7 @@ fn abi(profile: IvmProfileId) -> [u8; 32] {
 fn is_mismatch(error: &ivm::VMError, requested: IvmProfileId, bound: IvmProfileId) -> bool {
     matches!(
         error,
-        ivm::VMError::ArtifactAbiHashMismatch { expected, actual }
+        ivm::VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual })
             if *expected == abi(requested) && *actual == abi(bound)
     )
 }

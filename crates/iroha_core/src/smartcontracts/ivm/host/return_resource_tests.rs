@@ -11,6 +11,7 @@ use iroha_data_model::smart_contract::entrypoint::{
     EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
 };
 use ivm::VMError;
+use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
 
 #[test]
 fn nested_return_capture_preserves_read_refusal_and_original_pool_retry() {
@@ -35,7 +36,7 @@ fn nested_return_capture_preserves_read_refusal_and_original_pool_retry() {
     let ExecutionAttemptError::Deferred(owner) = attempt else {
         panic!("nested return capacity must preserve an unfinished attempt");
     };
-    let VMError::AllocationDeferred(expected_allocation) = &expected else {
+    let VMError::Deferred(VmDeferral::AllocationDeferred(expected_allocation)) = &expected else {
         panic!("fixture must report its actual pool refusal");
     };
     assert_eq!(owner.allocation_refusal(), Some(expected_allocation));
@@ -62,7 +63,8 @@ fn assert_sticky_deferral(error: VMError) {
         state::{State, World},
     };
     let expected_reason = error.execution_deferral().unwrap();
-    let VMError::AllocationDeferred(expected) = error.as_unmetered() else {
+    let VmErrorRef::Deferred(VmDeferral::AllocationDeferred(expected)) = error.as_unmetered()
+    else {
         panic!("syscall fixture must retain its original allocation refusal");
     };
     let expected = expected.clone();
@@ -92,7 +94,7 @@ fn assert_sticky_deferral(error: VMError) {
     assert!(transaction.take_execution_deferral().is_none());
     assert_same_return_error(
         &owner.into_vm_error(),
-        &VMError::AllocationDeferred(expected),
+        &VMError::Deferred(VmDeferral::AllocationDeferred(expected)),
     );
     assert_eq!(transaction.last_tx_gas_used, 0);
 }
@@ -150,9 +152,21 @@ fn contract_lookup_dispatch_preserves_current_shapes_and_semantic_errors() {
         matches!(CoreHost::decode_contract_instance_lookup(&vm, pointer), Ok(super::ContractInstanceLookup::Address(actual)) if actual == address)
     );
     for (pointer_type, payload, expected) in [
-        (PointerType::NoritoBytes, vec![0xFF], VMError::NoritoInvalid),
-        (PointerType::Name, vec![0xFF], VMError::DecodeError),
-        (PointerType::Blob, vec![0xFF], VMError::NoritoInvalid),
+        (
+            PointerType::NoritoBytes,
+            vec![0xFF],
+            VMError::Trap(VmTrap::NoritoInvalid),
+        ),
+        (
+            PointerType::Name,
+            vec![0xFF],
+            VMError::Trap(VmTrap::DecodeError),
+        ),
+        (
+            PointerType::Blob,
+            vec![0xFF],
+            VMError::Trap(VmTrap::NoritoInvalid),
+        ),
     ] {
         let envelope = CoreHost::encode_tlv_payload(pointer_type, &payload).unwrap();
         let pointer = vm.alloc_host_tlv(&envelope).unwrap();
@@ -168,7 +182,7 @@ fn fill_input(vm: &mut ivm::IVM) {
         loop {
             match vm.alloc_input_tlv(bytes) {
                 Ok(_) => {}
-                Err(VMError::MemoryOutOfBounds) => break,
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds)) => break,
                 Err(error) => panic!("unexpected local input allocation failure: {error}"),
             }
         }
@@ -193,7 +207,9 @@ fn vrf_seed_syscall_defers_funded_output_without_guest_status_or_gas() {
         .unwrap_err();
     assert!(matches!(
         &error,
-        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { .. })
+        VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::Capacity { .. }
+        ))
     ));
     assert_eq!(vm.register(10), 7);
     assert_eq!(
@@ -232,7 +248,7 @@ fn vrf_seed_syscall_preserves_deterministic_guest_oom_fault() {
     host.vrf_epoch_seeds.insert(7, [0x42; 32]);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_VRF_EPOCH_SEED, &mut vm),
-        Err(VMError::OutOfMemory)
+        Err(VMError::Trap(VmTrap::OutOfMemory))
     ));
     assert_eq!(vm.register(10), 7);
     assert_eq!(vm.register(11), 0xA5);

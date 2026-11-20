@@ -1,6 +1,7 @@
 //! Exact trace preparation, cleanup and original-owner boundary regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr},
@@ -63,9 +64,9 @@ fn initial_pc_and_full_delta_refusal_precedes_all_guest_changes() {
         original.set_limit_bytes(0);
         assert!(matches!(
             vm.begin_trace_invocation(),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::ExceedsLimit { .. }
-            ))
+            )))
         ));
         assert_eq!(state(&vm), before);
         assert!(vm.pc_trace.as_slice().is_empty());
@@ -94,9 +95,12 @@ fn tail_refusal_and_unwind_cancel_only_unobserved_credit_and_keep_original_error
         let Err(refusal) = original.try_reserve_bytes(1) else {
             panic!("original pool must refuse after limit shrinks to live credit");
         };
-        Err::<(), _>(VMError::AllocationDeferred(refusal))
+        Err::<(), _>(VMError::Deferred(VmDeferral::AllocationDeferred(refusal)))
     });
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. })) = outcome
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    }))) = outcome
     else {
         panic!("original tail refusal");
     };
@@ -197,12 +201,12 @@ fn non_zk_mode_mutation_cannot_append_or_repair_a_foreign_pending_batch() {
     let retained = original.reserved_bytes();
     original.set_limit_bytes(0);
     assert!(
-        matches!(vm.record_trace_prefetch(&original_invocation), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(vm.record_trace_prefetch(&original_invocation), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
     assert!(
-        matches!(vm.prepare_trace_instruction(&original_invocation, encode_halt(), |_| Ok(())), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(vm.prepare_trace_instruction(&original_invocation, encode_halt(), |_| Ok(())), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
@@ -250,7 +254,7 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
     assert_eq!(copies.pcs.as_slice(), &[99]);
     assert!(matches!(
         vm.begin_trace_invocation(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     drop(copies);
     assert_eq!(original.reserved_bytes(), before - demand);
@@ -279,9 +283,9 @@ fn original_scope_validation_precedes_clone_and_partial_copy_keeps_original_cred
     foreign.with_deferred_refund_notifications(|scope| {
         assert!(matches!(
             vm.try_clone_trace_storage(Some(scope)),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(foreign.reserved_bytes(), 0);
@@ -295,7 +299,7 @@ fn original_scope_validation_precedes_clone_and_partial_copy_keeps_original_cred
     let outcome = original
         .with_deferred_refund_notifications(|scope| vm.try_clone_trace_storage(Some(scope)));
     assert!(
-        matches!(outcome, Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == runtime_bytes)
+        matches!(outcome, Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == runtime_bytes)
     );
     assert_eq!(original.reserved_bytes(), before);
     assert_eq!(vm.delta_trace.len(), 2);
@@ -341,8 +345,8 @@ fn no_observation_tail_refusal_panic_and_policy_checks_preserve_their_precedence
     let refusal = original.try_reserve_bytes(1).unwrap_err();
     assert!(
         matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |_| {
-            Err::<(), _>(VMError::AllocationDeferred(refusal.clone()))
-        }), Err(VMError::AllocationDeferred(__actual_error_field)) if __actual_error_field == (refusal))
+            Err::<(), _>(VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone())))
+        }), Err(VMError::Deferred(VmDeferral::AllocationDeferred(__actual_error_field))) if __actual_error_field == (refusal))
     );
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ =
@@ -361,16 +365,16 @@ fn no_observation_tail_refusal_panic_and_policy_checks_preserve_their_precedence
     assert!(matches!(
         vm.prepare_trace_instruction(&invocation, encode_halt(), |vm| {
             vm.set_trace_mode(TraceMode::PcOnly);
-            Err::<(), _>(VMError::PrivacyViolation)
+            Err::<(), _>(VMError::Trap(VmTrap::PrivacyViolation))
         }),
-        Err(VMError::PrivacyViolation)
+        Err(VMError::Trap(VmTrap::PrivacyViolation))
     ));
     let mut called = false;
     assert!(
         matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |_| {
             called = true;
             Ok(())
-        }), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        }), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
@@ -388,7 +392,7 @@ fn no_observation_successful_tail_cannot_authorize_a_replaced_policy() {
         matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |vm| {
             vm.set_trace_mode(TraceMode::DeltaRegisters);
             Ok(())
-        }), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        }), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
@@ -433,7 +437,11 @@ fn fresh_child_uses_original_pool_and_refuses_before_parent_effects() {
     else {
         panic!("original pool must be exhausted");
     };
-    let VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. }) = refusal else {
+    let VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    })) = refusal
+    else {
         panic!("fresh child must preserve original capacity refusal");
     };
     assert_eq!(release, expected);
@@ -489,9 +497,9 @@ fn fresh_standalone_child_stays_unfunded_and_capture_checks_vm_owner() {
     parent.delta_trace = zk::DeltaTraceLog::new(Some(&foreign));
     assert!(matches!(
         parent.try_runtime_trace_capture(),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
+        )))
     ));
     assert_eq!(foreign.reserved_bytes(), 0);
 }
@@ -501,9 +509,9 @@ fn invocation_scope_fixes_collection_while_unscoped_tokens_follow_configuration(
     let owner_unavailable = |result: Result<(), VMError>| {
         matches!(
             result,
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
-            ))
+            )))
         )
     };
     let original = AllocationBudget::new(LIMIT);

@@ -9,6 +9,7 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
+use ivm_abi::error::VmTrap;
 mod authority_admission;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -3652,9 +3653,11 @@ impl StateBlock<'_> {
                     Err(error) => error,
                 };
                 let failure = match error {
-                    ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
-                        "unknown syscall number 0x{number:02x} for abi_version 1"
-                    )),
+                    ivm::VMError::Trap(VmTrap::UnknownSyscall(number)) => {
+                        ValidationFail::NotPermitted(format!(
+                            "unknown syscall number 0x{number:02x} for abi_version 1"
+                        ))
+                    }
                     // The summary was prepared under the profile resolved for these bytes in
                     // this root; that profile's engine owns the projection.
                     error => ValidationFail::IvmAdmission(

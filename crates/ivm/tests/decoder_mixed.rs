@@ -1,4 +1,5 @@
 use ivm::{Memory, VMError, decode, encoding, instruction};
+use ivm_abi::error::VmTrap;
 #[test]
 fn zero_word_decodes_as_32bit() {
     let mut mem = Memory::new();
@@ -21,7 +22,7 @@ fn misaligned_pc_is_error() {
     let err = decode(&mem, 1).unwrap_err();
     assert!(matches!(
         err,
-        VMError::MemoryAccessViolation { addr: 1, .. }
+        VMError::Trap(VmTrap::MemoryAccessViolation { addr: 1, .. })
     ));
 }
 #[test]
@@ -33,7 +34,9 @@ fn misaligned_pc_various_odd_addresses() {
     .unwrap();
     for &pc in &[1u64, 3, 5, 7, 9, 11] {
         let err = decode(&mem, pc).unwrap_err();
-        assert!(matches!(err, VMError::MemoryAccessViolation { addr, .. } if addr as u64 == pc));
+        assert!(
+            matches!(err, VMError::Trap(VmTrap::MemoryAccessViolation { addr, .. }) if addr as u64 == pc)
+        );
     }
 }
 #[test]
@@ -41,12 +44,18 @@ fn decode_oob_reports_violation() {
     let mut mem = Memory::new();
     mem.load_code(&[0xAA, 0xBB, 0xCC, 0xDD]).unwrap();
     let err = decode(&mem, 4).unwrap_err();
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }
 #[test]
 fn decode_tail_requires_full_word() {
     let mut mem = Memory::new();
     mem.load_code(&[0x01, 0x02, 0x03]).unwrap();
     let err = decode(&mem, 0).unwrap_err();
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }

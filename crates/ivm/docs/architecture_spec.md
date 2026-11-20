@@ -167,7 +167,7 @@ frame bounds; the runtime enforces initialization, ownership and storage lifetim
 See [calling convention](calling_convention.md) for the canonical table layout.
 
 SCALL delegates to IVMHost under the ABI-v1 syscall policy. Unknown or disallowed syscall
-numbers trap as VMError::UnknownSyscall. Pointer-ABI objects are validated for type, version,
+numbers trap as VmTrap::UnknownSyscall. Pointer-ABI objects are validated for type, version,
 length, checksum, ownership, and privacy before use.
 
 Contract admission checks the code and ABI hashes embedded in manifests. Since this is the first

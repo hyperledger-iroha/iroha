@@ -1,4 +1,5 @@
 //! Executable acceptance tests for the final Kotodama V1 language surface.
+use crate::error::{VmErrorRef, VmTrap};
 use crate::{CoreHost, IVM, VMError, host::IVMHost, parallel::StateAccessSet};
 use kotodama_lang::compiler::Compiler;
 
@@ -90,13 +91,13 @@ fn checked_list_errors_revert_prior_state_effects_with_exact_identity() {
             .run_with_host(&mut host)
             .expect_err("checked mutation aborts");
         let expected = ivm_abi::error_types::list_error_type();
-        let VMError::ContractAbort {
+        let VmErrorRef::Trap(VmTrap::ContractAbort {
             error_type,
             schema_hash,
             code: observed,
             name: observed_name,
             ..
-        } = error.as_unmetered()
+        }) = error.as_unmetered()
         else {
             panic!("expected nominal list error, observed {error:?}");
         };
@@ -343,7 +344,7 @@ fn bounded_transfer_lists_evaluate_before_begin_and_skip_empty_batches() {
                     iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(
                         vm.validate_tlv(vm.register(13))?.payload,
                     )
-                    .map_err(|_| VMError::NoritoInvalid)?
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
                     .into_quantity()
                     .to_string(),
                 );
@@ -496,7 +497,7 @@ fn static_error_messages_preserve_nominal_schema_and_reach_rejections() {
     let mut vm = compiled_main(&source("残高が不足しています"));
     let error = vm.run().expect_err("declared failure");
     assert!(
-        matches!(error.as_unmetered(), VMError::ContractAbort { code: 7, message: Some(text), .. } if text.as_ref() == "残高が不足しています")
+        matches!(error.as_unmetered(), VmErrorRef::Trap(VmTrap::ContractAbort { code: 7, message: Some(text), .. }) if text.as_ref() == "残高が不足しています")
     );
     assert!(error.to_string().contains("残高が不足しています"));
     let mut second_vm = compiled_main(&source("Insufficient balance"));

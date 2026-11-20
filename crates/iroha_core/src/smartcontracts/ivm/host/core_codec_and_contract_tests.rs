@@ -56,9 +56,12 @@ fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
     assert!(matches!(
         (
             &(CoreHost::decode_name_payload(&alternate_name)),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     assert_eq!(
         decode_canonical_norito::<StatePath>(&canonical_path)
@@ -457,11 +460,11 @@ fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scop
     assert!(matches!(
         (
             &(host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm)),
-            &(ivm::VMError::PermissionDenied)
+            &(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         (
-            Err(ivm::VMError::PermissionDenied),
-            ivm::VMError::PermissionDenied
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         )
     ));
 }
@@ -1204,7 +1207,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
         let error = result.expect_err("cursor possession cannot grant ReadState");
         assert!(matches!(
             error.as_unmetered(),
-            ivm::VMError::PermissionDenied
+            VmErrorRef::Trap(VmTrap::PermissionDenied)
         ));
         assert_eq!(
             vm.register(10),
@@ -1284,10 +1287,10 @@ seiyaku GrantPolicy {
             let result = host.syscall(syscall, &mut vm);
             if declaration != "Admin" {
                 assert!(matches!(
-                    (&(result), &(ivm::VMError::PermissionDenied)),
+                    (&(result), &(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                     (
-                        Err(ivm::VMError::PermissionDenied),
-                        ivm::VMError::PermissionDenied
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                        ivm::VMError::Trap(VmTrap::PermissionDenied)
                     )
                 ));
                 assert!(host.queued.is_empty());

@@ -1,6 +1,7 @@
 //! Real execution-boundary admission, nested calls and native finish observations.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
     argument_record::prepare_argument_record_with_gas_limit,
@@ -162,11 +163,11 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
         let baseline = original.reserved_bytes();
         let rows = event_counts::root(route, false);
         original.set_limit_bytes(baseline + rows * ROW - 1);
-        let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+        let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
             requested_bytes,
             release,
             ..
-        })) = vm.begin_root_call(host.as_mut())
+        }))) = vm.begin_root_call(host.as_mut())
         else {
             panic!("entire root subtree must be admitted before argument effects");
         };
@@ -248,7 +249,7 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_and_registers() {
     original.set_limit_bytes(baseline + shell + steps + deltas + 4 * ROW - 1);
     let start = vm.pc;
     assert!(
-        matches!(vm.run_with_host(&mut DefaultHost::default()), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 4 * ROW)
+        matches!(vm.run_with_host(&mut DefaultHost::default()), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == 4 * ROW)
     );
     assert_eq!(
         (vm.pc, vm.cycles, vm.remaining_gas(), vm.register(7)),
@@ -330,7 +331,7 @@ struct AllRegisters {
 impl IVMHost for AllRegisters {
     fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         if self.reject_prepare {
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         } else {
             Ok(0)
         }
@@ -372,7 +373,7 @@ fn actual_reserved_syscalls_prepay_restore_and_all_host_net_writes() {
         original.set_limit_bytes(baseline + rows * ROW - 1);
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_ABORT),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(
             (
@@ -391,7 +392,10 @@ fn actual_reserved_syscalls_prepay_restore_and_all_host_net_writes() {
             .unwrap();
         let result = vm.execute_syscall(&mut host, syscalls::SYSCALL_ABORT);
         if reject_prepare {
-            assert!(matches!(result, Err(VMError::AssertionFailed)));
+            assert!(matches!(
+                result,
+                Err(VMError::Trap(VmTrap::AssertionFailed))
+            ));
             assert_eq!(vm.registers.snapshot()[10], 7);
             assert!(vm.registers.tag(10));
             assert_eq!(log.lock().as_slice().len(), 5);
@@ -530,11 +534,11 @@ fn syscall_shell_refusal_precedes_reserved_output_and_staged_entry_effects() {
             reject_prepare: false,
             calls: 0,
         };
-        let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+        let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
             requested_bytes,
             release,
             ..
-        })) = vm.execute_syscall(&mut host, number)
+        }))) = vm.execute_syscall(&mut host, number)
         else {
             panic!("detached shell must precede output clearing and staged entry gas");
         };
@@ -593,7 +597,7 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
         calls: 0,
     };
     assert!(matches!(vm.run_with_host(&mut host),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(
         (
@@ -645,7 +649,7 @@ fn default_root_shell_refusal_precedes_argument_gas_heap_and_descriptors() {
     let shell = zk::SharedRegLog::allocation_layout().size();
     original.set_limit_bytes(baseline + shell - 1);
     assert!(matches!(vm.begin_root_call(&mut host),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(
         (

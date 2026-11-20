@@ -1,6 +1,7 @@
 //! Shared loader admission whose image producers return before VM installation.
 
 use super::*;
+use crate::error::VmTrap;
 
 /// Prepare a C10 image under the explicit [`IvmProfileId::C10_ABI_V1`] profile, installing it
 /// only when a VM was supplied. Validation-only callers retire the same admitted image without
@@ -108,15 +109,17 @@ fn prepare_generic_image<'a>(
         budget,
     )?;
     let code_region = &program[header_len..];
-    let code_len = u64::try_from(code_region.len()).map_err(|_| VMError::InvalidMetadata)?;
+    let code_len =
+        u64::try_from(code_region.len()).map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     if code_len > Memory::HEAP_START {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     if literal_prefix > code_region.len() {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let instruction_region = &code_region[literal_prefix..];
-    let entry_pc = u64::try_from(literal_prefix).map_err(|_| VMError::InvalidMetadata)?;
+    let entry_pc =
+        u64::try_from(literal_prefix).map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let meta = parsed.metadata;
     let (predecoded, prepared) = if instruction_region.is_empty() {
         (None, None)
@@ -166,6 +169,7 @@ fn prepare_generic_image<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
 
     fn generic(instructions: &[u8]) -> Vec<u8> {
         let mut program = ProgramMetadata::default().encode();
@@ -178,26 +182,34 @@ mod tests {
         let loaded = IVM::new(100_000).load_program(program);
         // These fixtures cover completed header/instruction failures, never local owners.
         let equivalent = match (&admitted, &loaded) {
-            (Ok(()), Ok(())) | (Err(VMError::InvalidMetadata), Err(VMError::InvalidMetadata)) => {
-                true
-            }
-            (Err(VMError::InvalidOpcode(a)), Err(VMError::InvalidOpcode(b))) => a == b,
-            (Err(VMError::UnknownSyscall(a)), Err(VMError::UnknownSyscall(b))) => a == b,
+            (Ok(()), Ok(()))
+            | (
+                Err(VMError::Trap(VmTrap::InvalidMetadata)),
+                Err(VMError::Trap(VmTrap::InvalidMetadata)),
+            ) => true,
             (
-                Err(VMError::GenericSyscallNotAllowed { syscall: a }),
-                Err(VMError::GenericSyscallNotAllowed { syscall: b }),
+                Err(VMError::Trap(VmTrap::InvalidOpcode(a))),
+                Err(VMError::Trap(VmTrap::InvalidOpcode(b))),
             ) => a == b,
             (
-                Err(VMError::MemoryAccessViolation { addr: a, perm: p }),
-                Err(VMError::MemoryAccessViolation { addr: b, perm: q }),
+                Err(VMError::Trap(VmTrap::UnknownSyscall(a))),
+                Err(VMError::Trap(VmTrap::UnknownSyscall(b))),
+            ) => a == b,
+            (
+                Err(VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: a })),
+                Err(VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: b })),
+            ) => a == b,
+            (
+                Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: a, perm: p })),
+                Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: b, perm: q })),
             ) => a == b && p == q,
             (
-                Err(VMError::UnsupportedProgramAbiVersion { version: a }),
-                Err(VMError::UnsupportedProgramAbiVersion { version: b }),
+                Err(VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: a })),
+                Err(VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: b })),
             ) => a == b,
             (
-                Err(VMError::UnsupportedProgramFeatureBits { bits: a }),
-                Err(VMError::UnsupportedProgramFeatureBits { bits: b }),
+                Err(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: a })),
+                Err(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: b })),
             ) => a == b,
             _ => false,
         };
@@ -275,9 +287,9 @@ mod tests {
         });
         assert!(matches!(
             refused,
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         IVM::validate_program(&contract).unwrap();
     }

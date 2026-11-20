@@ -1,4 +1,5 @@
 //! Parliament-authorized retail fees and exact native conversion execution.
+use ivm_abi::error::VmTrap;
 pub(crate) mod policy_history;
 use crate::execution_attempt::ExecutionAttemptError;
 use crate::{
@@ -1300,13 +1301,13 @@ pub(crate) fn encode_conversion_quantity_state_value(
     value: &Quantity,
 ) -> Result<Vec<u8>, ivm::VMError> {
     let schema_payload = norito::to_bytes(&conversion_quantity_state_schema())
-        .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
     let envelope = ivm_abi::numeric_tlv::encode_quantity(value)?;
     norito::to_bytes(&StateValueRecordV1 {
         schema_hash: state_value_schema_hash_v1(&schema_payload),
         atoms: vec![StateValueAtomV1::Pointer(envelope)],
     })
-    .map_err(|_| ivm::VMError::NoritoInvalid)
+    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
 }
 
 fn direct_conversion_transfer(

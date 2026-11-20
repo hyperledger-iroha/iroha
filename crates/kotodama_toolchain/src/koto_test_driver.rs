@@ -29,6 +29,7 @@ use ivm::{
     TraceMode, WsvHost,
 };
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
+use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
 use ivm_abi::state_value::{
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     state_value_schema_hash_v1,
@@ -3070,7 +3071,7 @@ impl KotoTestHost {
             }
         }
         self.last_failure = Some(failure);
-        Err(ivm::VMError::AssertionFailed)
+        Err(ivm::VMError::Trap(VmTrap::AssertionFailed))
     }
     /// Make the most recently announced call site the site of the helper call now starting.
     fn begin_helper_call(&mut self) {
@@ -3094,10 +3095,10 @@ impl KotoTestHost {
         use kotodama_lang::testing::TestCallSite;
         let bytes = Self::decode_bytes_arg(vm, 10)?;
         if bytes.len() > TestCallSite::MAX_ENCODED_BYTES {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let site: TestCallSite =
-            norito::decode_canonical(&bytes).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let site: TestCallSite = norito::decode_canonical(&bytes)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         self.pending_call_site = Some(site);
         Ok(0)
     }
@@ -3108,33 +3109,32 @@ impl KotoTestHost {
     fn decode_alias_arg(vm: &IVM, reg: usize, label: &str) -> Result<String, ivm::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let tlv = vm.validate_tlv(ptr)?;
         match tlv.type_id {
-            PointerType::Blob | PointerType::NoritoBytes => {
-                String::from_utf8(tlv.payload.to_vec()).map_err(|_| ivm::VMError::DecodeError)
-            }
+            PointerType::Blob | PointerType::NoritoBytes => String::from_utf8(tlv.payload.to_vec())
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
             PointerType::Name => {
-                let name: Name =
-                    norito::decode_canonical(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+                let name: Name = norito::decode_canonical(tlv.payload)
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 Ok(name.as_ref().to_string())
             }
             _ => {
                 let _ = label;
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             }
         }
     }
     fn decode_bytes_arg(vm: &IVM, reg: usize) -> Result<Vec<u8>, ivm::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
         let tlv = vm.validate_tlv(ptr)?;
         match tlv.type_id {
             PointerType::Blob | PointerType::NoritoBytes => Ok(tlv.payload.to_vec()),
-            _ => Err(ivm::VMError::NoritoInvalid),
+            _ => Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         }
     }
     fn alloc_pointer_result(
@@ -3251,8 +3251,8 @@ impl KotoTestHost {
             if bytes.len() > 64 * 1024 {
                 return self.fail_harness("rejection expectation exceeds the test metadata budget");
             }
-            let expectation: RejectionExpectation =
-                norito::decode_canonical(&bytes).map_err(|_| ivm::VMError::NoritoInvalid)?;
+            let expectation: RejectionExpectation = norito::decode_canonical(&bytes)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
             if !expectation.validate() {
                 return self.fail_harness("invalid nominal rejection expectation");
             }
@@ -3270,7 +3270,10 @@ impl KotoTestHost {
             )
         } else {
             let alias = Self::decode_alias_arg(vm, 10, "actor").map_err(|error| {
-                ivm::error::preserve_execution_deferral(error, ivm::VMError::NoritoInvalid)
+                ivm::error::preserve_execution_deferral(
+                    error,
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid),
+                )
             })?;
             let Some(actor) = self.actors.get(&alias).cloned() else {
                 return self.fail_harness(self.unknown_actor_message(&alias));
@@ -3279,7 +3282,10 @@ impl KotoTestHost {
         };
         let caller = Self::describe_caller(&actor_alias);
         let entrypoint = Self::decode_alias_arg(vm, 11, "kotoage").map_err(|error| {
-            ivm::error::preserve_execution_deferral(error, ivm::VMError::NoritoInvalid)
+            ivm::error::preserve_execution_deferral(
+                error,
+                ivm::VMError::Trap(VmTrap::NoritoInvalid),
+            )
         })?;
         let argument_table = vm.register(12);
         let argument_words = usize::try_from(vm.register(13)).unwrap_or(usize::MAX);
@@ -3391,7 +3397,7 @@ impl KotoTestHost {
                 .map(Some)
             }),
             None if argument_table == 0 && argument_words == 0 => Ok(None),
-            None => Err(ivm::VMError::DecodeError),
+            None => Err(ivm::VMError::Trap(VmTrap::DecodeError)),
         };
         let captured_arguments = match captured_arguments {
             Ok(captured) => captured,
@@ -3425,7 +3431,7 @@ impl KotoTestHost {
         };
         if !expect_reject {
             if runtime_entrypoint.return_schema.word_count() != Some(return_arity) {
-                return Err(ivm::VMError::DecodeError);
+                return Err(ivm::VMError::Trap(VmTrap::DecodeError));
             }
             ivm::value_record::validate_return_destination(vm, result_table, return_arity)?;
         }
@@ -3433,16 +3439,16 @@ impl KotoTestHost {
         nested_vm.reset()?;
         let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
         nested_vm.memory.preload_input(0, &clear).map_err(|error| {
-            ivm::error::preserve_execution_deferral(error, ivm::VMError::DecodeError)
+            ivm::error::preserve_execution_deferral(error, ivm::VMError::Trap(VmTrap::DecodeError))
         })?;
         nested_vm.load_prepared(program).map_err(|error| {
-            ivm::error::preserve_execution_deferral(error, ivm::VMError::DecodeError)
+            ivm::error::preserve_execution_deferral(error, ivm::VMError::Trap(VmTrap::DecodeError))
         })?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
         let actual_return_words = runtime_entrypoint
             .return_schema
             .word_count()
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         if let Some(captured) = captured_arguments.as_ref() {
             ivm::value_record::install_captured_arguments(
                 captured,
@@ -3468,7 +3474,7 @@ impl KotoTestHost {
         let rollback = self
             .inner
             .checkpoint()
-            .ok_or(ivm::VMError::HostUnavailable)?;
+            .ok_or(ivm::VMError::Deferred(VmDeferral::HostUnavailable))?;
         let previous_caller = self.inner.caller_subject();
         if let Err(message) = self.inner.bind_contract_runtime_context(
             actor.account.clone(),
@@ -3529,7 +3535,7 @@ impl KotoTestHost {
                         vm.remaining_gas().saturating_sub(boundary_gas),
                     )?;
                     boundary_gas = boundary_gas.checked_add(quote.gas)
-                        .ok_or(ivm::VMError::OutOfGas)?;
+                        .ok_or(ivm::VMError::Trap(VmTrap::OutOfGas))?;
                     let captured = ivm::value_record::capture_completed_return_funded(
                         &nested_vm, &runtime_entrypoint.return_schema, &self.record_budget,
                     )?;
@@ -3539,7 +3545,7 @@ impl KotoTestHost {
                         vm.remaining_gas().saturating_sub(boundary_gas),
                         &self.record_budget,
                     )?;
-                    boundary_gas = boundary_gas.checked_add(cost).ok_or(ivm::VMError::OutOfGas)?;
+                    boundary_gas = boundary_gas.checked_add(cost).ok_or(ivm::VMError::Trap(VmTrap::OutOfGas))?;
                     vm.set_register(10, result_table);
                     vm.set_register(11, return_arity as u64);
                     Ok::<(), ivm::VMError>(())
@@ -3641,14 +3647,14 @@ impl IVMHost for KotoTestHost {
         vm: ivm::host::SyscallQuote<'_>,
     ) -> Result<u64, ivm::VMError> {
         if number == ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT {
-            let ordinal =
-                usize::try_from(vm.public_register(10)?).map_err(|_| ivm::VMError::DecodeError)?;
-            let words =
-                usize::try_from(vm.public_register(12)?).map_err(|_| ivm::VMError::DecodeError)?;
+            let ordinal = usize::try_from(vm.public_register(10)?)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
+            let words = usize::try_from(vm.public_register(12)?)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
             let event = vm
                 .contract_interface()
                 .and_then(|interface| interface.events.get(ordinal))
-                .ok_or(ivm::VMError::DecodeError)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
             return vm
                 .quote_value_record(
                     &event.payload_type,
@@ -3700,14 +3706,14 @@ impl IVMHost for KotoTestHost {
                 outcome
             }
             ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => {
-                let ordinal =
-                    usize::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
-                let words =
-                    usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+                let ordinal = usize::try_from(vm.register(10))
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
+                let words = usize::try_from(vm.register(12))
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let event = vm
                     .contract_interface()
                     .and_then(|interface| interface.events.get(ordinal))
-                    .ok_or(ivm::VMError::DecodeError)?;
+                    .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = ivm::value_record::capture_value_record(
                     vm,
                     &event.payload_type,
@@ -3777,7 +3783,7 @@ impl IVMHost for KotoTestHost {
     fn restore(&mut self, snapshot: &dyn Any) -> Result<(), ivm::VMError> {
         let snapshot = snapshot
             .downcast_ref::<KotoTestHostSnapshot>()
-            .ok_or(ivm::VMError::HostUnavailable)?;
+            .ok_or(ivm::VMError::Deferred(VmDeferral::HostUnavailable))?;
         self.inner.restore(snapshot.inner.as_ref())?;
         self.actors.clone_from(&snapshot.actors);
         self.events.clone_from(&snapshot.events);
@@ -3803,7 +3809,7 @@ impl KotoTestHost {
                     return self.fail_harness(self.unknown_actor_message(&alias));
                 };
                 let payload = norito::encode_canonical(&actor.account)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 let ptr = Self::alloc_pointer_result(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, ptr);
                 Ok(0)
@@ -3856,10 +3862,10 @@ impl KotoTestHost {
         use kotodama_lang::testing::{AssertionKind, AssertionSite};
         let site_bytes = Self::decode_bytes_arg(vm, 10)?;
         if site_bytes.len() > AssertionSite::MAX_ENCODED_BYTES {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let site: AssertionSite =
-            norito::decode_canonical(&site_bytes).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let site: AssertionSite = norito::decode_canonical(&site_bytes)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
         let (location, line_text) = self
             .context
             .locate_site(site.source_id, site.byte_start as usize)
@@ -4480,13 +4486,13 @@ fn classify_vm_error(
     trap: Option<ivm_abi::error::VmTrapKind>,
 ) -> TestFailure {
     use ivm_abi::error::VmTrapKind as Trap;
-    if let ivm::VMError::ContractAbort {
+    if let VmErrorRef::Trap(VmTrap::ContractAbort {
         name,
         error_type,
         code,
         message,
         ..
-    } = error.as_unmetered()
+    }) = error.as_unmetered()
     {
         let mut failure = TestFailure::new(
             FailureKind::Rejected,
@@ -4497,10 +4503,10 @@ fn classify_vm_error(
         }
         return failure;
     }
-    if let ivm::VMError::NumericFault(fault) = error.as_unmetered() {
+    if let VmErrorRef::Trap(VmTrap::NumericFault(fault)) = error.as_unmetered() {
         return numeric_fault_failure(*fault);
     }
-    if let ivm::VMError::RegisterIntegerOverflow = error.as_unmetered() {
+    if let VmErrorRef::Trap(VmTrap::RegisterIntegerOverflow) = error.as_unmetered() {
         return register_integer_overflow_failure();
     }
     let kind = match trap {

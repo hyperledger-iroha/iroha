@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, syscalls};
+use ivm_abi::error::VmTrap;
 use std::{
     any::Any,
     sync::{Arc, Mutex},
@@ -20,7 +21,7 @@ impl IVMHost for CaptureHost {
     ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => Ok(0),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -29,7 +30,7 @@ impl IVMHost for CaptureHost {
                 *self.out.lock().expect("output mutex poisoned") = vm.read_output().to_vec();
                 Ok(0)
             }
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
     /// Downcast support for hosts with extra methods/state.

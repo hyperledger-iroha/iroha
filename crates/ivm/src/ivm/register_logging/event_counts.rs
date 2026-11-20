@@ -5,6 +5,7 @@
 //! private witness selects a reservation. Traps/untaken operations may use fewer
 //! rows; their unused quota returns only to the enclosing batch.
 
+use crate::error::{VmDeferral, VmTrap};
 use crate::{VMError, instruction::wide, syscalls};
 use iroha_allocation::AllocationRefusal;
 
@@ -58,7 +59,9 @@ fn writes(register: usize) -> usize {
     2 * usize::from(register != 0)
 }
 fn overflow() -> VMError {
-    VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        AllocationRefusal::DemandOverflow,
+    ))
 }
 
 /// Count one entire instruction including any delayed native finish observations.
@@ -135,7 +138,7 @@ pub(super) fn instruction(word: u32, strict_return: bool, native: bool) -> Resul
         c::JALS => 2 + if strict_return { 9 } else { 0 },
         c::HALT | c::JMP => 0,
         s::SCALL => syscall(wide::syscall_number(word)),
-        _ => return Err(VMError::InvalidOpcode(u16::from(opcode))),
+        _ => return Err(VMError::Trap(VmTrap::InvalidOpcode(u16::from(opcode)))),
     };
     ordinary
         .checked_add(if native { native_observations(word) } else { 0 })

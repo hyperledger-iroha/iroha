@@ -1,5 +1,6 @@
 //! Borrowed register-event membership checks for local trace diagnostics.
 
+use crate::error::VmTrap;
 use std::num::NonZeroU64;
 
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTreeCommitment};
@@ -12,7 +13,7 @@ pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     let leaf_index = u32::try_from(event.index)
         .ok()
         .filter(|index| (*index as usize) < REGISTER_COUNT)
-        .ok_or(VMError::AssertionFailed)?;
+        .ok_or(VMError::Trap(VmTrap::AssertionFailed))?;
     let mut leaf = [0u8; 9];
     leaf[0] = u8::from(event.tag);
     leaf[1..].copy_from_slice(&event.value.to_le_bytes());
@@ -25,7 +26,7 @@ pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     let path: &[[u8; 32]; REGISTER_MERKLE_PATH_DEPTH] = event
         .path
         .try_into()
-        .map_err(|_| VMError::AssertionFailed)?;
+        .map_err(|_| VMError::Trap(VmTrap::AssertionFailed))?;
     let siblings = path.map(|sibling| {
         (sibling != [0; 32]).then(|| HashOf::from_untyped_unchecked(Hash::prehashed(sibling)))
     });
@@ -36,6 +37,6 @@ pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     if MerkleProof::verify_audit_path_sha256(leaf_index, &siblings, &leaf, &commitment) {
         Ok(())
     } else {
-        Err(VMError::AssertionFailed)
+        Err(VMError::Trap(VmTrap::AssertionFailed))
     }
 }

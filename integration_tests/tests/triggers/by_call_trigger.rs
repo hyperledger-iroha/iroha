@@ -1,4 +1,5 @@
 //! Tests for executing triggers directly
+use ivm_abi::error::VmTrap;
 #[path = "../support/contract_deployment.rs"]
 mod contract_deployment;
 use crate::triggers::get_asset_value;
@@ -234,7 +235,7 @@ fn mint_rose_execute_arguments_encode_the_admitted_callback_quantity() -> Result
     let numeric_call = ExecuteTrigger::new(trigger_id).with_args(norito::json!({"val": 42}));
     assert!(matches!(
         ivm_abi::arguments::encode_argument_record_from_json(schema, &numeric_call.args),
-        Err(ivm::VMError::DecodeError),
+        Err(ivm::VMError::Trap(VmTrap::DecodeError)),
     ));
     Ok(())
 }

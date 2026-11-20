@@ -208,7 +208,7 @@ fn attachment_host_actual_child_rejects_unused_declaration_and_restores_business
         .expect_err("unused child declaration rejects after genuine execution");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert_eq!(host.nested_contract_call_depth, 0);
     assert!(host.durable_state_overlay.is_empty());
@@ -307,7 +307,7 @@ fn attachment_host_consumed_root_result_error_poison_cannot_publish() {
         .expect("execute genuine Result::Err");
     assert!(matches!(
         host.finish_contract_result(&vm),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     let context = host.current_contract_runtime_context.clone();
     assert!(matches!(host.into_execution_artifacts(context),
@@ -502,7 +502,7 @@ fn attachment_host_recoverable_child_rollback_still_advances_signed_path() {
         .expect_err("second entered path [1] has an unconsumed declaration");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(host.durable_state_overlay.is_empty());
     drop(host);
@@ -604,7 +604,7 @@ fn attachment_host_consumption_is_once_and_unfinished_or_unwound_hosts_poison() 
         consume_attachment_host_fixture(&mut host, declaration).unwrap();
         assert!(matches!(
             host.begin_tx(&ivm::parallel::StateAccessSet::default()),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     assert_eq!(owner.finish(), Err(CustodyError::FailedAttempt));

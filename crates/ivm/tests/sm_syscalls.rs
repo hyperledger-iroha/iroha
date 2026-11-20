@@ -5,6 +5,7 @@ use ivm::{
     CoreHost, Memory, PointerType, VMError, encoding,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+use ivm_abi::error::VmTrap;
 const TEST_CALLER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 fn test_caller_account() -> AccountId {
     AccountId::parse_encoded(TEST_CALLER_ID)
@@ -606,7 +607,7 @@ fn syscall_sm2_verify_errors_on_non_blob_inputs() {
         .run()
         .expect_err("non-blob inputs should trigger NoritoInvalid");
     assert!(
-        matches!(err, VMError::NoritoInvalid),
+        matches!(err, VMError::Trap(VmTrap::NoritoInvalid)),
         "expected NoritoInvalid, got {err:?}"
     );
 }
@@ -641,7 +642,7 @@ fn syscall_sm2_verify_errors_on_non_utf8_distid() {
         .run()
         .expect_err("non-UTF8 distid should trigger NoritoInvalid");
     assert!(
-        matches!(err, VMError::NoritoInvalid),
+        matches!(err, VMError::Trap(VmTrap::NoritoInvalid)),
         "expected NoritoInvalid, got {err:?}"
     );
 }

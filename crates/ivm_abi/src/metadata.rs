@@ -6,6 +6,7 @@
 //!
 //! The 48-byte metadata header encodes the VM version, the ABI-v1 `ZK` mode flag,
 //! the execution budget, the ABI version and the authenticated ABI descriptor hash.
+use crate::error::VmTrap;
 mod literal_table;
 mod manifest_projection;
 #[cfg(test)]
@@ -86,7 +87,7 @@ impl TryFrom<u8> for LiteralKindV1 {
         match value {
             0 => Ok(Self::PointerTlv),
             1 => Ok(Self::I64),
-            _ => Err(VMError::InvalidMetadata),
+            _ => Err(VMError::Trap(VmTrap::InvalidMetadata)),
         }
     }
 }
@@ -1674,7 +1675,7 @@ fn parse_program_sections(
             if bytes[idx..idx + 4] == LITERAL_SECTION_MAGIC {
                 let pad = &bytes[header_len..idx];
                 if pad.iter().all(|b| *b == 0) {
-                    return Err(VMError::InvalidMetadata);
+                    return Err(VMError::Trap(VmTrap::InvalidMetadata));
                 }
                 break;
             } else if bytes[idx] != 0 {
@@ -1687,7 +1688,7 @@ fn parse_program_sections(
     // or generic test harness claims this named profile through a header alone.
     if syscall_policy == crate::SyscallPolicy::AbiV1RuntimeLifecycle && contract_interface.is_none()
     {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     Ok(ParsedProgramMetadata {
         metadata,
@@ -1718,21 +1719,21 @@ fn parse_contract_interface_section(
     start: usize,
 ) -> Result<(EmbeddedContractInterfaceV1, usize), VMError> {
     if bytes.len() < start + CONTRACT_INTERFACE_SECTION_HEADER_SIZE {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     if bytes[start..start + 4] != CONTRACT_INTERFACE_SECTION_MAGIC {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let len_bytes: [u8; 4] = bytes[start + 4..start + 8]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let payload_len = u32::from_le_bytes(len_bytes) as usize;
     let payload_start = start + CONTRACT_INTERFACE_SECTION_HEADER_SIZE;
     let payload_end = payload_start
         .checked_add(payload_len)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     if payload_end > bytes.len() {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let decoded = section_decode::decode::<EmbeddedContractInterfaceV1>(
         &bytes[payload_start..payload_end],
@@ -1745,21 +1746,21 @@ fn parse_contract_debug_section(
     start: usize,
 ) -> Result<(EmbeddedContractDebugInfoV1, usize), VMError> {
     if bytes.len() < start + CONTRACT_DEBUG_SECTION_HEADER_SIZE {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     if bytes[start..start + 4] != CONTRACT_DEBUG_SECTION_MAGIC {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let len_bytes: [u8; 4] = bytes[start + 4..start + 8]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let payload_len = u32::from_le_bytes(len_bytes) as usize;
     let payload_start = start + CONTRACT_DEBUG_SECTION_HEADER_SIZE;
     let payload_end = payload_start
         .checked_add(payload_len)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     if payload_end > bytes.len() {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let decoded = section_decode::decode::<EmbeddedContractDebugInfoV1>(
         &bytes[payload_start..payload_end],
@@ -1773,49 +1774,51 @@ fn parse_literal_section(
     header_len: usize,
 ) -> Result<ParsedLiteralSection, VMError> {
     if bytes.len() < start + 16 {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let count_bytes: [u8; 4] = bytes[start + 4..start + 8]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let post_bytes: [u8; 4] = bytes[start + 8..start + 12]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let data_bytes: [u8; 4] = bytes[start + 12..start + 16]
         .try_into()
-        .map_err(|_| VMError::InvalidMetadata)?;
+        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
     let lit_count = u32::from_le_bytes(count_bytes) as usize;
     let post_pad = u32::from_le_bytes(post_bytes) as usize;
     let data_len = u32::from_le_bytes(data_bytes) as usize;
     if lit_count > usize::from(u16::MAX) + 1 || post_pad > 3 {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
-    let entries_len = lit_count.checked_mul(8).ok_or(VMError::InvalidMetadata)?;
+    let entries_len = lit_count
+        .checked_mul(8)
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     let data_start = start
         .checked_add(16)
         .and_then(|offset| offset.checked_add(entries_len))
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     let data_end = data_start
         .checked_add(data_len)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     let code_offset = data_end
         .checked_add(post_pad)
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     if code_offset > bytes.len() || start < header_len {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     let unpadded_len_from_header = start
         .checked_sub(header_len)
         .and_then(|prefix_len| prefix_len.checked_add(16))
         .and_then(|len| len.checked_add(entries_len))
         .and_then(|len| len.checked_add(data_len))
-        .ok_or(VMError::InvalidMetadata)?;
+        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
     let expected_pad = (4 - (unpadded_len_from_header % 4)) % 4;
     if post_pad != expected_pad {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     if bytes[data_end..code_offset].iter().any(|byte| *byte != 0) {
-        return Err(VMError::InvalidMetadata);
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
     Ok(ParsedLiteralSection {
         start,
@@ -1829,6 +1832,7 @@ fn parse_literal_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn header_encoders_follow_the_profile_engine() {
         let meta = ProgramMetadata {
@@ -1871,39 +1875,39 @@ mod tests {
         bytes[HEADER_ABI_VERSION_OFFSET] = 3;
         assert!(matches!(
             ProgramMetadata::parse(&bytes).expect_err("version must win"),
-            VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
+            VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 2, minor: 1 })
         ));
         bytes[4] = 1;
         bytes[5] = 2;
         assert!(matches!(
             ProgramMetadata::parse(&bytes).expect_err("minor version must be explicit"),
-            VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
+            VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 2 })
         ));
         bytes[5] = 1;
         assert!(matches!(
             ProgramMetadata::parse(&bytes).expect_err("feature bits must precede ABI"),
-            VMError::UnsupportedProgramFeatureBits { bits: 0x80 }
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x80 })
         ));
         bytes[6] = 0;
         assert!(matches!(
             ProgramMetadata::parse(&bytes).expect_err("ABI version must precede ABI hash"),
-            VMError::UnsupportedProgramAbiVersion { version: 3 }
+            VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: 3 })
         ));
         bytes[HEADER_ABI_VERSION_OFFSET] = 1;
         bytes[HEADER_ABI_HASH_OFFSET] ^= 1;
         assert!(matches!(
             ProgramMetadata::parse(&bytes),
-            Err(VMError::ArtifactAbiHashMismatch { .. })
+            Err(VMError::Trap(VmTrap::ArtifactAbiHashMismatch { .. }))
         ));
         assert!(matches!(
             ProgramMetadata::parse(&bytes[..HEADER_SIZE - 1])
                 .expect_err("truncated fixed header is structural corruption"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
         bytes[0] ^= 0xff;
         assert!(matches!(
             ProgramMetadata::parse(&bytes).expect_err("bad magic is structural corruption"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
     #[test]
@@ -1916,14 +1920,14 @@ mod tests {
         assert!(matches!(
             ProgramMetadata::parse(&exact)
                 .expect_err("an image above the V1 budget must fail before decoding sections"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
 
         exact[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&CONTRACT_INTERFACE_SECTION_MAGIC);
         assert!(matches!(
             ProgramMetadata::parse(&exact)
                 .expect_err("an oversized CNTR-shaped image must not reach Norito decoding"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
     #[test]
@@ -2513,7 +2517,7 @@ mod tests {
         assert!(matches!(
             parse_contract_interface_section(&alternate, 0)
                 .expect_err("alternate-layout CNTR payload must be rejected"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&section);
@@ -2567,7 +2571,7 @@ mod tests {
         assert!(matches!(
             parse_contract_debug_section(&alternate, 0)
                 .expect_err("alternate-layout DBG1 payload must be rejected"),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
 }

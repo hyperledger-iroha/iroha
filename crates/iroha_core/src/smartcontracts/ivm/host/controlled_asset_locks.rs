@@ -13,6 +13,7 @@ use iroha_data_model::{
         },
     },
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::num::NonZeroU64;
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
@@ -23,7 +24,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Result<(EscrowId, Vec<u8>), ivm::VMError> {
         let key = Self::decode_pointer_tlv(vm, pointer, PointerType::Blob)?;
         if key.payload.is_empty() || key.payload.len() > MAX_CONTROLLED_ASSET_LOCK_KEY_BYTES_V1 {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         Ok((
             controlled_asset_lock_id(controller, key.payload),
@@ -40,10 +41,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let controller = context.contract_address.clone();
         if context.contract_subject != controller.subject_id() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         vm.ensure_public_register(10)?;
         let mut custody_return = None;
@@ -51,7 +52,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN => {
                 let base = vm.register(10);
                 if !base.is_multiple_of(8) {
-                    return Err(ivm::VMError::DecodeError);
+                    return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                 }
                 // This validates both allocation provenance and public memory tags.
                 vm.ensure_owned_heap_range(base, 64)?;
@@ -72,7 +73,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 let network = self
                     .network_id
                     .as_ref()
-                    .ok_or(ivm::VMError::PermissionDenied)?;
+                    .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                 let custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
                     network,
                     &escrow_id,
@@ -132,20 +133,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                     waterfall: None,
                 })
             }
-            _ => return Err(ivm::VMError::UnknownSyscall(number)),
+            _ => return Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(number))),
         };
         if let Some(encoded_custody) = custody_return {
             self.ensure_instruction_queue_allowed(&instruction)?;
             let instruction_gas =
-                crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-                    .map_err(ivm::VMError::VerificationDeferred)?;
+                crate::gas::meter_instruction(&instruction, &self.confidential_gas).map_err(
+                    |cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)),
+                )?;
             let output_gas = u64::try_from(encoded_custody.len())
-                .map_err(|_| ivm::VMError::GasCostOverflow)?
+                .map_err(|_| ivm::VMError::Trap(VmTrap::GasCostOverflow))?
                 .checked_mul(ivm::gas::SYSCALL_GAS_PER_BYTE)
-                .ok_or(ivm::VMError::GasCostOverflow)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
             let gas = instruction_gas
                 .checked_add(output_gas)
-                .ok_or(ivm::VMError::GasCostOverflow)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
             // Complete gas, VM allocation, and retained-effect capacity checks before
             // allocating a return or publishing any queue entry or result register.
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -175,6 +177,7 @@ mod tests {
     use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::host::IVMHost;
+    use ivm_abi::error::{VmErrorRef, VmTrap};
 
     fn host() -> CoreHost {
         let caller = ALICE_ID.clone();
@@ -602,7 +605,7 @@ seiyaku ControlledLock {
             let before = vm.register(10);
             assert!(matches!(
                 host.syscall(ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN, &mut vm),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert_eq!(vm.register(10), before);
             assert!(host.queued.is_empty());
@@ -627,7 +630,7 @@ seiyaku ControlledLock {
         let argument_table = vm.register(10);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN, &mut vm),
-            Err(ivm::VMError::OutOfMemory)
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.register(10), argument_table);
         assert_eq!(
@@ -788,7 +791,7 @@ seiyaku ControlledLock {
         let (result, refused_vm, refused) = run_open_probe(&program, setup + actual - 1);
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
-            ivm::VMError::OutOfGas
+            VmErrorRef::Trap(VmTrap::OutOfGas)
         ));
         assert_eq!(refused.before.get(), Some(actual - 1));
         if let Some(reserved) = refused.reserve {

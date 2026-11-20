@@ -6,6 +6,7 @@ mod nested_profile_tests {
     //! unchanged.
     use super::*;
     use iroha_data_model::executor::fault::IvmFaultKindV1;
+    use ivm_abi::error::{VmErrorRef, VmTrap};
 
     const CALLER: &str = r"
 seiyaku ProfileCaller { view fn main() authorize(anyone) -> int { return 0; } }
@@ -112,11 +113,14 @@ seiyaku ProfileCallee { view fn value() authorize(anyone) -> int { return 42; } 
             );
             let error = result.expect_err("a mixed-profile nested call is refused");
             assert!(
-                matches!(error.as_unmetered(), ivm::VMError::PermissionDenied),
+                matches!(
+                    error.as_unmetered(),
+                    VmErrorRef::Trap(VmTrap::PermissionDenied)
+                ),
                 "the refusal is a deterministic permission fault, not a deferral: {error:?}"
             );
             assert!(error.execution_deferral().is_none());
-            let ivm::VMError::Metered { gas, .. } = &error else {
+            let ivm::VMError::Trap(VmTrap::Metered { gas, .. }) = &error else {
                 panic!("the boundary charge is metered: {error:?}");
             };
             assert!(*gas > 0, "the boundary is charged");

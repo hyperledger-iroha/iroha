@@ -3,6 +3,7 @@
 //! Remote spends are signed anchored-spend records admitted by Core after
 //! finalized-source verification. The retired raw-handle syscall is absent.
 
+use ivm_abi::error::VmTrap;
 use std::sync::Arc;
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
@@ -106,7 +107,7 @@ fn core_host_rejects_invalid_descriptor_before_envelope_creation() {
     vm.set_register(10, descriptor_ptr);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     let reject = host
         .take_axt_reject_for_tests()
@@ -116,7 +117,7 @@ fn core_host_rejects_invalid_descriptor_before_envelope_creation() {
     assert!(
         matches!(
             host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ),
         "failed descriptor admission cannot create an envelope"
     );
@@ -131,7 +132,7 @@ impl axt::AxtPolicy for DenyTouchPolicy {
         _manifest: &axt::TouchManifest,
     ) -> Result<(), VMError> {
         if dsid == self.0 {
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         } else {
             Ok(())
         }
@@ -158,7 +159,7 @@ fn core_host_rejects_touch_denied_by_current_policy() {
     vm.set_register(11, manifest_ptr);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     let reject = host.take_axt_reject_for_tests().expect("touch refusal");
     assert_eq!(reject.reason, AxtRejectReason::PolicyDenied);
@@ -186,7 +187,7 @@ fn core_host_requires_proof_before_completing_current_envelope() {
     assert!(
         matches!(
             host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ),
         "touches without an authenticated finalized-source proof cannot complete"
     );
@@ -205,7 +206,7 @@ fn malformed_anchored_spend_stage_cannot_complete_an_envelope() {
     assert!(
         matches!(
             host.syscall(syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND, &mut vm),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ),
         "staging requires an active AXT descriptor"
     );
@@ -223,14 +224,14 @@ fn malformed_anchored_spend_stage_cannot_complete_an_envelope() {
     assert!(
         matches!(
             host.syscall(syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ),
         "malformed signed-spend bytes cannot enter the staged envelope"
     );
     assert!(
         matches!(
             host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ),
         "failed staging cannot supply the missing signed spend or source proof"
     );
@@ -241,6 +242,6 @@ fn retired_raw_handle_syscall_is_unassigned_in_core_host() {
     let mut vm = IVM::try_new(1_000_000).expect("fixture VM allocation");
     let mut host = CoreHost::new(authority());
     assert!(
-        matches!(host.syscall(0xB4, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xB4))
+        matches!(host.syscall(0xB4, &mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xB4))
     );
 }

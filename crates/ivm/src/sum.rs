@@ -1,10 +1,11 @@
 //! Runtime support for active-only compiler-owned Kotodama sums.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{IVM, VMError};
 use ivm_abi::entrypoint::{EntrypointValueTypeNodeV1, EntrypointValueTypeV1};
 use ivm_abi::sum::SUM_WORD_BYTES_V1;
 pub use ivm_abi::sum::SumLayoutV1;
 fn layout_error() -> VMError {
-    VMError::DecodeError
+    VMError::Trap(VmTrap::DecodeError)
 }
 /// Classify a completed, validated public return as an outer `Result::err`.
 ///
@@ -109,7 +110,11 @@ pub fn read_words(vm: &IVM, base: u64, layout: SumLayoutV1) -> Result<(bool, Vec
     let mut payload = Vec::new();
     payload
         .try_reserve_exact(usize::try_from(active_words).map_err(|_| layout_error())?)
-        .map_err(|_| VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable))?;
+        .map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
     for index in 0..active_words {
         let offset = index
             .checked_add(1)
@@ -122,6 +127,7 @@ pub fn read_words(vm: &IVM, base: u64, layout: SumLayoutV1) -> Result<(bool, Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use crate::memory::Memory;
     #[test]
     fn entrypoint_error_disposition_requires_a_completed_outer_result() {
@@ -211,33 +217,33 @@ mod tests {
         let layout = SumLayoutV1::try_new(1, 2).expect("layout");
         assert!(matches!(
             allocate_words(&mut vm, layout, 1, &[1]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             allocate_words(&mut vm, layout, 3, &[1]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let value = allocate_words(&mut vm, layout, 0, &[8]).expect("valid sum");
         vm.store_u64(value + 16, 9)
             .expect("forge inactive reserved payload");
         assert!(matches!(
             read_words(&vm, value, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         vm.store_u64(value + 16, 0)
             .expect("restore inactive reserved payload");
         vm.store_u64(value, 2).expect("forge tag");
         assert!(matches!(
             read_words(&vm, value, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, Memory::HEAP_START + 4096, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, value + 1, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
 }

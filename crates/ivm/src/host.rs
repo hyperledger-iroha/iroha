@@ -6,6 +6,7 @@
 //!
 //! The host also exposes basic hardware feature discovery and Merkle-proof
 //! helpers used by some tests.
+use crate::error::{VmDeferral, VmTrap};
 mod syscall_context;
 mod syscall_quote;
 pub use syscall_context::SyscallContext;
@@ -66,12 +67,12 @@ pub(crate) fn request_nominal_contract_abort(
     resolve: impl Fn(&IVM, u64) -> u64,
 ) -> Result<u64, VMError> {
     if (12..=15).any(|register| vm.register(register) != 0) {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let code = u32::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+    let code = u32::try_from(vm.register(11)).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let tlv = vm.validate_tlv(resolve(vm, vm.register(10)))?;
     if tlv.type_id != PointerType::NoritoBytes || tlv.payload.len() > 64 * 1024 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let descriptor_len = tlv.payload.len();
     let descriptor: iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor =
@@ -82,16 +83,16 @@ pub(crate) fn request_nominal_contract_abort(
             .contract_interface()
             .is_some_and(|interface| interface.error_types.contains(&descriptor))
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let contract = vm
         .contract_interface()
-        .ok_or(VMError::NoritoInvalid)?
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?
         .seiyaku_name
         .clone();
     let name = descriptor
         .variant(code)
-        .ok_or(VMError::NoritoInvalid)?
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?
         .name
         .clone();
     let message = contract_abort_message(vm, &descriptor.identity, code).map(str::to_owned);
@@ -227,11 +228,11 @@ pub const STATE_QUERY_GAS_BASE: u64 = gas::STATE_QUERY_GAS_BASE;
 /// # Errors
 ///
 /// Returns an ABI or memory error for an invalid pointer and
-/// [`VMError::NoritoInvalid`] when the V1 path bound is exceeded.
+/// [`crate::error::VmTrap::NoritoInvalid`] when the V1 path bound is exceeded.
 pub fn quote_state_path_payload_len_at(vm: &IVM, address: u64) -> Result<usize, VMError> {
     let path_len = quote_tlv_payload_len_at(vm, address, PointerType::NoritoBytes)?;
     if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(path_len)
 }
@@ -239,7 +240,7 @@ pub fn quote_state_path_payload_len_at(vm: &IVM, address: u64) -> Result<usize, 
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the canonical length overflows.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the canonical length overflows.
 pub fn state_path_name_payload_len(name: &Name) -> Result<usize, VMError> {
     state_path_text_payload_len(name.as_ref(), core::mem::align_of::<Name>())
 }
@@ -247,7 +248,7 @@ pub fn state_path_name_payload_len(name: &Name) -> Result<usize, VMError> {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the canonical length overflows.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the canonical length overflows.
 pub fn state_path_payload_len(path: &StatePath) -> Result<usize, VMError> {
     state_path_text_payload_len(path.as_ref(), core::mem::align_of::<StatePath>())
 }
@@ -262,7 +263,7 @@ fn state_path_text_payload_len(path: &str, align: usize) -> Result<usize, VMErro
     Header::SIZE
         .checked_add(padding)
         .and_then(|bytes| bytes.checked_add(encoded))
-        .ok_or(VMError::NoritoInvalid)
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Validate canonical durable-state path text without applying `Name`'s
 /// business-identifier length bound.
@@ -270,19 +271,21 @@ fn state_path_text_payload_len(path: &str, align: usize) -> Result<usize, VMErro
 /// Stored-key scanners use this before counting or skipping an entry, so an
 /// oversized preloaded key cannot evade validation through pagination.
 pub fn validate_state_path_text(path: &str) -> Result<(), VMError> {
-    let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
+    let path: StatePath = path
+        .parse()
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     validate_state_path(&path)
 }
 /// Validate a canonical durable-state path against the V1 text and canonical-frame bounds.
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the path exceeds the V1 bound.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the path exceeds the V1 bound.
 pub fn validate_state_path(path: &StatePath) -> Result<(), VMError> {
     if path.as_ref().len() > syscalls::STATE_MAX_PATH_BYTES
         || state_path_payload_len(path)? > syscalls::STATE_MAX_PATH_FRAME_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -290,10 +293,10 @@ pub fn validate_state_path(path: &StatePath) -> Result<(), VMError> {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the value exceeds the V1 bound.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the value exceeds the V1 bound.
 pub fn validate_state_value_payload_len(value_len: usize) -> Result<(), VMError> {
     if value_len > syscalls::STATE_MAX_VALUE_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -326,14 +329,16 @@ pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<StatePath, VM
         || key.is_empty()
         || key.len() > syscalls::STATE_MAP_MAX_KEY_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let base = base.as_ref();
     let mut path = String::with_capacity(base.len() + 1 + key.len().saturating_mul(2));
     path.push_str(base);
     path.push('/');
     path.push_str(&hex::encode(key));
-    let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
+    let path: StatePath = path
+        .parse()
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     validate_state_path(&path)?;
     Ok(path)
 }
@@ -341,18 +346,20 @@ fn declared_state_map_key_type<'a>(
     vm: &'a IVM,
     base: &Name,
 ) -> Result<&'a crate::metadata::EmbeddedStateType, VMError> {
-    let interface = vm.contract_interface().ok_or(VMError::NoritoInvalid)?;
+    let interface = vm
+        .contract_interface()
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut matches = interface
         .states
         .iter()
         .filter(|state| state.name == base.as_ref());
-    let state = matches.next().ok_or(VMError::NoritoInvalid)?;
+    let state = matches.next().ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if matches.next().is_some() {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     match &state.ty {
         crate::metadata::EmbeddedStateType::StateMap { key, .. } => Ok(key),
-        _ => Err(VMError::NoritoInvalid),
+        _ => Err(VMError::Trap(VmTrap::NoritoInvalid)),
     }
 }
 /// Require `base` to name exactly one declared top-level `StateMap`.
@@ -396,9 +403,9 @@ fn resolve_declared_state_path<'a>(
         .split_once('/')
         .map_or((path.as_ref(), None), |(base, suffix)| (base, Some(suffix)));
     let mut matches = interface.states.iter().filter(|state| state.name == base);
-    let state = matches.next().ok_or(VMError::NoritoInvalid)?;
+    let state = matches.next().ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if matches.next().is_some() {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     match (&state.ty, suffix) {
         (crate::metadata::EmbeddedStateType::StateMap { .. }, None) => {
@@ -412,18 +419,20 @@ fn resolve_declared_state_path<'a>(
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
-            let key = hex::decode(suffix).map_err(|_| VMError::NoritoInvalid)?;
-            let base: Name = base.parse().map_err(|_| VMError::NoritoInvalid)?;
+            let key = hex::decode(suffix).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+            let base: Name = base
+                .parse()
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
             if canonical_state_map_path(&base, &key)?.as_ref() != path.as_ref() {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             validate_declared_state_map_key(vm, &base, &key)?;
             Ok(Some(DeclaredStatePath::Value(value)))
         }
         (ty, None) => Ok(Some(DeclaredStatePath::Value(ty))),
-        (_, Some(_)) => Err(VMError::NoritoInvalid),
+        (_, Some(_)) => Err(VMError::Trap(VmTrap::NoritoInvalid)),
     }
 }
 /// Bind one value operation to the loaded CNTR durable-state declaration.
@@ -434,7 +443,7 @@ fn resolve_declared_state_path<'a>(
 /// for value operations.
 pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     match resolve_declared_state_path(vm, path)? {
-        Some(DeclaredStatePath::MapBase) => Err(VMError::NoritoInvalid),
+        Some(DeclaredStatePath::MapBase) => Err(VMError::Trap(VmTrap::NoritoInvalid)),
         Some(DeclaredStatePath::Value(_)) | None => Ok(()),
     }
 }
@@ -460,7 +469,7 @@ pub fn validate_declared_state_value_payload(
         return Ok(());
     };
     let DeclaredStatePath::Value(ty) = declared else {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     };
     let schema = crate::state_value_runtime::schema_for_embedded_state_type(ty)?;
     crate::state_value_runtime::validate_state_value_record(vm, &schema, payload)
@@ -497,23 +506,23 @@ pub(crate) fn quote_canonical_state_map_path_lengths(
         || key_payload_len == 0
         || key_payload_len > syscalls::STATE_MAP_MAX_KEY_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let output_text_bound = syscalls::STATE_MAP_MAX_BASE_BYTES
         .checked_add(1)
         .and_then(|len| len.checked_add(key_payload_len.checked_mul(2)?))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if output_text_bound > syscalls::STATE_MAX_PATH_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let output_bound = output_text_bound
         .checked_add(
             syscalls::STATE_MAX_PATH_FRAME_BYTES.saturating_sub(syscalls::STATE_MAX_PATH_BYTES),
         )
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let input_len = base_payload_len
         .checked_add(key_payload_len)
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok((input_len, output_bound))
 }
 /// Decode one canonical key from a `STATE_SCAN` page and validate its map path.
@@ -526,7 +535,7 @@ pub(crate) fn canonical_state_map_key_at(
         || base.as_ref().len() > syscalls::STATE_MAP_MAX_BASE_BYTES
         || state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let default_limits = ivm_abi::codec::canonical_norito_decode_limits(page_payload.len());
     let item_limit = usize::try_from(syscalls::STATE_SCAN_MAX_ITEMS_V1).unwrap_or(usize::MAX);
@@ -538,19 +547,19 @@ pub(crate) fn canonical_state_map_key_at(
         default_limits.max_nesting_depth(),
     );
     let paths: Vec<StatePath> = decode_canonical_norito_with_limits(page_payload, page_limits)
-        .map_err(|_| VMError::DecodeError)?;
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     let mut previous: Option<&StatePath> = None;
     for path in &paths {
         validate_state_path(path)?;
         if previous.is_some_and(|previous| previous >= path) {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         previous = Some(path);
         let suffix = path
             .as_ref()
             .strip_prefix(base.as_ref())
             .and_then(|suffix| suffix.strip_prefix('/'))
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         if suffix.is_empty()
             || suffix.len() > syscalls::STATE_MAP_MAX_KEY_BYTES.saturating_mul(2)
             || suffix.len() % 2 != 0
@@ -559,7 +568,7 @@ pub(crate) fn canonical_state_map_key_at(
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
     }
     let index = usize::try_from(index).unwrap_or(usize::MAX);
@@ -570,7 +579,7 @@ pub(crate) fn canonical_state_map_key_at(
         .as_ref()
         .strip_prefix(base.as_ref())
         .and_then(|suffix| suffix.strip_prefix('/'))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if suffix.is_empty()
         || suffix.len() % 2 != 0
         || suffix.contains('/')
@@ -578,27 +587,28 @@ pub(crate) fn canonical_state_map_key_at(
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let key = hex::decode(suffix).map_err(|_| VMError::NoritoInvalid)?;
+    let key = hex::decode(suffix).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     if key.len() > syscalls::STATE_MAP_MAX_KEY_BYTES
         || canonical_state_map_path(base, &key)?.as_ref() != path.as_ref()
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(Some(key))
 }
 fn parse_tlv_header(vm: &IVM, header: &[u8]) -> Result<(PointerType, usize), VMError> {
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
-    let pointer_type = PointerType::from_u16(raw_type).ok_or(VMError::NoritoInvalid)?;
+    let pointer_type =
+        PointerType::from_u16(raw_type).ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if header[2] != 1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     if !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), pointer_type) {
-        return Err(VMError::AbiTypeNotAllowed {
+        return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
             abi: vm.abi_version(),
             type_id: raw_type,
-        });
+        }));
     }
     let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
     Ok((pointer_type, payload_len))
@@ -615,8 +625,8 @@ fn validate_quoted_tlv_range(vm: &IVM, address: u64, payload_len: usize) -> Resu
     let total = 7usize
         .checked_add(payload_len)
         .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
-    let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
+    let total = u64::try_from(total).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     vm.ensure_owned_tlv_range(address, total)?;
     vm.memory.inspect_region(address, total)?;
     Ok(())
@@ -633,7 +643,7 @@ fn quote_bounded_tlv_payload_len_at(
     // without performing attacker-controlled payload work first.
     let (actual, payload_len) = quote_tlv_header_at(vm, address)?;
     if actual != expected || payload_len > maximum_payload_len {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok(payload_len)
@@ -646,7 +656,7 @@ fn read_bounded_tlv_payload_len_at(
 ) -> Result<usize, VMError> {
     let (actual, payload_len) = read_tlv_header_at(vm, address)?;
     if actual != expected || payload_len > maximum_payload_len {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok(payload_len)
@@ -673,7 +683,7 @@ pub fn quote_tlv_payload_len_at(
 ) -> Result<usize, VMError> {
     let (actual, payload_len) = quote_any_tlv_at(vm, address)?;
     if actual != expected {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(payload_len)
 }
@@ -699,7 +709,7 @@ pub fn quote_zk_single_at(
 ) -> Result<(usize, u64), VMError> {
     let payload_bytes = quote_tlv_payload_len_at(vm, address, PointerType::NoritoBytes)?;
     if u64::try_from(payload_bytes).unwrap_or(u64::MAX) > schedule.max_payload_bytes {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok((
         payload_bytes,
@@ -727,7 +737,7 @@ pub fn quote_zk_batch_at(
     const MAX_ALIGNMENT_PADDING: usize = 64;
     let payload_len = quote_tlv_payload_len_at(vm, address, PointerType::NoritoBytes)?;
     if u64::try_from(payload_len).unwrap_or(u64::MAX) > schedule.max_payload_bytes {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let quoted_proof_count = (|| -> Option<usize> {
         if payload_len < norito::core::Header::SIZE + 8 {
@@ -784,7 +794,7 @@ pub enum ZkDecodeError {
 impl ZkDecodeError {
     fn from_canonical_read(error: VMError) -> Self {
         match error {
-            VMError::DecodeDeferred(original) => Self::Deferred(original),
+            VMError::Deferred(VmDeferral::DecodeDeferred(original)) => Self::Deferred(original),
             _ => Self::Rejected(ERR_DECODE),
         }
     }
@@ -792,11 +802,13 @@ impl ZkDecodeError {
     /// Return a completed ABI rejection or propagate the original local refusal.
     ///
     /// # Errors
-    /// Returns [`VMError::DecodeDeferred`] before the caller publishes registers or output.
+    /// Returns [`crate::error::VmDeferral::DecodeDeferred`] before the caller publishes registers or output.
     pub fn into_status(self) -> Result<u64, VMError> {
         match self {
             Self::Rejected(status) => Ok(status),
-            Self::Deferred(original) => Err(VMError::DecodeDeferred(original)),
+            Self::Deferred(original) => {
+                Err(VMError::Deferred(VmDeferral::DecodeDeferred(original)))
+            }
         }
     }
 }
@@ -1027,7 +1039,7 @@ pub struct HostSyscallMeteringSpec {
 ///
 /// This registry deliberately does not derive a formula from the access class: access and metering
 /// are independent security claims. Adding a syscall to the ABI therefore requires updating both
-/// registries, otherwise preparation fails closed with [`VMError::UnknownSyscall`].
+/// registries, otherwise preparation fails closed with [`crate::error::VmTrap::UnknownSyscall`].
 #[must_use]
 pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSyscallGasFormula> {
     if syscalls::is_numeric_v1_syscall(number) {
@@ -1383,12 +1395,12 @@ pub fn abi_v1_host_syscall_metering_registry() -> &'static [HostSyscallMeteringS
 ///
 /// # Errors
 ///
-/// Returns [`VMError::UnknownSyscall`] for a disallowed or unclassified number.
+/// Returns [`crate::error::VmTrap::UnknownSyscall`] for a disallowed or unclassified number.
 pub fn require_host_syscall_metering_spec(
     policy: SyscallPolicy,
     number: u32,
 ) -> Result<HostSyscallMeteringSpec, VMError> {
-    host_syscall_metering_spec(policy, number).ok_or(VMError::UnknownSyscall(number))
+    host_syscall_metering_spec(policy, number).ok_or(VMError::Trap(VmTrap::UnknownSyscall(number)))
 }
 /// Conservative deterministic gas bound for host implementations whose exact
 /// response size is unavailable during syscall preparation.
@@ -1434,7 +1446,7 @@ pub fn reserve_available_syscall_gas(vm: &IVM) -> Result<u64, VMError> {
 pub fn reserve_available_syscall_gas_at_least(vm: &IVM, minimum: u64) -> Result<u64, VMError> {
     let available = vm.remaining_gas();
     if available < minimum {
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     } else {
         Ok(available)
     }
@@ -1447,7 +1459,7 @@ pub fn reserve_available_syscall_gas_at_least(vm: &IVM, minimum: u64) -> Result<
 pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMError> {
     let reserved = vm.syscall_reserved_gas();
     if reserved != 0 && actual > reserved {
-        return Err(VMError::metered(reserved, VMError::OutOfGas));
+        return Err(VMError::metered(reserved, VMError::Trap(VmTrap::OutOfGas)));
     }
     Ok(())
 }
@@ -1459,7 +1471,7 @@ pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMErr
 ///
 /// # Errors
 ///
-/// Returns a metered [`VMError::OutOfGas`] before the next key is materialized
+/// Returns a metered [`crate::error::VmTrap::OutOfGas`] before the next key is materialized
 /// when its deterministic work charge exceeds the pre-debited reserve.
 pub fn preflight_reserved_state_scan_work(
     vm: &IVM,
@@ -1476,7 +1488,7 @@ pub fn preflight_reserved_state_scan_work(
 ///
 /// # Errors
 ///
-/// Returns a metered [`VMError::OutOfGas`] before the next key is materialized
+/// Returns a metered [`crate::error::VmTrap::OutOfGas`] before the next key is materialized
 /// when scan work plus the reserved tail exceeds the pre-debited quote.
 pub fn preflight_reserved_state_scan_work_with_tail(
     vm: &IVM,
@@ -1506,16 +1518,16 @@ fn state_scan_page_payload_bound_from_parts(
     encoded_elements: usize,
 ) -> Result<usize, VMError> {
     if item_count > usize::try_from(syscalls::STATE_SCAN_MAX_ITEMS_V1).unwrap_or(usize::MAX) {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let offset_table = item_count
         .checked_add(1)
         .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let payload = core::mem::size_of::<u64>()
         .checked_add(offset_table)
         .and_then(|bytes| bytes.checked_add(encoded_elements))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let align = core::mem::align_of::<Vec<StatePath>>();
     let padding = if align <= 1 {
         0
@@ -1526,23 +1538,23 @@ fn state_scan_page_payload_bound_from_parts(
     let framed = Header::SIZE
         .checked_add(padding)
         .and_then(|bytes| bytes.checked_add(payload))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if framed > syscalls::STATE_MAP_MAX_PAGE_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(framed)
 }
 fn state_key_encoded_len_from_text(key: &str) -> Result<usize, VMError> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    <&str as SerializePayload>::encoded_len_exact(&key).ok_or(VMError::NoritoInvalid)
+    <&str as SerializePayload>::encoded_len_exact(&key).ok_or(VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Compute the exact encoded-element total and framed page bound after adding
 /// one canonical durable-state key to a selected page.
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when length arithmetic overflows or the
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when length arithmetic overflows or the
 /// resulting canonical page would exceed the V1 page bound.
 pub fn state_scan_response_tail_after_item(
     selected_before: usize,
@@ -1551,10 +1563,10 @@ pub fn state_scan_response_tail_after_item(
 ) -> Result<(usize, usize), VMError> {
     let encoded_elements = encoded_elements_before
         .checked_add(state_key_encoded_len_from_text(key)?)
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let selected = selected_before
         .checked_add(1)
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let response = state_scan_page_payload_bound_from_parts(selected, encoded_elements)?;
     Ok((encoded_elements, response))
 }
@@ -1592,12 +1604,13 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
                 PointerType::NoritoBytes,
             )?;
             if len > 64 * 1024 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             let tlv = vm.validate_tlv(DefaultHost::resolve_code_tlv_addr(vm, vm.register(10)))?;
             let descriptor: iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor =
                 decode_canonical_norito(tlv.payload)?;
-            let code = u32::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+            let code =
+                u32::try_from(vm.register(11)).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
             contract_abort_gas(len, contract_abort_message(vm, &descriptor.identity, code))
         }
         syscalls::SYSCALL_DEBUG_LOG => {
@@ -1611,7 +1624,7 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
                     pointer_type,
                     PointerType::Blob | PointerType::NoritoBytes | PointerType::Json
                 ) {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 debug_log_gas(payload_len)
             }
@@ -1620,7 +1633,7 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
         syscalls::SYSCALL_POINTER_TO_NORITO => {
             let pointer = vm.register(10);
             if pointer == 0 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             let (_, payload_len) =
                 quote_any_tlv_at(vm, DefaultHost::resolve_code_tlv_addr(vm, pointer))?;
@@ -1634,7 +1647,7 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
                 let (pointer_type, payload_len) =
                     quote_any_tlv_at(vm, DefaultHost::resolve_code_tlv_addr(vm, pointer))?;
                 if pointer_type != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 DefaultHost::pointer_gas(payload_len)
             }
@@ -1680,7 +1693,7 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
                 PointerType::Name,
             )?;
             if input > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             DefaultHost::path_gas(input, syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES)
         }
@@ -1733,11 +1746,11 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
             vm.ensure_public_register(10)?;
             let pointer = vm.register(10);
             if pointer == 0 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             let (pointer_type, payload_len) = quote_any_tlv_at(vm, pointer)?;
             if !matches!(pointer_type, PointerType::Blob | PointerType::NoritoBytes) {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             DefaultHost::pointer_gas(payload_len)
         }
@@ -1754,12 +1767,12 @@ pub(crate) fn normalize_norito_bytes(vm: &mut IVM) -> Result<u64, VMError> {
     vm.ensure_public_register(10)?;
     let pointer = vm.register(10);
     if pointer == 0 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let payload = {
         let tlv = vm.validate_tlv(pointer)?;
         if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         tlv.payload.to_vec()
     };
@@ -1790,11 +1803,11 @@ pub trait IVMHost {
     ///
     /// A reserved handler returns the actual additional gas cost, which must not exceed
     /// [`Self::prepare_syscall`]. Metered errors report their actual cost through
-    /// [`VMError::Metered`]; an unmetered error consumes the complete prepared quote so potentially
+    /// [`crate::error::VmTrap::Metered`]; an unmetered error consumes the complete prepared quote so potentially
     /// completed host work is never refunded implicitly.
     ///
     /// A staged handler calls [`IVM::charge_syscall_stage`] before each phase and
-    /// returns zero. Returning non-zero actual gas or a [`VMError::Metered`]
+    /// returns zero. Returning non-zero actual gas or a [`crate::error::VmTrap::Metered`]
     /// wrapper from a staged handler is a metering-mode violation.
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError>;
     /// Whether this host accepts `number` for a program running under `policy`.
@@ -1832,7 +1845,7 @@ pub trait IVMHost {
     /// An error means rollback could not be completed durably; callers must not
     /// execute another transaction with the affected host.
     fn restore(&mut self, _snapshot: &dyn Any) -> Result<(), VMError> {
-        Err(VMError::HostUnavailable)
+        Err(VMError::Deferred(VmDeferral::HostUnavailable))
     }
     /// Indicate whether this host reports logical state accesses via `finish_tx`.
     fn access_logging_supported(&self) -> bool {
@@ -1919,7 +1932,7 @@ impl DefaultHost {
     /// the authenticated contract address.
     pub fn set_state_instance(&mut self, instance: String) -> Result<(), VMError> {
         if instance.is_empty() || instance.len() > 1024 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         self.state_instance = instance;
         Ok(())
@@ -1954,7 +1967,7 @@ impl DefaultHost {
     /// canonical outer Norito encoding exceeds its hard byte bound.
     pub fn with_private_inputs(inputs: Vec<PrivateInputRecordV1>) -> Result<Self, VMError> {
         if inputs.len() > MAX_PRIVATE_INPUTS_V1 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let private_inputs = inputs
             .iter()
@@ -1969,22 +1982,22 @@ impl DefaultHost {
     /// are enforced before this host retains any of the supplied buffers.
     ///
     /// # Errors
-    /// Returns [`VMError::NoritoInvalid`] when any V1 transport bound is
+    /// Returns [`crate::error::VmTrap::NoritoInvalid`] when any V1 transport bound is
     /// exceeded. Malformed but bounded records remain a metered runtime error.
     pub fn with_encoded_private_inputs(inputs: Vec<Vec<u8>>) -> Result<Self, VMError> {
         if inputs.len() > MAX_PRIVATE_INPUTS_V1 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let mut aggregate_bytes = 0_usize;
         for record in &inputs {
             if record.len() > MAX_PRIVATE_INPUT_RECORD_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             aggregate_bytes = aggregate_bytes
                 .checked_add(record.len())
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             if aggregate_bytes > MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
         }
         let mut host = Self::new();
@@ -2147,7 +2160,7 @@ impl DefaultHost {
         if self.fastpq_batch_active {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         self.fastpq_batch_active = true;
@@ -2156,7 +2169,7 @@ impl DefaultHost {
     }
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let quantity_len = Self::expect_quantity(vm, 13)?;
         Self::expect_tlv(vm, 10, PointerType::AccountId)?;
@@ -2170,19 +2183,22 @@ impl DefaultHost {
         if !self.fastpq_batch_active {
             return Err(VMError::metered(
                 gas::G_FASTPQ_BATCH,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
         self.fastpq_batch_active = false;
         if !self.fastpq_batch_has_entries {
-            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::Trap(VmTrap::DecodeError),
+            ));
         }
         self.fastpq_batch_has_entries = false;
         Ok(gas::G_FASTPQ_BATCH)
     }
     fn apply_fastpq_batch(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let gas = Self::fastpq_batch_apply_gas_quote(vm)?;
         preflight_reserved_syscall_gas(vm, gas)?;
@@ -2192,12 +2208,12 @@ impl DefaultHost {
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let batch: TransferAssetBatch =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         if batch.entries().is_empty() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(MUTATION_GAS.saturating_mul(u64::try_from(batch.entries().len()).unwrap_or(u64::MAX)))
     }
@@ -2205,7 +2221,7 @@ impl DefaultHost {
         if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
             VMError::metered_not_implemented(MUTATION_GAS, number)
         } else {
-            VMError::UnknownSyscall(number)
+            VMError::Trap(VmTrap::UnknownSyscall(number))
         }
     }
     /// Retrieve and clear the output committed by the last program run.
@@ -2220,14 +2236,14 @@ impl DefaultHost {
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
         let tlv = Self::decode_any_tlv(vm, vm.register(reg))?;
         if tlv.type_id as u16 != ty as u16 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let policy = vm.syscall_policy();
         if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
+            return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                 abi: vm.abi_version(),
                 type_id: tlv.type_id as u16,
-            });
+            }));
         }
         Ok(tlv)
     }
@@ -2244,7 +2260,8 @@ impl DefaultHost {
         // no reserve and remain available to low-level tests and tooling.
         preflight_reserved_syscall_gas(vm, Self::mutation_gas(payload_len))?;
         let tlv = Self::expect_tlv(vm, reg, PointerType::Quantity)?;
-        QuantityValueV1::decode_frame(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        QuantityValueV1::decode_frame(tlv.payload)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         debug_assert_eq!(tlv.payload.len(), payload_len);
         Ok(payload_len)
     }
@@ -2282,7 +2299,7 @@ impl DefaultHost {
         let mut out = Vec::with_capacity(7 + payload.len() + 32);
         out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         out.push(1);
-        let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+        let len = u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(payload);
         let h: [u8; 32] = Hash::new(payload).into();
@@ -2395,7 +2412,7 @@ impl DefaultHost {
                 vm.baseline_execution_summary_event_count(),
             ),
         };
-        let payload_len = payload_len.map_err(|_| VMError::NoritoInvalid)?;
+        let payload_len = payload_len.map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         Ok(128_u64
             .saturating_add(event_count.saturating_mul(2))
             .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX)))
@@ -2423,13 +2440,13 @@ impl DefaultHost {
     fn decode_signature_inputs(vm: &IVM) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), VMError> {
         let message_tlv = vm.validate_tlv(vm.register(10))?;
         if message_tlv.type_id != PointerType::Blob {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let message = message_tlv.payload.to_vec();
         let decode_blob = |register: usize| -> Result<Vec<u8>, VMError> {
             let tlv = vm.validate_tlv(vm.register(register))?;
             if tlv.type_id != PointerType::Blob {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             Ok(tlv.payload.to_vec())
         };
@@ -2452,10 +2469,10 @@ impl DefaultHost {
     fn decode_state_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
         let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         validate_state_path(&path)?;
         validate_declared_state_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
@@ -2463,10 +2480,10 @@ impl DefaultHost {
     fn decode_state_scan_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
         let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let path: StatePath =
-            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         validate_state_path(&path)?;
         validate_declared_state_scan_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
@@ -2515,26 +2532,30 @@ impl DefaultHost {
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::AxtDescriptor {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let gas = Self::axt_gas(tlv.payload.len());
         let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
-        let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
+        let binding =
+            axt::compute_binding(&descriptor).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         Ok(gas)
     }
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
+        let state = self
+            .axt_state
+            .as_mut()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let ds_ptr = vm.register(10);
         let ds_tlv = vm.validate_tlv(ds_ptr)?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let mut gas_len = ds_tlv.payload.len();
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let manifest_ptr = vm.register(11);
         let manifest = if manifest_ptr == 0 {
@@ -2545,7 +2566,7 @@ impl DefaultHost {
         } else {
             let manifest_tlv = vm.validate_tlv(manifest_ptr)?;
             if manifest_tlv.type_id != PointerType::NoritoBytes {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
             decode_canonical_norito(manifest_tlv.payload)?
@@ -2558,15 +2579,18 @@ impl DefaultHost {
         Ok(gas)
     }
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
+        let state = self
+            .axt_state
+            .as_mut()
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         let ds_ptr = vm.register(10);
         let ds_tlv = vm.validate_tlv(ds_ptr)?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
@@ -2577,7 +2601,7 @@ impl DefaultHost {
         }
         let proof_tlv = vm.validate_tlv(proof_ptr)?;
         if proof_tlv.type_id != PointerType::ProofBlob {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let proof: ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
         axt::validate_proof_blob(&proof)?;
@@ -2585,14 +2609,14 @@ impl DefaultHost {
         axt::preflight_fastpq_v1_proof_envelope(&envelope, dsid)?;
         // The standalone host does not link the FastPQ verifier. Shape preflight
         // is diagnostic only, so proof-consuming AXT calls fail closed here.
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     }
     fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, VMError> {
         let gas = self
             .axt_state
             .as_ref()
             .map(Self::axt_commit_gas)
-            .ok_or(VMError::PermissionDenied)?;
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
         preflight_reserved_syscall_gas(vm, gas)?;
         let state = self
             .axt_state
@@ -2644,7 +2668,7 @@ impl IVMHost for DefaultHost {
                 PointerType::Name,
             )?;
             if json > gas::HOST_CODEC_MAX_INPUT_BYTES || key > gas::HOST_CODEC_MAX_INPUT_BYTES {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             let maximum_output = gas::HOST_CODEC_MAX_OUTPUT_BYTES;
             let output = maximum_output.saturating_add(16);
@@ -2684,7 +2708,7 @@ impl IVMHost for DefaultHost {
                 if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
                     || base_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 Self::path_gas(
                     page_len.saturating_add(base_len),
@@ -2758,7 +2782,7 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
                 let payload_len = tlv_len(10)?;
                 if payload_len > gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 gas::zk_verify_gas(payload_len)
             }
@@ -2816,7 +2840,7 @@ impl IVMHost for DefaultHost {
                 let address = vm.public_register(10)?;
                 let max_address = vm.stack_top().saturating_add(Memory::STACK_SLOP);
                 if address >= max_address {
-                    return Err(VMError::MemoryOutOfBounds);
+                    return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
                 }
                 Self::merkle_path_gas(vm.merkle_depth())
             }
@@ -2824,16 +2848,16 @@ impl IVMHost for DefaultHost {
                 let address = vm.public_register(10)?;
                 let max_address = vm.stack_top().saturating_add(Memory::STACK_SLOP);
                 if address >= max_address {
-                    return Err(VMError::MemoryOutOfBounds);
+                    return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
                 }
                 let depth = Self::compact_merkle_depth(vm.merkle_depth(), vm.public_register(12)?);
                 Self::merkle_path_gas(depth)
             }
             crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => {
                 let index = usize::try_from(vm.public_register(10)?)
-                    .map_err(|_| VMError::RegisterOutOfBounds)?;
+                    .map_err(|_| VMError::Trap(VmTrap::RegisterOutOfBounds))?;
                 if index >= crate::parallel::REGISTER_COUNT {
-                    return Err(VMError::RegisterOutOfBounds);
+                    return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                 }
                 let full_depth = Self::complete_tree_depth(crate::parallel::REGISTER_COUNT);
                 Self::merkle_path_gas(Self::compact_merkle_depth(
@@ -2952,8 +2976,8 @@ impl IVMHost for DefaultHost {
                 let base_tlv = Self::expect_tlv(vm, 10, PointerType::Name)?;
                 let key_tlv = Self::expect_tlv(vm, 11, PointerType::NoritoBytes)?;
                 let input_len = base_tlv.payload.len().saturating_add(key_tlv.payload.len());
-                let base: Name =
-                    decode_canonical_norito(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let base: Name = decode_canonical_norito(base_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let path = canonical_typed_state_map_path(vm, &base, key_tlv.payload)?;
                 let body = encode_canonical_norito(&path)?;
                 let pointer = Self::alloc_norito_bytes_tlv(vm, &body)?;
@@ -2963,11 +2987,11 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
                 let name_tlv = Self::expect_tlv(vm, 10, PointerType::Name)?;
                 if name_tlv.payload.len() > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let input_len = name_tlv.payload.len();
-                let name: Name =
-                    decode_canonical_norito(name_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let name: Name = decode_canonical_norito(name_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let path = StatePath::from(name);
                 validate_state_path(&path)?;
                 let body = encode_canonical_norito(&path)?;
@@ -3048,10 +3072,10 @@ impl IVMHost for DefaultHost {
                 let base_tlv = Self::decode_any_tlv(vm, vm.register(11))?;
                 if page.type_id != PointerType::NoritoBytes || base_tlv.type_id != PointerType::Name
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                let base: Name =
-                    decode_canonical_norito(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let base: Name = decode_canonical_norito(base_tlv.payload)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 validate_declared_state_map_base(vm, &base)?;
                 let key = canonical_state_map_key_at(page.payload, &base, vm.register(12))?;
                 if let Some(key) = key.as_deref() {
@@ -3109,7 +3133,7 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_POINTER_TO_NORITO => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
                 crate::numeric_tlv::validate_numeric_frame_if_needed(tlv.type_id, tlv.payload)?;
@@ -3117,7 +3141,8 @@ impl IVMHost for DefaultHost {
                     Vec::with_capacity(2 + 1 + 4 + tlv.payload.len() + iroha_crypto::Hash::LENGTH);
                 body.extend_from_slice(&tlv.type_id_raw().to_be_bytes());
                 body.push(tlv.version);
-                let len = u32::try_from(tlv.payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+                let len = u32::try_from(tlv.payload.len())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 body.extend_from_slice(&len.to_be_bytes());
                 body.extend_from_slice(tlv.payload);
                 let hash: [u8; iroha_crypto::Hash::LENGTH] =
@@ -3138,31 +3163,31 @@ impl IVMHost for DefaultHost {
                     .into_iter()
                     .any(|kind| vm.register(11) == u64::from(kind as u16))
                     {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     vm.set_register(10, 0);
                     return Ok(Self::pointer_gas(0));
                 }
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let encoded_len = tlv.payload.len();
                 let (inner_type, inner_version, inner_payload) = {
                     let inner = pointer_abi::validate_tlv_bytes(tlv.payload)
-                        .map_err(|_| VMError::NoritoInvalid)?;
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                     (inner.type_id, inner.version, inner.payload.to_vec())
                 };
-                let expected =
-                    u16::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
+                let expected = u16::try_from(vm.register(11))
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if expected != 0 && expected != inner_type as u16 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), inner_type) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: inner_type as u16,
-                    });
+                    }));
                 }
                 crate::numeric_tlv::validate_numeric_frame_if_needed(inner_type, &inner_payload)?;
                 let mut out = Vec::with_capacity(
@@ -3170,7 +3195,8 @@ impl IVMHost for DefaultHost {
                 );
                 out.extend_from_slice(&(inner_type as u16).to_be_bytes());
                 out.push(inner_version);
-                let len = u32::try_from(inner_payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+                let len = u32::try_from(inner_payload.len())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(&inner_payload);
                 let hash: [u8; iroha_crypto::Hash::LENGTH] =
@@ -3219,10 +3245,10 @@ impl IVMHost for DefaultHost {
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let payload_len = tlv.payload.len();
                 vm.set_register(10, u64::try_from(payload_len).unwrap_or(u64::MAX));
@@ -3258,10 +3284,10 @@ impl IVMHost for DefaultHost {
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 match tlv.type_id {
                     PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
@@ -3283,7 +3309,7 @@ impl IVMHost for DefaultHost {
                         }
                         Ok(debug_log_gas(tlv.payload.len()))
                     }
-                    _ => Err(VMError::NoritoInvalid),
+                    _ => Err(VMError::Trap(VmTrap::NoritoInvalid)),
                 }
             }
             // Basic pointer‑ABI validations to mirror core host behavior in tests
@@ -3303,8 +3329,9 @@ impl IVMHost for DefaultHost {
                 // r10=&AccountId, r11=quorum:u64
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 let quorum_raw = vm.register(11);
-                let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
-                NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
+                let quorum_u16 =
+                    u16::try_from(quorum_raw).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                NonZeroU16::new(quorum_u16).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 Ok(Self::mutation_gas(0))
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
@@ -3331,7 +3358,7 @@ impl IVMHost for DefaultHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    Err(crate::VMError::PermissionDenied)
+                    Err(crate::VMError::Trap(VmTrap::PermissionDenied))
                 }
             }
             crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
@@ -3384,7 +3411,10 @@ impl IVMHost for DefaultHost {
                 let decode_gas = Self::vrf_verify_gas(0, payload_len);
                 preflight_reserved_syscall_gas(vm, decode_gas)?;
                 if payload_len > crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 {
-                    return Err(VMError::metered(decode_gas, VMError::NoritoInvalid));
+                    return Err(VMError::metered(
+                        decode_gas,
+                        VMError::Trap(VmTrap::NoritoInvalid),
+                    ));
                 }
                 validate_quoted_tlv_range(vm, ptr, payload_len)
                     .map_err(|error| VMError::metered(decode_gas, error))?;
@@ -3592,7 +3622,10 @@ impl IVMHost for DefaultHost {
                 let decode_gas = Self::vrf_verify_gas(0, payload_len);
                 preflight_reserved_syscall_gas(vm, decode_gas)?;
                 if payload_len > crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 {
-                    return Err(VMError::metered(decode_gas, VMError::NoritoInvalid));
+                    return Err(VMError::metered(
+                        decode_gas,
+                        VMError::Trap(VmTrap::NoritoInvalid),
+                    ));
                 }
                 validate_quoted_tlv_range(vm, ptr, payload_len)
                     .map_err(|error| VMError::metered(decode_gas, error))?;
@@ -3812,12 +3845,12 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => {
                 // Decode only after the VM has debited the fixed maximum quote.
-                let expected =
-                    PrivateInputKindV1::from_tag(vm.register(11)).ok_or(VMError::NoritoInvalid)?;
+                let expected = PrivateInputKindV1::from_tag(vm.register(11))
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 let raw = usize::try_from(vm.register(10))
                     .ok()
                     .and_then(|index| self.private_inputs.get(index))
-                    .ok_or(VMError::PermissionDenied)?;
+                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
                 let value = crate::private_input::decode_record(raw, expected)?;
                 debug_assert_eq!(value.kind, expected);
                 let pointer = vm.alloc_host_private_tlv(&value.envelope)?;
@@ -3846,25 +3879,25 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let name: Name = decode_canonical_norito(tlv.payload)?;
                 let Some(bytes) = self.public_inputs.get(&name) else {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 };
                 let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: vm.abi_version(),
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                 let gas = PUBLIC_INPUT_GAS_BASE
@@ -3949,7 +3982,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest = Sm3Digest::hash(tlv.payload);
@@ -3962,7 +3995,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest = <Sha256 as Sha2Digest>::digest(tlv.payload);
@@ -3974,7 +4007,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest = <Sha3_256 as Sha3Digest>::digest(tlv.payload);
@@ -3986,7 +4019,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest = Self::blake2b256(tlv.payload);
@@ -3998,7 +4031,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest = <Keccak256 as Sha3Digest>::digest(tlv.payload);
@@ -4010,7 +4043,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 let digest: [u8; iroha_crypto::Hash::LENGTH] =
@@ -4027,7 +4060,7 @@ impl IVMHost for DefaultHost {
                     || sig_tlv.type_id != PointerType::Blob
                     || pk_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let distid_ptr = vm.register(13);
                 let mut input_len = msg_tlv
@@ -4038,10 +4071,11 @@ impl IVMHost for DefaultHost {
                 let distid = if distid_ptr != 0 {
                     let distid_tlv = vm.validate_tlv(distid_ptr)?;
                     if distid_tlv.type_id != PointerType::Blob {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     input_len = input_len.saturating_add(distid_tlv.payload.len());
-                    std::str::from_utf8(distid_tlv.payload).map_err(|_| VMError::NoritoInvalid)?
+                    std::str::from_utf8(distid_tlv.payload)
+                        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
                 } else {
                     // An omitted ABI operand has one protocol meaning on all nodes.
                     // The process default is only a key-generation convenience.
@@ -4087,12 +4121,12 @@ impl IVMHost for DefaultHost {
                     || nonce_tlv.type_id != PointerType::Blob
                     || pt_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if let Some(ref aad_tlv) = aad_opt
                     && aad_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, pt_tlv.payload.len());
@@ -4136,12 +4170,12 @@ impl IVMHost for DefaultHost {
                     || nonce_tlv.type_id != PointerType::Blob
                     || ct_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if let Some(ref aad_tlv) = aad_opt
                     && aad_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, ct_tlv.payload.len());
@@ -4192,12 +4226,12 @@ impl IVMHost for DefaultHost {
                     || nonce_tlv.type_id != PointerType::Blob
                     || pt_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if let Some(ref aad_tlv) = aad_opt
                     && aad_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, pt_tlv.payload.len());
@@ -4239,12 +4273,12 @@ impl IVMHost for DefaultHost {
                     || nonce_tlv.type_id != PointerType::Blob
                     || ct_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if let Some(ref aad_tlv) = aad_opt
                     && aad_tlv.type_id != PointerType::Blob
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, ct_tlv.payload.len());
@@ -4291,8 +4325,8 @@ impl IVMHost for DefaultHost {
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                let resolved =
-                    Self::resolve_literal_pointer(vm, src).ok_or(VMError::NoritoInvalid)?;
+                let resolved = Self::resolve_literal_pointer(vm, src)
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
@@ -4314,13 +4348,13 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_len = tlv.payload.len();
                 if u64::try_from(payload_len).unwrap_or(u64::MAX)
                     > self.zk_gas_schedule.max_payload_bytes
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let conservative = self.zk_gas_schedule.conservative_single_gas(payload_len);
                 preflight_reserved_syscall_gas(vm, conservative)?;
@@ -4358,7 +4392,7 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let input_len = tlv.payload.len();
                 if number == crate::syscalls::SYSCALL_ZK_ROOTS_GET {
@@ -4388,7 +4422,7 @@ impl IVMHost for DefaultHost {
                     let req: crate::zk_verify::VoteGetTallyRequest =
                         decode_canonical_norito(tlv.payload)?;
                     if !req.is_valid_v1() {
-                        return Err(VMError::NoritoInvalid);
+                        return Err(VMError::Trap(VmTrap::NoritoInvalid));
                     }
                     let resp = crate::zk_verify::VoteGetTallyResponse {
                         finalized: false,
@@ -4411,12 +4445,12 @@ impl IVMHost for DefaultHost {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX)
                     > self.zk_gas_schedule.max_payload_bytes
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let quote = quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
                 preflight_reserved_syscall_gas(vm, quote.gas)?;
@@ -4467,12 +4501,15 @@ impl IVMHost for DefaultHost {
                 // canonical item fails closed and the first failure is index 0.
                 let statuses = vec![0_u8; envelopes.len()];
                 let body = encode_canonical_norito(&statuses)
-                    .map_err(|_| VMError::metered(actual, VMError::NoritoInvalid))?;
+                    .map_err(|_| VMError::metered(actual, VMError::Trap(VmTrap::NoritoInvalid)))?;
                 let encoded_output_bytes = TLV_ENVELOPE_OVERHEAD.saturating_add(body.len());
                 if u64::try_from(encoded_output_bytes).unwrap_or(u64::MAX)
                     != self.zk_gas_schedule.batch_output_bytes(envelopes.len())
                 {
-                    return Err(VMError::metered(actual, VMError::NoritoInvalid));
+                    return Err(VMError::metered(
+                        actual,
+                        VMError::Trap(VmTrap::NoritoInvalid),
+                    ));
                 }
                 let output = Self::alloc_norito_bytes_tlv(vm, &body)?;
                 self.zk_execution_counters.response_allocations = self
@@ -4495,7 +4532,9 @@ impl IVMHost for DefaultHost {
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => Err(VMError::PermissionDenied),
+            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
+                Err(VMError::Trap(VmTrap::PermissionDenied))
+            }
             _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
@@ -4524,7 +4563,7 @@ impl IVMHost for DefaultHost {
             *self = saved.clone();
             Ok(())
         } else {
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         }
     }
     fn access_logging_supported(&self) -> bool {
@@ -4535,6 +4574,7 @@ impl IVMHost for DefaultHost {
 mod tests {
     use super::*;
     use crate::ProgramMetadata;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::pointer_abi::PointerType;
     use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use iroha_data_model::zk::BackendTag;
@@ -4586,12 +4626,12 @@ mod tests {
         let too_many = vec![Vec::new(); MAX_PRIVATE_INPUTS_V1 + 1];
         assert!(matches!(
             DefaultHost::with_encoded_private_inputs(too_many),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let too_large = vec![vec![0_u8; MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1]];
         assert!(matches!(
             DefaultHost::with_encoded_private_inputs(too_large),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let bounded_but_malformed = vec![vec![0xA5; MAX_PRIVATE_INPUT_RECORD_BYTES_V1]];
         let host = DefaultHost::with_encoded_private_inputs(bounded_but_malformed)
@@ -4846,11 +4886,11 @@ mod tests {
         assert!(configured_output_bound <= syscalls::STATE_MAX_PATH_FRAME_BYTES);
         assert!(matches!(
             canonical_state_map_path(&base, &[0u8; syscalls::STATE_MAP_MAX_KEY_BYTES + 1]),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             quote_canonical_state_map_path_lengths(syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES + 1, 1),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!("b".repeat(MAX_NAME_BYTES + 1).parse::<Name>().is_err());
         assert!(
@@ -4889,7 +4929,7 @@ mod tests {
         }
         assert!(matches!(
             state_scan_page_payload_bound_from_parts(maximum_items + 1, 0),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -4971,7 +5011,7 @@ mod tests {
             assert!(
                 matches!(
                     canonical_state_map_key_at(&page, &base, u64::MAX),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "the complete page must be validated even when the index is out of range"
             );
@@ -4990,7 +5030,7 @@ mod tests {
         assert!(
             matches!(
                 canonical_state_map_key_at(&page, &base, 0),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "the top-level sequence limit must reject before Vec<StatePath> materialization"
         );
@@ -5033,7 +5073,9 @@ mod tests {
             let retained = original.clone();
             let error =
                 norito::core::with_decode_limits_scope(limit, || error.into_status()).unwrap_err();
-            assert!(matches!(&error, VMError::DecodeDeferred(actual) if actual == &retained));
+            assert!(
+                matches!(&error, VMError::Deferred(VmDeferral::DecodeDeferred(actual)) if actual == &retained)
+            );
             assert_eq!(error.fault_kind(), None);
             assert_eq!(error.metered_gas(), None);
         }
@@ -5096,7 +5138,9 @@ mod tests {
                 ZkDecodeError::Deferred(original).into_status()
             })
             .unwrap_err();
-            assert!(matches!(error, VMError::DecodeDeferred(actual) if actual == retained));
+            assert!(
+                matches!(error, VMError::Deferred(VmDeferral::DecodeDeferred(actual)) if actual == retained)
+            );
             // A completed intrinsic count rejection takes no element admission at all.
             let rejected = norito::core::with_decode_limits_scope(limits, || {
                 decode_canonical_zk_batch(&bytes, 0)
@@ -5133,7 +5177,10 @@ mod tests {
             let error =
                 norito::core::with_decode_limits_scope(limit, || host.syscall(syscall, &mut vm))
                     .unwrap_err();
-            assert!(matches!(error, VMError::DecodeDeferred(_)));
+            assert!(matches!(
+                error,
+                VMError::Deferred(VmDeferral::DecodeDeferred(_))
+            ));
             assert_eq!(error.fault_kind(), None);
             assert_eq!(error.metered_gas(), None);
             assert_eq!(
@@ -5649,7 +5696,7 @@ mod tests {
         let host = DefaultHost::new();
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let oversized = vec![0_u8; crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 + 1];
         let envelope = test_tlv(PointerType::NoritoBytes, &oversized);
@@ -5661,7 +5708,7 @@ mod tests {
         vm.set_register(10, pointer);
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             host.vrf_execution_counters(),
@@ -5693,7 +5740,7 @@ mod tests {
         vm.set_gas_limit(quote);
         assert!(matches!(
             vm.run_with_host(&mut host),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
@@ -5733,7 +5780,7 @@ mod tests {
             .expect_err("response allocation must fail");
         let (metered_gas, original) = error.split_metered();
         assert_eq!(metered_gas, Some(actual));
-        assert!(matches!(original, VMError::OutOfMemory));
+        assert!(matches!(original, VMError::Trap(VmTrap::OutOfMemory)));
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
         assert_eq!(vm.register(12), 0xbeef);
@@ -5993,7 +6040,7 @@ mod tests {
         let mut host = DefaultHost::new();
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(
             host.zk_execution_counters(),
@@ -6029,7 +6076,7 @@ mod tests {
         vm.set_gas_limit(quote);
         assert!(matches!(
             vm.run_with_host(&mut host),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
@@ -6148,7 +6195,7 @@ mod tests {
         vm.set_register(10, request_ptr);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             vm.register(10),
@@ -6251,7 +6298,7 @@ mod tests {
         assert!(
             matches!(
                 host.syscall(syscalls::SYSCALL_STATE_HAS, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "durable-state operations must not accept Name as a compatibility carrier"
         );
@@ -6321,7 +6368,7 @@ mod tests {
         );
         assert!(matches!(
             reserve_available_syscall_gas(&IVM::new(0)),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
     }
     #[test]
@@ -6376,7 +6423,7 @@ mod tests {
         vm.set_register(11, PointerType::Blob as u64);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), blob_carrier_ptr);
     }
@@ -6421,7 +6468,7 @@ mod tests {
         vm.set_register(10, malformed_ptr);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
-            Err(VMError::PointerAbiFault(_))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(_)))
         ));
         assert_eq!(vm.register(10), malformed_ptr);
         let wrapped_malformed = test_tlv(PointerType::NoritoBytes, &malformed);
@@ -6432,7 +6479,7 @@ mod tests {
         vm.set_register(11, u64::from(PointerType::Int as u16));
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-            Err(VMError::PointerAbiFault(_))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(_)))
         ));
         assert_eq!(vm.register(10), wrapped_ptr);
         for kind in [
@@ -6445,7 +6492,7 @@ mod tests {
             assert!(
                 matches!(
                     host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-                    Err(VMError::NoritoInvalid)
+                    Err(VMError::Trap(VmTrap::NoritoInvalid))
                 ),
                 "numeric {kind:?} cannot decode from null"
             );
@@ -6498,7 +6545,8 @@ mod tests {
             .expect_err("invalid right pointer must fail strict pointer-ABI preparation");
         assert!(matches!(
             error,
-            VMError::NoritoInvalid | VMError::MemoryAccessViolation { .. }
+            VMError::Trap(VmTrap::NoritoInvalid)
+                | VMError::Trap(VmTrap::MemoryAccessViolation { .. })
         ));
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
         vm.set_register(10, Memory::OUTPUT_START);
@@ -6598,17 +6646,17 @@ mod tests {
             let mut host = DefaultHost::new();
             assert!(matches!(
                 host.prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, vm.syscall_quote()),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert!(matches!(
                 host.syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!(vm.register(10), message);
             let mut sm_host = DefaultHost::new();
             assert!(matches!(
                 sm_host.syscall(syscalls::SYSCALL_SM2_VERIFY, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
             assert_eq!(vm.register(10), message);
         }
@@ -6643,7 +6691,7 @@ mod tests {
         let error = vm
             .run_with_host(&mut host)
             .expect_err("the quote is one gas beyond the post-SCALL budget");
-        assert!(matches!(error, VMError::OutOfGas));
+        assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
         assert_eq!(vm.register(10), message);
         assert_eq!(vm.register(11), signature);
         assert_eq!(vm.register(12), public_key);
@@ -6686,7 +6734,7 @@ mod tests {
         assert!(matches!(
             DefaultHost::new()
                 .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, vm.syscall_quote()),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         vm.set_register(10, crate::parallel::REGISTER_COUNT as u64);
         assert!(matches!(
@@ -6694,7 +6742,7 @@ mod tests {
                 syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT,
                 vm.syscall_quote()
             ),
-            Err(VMError::RegisterOutOfBounds)
+            Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
         ));
     }
     #[test]
@@ -6725,14 +6773,14 @@ mod tests {
         let error = host
             .prepare_syscall(syscalls::SYSCALL_SM3_HASH, vm.syscall_quote())
             .expect_err("SM quoting validates the input even on a new host");
-        assert!(!matches!(error, VMError::PermissionDenied));
+        assert!(!matches!(error, VMError::Trap(VmTrap::PermissionDenied)));
         assert_eq!(
             (host.prepare_syscall(syscalls::SYSCALL_REGISTER_DOMAIN, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             MUTATION_GAS
         );
         assert!(
-            matches!(host.prepare_syscall(0xffff_fffe, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xffff_fffe))
+            matches!(host.prepare_syscall(0xffff_fffe, vm.syscall_quote()), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xffff_fffe))
         );
     }
     #[test]
@@ -6900,7 +6948,7 @@ mod tests {
         vm.set_register(10, malformed_pointer);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let unowned = test_tlv(PointerType::Blob, b"unowned");
         let unowned_pointer = Memory::HEAP_START + 0x10_000;
@@ -6909,7 +6957,7 @@ mod tests {
         vm.set_register(10, unowned_pointer);
         assert!(matches!(
             host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, vm.syscall_quote()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), unowned_pointer);
     }
@@ -6934,7 +6982,7 @@ mod tests {
         assert!(
             matches!(
                 vm.ensure_public_tlv_register(10),
-                Err(VMError::PrivacyViolation)
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
             ),
             "the host must mark the complete private-input envelope as private memory"
         );

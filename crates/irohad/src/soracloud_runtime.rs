@@ -109,6 +109,7 @@ use iroha_torii::sorafs::{
     api::StorageManifestResponseDto,
     site::{decode_content_cid, encode_content_cid},
 };
+use ivm::error::{VmDeferral, VmErrorRef, VmTrap};
 use ivm::{
     CoreHost, IVM, IVMHost, Memory, PointerType, PreparedArgumentRecord, PreparedContract,
     RuntimeTemplate, VMError,
@@ -2771,7 +2772,7 @@ struct SoracloudIvmHost {
 impl SoracloudIvmHost {
     fn ensure_syscall_available(number: u32) -> Result<(), VMError> {
         if ivm_syscalls::is_axt_syscall(number) {
-            return Err(VMError::UnknownSyscall(number));
+            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
         }
         Ok(())
     }
@@ -2832,7 +2833,7 @@ impl SoracloudIvmHost {
         } else {
             Err(VMError::metered(
                 ivm::gas::G_SORACLOUD,
-                VMError::PermissionDenied,
+                VMError::Trap(VmTrap::PermissionDenied),
             ))
         }
     }
@@ -2863,10 +2864,10 @@ impl SoracloudIvmHost {
         if actual != expected {
             return Err(VMError::metered(
                 request_gas,
-                VMError::AbiTypeNotAllowed {
+                VMError::Trap(VmTrap::AbiTypeNotAllowed {
                     abi: vm.abi_version(),
                     type_id: actual as u16,
-                },
+                }),
             ));
         }
         Ok(request_bytes)
@@ -2900,7 +2901,7 @@ impl SoracloudIvmHost {
         let minimum = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         let available = vm.reserve_available_syscall_gas()?;
         if available < minimum {
-            return Err(VMError::metered(available, VMError::OutOfGas));
+            return Err(VMError::metered(available, VMError::Trap(VmTrap::OutOfGas)));
         }
         Ok(available)
     }
@@ -2912,7 +2913,7 @@ impl SoracloudIvmHost {
     ) -> Result<(), VMError> {
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         let response_bytes = soracloud_response_encoded_len_bound(operation, shape)
-            .ok_or_else(|| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .ok_or_else(|| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         let gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, response_bytes);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)
     }
@@ -2929,17 +2930,17 @@ impl SoracloudIvmHost {
         if tlv.type_id != PointerType::SoracloudRequest {
             return Err(VMError::metered(
                 request_gas,
-                VMError::AbiTypeNotAllowed {
+                VMError::Trap(VmTrap::AbiTypeNotAllowed {
                     abi: vm.abi_version(),
                     type_id: tlv.type_id_raw(),
-                },
+                }),
             ));
         }
         let envelope = norito::decode_from_bytes::<SoracloudHostRequestEnvelopeV1>(tlv.payload)
-            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         envelope
             .validate()
-            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         if envelope.operation != expected_operation {
             return Err(VMError::metered_not_implemented(request_gas, syscall));
         }
@@ -2967,10 +2968,10 @@ impl SoracloudIvmHost {
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         envelope
             .validate()
-            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let payload_bytes = norito::to_bytes(&envelope)
-            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         let gas =
             ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, payload_bytes.len());
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -2990,7 +2991,7 @@ impl SoracloudIvmHost {
             .state_bindings
             .iter()
             .find(|binding| binding.binding_name == *binding_name)
-            .ok_or(VMError::PermissionDenied)
+            .ok_or(VMError::Trap(VmTrap::PermissionDenied))
     }
     fn state_entry_key(binding_name: &Name, state_key: &str) -> (String, String) {
         (binding_name.to_string(), state_key.to_owned())
@@ -3015,65 +3016,65 @@ impl SoracloudIvmHost {
             .capabilities
             .allow_state_writes
         {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if request.state_key.trim().is_empty() || !request.state_key.starts_with('/') {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let binding = self.binding(&request.binding_name)?.clone();
         if !request.state_key.starts_with(&binding.key_prefix) {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         if binding.encryption != request.encryption {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let binding_name = request.binding_name.to_string();
         let current_size = self.current_entry_size(&request.binding_name, &request.state_key);
         match request.operation {
             SoraStateMutationOperationV1::Upsert => {
                 let Some(payload) = request.payload.as_ref() else {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 };
-                let payload_bytes =
-                    u64::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+                let payload_bytes = u64::try_from(payload.len())
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
                 if payload_bytes == 0 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if request
                     .payload_bytes
                     .is_some_and(|declared| declared != payload_bytes)
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 let payload_commitment = Hash::new(payload);
                 if request
                     .payload_commitment
                     .is_some_and(|declared| declared != payload_commitment)
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if payload_bytes > binding.max_item_bytes.get() {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 if !matches!(
                     binding.mutability,
                     iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
                         | iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite
                 ) {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 if binding.mutability
                     == iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
                     && current_size > 0
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let current_total = self.binding_totals.get(&binding_name).copied().unwrap_or(0);
                 let next_total = current_total
                     .saturating_sub(current_size)
                     .saturating_add(payload_bytes);
                 if next_total > binding.max_total_bytes.get() {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 self.binding_totals.insert(binding_name.clone(), next_total);
                 self.committed_entries.insert(
@@ -3088,7 +3089,7 @@ impl SoracloudIvmHost {
                         encryption: request.encryption,
                         payload: payload.clone(),
                         payload_bytes: std::num::NonZeroU64::new(payload_bytes)
-                            .ok_or(VMError::NoritoInvalid)?,
+                            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?,
                         payload_commitment,
                         fhe_public_key_digest: None,
                         fhe_residual_multiple_bound: None,
@@ -3104,12 +3105,12 @@ impl SoracloudIvmHost {
                     || request.payload.is_some()
                     || request.payload_commitment.is_some()
                 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 if binding.mutability
                     != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite
                 {
-                    return Err(VMError::PermissionDenied);
+                    return Err(VMError::Trap(VmTrap::PermissionDenied));
                 }
                 let current_total = self.binding_totals.get(&binding_name).copied().unwrap_or(0);
                 self.binding_totals.insert(
@@ -3210,10 +3211,10 @@ impl SoracloudIvmHost {
         self.record_metering_query();
         if let Some(config) = self.request.deployment.service_configs.get(key) {
             let bytes = config.value_json.get().as_bytes();
-            if u64::try_from(bytes.len()).map_err(|_| VMError::PermissionDenied)?
+            if u64::try_from(bytes.len()).map_err(|_| VMError::Trap(VmTrap::PermissionDenied))?
                 > SORACLOUD_HOST_VARIABLE_RESPONSE_MAX_BYTES
             {
-                return Err(VMError::PermissionDenied);
+                return Err(VMError::Trap(VmTrap::PermissionDenied));
             }
             return Ok(Some(bytes.to_vec()));
         }
@@ -3231,7 +3232,7 @@ impl SoracloudIvmHost {
         ) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(VMError::PermissionDenied),
+            Err(_) => Err(VMError::Trap(VmTrap::PermissionDenied)),
         }
     }
     fn read_service_config(
@@ -3267,14 +3268,20 @@ impl SoracloudIvmHost {
         let request_bytes = tlv.payload.len();
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         if tlv.type_id != PointerType::Name {
-            return Err(VMError::metered(request_gas, VMError::NoritoInvalid));
+            return Err(VMError::metered(
+                request_gas,
+                VMError::Trap(VmTrap::NoritoInvalid),
+            ));
         }
         let name: Name = norito::decode_from_bytes(tlv.payload)
-            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+            .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         #[cfg(test)]
         self.record_metering_query();
         let Some(bytes) = self.public_inputs.get(&name) else {
-            return Err(VMError::metered(request_gas, VMError::PermissionDenied));
+            return Err(VMError::metered(
+                request_gas,
+                VMError::Trap(VmTrap::PermissionDenied),
+            ));
         };
         let gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, bytes.len());
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -3403,7 +3410,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 #[cfg(test)]
@@ -3445,7 +3452,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 Self::preflight_response_shape(
@@ -3476,7 +3483,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 Self::preflight_response_shape(
@@ -3509,7 +3516,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::AppendJournal(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 self.require_mutating_runtime(number).map_err(|err| {
@@ -3547,7 +3554,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 self.require_mutating_runtime(number).map_err(|err| {
@@ -3582,7 +3589,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::ReadConfig(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 let response = self
@@ -3617,7 +3624,7 @@ impl IVMHost for SoracloudIvmHost {
                 let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = payload else {
                     return Err(VMError::metered(
                         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
-                        VMError::NoritoInvalid,
+                        VMError::Trap(VmTrap::NoritoInvalid),
                     ));
                 };
                 let response = self.read_service_secret_envelope(&request.secret_name);
@@ -9190,11 +9197,11 @@ fn local_read_request_metadata_tlv_bytes(
     })
 }
 fn public_input_name(name: &str) -> Result<Name, VMError> {
-    Name::from_str(name).map_err(|_| VMError::NoritoInvalid)
+    Name::from_str(name).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 fn public_input_int_tlv(value: u64) -> Result<Vec<u8>, VMError> {
     let ivm::EntrypointValueAtomV1::Pointer(bytes) = soracloud_integer_atom(value)? else {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     };
     Ok(bytes)
 }
@@ -9210,9 +9217,10 @@ fn pointer_tlv_payload(tlv_bytes: &[u8]) -> &[u8] {
     ivm::pointer_abi::validate_tlv_bytes(tlv_bytes).map_or(tlv_bytes, |tlv| tlv.payload)
 }
 fn json_value_from_tlv(tlv_bytes: &[u8]) -> Result<norito::json::Value, VMError> {
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(tlv_bytes).map_err(|_| VMError::DecodeError)?;
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(tlv_bytes)
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if tlv.type_id != PointerType::Json {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let json = soracloud_codec_attempt(|| norito::decode_canonical::<Json>(tlv.payload))?;
     soracloud_codec_attempt(|| json.try_into_any_norito::<norito::json::Value>())
@@ -9303,19 +9311,22 @@ fn soracloud_codec_attempt<T>(
     operation: impl FnOnce() -> Result<T, norito::Error>,
 ) -> Result<T, VMError> {
     norito::core::classify_decode_attempt(operation).map_err(|error| match error.kind() {
-        norito::core::DecodeAttemptErrorKind::Allocator => {
-            VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
-        }
-        norito::core::DecodeAttemptErrorKind::EnclosingLimit => {
-            VMError::ExecutionDeferred(ivm::ExecutionDeferral::ActiveMemoryCapacity)
-        }
-        norito::core::DecodeAttemptErrorKind::Invalid => VMError::DecodeError,
+        norito::core::DecodeAttemptErrorKind::Allocator => VMError::Deferred(
+            VmDeferral::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable),
+        ),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit => VMError::Deferred(
+            VmDeferral::ExecutionDeferred(ivm::ExecutionDeferral::ActiveMemoryCapacity),
+        ),
+        norito::core::DecodeAttemptErrorKind::Invalid => VMError::Trap(VmTrap::DecodeError),
     })
 }
 fn soracloud_copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, VMError> {
     let mut copy = Vec::new();
-    copy.try_reserve_exact(bytes.len())
-        .map_err(|_| VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable))?;
+    copy.try_reserve_exact(bytes.len()).map_err(|_| {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::ExecutionDeferral::AllocationUnavailable,
+        ))
+    })?;
     copy.extend_from_slice(bytes);
     Ok(copy)
 }
@@ -9325,17 +9336,19 @@ fn soracloud_canonical_frame<T: norito::NoritoSerialize>(
 ) -> Result<Vec<u8>, VMError> {
     let size = soracloud_codec_attempt(|| norito::canonical_frame_len(value))?;
     if size > maximum {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(size)
-        .map_err(|_| VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable))?;
+    bytes.try_reserve_exact(size).map_err(|_| {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::ExecutionDeferral::AllocationUnavailable,
+        ))
+    })?;
     bytes.resize(size, 0);
     let mut writer = std::io::Cursor::new(bytes.as_mut_slice());
     soracloud_codec_attempt(|| norito::core::write_canonical_to_writer(value, &mut writer))?;
     if writer.position() != size as u64 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(bytes)
 }
@@ -9366,7 +9379,7 @@ fn soracloud_output_kind(
         Some([EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Blob)]) => {
             Ok(SoracloudOutputKind::Blob)
         }
-        _ => Err(VMError::DecodeError),
+        _ => Err(VMError::Trap(VmTrap::DecodeError)),
     }
 }
 fn soracloud_integer_atom(value: u64) -> Result<ivm::EntrypointValueAtomV1, VMError> {
@@ -9387,28 +9400,30 @@ fn prepare_soracloud_invocation(
 ) -> Result<(Option<PreparedArgumentRecord>, SoracloudOutputKind), VMError> {
     let entrypoint = contract
         .entrypoint_descriptor(entrypoint_name)
-        .ok_or(VMError::PermissionDenied)?;
+        .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
     let output_kind = soracloud_output_kind(entrypoint.return_schema.as_ref())?;
     vm.select_entrypoint(entrypoint_name)?;
     let Some(schema) = entrypoint.argument_schema.as_ref() else {
         return Ok((None, output_kind));
     };
     if !schema.validate() || schema.fields.len() > 4 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut atoms = Vec::new();
-    atoms
-        .try_reserve_exact(schema.fields.len())
-        .map_err(|_| VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable))?;
+    atoms.try_reserve_exact(schema.fields.len()).map_err(|_| {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::ExecutionDeferral::AllocationUnavailable,
+        ))
+    })?;
     for field in &schema.fields {
         let atom = match (field.name.as_str(), field.ty.nodes.as_slice()) {
             ("_request_body", [EntrypointValueTypeNodeV1::Leaf(kind)]) => {
                 let body = ivm::pointer_abi::validate_tlv_bytes(input.body_tlv)
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 if input.body_tlv.len()
                     > iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let bytes = match kind {
                     EntrypointValueKindV1::Blob if body.type_id == PointerType::Blob => {
@@ -9420,27 +9435,33 @@ fn prepare_soracloud_invocation(
                     EntrypointValueKindV1::Json if body.type_id == PointerType::Json => {
                         soracloud_copy_bytes(input.body_tlv)?
                     }
-                    _ => return Err(VMError::DecodeError),
+                    _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                 };
                 ivm::EntrypointValueAtomV1::Pointer(bytes)
             }
             ("_request_meta", [EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Json)]) => {
-                let metadata = input.metadata_tlv.ok_or(VMError::DecodeError)?;
+                let metadata = input
+                    .metadata_tlv
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if metadata.len()
                     > iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 ivm::EntrypointValueAtomV1::Pointer(soracloud_copy_bytes(metadata)?)
             }
             (
                 "execution_sequence",
                 [EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)],
-            ) => soracloud_integer_atom(input.execution_sequence.ok_or(VMError::DecodeError)?)?,
+            ) => soracloud_integer_atom(
+                input
+                    .execution_sequence
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            )?,
             ("observed_height", [EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)]) => {
                 soracloud_integer_atom(input.observed_height)?
             }
-            _ => return Err(VMError::DecodeError),
+            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
         };
         atoms.push(atom);
     }
@@ -9531,7 +9552,7 @@ fn decode_vm_output(
         .map_err(|error| invalid_table(&error))?
         != 1
     {
-        return Err(invalid_table(&VMError::DecodeError));
+        return Err(invalid_table(&VMError::Trap(VmTrap::DecodeError)));
     }
     let response_ptr = vm
         .public_call_result_word(0)
@@ -9540,7 +9561,7 @@ fn decode_vm_output(
         return if response_ptr == 0 {
             Ok((Vec::new(), None))
         } else {
-            Err(invalid_table(&VMError::DecodeError))
+            Err(invalid_table(&VMError::Trap(VmTrap::DecodeError)))
         };
     }
     let tlv = vm.validate_tlv(response_ptr).map_err(|error| {
@@ -11360,65 +11381,79 @@ fn make_pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 fn vm_error_label(error: &VMError) -> &'static str {
     match error.as_unmetered() {
-        VMError::ExecutionDeferred(_) => "execution_deferred",
-        VMError::AllocationDeferred(_) => "allocation_deferred",
-        VMError::AllocatorDeferred(_) => "allocator_deferred",
-        VMError::DecodeDeferred(_) => "decode_deferred",
-        VMError::VerificationDeferred(_) => "verification_deferred",
-        VMError::OutOfGas => "out_of_gas",
-        VMError::OutOfMemory => "out_of_memory",
-        VMError::MemoryAccessViolation { .. } => "memory_access_violation",
-        VMError::MisalignedAccess { .. } => "misaligned_access",
-        VMError::MemoryOutOfBounds => "memory_out_of_bounds",
-        VMError::DecodeError => "decode_error",
-        VMError::InvalidOpcode(_) => "invalid_opcode",
-        VMError::UnknownSyscall(_) => "unknown_syscall",
-        VMError::HostUnavailable => "host_unavailable",
-        VMError::NotImplemented { .. } => "not_implemented",
-        VMError::SyscallGasQuoteExceeded { .. } => "syscall_gas_quote_exceeded",
-        VMError::SyscallMeteringModeMismatch { .. } => "syscall_metering_mode_mismatch",
-        VMError::GasCostOverflow => "gas_cost_overflow",
-        VMError::SyscallOutOfGas { .. } => "syscall_out_of_gas",
-        VMError::NumericFault(_) => "numeric_fault",
-        VMError::RegisterIntegerOverflow => "register_integer_overflow",
-        VMError::PointerAbiFault(_) => "pointer_abi_fault",
-        VMError::AssertionFailed => "assertion_failed",
-        VMError::ContractAbort { .. } => "contract_abort",
-        VMError::ExceededMaxCycles => "exceeded_max_cycles",
-        VMError::InvalidMetadata => "invalid_metadata",
-        VMError::UnsupportedProgramVersion { .. } => "unsupported_program_version",
-        VMError::UnsupportedProgramFeatureBits { .. } => "unsupported_program_feature_bits",
-        VMError::UnsupportedProgramAbiVersion { .. } => "unsupported_program_abi_version",
-        VMError::MissingMaxCycles => "missing_max_cycles",
-        VMError::MaxCyclesWithoutZk { .. } => "max_cycles_without_zk",
-        VMError::ProgramVectorLengthTooLarge { .. } => "program_vector_length_too_large",
-        VMError::ArtifactAbiHashMismatch { .. } => "artifact_abi_hash_mismatch",
-        VMError::GenericSyscallNotAllowed { .. } => "generic_syscall_not_allowed",
-        VMError::InvalidVectorLength { .. } => "invalid_vector_length",
-        VMError::MissingHalt => "missing_halt",
-        VMError::VectorExtensionDisabled => "vector_disabled",
-        VMError::ZkExtensionDisabled => "zk_disabled",
-        VMError::NullifierAlreadyUsed => "nullifier_used",
-        VMError::PermissionDenied => "permission_denied",
-        VMError::PrivacyViolation => "privacy_violation",
-        VMError::ReentrantCall => "reentrant_call",
-        VMError::ControlFlowViolation => "control_flow_violation",
-        VMError::CallDepthExceeded => "call_depth_exceeded",
-        VMError::RegisterOutOfBounds => "register_out_of_bounds",
-        VMError::NoritoInvalid => "norito_invalid",
-        VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
-        VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",
-        VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
-        VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
+        VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(_)) => "execution_deferred",
+        VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_)) => "allocation_deferred",
+        VmErrorRef::Deferred(VmDeferral::AllocatorDeferred(_)) => "allocator_deferred",
+        VmErrorRef::Deferred(VmDeferral::DecodeDeferred(_)) => "decode_deferred",
+        VmErrorRef::Deferred(VmDeferral::VerificationDeferred(_)) => "verification_deferred",
+        VmErrorRef::Trap(VmTrap::OutOfGas) => "out_of_gas",
+        VmErrorRef::Trap(VmTrap::OutOfMemory) => "out_of_memory",
+        VmErrorRef::Trap(VmTrap::MemoryAccessViolation { .. }) => "memory_access_violation",
+        VmErrorRef::Trap(VmTrap::MisalignedAccess { .. }) => "misaligned_access",
+        VmErrorRef::Trap(VmTrap::MemoryOutOfBounds) => "memory_out_of_bounds",
+        VmErrorRef::Trap(VmTrap::DecodeError) => "decode_error",
+        VmErrorRef::Trap(VmTrap::InvalidOpcode(_)) => "invalid_opcode",
+        VmErrorRef::Trap(VmTrap::UnknownSyscall(_)) => "unknown_syscall",
+        VmErrorRef::Deferred(VmDeferral::HostUnavailable) => "host_unavailable",
+        VmErrorRef::Trap(VmTrap::NotImplemented { .. }) => "not_implemented",
+        VmErrorRef::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. }) => {
+            "syscall_gas_quote_exceeded"
+        }
+        VmErrorRef::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => {
+            "syscall_metering_mode_mismatch"
+        }
+        VmErrorRef::Trap(VmTrap::GasCostOverflow) => "gas_cost_overflow",
+        VmErrorRef::Trap(VmTrap::SyscallOutOfGas { .. }) => "syscall_out_of_gas",
+        VmErrorRef::Trap(VmTrap::NumericFault(_)) => "numeric_fault",
+        VmErrorRef::Trap(VmTrap::RegisterIntegerOverflow) => "register_integer_overflow",
+        VmErrorRef::Trap(VmTrap::PointerAbiFault(_)) => "pointer_abi_fault",
+        VmErrorRef::Trap(VmTrap::AssertionFailed) => "assertion_failed",
+        VmErrorRef::Trap(VmTrap::ContractAbort { .. }) => "contract_abort",
+        VmErrorRef::Trap(VmTrap::ExceededMaxCycles) => "exceeded_max_cycles",
+        VmErrorRef::Trap(VmTrap::InvalidMetadata) => "invalid_metadata",
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramVersion { .. }) => "unsupported_program_version",
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramFeatureBits { .. }) => {
+            "unsupported_program_feature_bits"
+        }
+        VmErrorRef::Trap(VmTrap::UnsupportedProgramAbiVersion { .. }) => {
+            "unsupported_program_abi_version"
+        }
+        VmErrorRef::Trap(VmTrap::MissingMaxCycles) => "missing_max_cycles",
+        VmErrorRef::Trap(VmTrap::MaxCyclesWithoutZk { .. }) => "max_cycles_without_zk",
+        VmErrorRef::Trap(VmTrap::ProgramVectorLengthTooLarge { .. }) => {
+            "program_vector_length_too_large"
+        }
+        VmErrorRef::Trap(VmTrap::ArtifactAbiHashMismatch { .. }) => "artifact_abi_hash_mismatch",
+        VmErrorRef::Trap(VmTrap::GenericSyscallNotAllowed { .. }) => "generic_syscall_not_allowed",
+        VmErrorRef::Trap(VmTrap::InvalidVectorLength { .. }) => "invalid_vector_length",
+        VmErrorRef::Trap(VmTrap::MissingHalt) => "missing_halt",
+        VmErrorRef::Trap(VmTrap::VectorExtensionDisabled) => "vector_disabled",
+        VmErrorRef::Trap(VmTrap::ZkExtensionDisabled) => "zk_disabled",
+        VmErrorRef::Trap(VmTrap::NullifierAlreadyUsed) => "nullifier_used",
+        VmErrorRef::Trap(VmTrap::PermissionDenied) => "permission_denied",
+        VmErrorRef::Trap(VmTrap::PrivacyViolation) => "privacy_violation",
+        VmErrorRef::Trap(VmTrap::ReentrantCall) => "reentrant_call",
+        VmErrorRef::Trap(VmTrap::ControlFlowViolation) => "control_flow_violation",
+        VmErrorRef::Trap(VmTrap::CallDepthExceeded) => "call_depth_exceeded",
+        VmErrorRef::Trap(VmTrap::RegisterOutOfBounds) => "register_out_of_bounds",
+        VmErrorRef::Trap(VmTrap::NoritoInvalid) => "norito_invalid",
+        VmErrorRef::Trap(VmTrap::AbiTypeNotAllowed { .. }) => "abi_type_not_allowed",
+        VmErrorRef::Trap(VmTrap::HostOutputBudgetExceeded { .. }) => "host_output_budget_exceeded",
+        VmErrorRef::Trap(VmTrap::AmxBudgetExceeded { .. }) => "amx_budget_exceeded",
+        VmErrorRef::Trap(VmTrap::Metered { .. }) => {
+            unreachable!("as_unmetered peels metered wrappers")
+        }
     }
 }
 fn vm_error_kind(error: &VMError) -> SoracloudRuntimeExecutionErrorKind {
     match error.as_unmetered() {
-        VMError::ExecutionDeferred(_)
-        | VMError::AllocationDeferred(_)
-        | VMError::AllocatorDeferred(_)
-        | VMError::DecodeDeferred(_)
-        | VMError::VerificationDeferred(_) => SoracloudRuntimeExecutionErrorKind::Unavailable,
+        VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(_))
+        | VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_))
+        | VmErrorRef::Deferred(VmDeferral::AllocatorDeferred(_))
+        | VmErrorRef::Deferred(VmDeferral::DecodeDeferred(_))
+        | VmErrorRef::Deferred(VmDeferral::VerificationDeferred(_)) => {
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        }
         _ => SoracloudRuntimeExecutionErrorKind::Internal,
     }
 }
@@ -11453,12 +11488,12 @@ fn persist_staged_runtime_artifact(
 }
 fn sanitized_relative_material_path(key: &str) -> Result<PathBuf, VMError> {
     if key.trim().is_empty() {
-        return Err(VMError::PermissionDenied);
+        return Err(VMError::Trap(VmTrap::PermissionDenied));
     }
     let mut path = PathBuf::new();
     for component in key.split('/') {
         if component.is_empty() || matches!(component, "." | "..") {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         path.push(storage_path_component(component));
     }

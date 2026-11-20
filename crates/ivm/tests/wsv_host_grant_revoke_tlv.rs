@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -122,5 +123,8 @@ fn grant_revoke_permission_with_tlv() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8);
     vm.load_program(&prog_bal).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

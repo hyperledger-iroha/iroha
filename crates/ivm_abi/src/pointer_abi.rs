@@ -19,6 +19,7 @@
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{SyscallPolicy, error::VMError};
 use std::{cell::Cell, collections::HashSet, marker::PhantomData, rc::Rc, sync::OnceLock};
 /// Known pointer-ABI types.
@@ -134,18 +135,21 @@ impl<'a> core::fmt::Debug for Tlv<'a> {
 /// Encode the sole canonical V1 pointer envelope over the exact payload bytes.
 ///
 /// # Errors
-/// Rejects an unrepresentable payload or total length with [`VMError::NoritoInvalid`].
+/// Rejects an unrepresentable payload or total length with [`crate::error::VmTrap::NoritoInvalid`].
 /// Native reservation failure retains the local
 /// `ExecutionDeferred::AllocationUnavailable` result.
 pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMError> {
-    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let total = 7usize
         .checked_add(payload.len())
         .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| {
-        VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::AllocationUnavailable,
+        ))
     })?;
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
@@ -158,20 +162,20 @@ pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, 
 /// its payload. The slice must contain the full header, payload, and hash.
 pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     if bytes.len() < 7 + iroha_crypto::Hash::LENGTH {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let type_id = u16::from_be_bytes([bytes[0], bytes[1]]);
     let version = bytes[2];
     if version != 1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let len = u32::from_be_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]) as usize;
     let total = 7usize
         .checked_add(len)
         .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if bytes.len() != total {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let payload = &bytes[7..7 + len];
     let hash_bytes = &bytes[7 + len..total];
@@ -179,9 +183,9 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     expected_hash.copy_from_slice(hash_bytes);
     let computed: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
     if expected_hash != computed {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::NoritoInvalid)?;
+    let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok(Tlv {
         type_id: tlv_type,
         version,
@@ -310,6 +314,7 @@ pub fn render_pointer_types_markdown_table() -> String {
 #[cfg(test)]
 mod tests {
 
+    use crate::error::VmTrap;
     #[test]
     fn canonical_tlv_producer_preserves_exact_v1_bytes_for_all_payload_boundaries() {
         for len in [0usize, 1, 31, 32, 33, 255, 256, 4096] {
@@ -405,13 +410,13 @@ mod tests {
         truncated.pop();
         assert!(matches!(
             validate_tlv_bytes(&truncated),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut trailing = envelope;
         trailing.push(0);
         assert!(matches!(
             validate_tlv_bytes(&trailing),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -426,7 +431,7 @@ mod tests {
             envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
             assert!(matches!(
                 validate_tlv_bytes(&envelope),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }

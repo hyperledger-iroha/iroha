@@ -1,5 +1,6 @@
 //! Operations available to the host body after the VM reserves syscall gas.
 
+use crate::error::VmTrap;
 use crate::{IVM, Memory, VMError};
 use iroha_crypto::{CompactMerkleProof, HashOf, MerkleTree};
 
@@ -31,7 +32,7 @@ impl SyscallContext for IVM {
             .stack_top()
             .saturating_add(crate::Memory::STACK_SLOP);
         if addr >= max_addr {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let dest = self.syscall_quote().public_register(11)?;
         let root_out = self.syscall_quote().public_register(12)?;
@@ -53,7 +54,7 @@ impl SyscallContext for IVM {
             .stack_top()
             .saturating_add(crate::Memory::STACK_SLOP);
         if addr >= max_addr {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let dest = self.syscall_quote().public_register(11)?;
         let depth_cap_raw = self.syscall_quote().public_register(12)?;
@@ -71,9 +72,10 @@ impl SyscallContext for IVM {
 
     fn write_compact_register_merkle_path(&mut self) -> Result<usize, VMError> {
         let idx_raw = self.syscall_quote().public_register(10)?;
-        let idx = usize::try_from(idx_raw).map_err(|_| VMError::RegisterOutOfBounds)?;
+        let idx =
+            usize::try_from(idx_raw).map_err(|_| VMError::Trap(VmTrap::RegisterOutOfBounds))?;
         if idx >= crate::parallel::REGISTER_COUNT {
-            return Err(VMError::RegisterOutOfBounds);
+            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
         }
         let dest = self.syscall_quote().public_register(11)?;
         let depth_cap_raw = self.syscall_quote().public_register(12)?;
@@ -116,6 +118,7 @@ fn write_compact_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn merkle_outputs_check_public_destination_before_emitting_any_proof() {
@@ -129,7 +132,10 @@ mod tests {
             IVM::write_compact_memory_merkle_path,
             IVM::write_compact_register_merkle_path,
         ] {
-            assert!(matches!(write(&mut vm), Err(VMError::PrivacyViolation)));
+            assert!(matches!(
+                write(&mut vm),
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
+            ));
             assert_eq!(vm.memory.load_u64(Memory::OUTPUT_START).unwrap(), 0);
             assert_eq!(vm.register(10), 0);
         }

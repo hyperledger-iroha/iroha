@@ -12,6 +12,7 @@ use ivm::{
     },
     host::DefaultHost,
 };
+use ivm_abi::error::VmTrap;
 
 fn interpreter_statement(
     opcode: u8,
@@ -54,12 +55,24 @@ fn interpreter_statement(
     vm.set_register(left_register.into(), left);
     vm.set_register(right_register.into(), right);
     assert!(matches!(
-        (&(vm.set_program_counter(2)), &(ivm::VMError::DecodeError)),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            &(vm.set_program_counter(2)),
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
+        ),
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     assert!(matches!(
-        (&(vm.set_program_counter(12)), &(ivm::VMError::DecodeError)),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            &(vm.set_program_counter(12)),
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
+        ),
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     vm.set_program_counter(branch_pc).unwrap();
     vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder)

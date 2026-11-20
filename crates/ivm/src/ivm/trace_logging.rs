@@ -9,6 +9,7 @@
 #[cfg(test)]
 use super::zk;
 use super::{IVM, IvmEngine, TraceMode, VMError, completed_instruction_cycles};
+use crate::error::VmDeferral;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, AllocationScope};
 
 mod change_counts;
@@ -60,9 +61,9 @@ impl InvocationTrace {
         if self.owns(vm) {
             Ok(())
         } else {
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            ))
+            )))
         }
     }
     fn discard_unobserved(&self, vm: &mut IVM) {
@@ -152,9 +153,9 @@ impl IVM {
         if invocation.cycles && invocation.engine == IvmEngine::Baseline {
             // Completed-cycle proof traces are C10 rows; the baseline producer is not
             // reconstructed (`run_baseline` refuses it first), so never record C10 rows here.
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            ));
+            )));
         }
         if invocation.cycles {
             // Every completed cycle records the memory root. Allocate its Merkle
@@ -382,7 +383,9 @@ impl IVM {
 }
 
 fn overflow() -> VMError {
-    VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        AllocationRefusal::DemandOverflow,
+    ))
 }
 
 #[cfg(test)]

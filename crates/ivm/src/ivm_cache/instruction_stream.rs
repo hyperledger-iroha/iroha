@@ -1,6 +1,7 @@
 //! Borrowed canonical instruction geometry for allocation-free inspection.
 
 use super::DecodedOp;
+use crate::error::VmTrap;
 
 /// A validated immutable instruction slice whose iteration needs no decoded storage.
 #[derive(Clone, Copy)]
@@ -15,7 +16,7 @@ impl<'a> ValidatedInstructions<'a> {
     /// Returns the original stream-boundary or decoder error before any consumer runs.
     pub fn new(code: &'a [u8]) -> Result<Self, crate::VMError> {
         if (code.len() as u64) > crate::memory::Memory::HEAP_START {
-            return Err(crate::VMError::MemoryOutOfBounds);
+            return Err(crate::VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         for index in 0..code.len().div_ceil(4) {
             crate::decoder::decode_slice(code, (index as u64) * 4)?;
@@ -52,6 +53,7 @@ impl<'a> ValidatedInstructions<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
 
     #[test]
     fn borrowed_scan_matches_decoded_storage_and_all_boundary_failures() {
@@ -69,8 +71,8 @@ mod tests {
                     assert!(scan.iter().eq(decoded.iter().copied()));
                 }
                 (
-                    Err(crate::VMError::MemoryAccessViolation { addr: a, perm: p }),
-                    Err(crate::VMError::MemoryAccessViolation { addr: b, perm: q }),
+                    Err(crate::VMError::Trap(VmTrap::MemoryAccessViolation { addr: a, perm: p })),
+                    Err(crate::VMError::Trap(VmTrap::MemoryAccessViolation { addr: b, perm: q })),
                 ) => {
                     assert_eq!((a, p), (b, q));
                     assert_eq!(

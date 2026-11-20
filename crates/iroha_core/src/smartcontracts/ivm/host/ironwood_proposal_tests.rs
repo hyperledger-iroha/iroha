@@ -129,11 +129,14 @@ fn ironwood_host_proposal_publication_preserves_old_and_opaque_rows() {
 
 #[test]
 fn ironwood_opaque_host_decoders_preserve_predecessor_vm_errors() {
-    use iroha_data_model::{
-        isi::privacy::SchedulePrivacyIronwoodLimitsUpdateV1,
-    };
+    use iroha_data_model::isi::privacy::SchedulePrivacyIronwoodLimitsUpdateV1;
     let authority = fixture_account("alice");
-    let instruction: InstructionBox = SchedulePrivacyIronwoodLimitsUpdateV1::new(100, iroha_data_model::privacy::OrchardLimitsV1 { max_action_count: iroha_data_model::privacy::ORCHARD_MAX_ACTIONS_V1 })
+    let instruction: InstructionBox = SchedulePrivacyIronwoodLimitsUpdateV1::new(
+        100,
+        iroha_data_model::privacy::OrchardLimitsV1 {
+            max_action_count: iroha_data_model::privacy::ORCHARD_MAX_ACTIONS_V1,
+        },
+    )
     .into();
     for activated in [false, true] {
         let mut world = World::default();
@@ -157,12 +160,12 @@ fn ironwood_opaque_host_decoders_preserve_predecessor_vm_errors() {
         let result = host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm);
         if activated {
             assert!(
-                matches!(result, Err(ivm::VMError::PermissionDenied)),
+                matches!(result, Err(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                 "{result:?}"
             );
         } else {
             assert!(
-                matches!(result, Err(ivm::VMError::NoritoInvalid)),
+                matches!(result, Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
                 "{result:?}"
             );
         }
@@ -186,7 +189,7 @@ fn ironwood_opaque_host_decoders_preserve_predecessor_vm_errors() {
             assert_eq!(host.queued.len(), 1);
         } else {
             assert!(
-                matches!(result, Err(ivm::VMError::DecodeError)),
+                matches!(result, Err(ivm::VMError::Trap(VmTrap::DecodeError))),
                 "{result:?}"
             );
             assert!(host.queued.is_empty());
@@ -206,7 +209,7 @@ fn ironwood_host_without_committed_selection_refuses_instead_of_assuming_baselin
     vm.set_register(10, ptr);
     assert!(matches!(
         host.decode_opaque_instruction(&vm),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     let trigger = Trigger::new(
         "ironwood_requires_selection".parse().unwrap(),
@@ -223,7 +226,7 @@ fn ironwood_host_without_committed_selection_refuses_instead_of_assuming_baselin
     vm.set_register(10, ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_CREATE_TRIGGER, &mut vm),
-        Err(ivm::VMError::PermissionDenied)
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(host.queued.is_empty());
 }
@@ -295,7 +298,7 @@ fn ironwood_custom_trigger_sccp_preflight_uses_compiled_grammar_without_state() 
                 assert_eq!(host.queued.len(), 1);
             } else {
                 assert!(
-                    matches!(result, Err(ivm::VMError::PermissionDenied)),
+                    matches!(result, Err(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                     "selection {selected:?}: {result:?}"
                 );
                 assert!(host.queued.is_empty());

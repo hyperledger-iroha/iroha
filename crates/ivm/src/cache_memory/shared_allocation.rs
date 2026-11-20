@@ -3,6 +3,7 @@
 #[cfg(test)]
 use super::REFUSE_NEXT_SHARED_ALLOCATION;
 use super::{MemoryBudget, MemoryReservation, current_budget, strong_owner::StrongOwner};
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedShared};
 use std::ops::Deref;
 
@@ -127,20 +128,26 @@ impl<T: Copy> SharedAllocation<T> {
         use iroha_allocation::AllocationRefusal;
 
         let len = values.len();
-        let backing = std::alloc::Layout::array::<T>(len)
-            .map_err(|_| VMError::AllocationDeferred(AllocationRefusal::DemandOverflow))?;
+        let backing = std::alloc::Layout::array::<T>(len).map_err(|_| {
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::DemandOverflow,
+            ))
+        })?;
         let bytes = backing
             .size()
             .checked_add(ChargedShared::<Allocation<T>>::allocation_layout().size())
-            .ok_or(VMError::AllocationDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::DemandOverflow,
-            ))?;
+            )))?;
         let mut admission = budget
             .try_reserve_bytes(bytes)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let reservation = retention.reserve(bytes);
-        let allocation_failure =
-            || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let allocation_failure = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         #[cfg(test)]
         if REFUSE_NEXT_SHARED_ALLOCATION.replace(false) {
             return Err(allocation_failure().into());
@@ -155,12 +162,12 @@ impl<T: Copy> SharedAllocation<T> {
             .map_err(|_| allocation_failure())?;
         for value in values {
             if storage.as_slice().len() == len {
-                return Err(VMError::DecodeError.into());
+                return Err(VMError::Trap(VmTrap::DecodeError).into());
             }
             storage.push_reserved(value?);
         }
         if storage.as_slice().len() != len {
-            return Err(VMError::DecodeError.into());
+            return Err(VMError::Trap(VmTrap::DecodeError).into());
         }
         debug_assert_eq!(admission.remaining_bytes(), 0);
         let owner = Self(
@@ -186,8 +193,11 @@ impl<T: Copy> SharedAllocation<T> {
     ) -> Result<Self, E> {
         use crate::error::{ExecutionDeferral, VMError};
 
-        let allocation_refusal =
-            || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let allocation_refusal = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         #[cfg(test)]
         if REFUSE_NEXT_SHARED_ALLOCATION.replace(false) {
             return Err(allocation_refusal().into());
@@ -217,12 +227,12 @@ impl<T: Copy> SharedAllocation<T> {
         reservation.set_known_bytes(conversion_peak_bytes);
         for value in values {
             if output.len() == len {
-                return Err(VMError::DecodeError.into());
+                return Err(VMError::Trap(VmTrap::DecodeError).into());
             }
             output.push(value?);
         }
         if output.len() != len {
-            return Err(VMError::DecodeError.into());
+            return Err(VMError::Trap(VmTrap::DecodeError).into());
         }
         let values = output.into_boxed_slice();
         reservation.set_known_bytes(Self::bytes_for_len(values.len()));

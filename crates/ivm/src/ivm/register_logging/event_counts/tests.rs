@@ -1,6 +1,7 @@
 //! Reservation bounds checked against ordinary interpreter register observations.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::{
     IVM, ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
@@ -235,7 +236,7 @@ fn an_unassigned_opcode_reserves_nothing_and_reports_its_opcode_byte() {
             matches!(
                 instruction(encode_rr(opcode, 7, 5, 6), false, false),
                 // The opcode byte, not the operand bits (0x0506).
-                Err(VMError::InvalidOpcode(reported)) if reported == u16::from(opcode)
+                Err(VMError::Trap(VmTrap::InvalidOpcode(reported))) if reported == u16::from(opcode)
             ),
             "{opcode:#04x}"
         );

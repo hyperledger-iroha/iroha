@@ -1,6 +1,7 @@
 //! Native ownership, exact ordinary execution and closed component boundaries.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::{IVM, TraceMode, execution_memory::ExecutionMemoryLease, instruction::wide};
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
@@ -407,11 +408,11 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
     );
     drop(parent);
     for (contract, gas, expected) in [
-        (unit(), 0, VMError::OutOfGas),
+        (unit(), 0, VMError::Trap(VmTrap::OutOfGas)),
         (
             contract("seiyaku S { view fn main() authorize(anyone) { } }", 1),
             10_000,
-            VMError::ExceededMaxCycles,
+            VMError::Trap(VmTrap::ExceededMaxCycles),
         ),
     ] {
         let mut parent = super::tests::parent(&budget);
@@ -421,11 +422,13 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
                 expected
             ),
             (
-                Err(CaptureError::Execution(VMError::OutOfGas)),
-                VMError::OutOfGas
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas))),
+                VMError::Trap(VmTrap::OutOfGas)
             ) | (
-                Err(CaptureError::Execution(VMError::ExceededMaxCycles)),
-                VMError::ExceededMaxCycles,
+                Err(CaptureError::Execution(VMError::Trap(
+                    VmTrap::ExceededMaxCycles
+                ))),
+                VMError::Trap(VmTrap::ExceededMaxCycles),
             )
         ));
         assert_eq!(budget.reserved_bytes(), 0);

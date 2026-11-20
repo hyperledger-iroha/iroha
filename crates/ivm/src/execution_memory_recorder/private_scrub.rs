@@ -4,6 +4,7 @@ use super::{
     DiagnosticMemoryAccess, DiagnosticMemoryAccessKind, DiagnosticMemoryAccessRecorder,
     DiagnosticMemoryPrivacyTag, ExecutionDeferral, VMError,
 };
+use crate::error::VmDeferral;
 use crate::private_memory_ranges::PrivateMemoryRanges;
 
 impl DiagnosticMemoryAccessRecorder {
@@ -14,33 +15,38 @@ impl DiagnosticMemoryAccessRecorder {
     ) -> Result<(), VMError> {
         let mut inner = self.inner.lock();
         if !inner.started {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         let mut bytes = 0_usize;
         let mut count = 0_u64;
         let mut previous = None;
         while let Some((start, end)) = ranges.next_after(previous) {
-            let start_index = usize::try_from(start).map_err(|_| VMError::HostUnavailable)?;
-            let end_index = usize::try_from(end).map_err(|_| VMError::HostUnavailable)?;
+            let start_index = usize::try_from(start)
+                .map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
+            let end_index =
+                usize::try_from(end).map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
             let before = image
                 .get(start_index..end_index)
-                .ok_or(VMError::HostUnavailable)?;
-            u32::try_from(before.len()).map_err(|_| VMError::HostUnavailable)?;
+                .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
+            u32::try_from(before.len())
+                .map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
             bytes = bytes
                 .checked_add(before.len())
-                .ok_or(VMError::HostUnavailable)?;
-            count = count.checked_add(1).ok_or(VMError::HostUnavailable)?;
+                .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
+            count = count
+                .checked_add(1)
+                .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
             previous = Some(start);
         }
         if bytes > inner.capacity.saturating_sub(inner.rows.as_slice().len()) {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity,
-            ));
+            )));
         }
         let next_ordinal = inner
             .next_access_ordinal
             .checked_add(count)
-            .ok_or(VMError::HostUnavailable)?;
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         // Nothing below can allocate or fail: exact row capacity, every slice,
         // offset conversion and all ordinals have been checked under this lock.
         let mut previous = None;
@@ -73,6 +79,7 @@ impl DiagnosticMemoryAccessRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmDeferral;
     use iroha_allocation::AllocationBudget;
 
     #[test]
@@ -85,7 +92,7 @@ mod tests {
         ranges.try_insert(0..1).unwrap();
         assert!(matches!(
             recorder.record_private_scrub(&[9], &ranges),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         assert_eq!(recorder.len(), 0);
         assert_eq!(recorder.inner.lock().next_access_ordinal, u64::MAX);
@@ -101,7 +108,7 @@ mod tests {
         ranges.try_insert(2..3).unwrap();
         assert!(matches!(
             recorder.record_private_scrub(&[9, 8], &ranges),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         assert_eq!(recorder.len(), 0);
         assert_eq!(recorder.inner.lock().next_access_ordinal, 0);

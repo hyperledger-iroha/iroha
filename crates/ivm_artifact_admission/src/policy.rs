@@ -1663,6 +1663,7 @@ fn schedule_nested_state_types<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ivm_abi::error::VmTrap;
     #[test]
     fn nested_view_calls_require_global_reads_and_keep_other_effects_forbidden() {
         use ivm_abi::syscalls::{self, SyscallAccess};
@@ -1860,7 +1861,7 @@ mod tests {
             .copy_from_slice(&erased_schema_surface);
         assert!(matches!(
             crate::verify_contract_artifact(&bytes).expect_err("retired surface must reject").into_vm_error(),
-            ivm_abi::VMError::ArtifactAbiHashMismatch { expected, actual } if expected == current && actual == erased_schema_surface
+            ivm_abi::VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) if expected == current && actual == erased_schema_surface
         ));
     }
     #[test]

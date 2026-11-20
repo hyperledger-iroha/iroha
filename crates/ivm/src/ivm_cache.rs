@@ -8,6 +8,7 @@
 //! tracks LRU order. Accessing an entry moves its digest to the back; capacity
 //! or byte budget overflow evicts from the front. Per-entry decoded-op limits
 //! affect cache retention only and never change whether valid code decodes.
+use crate::error::VmTrap;
 use crate::{cache_memory::SharedAllocation, decoder, metadata::ProgramMetadata};
 mod instruction_stream;
 pub use instruction_stream::ValidatedInstructions;
@@ -192,7 +193,7 @@ impl IvmCache {
         budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<DecodedStream, crate::VMError> {
         if (code.len() as u64) > crate::memory::Memory::HEAP_START {
-            return Err(crate::VMError::MemoryOutOfBounds);
+            return Err(crate::VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let start = Instant::now();
         let values = (0..code.len().div_ceil(4)).map(|index| {

@@ -213,12 +213,14 @@ fn map_overlay_error(
                 ),
             ))
         }
-        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::AmxBudgetExceeded {
-            dataspace,
-            stage,
-            elapsed_ms,
-            budget_ms,
-        }) => TransactionRejectionReason::Validation(
+        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::Trap(
+            ivm_abi::error::VmTrap::AmxBudgetExceeded {
+                dataspace,
+                stage,
+                elapsed_ms,
+                budget_ms,
+            },
+        )) => TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::NotPermitted(format!(
                 "{} code={}",
                 crate::pipeline::overlay::amx_timeout_message(

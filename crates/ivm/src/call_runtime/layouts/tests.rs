@@ -1,6 +1,7 @@
 //! Exact layout funding, shared lifetime, and allocation-free warm reuse.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use ivm_abi::call::{CallSchemaV1, CallTypeNodeV1};
 
 fn interface() -> EmbeddedContractInterfaceV1 {
@@ -19,7 +20,7 @@ fn funded_layouts_refuse_before_allocation_and_release_only_after_final_borrower
     let budget = AllocationBudget::new(0);
     assert!(matches!(
         CallLayouts::prepare(&interface, Some(&budget)),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     let node_count: usize = interface
@@ -73,7 +74,7 @@ fn local_layouts_derive_aggregate_widths_and_reject_malformed_types() {
     interface.callables[0].results.nodes.pop();
     assert!(matches!(
         CallLayouts::prepare(&interface, None),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
 }
 

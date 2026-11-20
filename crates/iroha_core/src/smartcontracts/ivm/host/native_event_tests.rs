@@ -188,9 +188,12 @@ seiyaku GuardedNativeEvent {
     assert!(matches!(
         (
             &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     assert!(host.queued.is_empty());
     vm.set_register(10, 0);
@@ -206,11 +209,11 @@ seiyaku GuardedNativeEvent {
     assert!(matches!(
         (
             &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
-            &(ivm::VMError::PermissionDenied)
+            &(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         (
-            Err(ivm::VMError::PermissionDenied),
-            ivm::VMError::PermissionDenied
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         )
     ));
     host.execution_class = HostExecutionClass::Contract;
@@ -218,11 +221,11 @@ seiyaku GuardedNativeEvent {
     assert!(matches!(
         (
             &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
-            &(ivm::VMError::PermissionDenied)
+            &(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         (
-            Err(ivm::VMError::PermissionDenied),
-            ivm::VMError::PermissionDenied
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         )
     ));
     assert_eq!(budget.reserved_bytes(), before);
@@ -251,11 +254,11 @@ seiyaku PrivateEventOperands {
         assert!(matches!(
             (
                 &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
-                &(ivm::VMError::PrivacyViolation)
+                &(ivm::VMError::Trap(VmTrap::PrivacyViolation))
             ),
             (
-                Err(ivm::VMError::PrivacyViolation),
-                ivm::VMError::PrivacyViolation
+                Err(ivm::VMError::Trap(VmTrap::PrivacyViolation)),
+                ivm::VMError::Trap(VmTrap::PrivacyViolation)
             )
         ));
         assert!(host.queued.is_empty());
@@ -268,11 +271,11 @@ seiyaku PrivateEventOperands {
     assert!(matches!(
         (
             &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
-            &(ivm::VMError::PermissionDenied)
+            &(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ),
         (
-            Err(ivm::VMError::PermissionDenied),
-            ivm::VMError::PermissionDenied
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         )
     ));
     assert!(host.queued.is_empty());
@@ -326,7 +329,7 @@ fn native_event_preparation_does_not_traverse_guest_values_before_gas_reservatio
     vm.set_gas_limit(31);
     assert!(matches!(
         host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote()),
-        Err(ivm::VMError::OutOfGas)
+        Err(ivm::VMError::Trap(VmTrap::OutOfGas))
     ));
     assert!(host.queued.is_empty());
     vm.set_gas_limit(32);
@@ -340,8 +343,14 @@ fn native_event_preparation_does_not_traverse_guest_values_before_gas_reservatio
         .syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &mut vm)
         .unwrap_err();
     assert!(matches!(
-        (&(error.as_unmetered()), &(ivm::VMError::DecodeError)),
-        (ivm::VMError::DecodeError, ivm::VMError::DecodeError)
+        (
+            &(error.as_unmetered()),
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
+        ),
+        (
+            VmErrorRef::Trap(VmTrap::DecodeError),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     assert_eq!(error.metered_gas(), Some(32));
     assert!(host.queued.is_empty());
@@ -352,8 +361,14 @@ fn native_event_preparation_does_not_traverse_guest_values_before_gas_reservatio
         .syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &mut vm)
         .unwrap_err();
     assert!(matches!(
-        (&(error.as_unmetered()), &(ivm::VMError::OutOfGas)),
-        (ivm::VMError::OutOfGas, ivm::VMError::OutOfGas)
+        (
+            &(error.as_unmetered()),
+            &(ivm::VMError::Trap(VmTrap::OutOfGas))
+        ),
+        (
+            VmErrorRef::Trap(VmTrap::OutOfGas),
+            ivm::VMError::Trap(VmTrap::OutOfGas)
+        )
     ));
     assert_eq!(error.metered_gas(), Some(32));
     assert!(host.queued.is_empty());

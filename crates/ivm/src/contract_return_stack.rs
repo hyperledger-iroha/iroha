@@ -4,6 +4,7 @@
 //! The original State execution charge stays with that backing through warm
 //! reuse, worker copies, cache eviction, and the final VM owner.
 
+use crate::error::{VmDeferral, VmTrap};
 use std::ops::Deref;
 
 use iroha_allocation::AllocationBudget;
@@ -45,22 +46,29 @@ impl ContractReturnStack {
     /// Complete any backing allocation before call gas or frame authority changes.
     pub(crate) fn preflight_one(&mut self) -> Result<(), VMError> {
         if self.len() >= MAX_CONTRACT_CALL_DEPTH {
-            return Err(VMError::CallDepthExceeded);
+            return Err(VMError::Trap(VmTrap::CallDepthExceeded));
         }
         match &mut self.0 {
-            Storage::Local(values) => values
-                .try_reserve_one()
-                .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)),
+            Storage::Local(values) => values.try_reserve_one().map_err(|_| {
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::AllocationUnavailable,
+                ))
+            }),
             Storage::Funded { budget, values } => {
                 if values.is_none() {
-                    let plan = ExecutionMemoryPlan::array::<u64>(MAX_CONTRACT_CALL_DEPTH)
-                        .map_err(VMError::AllocationDeferred)?;
-                    let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-                        .map_err(VMError::AllocationDeferred)?;
+                    let plan = ExecutionMemoryPlan::array::<u64>(MAX_CONTRACT_CALL_DEPTH).map_err(
+                        |cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)),
+                    )?;
+                    let mut lease =
+                        ExecutionMemoryLease::reserve(budget, plan).map_err(|cause| {
+                            VMError::Deferred(VmDeferral::AllocationDeferred(cause))
+                        })?;
                     *values = Some(
                         ExecutionBuffer::new(MAX_CONTRACT_CALL_DEPTH, &mut lease).map_err(
                             |_| {
-                                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+                                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                                    ExecutionDeferral::AllocationUnavailable,
+                                ))
                             },
                         )?,
                     );
@@ -126,7 +134,11 @@ impl ContractReturnStack {
             Storage::Local(values) => values
                 .try_copy_exact()
                 .map(|values| Self(Storage::Local(values)))
-                .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)),
+                .map_err(|_| {
+                    VMError::Deferred(VmDeferral::ExecutionDeferred(
+                        ExecutionDeferral::AllocationUnavailable,
+                    ))
+                }),
             Storage::Funded { budget, values } => {
                 let mut copy = Self::with_memory_budget(budget);
                 if let Some(values) = values {
@@ -193,6 +205,7 @@ impl Deref for ContractReturnStack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
 
     const BACKING_BYTES: usize = MAX_CONTRACT_CALL_DEPTH * std::mem::size_of::<u64>();
 
@@ -202,7 +215,7 @@ mod tests {
         let mut stack = ContractReturnStack::with_memory_budget(&budget);
         assert!(matches!(
             stack.preflight_one(),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert!(stack.is_empty());
         assert_eq!(budget.reserved_bytes(), 0);
@@ -253,7 +266,7 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 stack.try_push(u64::MAX),
-                Err(VMError::CallDepthExceeded)
+                Err(VMError::Trap(VmTrap::CallDepthExceeded))
             ));
             assert_eq!(stack.len(), MAX_CONTRACT_CALL_DEPTH);
             assert_eq!(budget.reserved_bytes(), BACKING_BYTES);

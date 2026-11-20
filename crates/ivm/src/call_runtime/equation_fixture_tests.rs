@@ -4,6 +4,7 @@
 //! instruction trace or proof. A separate complete native run checks the image.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::{
     ProgramMetadata, call_frame::native_equation_fixture_tests::observe, host::DefaultHost,
 };
@@ -86,7 +87,7 @@ fn runtime_capture() -> Value {
     vm.registers.set(11, 1);
     assert!(matches!(
         vm.finish_call(),
-        Err(VMError::ControlFlowViolation)
+        Err(VMError::Trap(VmTrap::ControlFlowViolation))
     ));
     vm.store_u64(child_result, 1).unwrap();
     vm.registers.set(31, parent_start + 8);
@@ -94,7 +95,7 @@ fn runtime_capture() -> Value {
     let gas_before_wrong_sp = vm.remaining_gas();
     assert!(matches!(
         vm.finish_call(),
-        Err(VMError::ControlFlowViolation)
+        Err(VMError::Trap(VmTrap::ControlFlowViolation))
     ));
     let gas_after_wrong_sp = vm.remaining_gas();
     assert!(

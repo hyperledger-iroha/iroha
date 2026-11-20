@@ -4,7 +4,7 @@ This document lists IVM syscall numbers and their ABI for `abi_version = 1`.
 The host and VM enforce the execution root's exact selected ABI V1 host profile.
 The baseline and the separately named `iroha.ivm.runtime_lifecycle.v1` profile use
 the same syscall numbers and pointer type IDs. Unknown or disallowed syscall
-numbers are rejected with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`).
+numbers are rejected with `E_SCALL_UNKNOWN` (mapped to `VmTrap::UnknownSyscall`).
 The number policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
 
 ABI policy
@@ -64,10 +64,10 @@ Admission/host guardrails
 - Admission decodes the instruction stream and rejects `SCALL` numbers outside the ABI surface with
   `ValidationFail::NotPermitted` before execution, so mutated or malformed bytecode never reaches the
   host.
-- Runtime hosts must return `VMError::UnknownSyscall` for disallowed syscall numbers; the executor
+- Runtime hosts must return `VmTrap::UnknownSyscall` for disallowed syscall numbers; the executor
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
-  `VMError::NotImplemented` instead.
+  `VmTrap::NotImplemented` instead.
 - The ten extended `0x00FE0001..=0x00FE000A` Kotodama test helpers (fixture actors, seiyaku calls
   and rejection expectations, assertion failure reports, block height and transaction time
   control, and helper call-site records) are not ABI-v1 syscalls and do
@@ -75,7 +75,7 @@ Admission/host guardrails
   only in unreachable local test bodies, and the VM dispatches them only when the private
   test-suite loader capability is present and the host opts in; the runner supplies
   `KotoTestHost`. Production artifact admission, public raw/program/prepared loaders, adjacent
-  `0x00FE` IDs, and permissive custom hosts all fail with `VMError::UnknownSyscall`.
+  `0x00FE` IDs, and permissive custom hosts all fail with `VmTrap::UnknownSyscall`.
 - Reserved-metering host calls compute a deterministic, side-effect-free upper gas quote before
   dispatch, debit it before effects, and reconcile unused reserve afterward. Numeric V1 calls use
   staged metering instead: each phase is debited immediately before its bounded work, and no staged
@@ -684,13 +684,13 @@ Soracloud runtime host surface
 - 0xC8 SORACLOUD_READ_CONFIG — Args: `r10=&SoracloudRequest(ReadConfig)` → `r10=&SoracloudResponse(ReadConfig)`. Reads authoritative service config payload bytes for the active revision and is valid from ordinary Soracloud handlers.
 - IDs `0xC5` through `0xC7` are retired holes and must report `UnknownSyscall`; validator execution exposes neither plaintext node-local secrets nor nondeterministic network egress.
 - 0xC9 SORACLOUD_READ_SECRET_ENVELOPE — Args: `r10=&SoracloudRequest(ReadSecretEnvelope)` → `r10=&SoracloudResponse(ReadSecretEnvelope)`. Reads the authoritative committed client-ciphertext secret envelope for the active revision and is valid from ordinary Soracloud handlers.
-- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Gas: G_soracloud + request bytes + response bytes. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
+- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Gas: G_soracloud + request bytes + response bytes. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VmTrap::UnknownSyscall`.
 - Dedicated Soracloud handler execution uses `irohad`'s `SoracloudIvmHost` to
   produce response envelopes and stage deterministic runtime side effects.
   Ordinary contract execution through `CoreHostImpl` is fail-closed for these
   numbers: it validates the `SoracloudRequest` pointer type, schema version,
   syscall operation, and payload variant, then returns metered
-  `VMError::NotImplemented` with `G_soracloud + request bytes` and queues no
+  `VmTrap::NotImplemented` with `G_soracloud + request bytes` and queues no
   ISI. Wrong pointer types or operation/payload mismatches fail during request
   validation.
 

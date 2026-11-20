@@ -1,4 +1,5 @@
 //! Compiler-internal canonical codec for aggregate durable-state values.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     host::preflight_reserved_syscall_gas,
@@ -51,10 +52,10 @@ fn load_tlv<'a>(
     let total = 7usize
         .checked_add(tlv.payload.len())
         .and_then(|len| len.checked_add(Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let envelope = vm.memory.load_region(
         address,
-        u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?,
+        u64::try_from(total).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
     Ok((envelope, tlv))
 }
@@ -72,7 +73,7 @@ fn load_expected_tlv<'a>(
                 tlv.type_id
             );
         }
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok((envelope, tlv))
 }
@@ -83,11 +84,11 @@ fn decode_schema(
 ) -> Result<(StateValueSchemaV1, &[u8]), VMError> {
     let (_, tlv) = load_expected_tlv(vm, address, PointerType::NoritoBytes, resolver)?;
     if tlv.payload.len() > MAX_STATE_VALUE_SCHEMA_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let schema: StateValueSchemaV1 = decode_canonical_norito(tlv.payload)?;
     if !schema.validate() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok((schema, tlv.payload))
 }
@@ -96,26 +97,28 @@ where
     T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     norito::decode_canonical(payload).map_err(|error| match error {
-        norito::Error::AllocationFailed { .. } => {
-            VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
-        }
-        _ => VMError::DecodeError,
+        norito::Error::AllocationFailed { .. } => VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::ExecutionDeferral::AllocationUnavailable,
+        )),
+        _ => VMError::Trap(VmTrap::DecodeError),
     })
 }
 fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<(), VMError> {
     match kind {
-        StateValueKindV1::Bool => return Err(VMError::DecodeError),
+        StateValueKindV1::Bool => return Err(VMError::Trap(VmTrap::DecodeError)),
         StateValueKindV1::Int => {
-            IntValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            IntValueV1::decode_frame(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::Decimal => {
-            DecimalValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            DecimalValueV1::decode_frame(payload)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::Quantity => {
-            QuantityValueV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+            QuantityValueV1::decode_frame(payload)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::String => {
-            std::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
+            std::str::from_utf8(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::Json => {
             let _: Json = decode_canonical_norito(payload)?;
@@ -144,25 +147,32 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
         }
         StateValueKindV1::AxtDescriptor => {
             let value: ivm_abi::axt::AxtDescriptor = decode_canonical_norito(payload)?;
-            ivm_abi::axt::validate_descriptor(&value).map_err(|_| VMError::DecodeError)?;
+            ivm_abi::axt::validate_descriptor(&value)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::ProofBlob => {
             let value: ivm_abi::axt::ProofBlob = decode_canonical_norito(payload)?;
-            ivm_abi::axt::validate_proof_blob(&value).map_err(|_| VMError::DecodeError)?;
+            ivm_abi::axt::validate_proof_blob(&value)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::SoracloudRequest => {
             let value: SoracloudHostRequestEnvelopeV1 = decode_canonical_norito(payload)?;
-            value.validate().map_err(|_| VMError::DecodeError)?;
+            value
+                .validate()
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
         StateValueKindV1::SoracloudResponse => {
             let value: SoracloudHostResponseEnvelopeV1 = decode_canonical_norito(payload)?;
-            value.validate().map_err(|_| VMError::DecodeError)?;
+            value
+                .validate()
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         }
     }
     Ok(())
 }
 fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMError> {
-    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
@@ -173,19 +183,21 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
 }
 fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let byte_len = count.checked_mul(8).ok_or(VMError::NoritoInvalid)?;
+    let byte_len = count
+        .checked_mul(8)
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if byte_len == 0 {
         return Ok(Vec::new());
     }
     vm.ensure_public_memory(
         address,
-        u64::try_from(byte_len).map_err(|_| VMError::NoritoInvalid)?,
+        u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
     let bytes = vm.memory.load_region(
         address,
-        u64::try_from(byte_len).map_err(|_| VMError::NoritoInvalid)?,
+        u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
     Ok(bytes
         .as_chunks::<8>()
@@ -198,8 +210,12 @@ fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result
     let mut pending = 1_usize;
     while pending != 0 {
         pending -= 1;
-        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        let node = nodes
+            .get(*node_index)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+        *node_index = node_index
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let children = match node {
             StateValueNodeV1::Struct { fields, .. } => fields.len(),
             StateValueNodeV1::Tuple { arity } => usize::from(*arity),
@@ -212,7 +228,9 @@ fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result
             | StateValueNodeV1::Enum(_)
             | StateValueNodeV1::StateCursor(_) => 0,
         };
-        pending = pending.checked_add(children).ok_or(VMError::DecodeError)?;
+        pending = pending
+            .checked_add(children)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     }
     Ok(())
 }
@@ -224,28 +242,36 @@ fn state_node_word_count(
     let mut words = 0_usize;
     while pending != 0 {
         pending -= 1;
-        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        let node = nodes
+            .get(*node_index)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+        *node_index = node_index
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         match node {
             StateValueNodeV1::Struct { fields, .. } => {
                 words = words
                     .checked_add(usize::from(fields.is_empty()))
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 pending = pending
                     .checked_add(fields.len())
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             StateValueNodeV1::Tuple { arity } => {
                 pending = pending
                     .checked_add(usize::from(*arity))
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
             StateValueNodeV1::Option => {
-                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+                words = words
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 skip_state_node(nodes, node_index)?;
             }
             StateValueNodeV1::Result => {
-                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+                words = words
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 skip_state_node(nodes, node_index)?;
                 skip_state_node(nodes, node_index)?;
             }
@@ -255,7 +281,9 @@ fn state_node_word_count(
             | StateValueNodeV1::Error(_)
             | StateValueNodeV1::Enum(_)
             | StateValueNodeV1::StateCursor(_) => {
-                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+                words = words
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             }
         }
     }
@@ -266,10 +294,12 @@ pub(crate) fn validate_state_pointer_atom(
     kind: StateValueKindV1,
     envelope: &[u8],
 ) -> Result<(), VMError> {
-    let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
+    let expected = kind
+        .pointer_type()
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
     if tlv.type_id != expected || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     // Exact envelope validation above has already authenticated these bytes;
     // rebuilding the same TLV would only repeat the payload hash.
@@ -303,28 +333,34 @@ fn validate_state_atoms_recursive(
     while let Some(task) = work.pop() {
         match task {
             Work::Skip(cursor_id) => {
-                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get_mut(cursor_id)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 skip_state_node(cursor.nodes, &mut cursor.node_index)?;
             }
             Work::FinishStream(cursor_id) => {
-                let cursor = cursors.get(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get(cursor_id)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if cursor.node_index != cursor.nodes.len()
                     || cursor.atom_index != cursor.atoms.len()
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
             }
             Work::Validate(cursor_id) => {
-                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get_mut(cursor_id)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let cursor_nodes = cursor.nodes;
                 let cursor_atoms = cursor.atoms;
                 let node = cursor_nodes
                     .get(cursor.node_index)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 cursor.node_index = cursor
                     .node_index
                     .checked_add(1)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match node {
                     StateValueNodeV1::Struct { fields, .. } => {
                         work.extend(
@@ -340,14 +376,14 @@ fn validate_state_atoms_recursive(
                     StateValueNodeV1::Option => {
                         let StateValueAtomV1::Tag(tag) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         work.push(if *tag {
                             Work::Validate(cursor_id)
                         } else {
@@ -357,14 +393,14 @@ fn validate_state_atoms_recursive(
                     StateValueNodeV1::Result => {
                         let StateValueAtomV1::Tag(tag) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if *tag {
                             work.push(Work::Skip(cursor_id));
                             work.push(Work::Validate(cursor_id));
@@ -376,16 +412,16 @@ fn validate_state_atoms_recursive(
                     StateValueNodeV1::List { element, capacity } => {
                         let StateValueAtomV1::List(items) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if items.len() > usize::from(*capacity) {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let first_cursor = cursors.len();
                         cursors.extend(items.iter().map(|item| Cursor {
@@ -403,19 +439,19 @@ fn validate_state_atoms_recursive(
                         let Some(StateValueAtomV1::Pointer(envelope)) =
                             cursor_atoms.get(cursor.atom_index)
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         ivm_abi::state_cursor::validate_cursor_envelope(
                             iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(
                                 key,
                             )
-                            .ok_or(VMError::DecodeError)?,
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             envelope,
                         )?;
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     }
                     StateValueNodeV1::Unit
                     | StateValueNodeV1::Error(_)
@@ -430,43 +466,43 @@ fn validate_state_atoms_recursive(
                                 StateValueNodeV1::Enum(descriptor),
                                 Some(StateValueAtomV1::EnumCode(code)),
                             ) if descriptor.variant(*code).is_some() => {}
-                            _ => return Err(VMError::DecodeError),
+                            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                         }
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
                         if !matches!(
                             cursor_atoms.get(cursor.atom_index),
                             Some(StateValueAtomV1::Bool(_))
                         ) {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     }
                     StateValueNodeV1::Leaf(kind) => {
                         let StateValueAtomV1::Pointer(envelope) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         validate_state_pointer_atom(policy, *kind, envelope)?;
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     }
                 }
             }
         }
     }
-    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    let root = cursors.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
     *node_index = root.node_index;
     *atom_index = root.atom_index;
     Ok(())
@@ -486,7 +522,7 @@ fn validate_state_atom_stream(
         &mut atom_index,
     )?;
     if node_index != schema.nodes.len() || atom_index != atoms.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(())
 }
@@ -494,7 +530,7 @@ fn validate_state_atom_stream(
 pub(crate) fn schema_for_embedded_state_type(
     ty: &crate::metadata::EmbeddedStateType,
 ) -> Result<StateValueSchemaV1, VMError> {
-    state_value_schema_for_embedded_type_v1(ty).ok_or(VMError::NoritoInvalid)
+    state_value_schema_for_embedded_type_v1(ty).ok_or(VMError::Trap(VmTrap::NoritoInvalid))
 }
 fn decode_validated_state_value_record(
     policy: ivm_abi::SyscallPolicy,
@@ -506,11 +542,11 @@ fn decode_validated_state_value_record(
         || schema_payload.len() > MAX_STATE_VALUE_SCHEMA_BYTES
         || payload.len() > MAX_STATE_VALUE_RECORD_BYTES
     {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let record: StateValueRecordV1 = decode_canonical_norito(payload)?;
     if record.schema_hash != state_value_schema_hash_v1(schema_payload) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     validate_state_atom_stream(policy, schema, &record.atoms)?;
     Ok(record)
@@ -528,7 +564,8 @@ pub(crate) fn validate_state_value_record_for_policy(
     schema: &StateValueSchemaV1,
     payload: &[u8],
 ) -> Result<(), VMError> {
-    let schema_payload = encode_canonical_norito(schema).map_err(|_| VMError::DecodeError)?;
+    let schema_payload =
+        encode_canonical_norito(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     decode_validated_state_value_record(policy, schema, &schema_payload, payload).map(drop)
 }
 #[derive(Clone, Copy)]
@@ -624,22 +661,26 @@ fn encode_state_node(
                 expected_node,
                 expected_word,
             } => {
-                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if cursor.node_index != expected_node || cursor.word_index != expected_word {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
             }
             Work::FinishItem { cursor, schema } => {
-                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if cursor.node_index != cursor.nodes.len()
                     || cursor.word_index != cursor.words.as_slice().len()
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let item = outputs
                     .streams
                     .get(cursor.output)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 validate_state_atom_stream(context.vm.syscall_policy(), schema, item)?;
             }
             Work::FinishList {
@@ -652,36 +693,38 @@ fn encode_state_node(
                         outputs
                             .streams
                             .get_mut(output)
-                            .ok_or(VMError::DecodeError)?,
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     ));
                 }
                 outputs
                     .streams
                     .get_mut(parent_output)
-                    .ok_or(VMError::DecodeError)?
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     .push(StateValueAtomV1::List(items));
             }
             Work::Encode(cursor_id) => {
-                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get_mut(cursor_id)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let cursor_nodes = cursor.nodes;
                 let cursor_output = cursor.output;
                 let node = cursor_nodes
                     .get(cursor.node_index)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 cursor.node_index = cursor
                     .node_index
                     .checked_add(1)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match node {
                     StateValueNodeV1::Struct { fields, .. } => {
                         if fields.is_empty() {
                             if cursor.words.as_slice().get(cursor.word_index) != Some(&0) {
-                                return Err(VMError::DecodeError);
+                                return Err(VMError::Trap(VmTrap::DecodeError));
                             }
                             cursor.word_index = cursor
                                 .word_index
                                 .checked_add(1)
-                                .ok_or(VMError::DecodeError)?;
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         }
                         work.extend(
                             std::iter::repeat_with(|| Work::Encode(cursor_id)).take(fields.len()),
@@ -698,27 +741,28 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if pointer == 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let child_start = cursor.node_index;
                         let mut child_end = child_start;
                         let child_words = state_node_word_count(cursor_nodes, &mut child_end)?;
                         let layout = SumLayoutV1::option(
-                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(child_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let (tag, payload) =
                             crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Tag(tag));
                         cursor.node_index = child_end;
                         if tag {
@@ -738,13 +782,13 @@ fn encode_state_node(
                             });
                             work.push(Work::Encode(child_cursor));
                         } else if !payload.is_empty() {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         encoded_pointer_bytes = encoded_pointer_bytes.saturating_add(
                             usize::try_from(
                                 layout
                                     .allocation_bytes()
-                                    .map_err(|_| VMError::DecodeError)?,
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                             )
                             .unwrap_or(usize::MAX),
                         );
@@ -754,13 +798,13 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if pointer == 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let ok_start = cursor.node_index;
                         let mut ok_end = ok_start;
@@ -768,16 +812,18 @@ fn encode_state_node(
                         let mut err_end = ok_end;
                         let err_words = state_node_word_count(cursor_nodes, &mut err_end)?;
                         let layout = SumLayoutV1::try_new(
-                            u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
-                            u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(err_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
+                            u64::try_from(ok_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let (tag, payload) =
                             crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Tag(tag));
                         cursor.node_index = err_end;
                         let (active_start, active_end) = if tag {
@@ -804,7 +850,7 @@ fn encode_state_node(
                             usize::try_from(
                                 layout
                                     .allocation_bytes()
-                                    .map_err(|_| VMError::DecodeError)?,
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                             )
                             .unwrap_or(usize::MAX),
                         );
@@ -814,20 +860,23 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if pointer == 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+                        let element_words = element
+                            .word_count()
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let layout = ListLayoutV1::try_new(
                             u64::from(*capacity),
-                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(element_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let raw_items =
                             crate::list::read_words(context.vm, context.resolve(pointer), layout)?;
                         let parent_output = cursor_output;
@@ -862,7 +911,7 @@ fn encode_state_node(
                             usize::try_from(
                                 layout
                                     .allocation_bytes()
-                                    .map_err(|_| VMError::DecodeError)?,
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                             )
                             .unwrap_or(usize::MAX),
                         );
@@ -874,29 +923,35 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let atom = match node {
                             StateValueNodeV1::Unit if word == 0 => StateValueAtomV1::Unit,
                             StateValueNodeV1::Error(error) => {
-                                let code = u32::try_from(word).map_err(|_| VMError::DecodeError)?;
-                                error.variant(code).ok_or(VMError::DecodeError)?;
+                                let code = u32::try_from(word)
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                                error
+                                    .variant(code)
+                                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                                 StateValueAtomV1::ErrorCode(code)
                             }
                             StateValueNodeV1::Enum(descriptor) => {
-                                let code = u32::try_from(word).map_err(|_| VMError::DecodeError)?;
-                                descriptor.variant(code).ok_or(VMError::DecodeError)?;
+                                let code = u32::try_from(word)
+                                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                                descriptor
+                                    .variant(code)
+                                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                                 StateValueAtomV1::EnumCode(code)
                             }
-                            _ => return Err(VMError::DecodeError),
+                            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                         };
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(atom);
                     }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
@@ -904,20 +959,20 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let value = match word {
                             0 => false,
                             1 => true,
-                            _ => return Err(VMError::DecodeError),
+                            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                         };
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Bool(value));
                     }
                     StateValueNodeV1::StateCursor(key) => {
@@ -925,11 +980,11 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let (envelope, _) = load_expected_tlv(
                             context.vm,
                             pointer,
@@ -940,7 +995,7 @@ fn encode_state_node(
                             iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(
                                 key,
                             )
-                            .ok_or(VMError::DecodeError)?,
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             envelope,
                         )?;
                         encoded_pointer_bytes =
@@ -948,7 +1003,7 @@ fn encode_state_node(
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Pointer(envelope.to_vec()));
                     }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bytes) => {
@@ -956,17 +1011,17 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if pointer == 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let (envelope, tlv) = load_tlv(context.vm, pointer, context.resolver)?;
                         if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
-                            return Err(VMError::NoritoInvalid);
+                            return Err(VMError::Trap(VmTrap::NoritoInvalid));
                         }
                         validate_pointer_payload(StateValueKindV1::Bytes, tlv.payload)?;
                         let canonical = encode_tlv(PointerType::Blob, tlv.payload)?;
@@ -975,7 +1030,7 @@ fn encode_state_node(
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Pointer(canonical));
                     }
                     StateValueNodeV1::Leaf(kind) => {
@@ -983,15 +1038,17 @@ fn encode_state_node(
                             .words
                             .as_slice()
                             .get(cursor.word_index)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         cursor.word_index = cursor
                             .word_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if pointer == 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
+                        let expected = kind
+                            .pointer_type()
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let (envelope, tlv) =
                             load_expected_tlv(context.vm, pointer, expected, context.resolver)?;
                         validate_pointer_payload(*kind, tlv.payload)?;
@@ -1000,18 +1057,21 @@ fn encode_state_node(
                         outputs
                             .streams
                             .get_mut(cursor_output)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .push(StateValueAtomV1::Pointer(envelope.to_vec()));
                     }
                 }
             }
         }
     }
-    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    let root = cursors.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
     *node_index = root.node_index;
     *word_index = root.word_index;
     atoms.extend(std::mem::take(
-        outputs.streams.first_mut().ok_or(VMError::DecodeError)?,
+        outputs
+            .streams
+            .first_mut()
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
     ));
     *pointer_bytes = pointer_bytes.saturating_add(encoded_pointer_bytes);
     Ok(())
@@ -1019,9 +1079,14 @@ fn encode_state_node(
 /// Encode the compiler word table selected by `r11`/`r12` using the schema in `r10`.
 pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
     let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
-    let count = usize::try_from(vm.register(12)).map_err(|_| VMError::NoritoInvalid)?;
-    if count != schema.word_count().ok_or(VMError::DecodeError)? {
-        return Err(VMError::DecodeError);
+    let count =
+        usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    if count
+        != schema
+            .word_count()
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
+    {
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let words = table_words(vm, vm.register(11), count)?;
     let mut atoms = Vec::with_capacity(count);
@@ -1041,7 +1106,7 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         || word_index != words.len()
         || !schema.validate_atoms(&atoms)
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let record = StateValueRecordV1 {
         schema_hash: state_value_schema_hash_v1(schema_payload),
@@ -1049,7 +1114,7 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     };
     let payload = encode_canonical_norito(&record)?;
     if payload.len() > MAX_STATE_VALUE_RECORD_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let actual = gas(
         schema_payload
@@ -1125,7 +1190,7 @@ fn plan_state_atoms(
         values.push(value);
         outputs
             .get_mut(output)
-            .ok_or(VMError::DecodeError)?
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
             .push(value_id);
         Ok(())
     }
@@ -1150,26 +1215,31 @@ fn plan_state_atoms(
                 layout,
                 tag,
             } => {
-                let child = cursors.get(child_cursor).ok_or(VMError::DecodeError)?;
+                let child = cursors
+                    .get(child_cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if child.node_index != expected_node
                     || outputs
                         .get(active_output)
-                        .ok_or(VMError::DecodeError)?
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         .len()
                         != expected_words
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let child_atom_index = child.atom_index;
                 cursors
                     .get_mut(parent_cursor)
-                    .ok_or(VMError::DecodeError)?
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     .atom_index = child_atom_index;
-                let active =
-                    std::mem::take(outputs.get_mut(active_output).ok_or(VMError::DecodeError)?);
+                let active = std::mem::take(
+                    outputs
+                        .get_mut(active_output)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                );
                 let parent_output = cursors
                     .get(parent_cursor)
-                    .ok_or(VMError::DecodeError)?
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?
                     .output;
                 push_planned(
                     &mut values,
@@ -1187,12 +1257,18 @@ fn plan_state_atoms(
                 output,
                 expected_words,
             } => {
-                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get(cursor)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if cursor.node_index != cursor.nodes.len()
                     || cursor.atom_index != cursor.atoms.len()
-                    || outputs.get(output).ok_or(VMError::DecodeError)?.len() != expected_words
+                    || outputs
+                        .get(output)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
+                        .len()
+                        != expected_words
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
             }
             Work::FinishList {
@@ -1204,7 +1280,9 @@ fn plan_state_atoms(
                 let mut elements = Vec::with_capacity(item_outputs.len());
                 for output in item_outputs {
                     elements.push(std::mem::take(
-                        outputs.get_mut(output).ok_or(VMError::DecodeError)?,
+                        outputs
+                            .get_mut(output)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     ));
                 }
                 push_planned(
@@ -1215,17 +1293,19 @@ fn plan_state_atoms(
                 )?;
             }
             Work::Plan(cursor_id) => {
-                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor = cursors
+                    .get_mut(cursor_id)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let cursor_nodes = cursor.nodes;
                 let cursor_atoms = cursor.atoms;
                 let cursor_output = cursor.output;
                 let node = cursor_nodes
                     .get(cursor.node_index)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 cursor.node_index = cursor
                     .node_index
                     .checked_add(1)
-                    .ok_or(VMError::DecodeError)?;
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match node {
                     StateValueNodeV1::Struct { fields, .. } => {
                         if fields.is_empty() {
@@ -1249,23 +1329,24 @@ fn plan_state_atoms(
                     StateValueNodeV1::Option => {
                         let StateValueAtomV1::Tag(tag) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         let tag = *tag;
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let child_start = cursor.node_index;
                         let mut child_end = child_start;
                         let child_words = state_node_word_count(cursor_nodes, &mut child_end)?;
                         cursor.node_index = child_end;
                         let layout = SumLayoutV1::option(
-                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(child_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         if tag {
                             let active_output = outputs.len();
                             outputs.push(Vec::with_capacity(child_words));
@@ -1304,15 +1385,15 @@ fn plan_state_atoms(
                     StateValueNodeV1::Result => {
                         let StateValueAtomV1::Tag(tag) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         let tag = *tag;
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let ok_start = cursor.node_index;
                         let mut ok_end = ok_start;
                         let ok_words = state_node_word_count(cursor_nodes, &mut ok_end)?;
@@ -1320,10 +1401,12 @@ fn plan_state_atoms(
                         let err_words = state_node_word_count(cursor_nodes, &mut err_end)?;
                         cursor.node_index = err_end;
                         let layout = SumLayoutV1::try_new(
-                            u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
-                            u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(err_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
+                            u64::try_from(ok_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let (active_start, active_end, active_words) = if tag {
                             (ok_start, ok_end, ok_words)
                         } else {
@@ -1354,23 +1437,26 @@ fn plan_state_atoms(
                     StateValueNodeV1::List { element, capacity } => {
                         let StateValueAtomV1::List(items) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if items.len() > usize::from(*capacity) {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+                        let element_words = element
+                            .word_count()
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let layout = ListLayoutV1::try_new(
                             u64::from(*capacity),
-                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(element_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let parent_output = cursor_output;
                         let first_cursor = cursors.len();
                         let first_output = outputs.len();
@@ -1411,12 +1497,12 @@ fn plan_state_atoms(
                                 StateValueNodeV1::Enum(descriptor),
                                 Some(StateValueAtomV1::EnumCode(code)),
                             ) if descriptor.variant(*code).is_some() => u64::from(*code),
-                            _ => return Err(VMError::DecodeError),
+                            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         push_planned(
                             &mut values,
                             &mut outputs,
@@ -1427,15 +1513,15 @@ fn plan_state_atoms(
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
                         let StateValueAtomV1::Bool(value) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         let value = *value;
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         push_planned(
                             &mut values,
                             &mut outputs,
@@ -1446,14 +1532,14 @@ fn plan_state_atoms(
                     StateValueNodeV1::Leaf(_) | StateValueNodeV1::StateCursor(_) => {
                         let StateValueAtomV1::Pointer(envelope) = cursor_atoms
                             .get(cursor.atom_index)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         cursor.atom_index = cursor
                             .atom_index
                             .checked_add(1)
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         push_planned(
                             &mut values,
                             &mut outputs,
@@ -1465,13 +1551,17 @@ fn plan_state_atoms(
             }
         }
     }
-    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    let root = cursors.first().ok_or(VMError::Trap(VmTrap::DecodeError))?;
     if root.node_index != nodes.len() || root.atom_index != atoms.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(PlannedState {
         values,
-        roots: std::mem::take(outputs.first_mut().ok_or(VMError::DecodeError)?),
+        roots: std::mem::take(
+            outputs
+                .first_mut()
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+        ),
     })
 }
 fn planned_state_bytes(planned: &PlannedState) -> usize {
@@ -1528,21 +1618,29 @@ fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u
             } => {
                 let mut payload = Vec::with_capacity(active.len());
                 for value in active {
-                    payload.push(*materialized.get(*value).ok_or(VMError::DecodeError)?);
+                    payload.push(
+                        *materialized
+                            .get(*value)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                    );
                 }
                 crate::sum::allocate_words(vm, *layout, *tag, &payload)?
             }
             PlannedStateWord::List { layout, elements } => {
-                let width =
-                    usize::try_from(layout.element_words()).map_err(|_| VMError::DecodeError)?;
+                let width = usize::try_from(layout.element_words())
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                 let mut words = Vec::with_capacity(elements.len());
                 for element in elements {
                     let mut item = Vec::with_capacity(width);
                     for value in element {
-                        item.push(*materialized.get(*value).ok_or(VMError::DecodeError)?);
+                        item.push(
+                            *materialized
+                                .get(*value)
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+                        );
                     }
                     if item.len() != width {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     words.push(item);
                 }
@@ -1554,7 +1652,12 @@ fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u
     planned
         .roots
         .iter()
-        .map(|root| materialized.get(*root).copied().ok_or(VMError::DecodeError))
+        .map(|root| {
+            materialized
+                .get(*root)
+                .copied()
+                .ok_or(VMError::Trap(VmTrap::DecodeError))
+        })
         .collect()
 }
 /// Decode the record in `r11`, returning an aligned Blob word table in `r10`.
@@ -1565,11 +1668,11 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         // Missing durable values are not valid typed values. StateMap.get/remove
         // branch on presence before typed decoding; top-level Scalar/aggregate
         // state must have been initialized by `hajimari`/`始まり`.
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let (_, tlv) = load_expected_tlv(vm, record_pointer, PointerType::NoritoBytes, resolver)?;
     if tlv.payload.len() > MAX_STATE_VALUE_RECORD_BYTES {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let record = decode_validated_state_value_record(
         vm.syscall_policy(),
@@ -1580,8 +1683,12 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     let atoms = &record.atoms;
     let record_len = tlv.payload.len();
     let planned = plan_state_atoms(&schema.nodes, atoms)?;
-    if planned.roots.len() != schema.word_count().ok_or(VMError::DecodeError)? {
-        return Err(VMError::DecodeError);
+    if planned.roots.len()
+        != schema
+            .word_count()
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
+    {
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let pointer_bytes = planned_state_bytes(&planned);
     let table_payload_len = 1usize.saturating_add(planned.roots.len().saturating_mul(8));
@@ -1602,15 +1709,16 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
             .saturating_add(Hash::LENGTH),
     );
     vm.preflight_host_tlv_allocations(&tlv_lengths)?;
-    let raw_heap_bytes = u64::try_from(raw_heap_bytes).map_err(|_| VMError::OutOfMemory)?;
+    let raw_heap_bytes =
+        u64::try_from(raw_heap_bytes).map_err(|_| VMError::Trap(VmTrap::OutOfMemory))?;
     if vm
         .memory
         .heap_allocated_len()
         .checked_add(raw_heap_bytes)
-        .ok_or(VMError::OutOfMemory)?
+        .ok_or(VMError::Trap(VmTrap::OutOfMemory))?
         > vm.memory.heap_limit()
     {
-        return Err(VMError::OutOfMemory);
+        return Err(VMError::Trap(VmTrap::OutOfMemory));
     }
     let words = materialize_state_words(vm, &planned)?;
     let mut table = Vec::with_capacity(table_payload_len);
@@ -1626,6 +1734,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
@@ -1801,7 +1910,7 @@ mod tests {
                 vm.set_register(12, 1);
                 assert!(matches!(
                     encode_state_value(&mut vm, identity_address),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ));
                 assert_eq!(vm.register(10), schema_pointer);
                 assert_eq!(vm.memory.heap_allocated_len(), heap_before);
@@ -1914,7 +2023,7 @@ mod tests {
         assert_ne!(alternate, canonical);
         assert!(matches!(
             validate_pointer_payload(StateValueKindV1::AxtDescriptor, &alternate),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let invalid_descriptor = AxtDescriptor {
             dsids: Vec::new(),
@@ -1925,7 +2034,7 @@ mod tests {
                 StateValueKindV1::AxtDescriptor,
                 &encode_canonical_norito(&invalid_descriptor).expect("encode invalid descriptor"),
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let invalid_proof = ProofBlob {
             payload: Vec::new(),
@@ -1936,7 +2045,7 @@ mod tests {
                 StateValueKindV1::ProofBlob,
                 &encode_canonical_norito(&invalid_proof).expect("encode invalid proof"),
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&descriptor).expect("ambient descriptor");
@@ -1985,8 +2094,13 @@ mod tests {
         assert!(
             matches!(
                 (&actual, &expected),
-                (VMError::DecodeError, VMError::DecodeError)
-                    | (VMError::NoritoInvalid, VMError::NoritoInvalid)
+                (
+                    VMError::Trap(VmTrap::DecodeError),
+                    VMError::Trap(VmTrap::DecodeError)
+                ) | (
+                    VMError::Trap(VmTrap::NoritoInvalid),
+                    VMError::Trap(VmTrap::NoritoInvalid)
+                )
             ),
             "mixed pointer rejection differs: {actual:?} != {expected:?}"
         );
@@ -2124,7 +2238,7 @@ mod tests {
         vm.set_register(12, 2);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2160,7 +2274,7 @@ mod tests {
             vm.set_register(12, 1);
             assert!(matches!(
                 encode_state_value(&mut vm, identity_address),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
         }
     }
@@ -2311,7 +2425,7 @@ mod tests {
         let vm = IVM::new(u64::MAX);
         assert!(matches!(
             validate_state_value_record(&vm, &schema, &record),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2333,7 +2447,7 @@ mod tests {
         vm.set_register(12, 1);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let string_schema_pointer = install_schema(&mut vm, &string_schema);
         let norito_bytes = install_pointer(&mut vm, PointerType::NoritoBytes, b"text");
@@ -2344,7 +2458,7 @@ mod tests {
         vm.set_register(12, 1);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -2382,7 +2496,7 @@ mod tests {
         vm.set_register(11, record_pointer);
         assert!(matches!(
             decode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2413,7 +2527,7 @@ mod tests {
         vm.set_register(11, record_pointer);
         assert!(matches!(
             decode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2430,7 +2544,7 @@ mod tests {
         vm.set_register(11, 0);
         assert!(matches!(
             decode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(vm.register(10), schema_pointer);
     }
@@ -2457,7 +2571,7 @@ mod tests {
         assert!(
             matches!(
                 encode_state_value(&mut vm, identity_address),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "an inactive payload word is not part of the V1 value"
         );
@@ -2482,7 +2596,7 @@ mod tests {
         vm.set_register(12, 1);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2503,14 +2617,17 @@ mod tests {
         vm.set_register(12, 1);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
     fn mixed_pointer_scalar_record_rejects_missing_stale_and_malformed_dynamic_pointers() {
-        assert_mixed_name_pointer_rejected(|_| 0, VMError::DecodeError);
-        assert_mixed_name_pointer_rejected(|_| 1, VMError::NoritoInvalid);
-        assert_mixed_name_pointer_rejected(|vm| install_int(vm, 7), VMError::NoritoInvalid);
+        assert_mixed_name_pointer_rejected(|_| 0, VMError::Trap(VmTrap::DecodeError));
+        assert_mixed_name_pointer_rejected(|_| 1, VMError::Trap(VmTrap::NoritoInvalid));
+        assert_mixed_name_pointer_rejected(
+            |vm| install_int(vm, 7),
+            VMError::Trap(VmTrap::NoritoInvalid),
+        );
         assert_mixed_name_pointer_rejected(
             |vm| {
                 let envelope = encode_tlv(PointerType::Name, b"not canonical Norito")
@@ -2518,7 +2635,7 @@ mod tests {
                 vm.alloc_host_tlv(&envelope)
                     .expect("install malformed dynamic Name")
             },
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         );
         assert_mixed_name_pointer_rejected(
             |vm| {
@@ -2533,7 +2650,7 @@ mod tests {
                 vm.alloc_host_tlv(&envelope)
                     .expect("install checksum-corrupted Name")
             },
-            VMError::NoritoInvalid,
+            VMError::Trap(VmTrap::NoritoInvalid),
         );
     }
     #[test]
@@ -2602,7 +2719,7 @@ mod tests {
         vm.set_register(12, 1);
         assert!(matches!(
             encode_state_value(&mut vm, identity_address),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]

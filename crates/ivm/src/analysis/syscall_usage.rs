@@ -1,6 +1,7 @@
 //! Exact syscall histogram storage and original-pool scratch custody.
 
 use super::SyscallUsage;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     cache_memory::{OwnedAllocation, SharedAllocation},
@@ -71,20 +72,20 @@ impl UsageScratch {
         let storage = match budget {
             Some(budget) => {
                 let plan = ExecutionMemoryPlan::array::<u32>(occurrences)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 let buffer =
                     ExecutionBuffer::new(occurrences, &mut lease).map_err(|error| match error {
                         PrepaidBufferError::Allocation(ChargedBufferError::Admission(error)) => {
-                            VMError::AllocationDeferred(error)
+                            VMError::Deferred(VmDeferral::AllocationDeferred(error))
                         }
                         PrepaidBufferError::Allocation(ChargedBufferError::Allocator {
                             ..
                         })
-                        | PrepaidBufferError::Reservation(_) => {
-                            VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
-                        }
+                        | PrepaidBufferError::Reservation(_) => VMError::Deferred(
+                            VmDeferral::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
+                        ),
                     })?;
                 Scratch::Funded(buffer)
             }
@@ -100,7 +101,7 @@ impl UsageScratch {
 
     pub(super) fn push(&mut self, number: u32) -> Result<(), VMError> {
         if self.used == self.capacity {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         match &mut self.storage {
             Scratch::Local(values) => values[self.used] = number,
@@ -112,7 +113,7 @@ impl UsageScratch {
 
     pub(super) fn finish(mut self) -> Result<SyscallUsages, VMError> {
         if self.used != self.capacity {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         if self.used == 0 {
             return Ok(SyscallUsages::default());
