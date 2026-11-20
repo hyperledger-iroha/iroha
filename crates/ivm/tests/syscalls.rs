@@ -264,11 +264,15 @@ impl ivm::IVMHost for AddHost {
             Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         if number == 1 {
-            let a0 = vm.register(10);
-            let a1 = vm.register(11);
-            vm.set_register(10, a0.wrapping_add(a1));
+            let a0 = vm.public_register(10)?;
+            let a1 = vm.public_register(11)?;
+            vm.write_register(10, a0.wrapping_add(a1))?;
             Ok(0)
         } else {
             Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
@@ -370,7 +374,11 @@ fn traced_execution_summary_quotes_and_commits_the_invocation_register_log() {
             Ok(quote)
         }
 
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             let actual = self.inner.syscall(number, vm)?;
             self.actual = Some(actual);
             Ok(actual)

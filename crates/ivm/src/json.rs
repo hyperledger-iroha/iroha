@@ -5,9 +5,7 @@
 //! Options use the public argument/return representation: `{"some": value}` or `{"none": true}`.
 //! In particular, `Some(())` is `{"some": null}` and remains distinct from `None`.
 use crate::error::VmTrap;
-use crate::{
-    IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
-};
+use crate::{PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls};
 use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -42,7 +40,7 @@ pub const JSON_BUILD_GAS_BASE: u64 = 32;
 /// Base gas for one typed JSON getter.
 pub const JSON_TYPED_GETTER_GAS_BASE: u64 = 16;
 /// Address translation used for compiler literal TLVs.
-pub type AddressResolver = fn(&IVM, u64) -> u64;
+pub type AddressResolver = fn(&dyn crate::host::SyscallContext, u64) -> u64;
 /// Result metadata for one typed getter execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JsonGetterCost {
@@ -227,15 +225,15 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
     Json::from_raw_json(output).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 fn load_tlv<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     address: u64,
     expected: PointerType,
     resolver: AddressResolver,
 ) -> Result<pointer_abi::Tlv<'a>, VMError> {
     let resolved = resolver(vm, address);
-    let tlv = vm.validate_tlv(resolved)?;
+    let tlv = vm.public_tlv(resolved)?;
     if tlv.type_id != expected
-        || !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id)
+        || !pointer_abi::is_type_allowed_for_policy(vm.quote().syscall_policy(), tlv.type_id)
     {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
@@ -253,7 +251,11 @@ where
 {
     ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
-fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Result<u64, VMError> {
+fn allocate_tlv(
+    vm: &mut dyn crate::host::SyscallContext,
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Result<u64, VMError> {
     let payload_len =
         u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -262,10 +264,10 @@ fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Resu
     envelope.extend_from_slice(&payload_len.to_be_bytes());
     envelope.extend_from_slice(payload);
     envelope.extend_from_slice(Hash::new(payload).as_ref());
-    vm.alloc_host_tlv(&envelope)
+    vm.alloc_encoded_host_tlv(&envelope)
 }
 fn decode_construction_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(JsonConstructionSchemaV1, usize), VMError> {
@@ -279,7 +281,11 @@ fn decode_construction_schema(
     }
     Ok((schema, tlv.payload.len()))
 }
-fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
+fn read_word_table(
+    vm: &dyn crate::host::SyscallContext,
+    address: u64,
+    count: usize,
+) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
         return Err(VMError::Trap(VmTrap::DecodeError));
     }
@@ -293,7 +299,7 @@ fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VME
         address,
         u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
     )?;
-    let bytes = vm.memory.load_region(
+    let bytes = vm.tracked_public_bytes(
         address,
         u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
     )?;
@@ -337,7 +343,7 @@ fn state_node_word_count(
     }
 }
 fn pointer_leaf<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     word: u64,
     pointer_type: PointerType,
     resolver: AddressResolver,
@@ -348,7 +354,7 @@ fn pointer_leaf<'a>(
     Ok(tlv.payload)
 }
 fn convert_leaf(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     kind: StateValueKindV1,
     word: u64,
     resolver: AddressResolver,
@@ -437,7 +443,7 @@ fn convert_leaf(
     })
 }
 fn convert_state_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &StateValueSchemaV1,
     words: &[u64],
     resolver: AddressResolver,
@@ -653,7 +659,7 @@ fn convert_state_schema(
     completed.into_only()
 }
 fn convert_construction_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     nodes: &[JsonConstructionNodeV1],
     node_index: &mut usize,
     words: &[u64],
@@ -839,8 +845,11 @@ pub fn typed_getter_gas(input_bytes: usize, output_bytes: usize) -> u64 {
 ///
 /// Returns a deterministic VM error for a malformed schema, word table, handle,
 /// pointer payload, or unsupported source type.
-pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
-    let (schema, schema_bytes) = decode_construction_schema(vm, vm.register(10), resolver)?;
+pub fn build_json(
+    vm: &mut dyn crate::host::SyscallContext,
+    resolver: AddressResolver,
+) -> Result<u64, VMError> {
+    let (schema, schema_bytes) = decode_construction_schema(vm, vm.public_register(10)?, resolver)?;
     if crate::dev_env::decode_trace_enabled() {
         eprintln!(
             "[json] decoded construction schema: nodes={} bytes={schema_bytes}",
@@ -851,11 +860,11 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
         .word_count()
         .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let supplied_words =
-        usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        usize::try_from(vm.public_register(12)?).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if supplied_words != expected_words {
         return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    let words = read_word_table(vm, vm.register(11), supplied_words)?;
+    let words = read_word_table(vm, vm.public_register(11)?, supplied_words)?;
     if crate::dev_env::decode_trace_enabled() {
         eprintln!(
             "[json] read construction word table: expected={expected_words} supplied={supplied_words} words={words:x?}"
@@ -902,7 +911,7 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     if crate::dev_env::decode_trace_enabled() {
         eprintln!("[json] allocated JSON result: pointer=0x{pointer:x}");
     }
-    vm.set_register(10, pointer);
+    vm.write_register(10, pointer)?;
     Ok(gas)
 }
 fn canonical_account(raw: &str) -> Option<AccountId> {
@@ -1016,15 +1025,15 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterPayload> {
 /// reads as absent. Malformed pointer envelopes or noncanonical root/key
 /// payloads remain deterministic VM errors.
 pub fn typed_getter(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     number: u32,
     resolver: AddressResolver,
 ) -> Result<JsonGetterCost, VMError> {
     if !syscalls::is_json_getter_syscall(number) {
         return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
     }
-    let json_tlv = load_tlv(vm, vm.register(10), PointerType::Json, resolver)?;
-    let key_tlv = load_tlv(vm, vm.register(11), PointerType::Name, resolver)?;
+    let json_tlv = load_tlv(vm, vm.public_register(10)?, PointerType::Json, resolver)?;
+    let key_tlv = load_tlv(vm, vm.public_register(11)?, PointerType::Name, resolver)?;
     let json: Json = decode_canonical(json_tlv.payload)?;
     let key: Name = decode_canonical(key_tlv.payload)?;
     let value = StackSafeJsonValue::new(
@@ -1059,7 +1068,7 @@ pub fn typed_getter(
         ),
         None => (crate::sum::allocate_words(vm, layout, 0, &[])?, 0),
     };
-    vm.set_register(10, handle);
+    vm.write_register(10, handle)?;
     Ok(JsonGetterCost {
         input_bytes,
         output_bytes: payload_bytes.saturating_add(16),
@@ -1068,6 +1077,7 @@ pub fn typed_getter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
     use crate::error::VmTrap;
     use crate::{core_host::CoreHost, memory::Memory};
     use iroha_crypto::{Algorithm, KeyPair};

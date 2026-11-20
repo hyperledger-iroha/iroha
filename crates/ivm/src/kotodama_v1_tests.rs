@@ -337,12 +337,16 @@ fn bounded_transfer_lists_evaluate_before_begin_and_skip_empty_batches() {
         ) -> Result<u64, VMError> {
             self.core.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.events.push(number);
             if number == syscalls::SYSCALL_TRANSFER_V1 {
                 self.quantities.push(
                     iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(
-                        vm.validate_tlv(vm.register(13))?.payload,
+                        vm.public_tlv(vm.public_register(13)?)?.payload,
                     )
                     .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
                     .into_quantity()

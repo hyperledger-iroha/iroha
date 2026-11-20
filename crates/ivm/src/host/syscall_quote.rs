@@ -25,6 +25,11 @@ impl IVM {
 }
 
 impl<'a> SyscallQuote<'a> {
+    /// Guest program counter at the syscall boundary.
+    pub fn program_counter(self) -> u64 {
+        self.vm.pc()
+    }
+
     /// Syscall policy selected by the authenticated image.
     pub fn syscall_policy(self) -> crate::SyscallPolicy {
         self.vm.syscall_policy()
@@ -261,6 +266,7 @@ mod tests {
             Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
         ));
         assert_eq!(quote.public_register(13).unwrap(), 0);
+        assert_eq!(quote.program_counter(), vm.pc());
         assert_eq!(quote.remaining_gas(), 100);
         assert_eq!(quote.reserve_available_syscall_gas().unwrap(), 100);
         assert!(matches!(

@@ -194,7 +194,12 @@ fn public_example(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .wrap_err_with(|| format!("start the candidate's {name} example from {dir:?}"))?;
+        .wrap_err_with(|| {
+            format!(
+                "start the candidate's {name} example from {}",
+                dir.display()
+            )
+        })?;
     if let Some(bytes) = input {
         child
             .stdin
@@ -404,7 +409,7 @@ fn authenticated_opening(
     let first = proof(1)?;
     let mut verifier = SumeragiFinalityVerifier::new(
         &origin,
-        &network.chain_id().to_string(),
+        network.chain_id().as_ref(),
         first.committee.clone(),
     )?;
     verifier.verify(&first)?;
@@ -463,6 +468,10 @@ fn check_open_board(
 ) -> Result<()> {
     board.validate()?;
     ensure!(
+        board.sealed_timestamp_ms == anchor.timestamp_ms,
+        "board seal timestamp differs from the certified seal"
+    );
+    ensure!(
         board.context.body_context == voter
             && board.context.proposal_digest == digests::proposal_digest_v1(proposal)?
             && board.purpose
@@ -477,7 +486,6 @@ fn check_open_board(
             && board.context.policy_hash == event.policy_hash
             && board.opening == Some(opening)
             && board.casting_clock.is_some()
-            && board.sealed_timestamp_ms == anchor.timestamp_ms
             && board.roster_root == seal.roster_root
             && board.context.list_digest == seal.list_digest
             && board.registration_mapping_digest == seal.registration_mapping_digest
@@ -544,14 +552,15 @@ pub(super) fn exercise(network: &Network, runtime: &tokio::runtime::Runtime) -> 
                 .is_ok_and(|a| a.ip().is_loopback())),
         "this exercise requires four disposable localhost validators"
     );
-    let mut examples = std::env::current_exe()?
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| eyre!("missing Cargo profile path"))?
-        .join("examples");
-    if let Some(path) = std::env::var_os("IROHA_PARLIAMENT_EXAMPLE_DIR") {
-        examples = PathBuf::from(path);
-    }
+    let examples = if let Some(path) = std::env::var_os("IROHA_PARLIAMENT_EXAMPLE_DIR") {
+        PathBuf::from(path)
+    } else {
+        std::env::current_exe()?
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| eyre!("missing Cargo profile path"))?
+            .join("examples")
+    };
     let private = tempfile::tempdir()?;
     let root = private.path();
     let clients = fund_citizens(network)?;

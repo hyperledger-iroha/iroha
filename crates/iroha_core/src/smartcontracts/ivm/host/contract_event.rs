@@ -259,7 +259,7 @@ impl Construction {
 /// The caller quotes/debits work and output capacity before calling this materializer.
 #[allow(clippy::too_many_arguments)]
 pub fn capture(
-    vm: &IVM,
+    vm: &dyn ivm::host::SyscallContext,
     budget: &AllocationBudget,
     contract: &ContractAddress,
     code_hash: Hash,

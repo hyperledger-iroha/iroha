@@ -85,16 +85,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         vm.reserve_available_syscall_gas_at_least(32)
     }
 
-    pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
-        let (_, _, _, _, definition) = self.event_context(vm.syscall_quote())?;
-        let words = usize::try_from(vm.register(12))
+    pub(super) fn emit_contract_event(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
+        let (_, _, _, _, definition) = self.event_context(vm.quote())?;
+        let words = usize::try_from(vm.public_register(12)?)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let gas = ivm::value_record::quote_value_record(
             vm,
             &definition.payload_type,
-            vm.register(11),
+            vm.public_register(11)?,
             words,
-            vm.remaining_gas(),
+            vm.quote().remaining_gas(),
         )?
         .gas;
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -107,7 +110,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 ))
             })?;
             let (context, authorization, entrypoint, event, definition) =
-                self.event_context(vm.syscall_quote())?;
+                self.event_context(vm.quote())?;
             let emission = contract_event::capture(
                 vm,
                 self.prepared_contract_cache.execution_budget(),
@@ -117,8 +120,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 event,
                 &authorization.authority,
                 definition,
-                vm.register(11),
-                usize::try_from(vm.register(12))
+                vm.public_register(11)?,
+                usize::try_from(vm.public_register(12)?)
                     .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?,
             )?;
             if !self.try_reserve_serialized_output(&emission.value, 1) {

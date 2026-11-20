@@ -394,15 +394,19 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
             }
             Ok(0)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             if number == syscalls::SYSCALL_CURRENT_TIME_MS {
-                assert_eq!(vm.register(10), 0);
-                assert!(!vm.registers.tag(10));
+                assert_eq!(vm.public_register(10)?, 0);
+                vm.quote().ensure_public_register(10)?;
             }
             if number == syscalls::SYSCALL_VERIFY_PROOF {
-                assert_eq!(vm.register(11), 0);
-                assert!(!vm.registers.tag(11));
-                vm.set_register(10, 1);
+                assert_eq!(vm.public_register(11)?, 0);
+                vm.quote().ensure_public_register(11)?;
+                vm.write_register(10, 1)?;
             }
             Ok(0)
         }
@@ -452,7 +456,11 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
             vm.ensure_public_register(10)?;
             Err(VMError::Trap(VmTrap::DecodeError))
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             panic!("failed preparation must not execute the host")
         }
         fn as_any(&mut self) -> &mut dyn Any
@@ -473,7 +481,11 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
             vm.ensure_public_register(10)?;
             Ok(1_000_000)
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             panic!("unaffordable quote must not execute the host")
         }
         fn as_any(&mut self) -> &mut dyn Any
@@ -507,9 +519,9 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
     assert_restored(UnaffordableHost, VMError::Trap(VmTrap::OutOfGas));
 }
 #[test]
-fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
-    struct PrivateOutputHost;
-    impl IVMHost for PrivateOutputHost {
+fn public_host_result_is_sanitized_by_the_declared_output_boundary() {
+    struct PublicOutputHost;
+    impl IVMHost for PublicOutputHost {
         fn prepare_syscall(
             &self,
             _number: u32,
@@ -517,9 +529,12 @@ fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
         ) -> Result<u64, VMError> {
             Ok(0)
         }
-        fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-            vm.set_register(10, 7);
-            vm.registers.set_tag(10, true);
+        fn syscall(
+            &mut self,
+            _number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
+            vm.write_register(10, 7)?;
             Ok(0)
         }
         fn as_any(&mut self) -> &mut dyn Any
@@ -531,13 +546,14 @@ fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
     }
     let mut vm = IVM::new(10_000);
     vm.load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_CURRENT_TIME_MS)]))
-        .expect("load private host-output fixture");
-    vm.set_host(PrivateOutputHost);
-    assert!(matches!(
-        vm.run(),
-        Err(VMError::Trap(VmTrap::PrivacyViolation))
-    ));
-    assert!(vm.registers.tag(10), "the VM must not launder the host tag");
+        .expect("load public host-output fixture");
+    vm.set_host(PublicOutputHost);
+    vm.set_register(10, 999);
+    vm.registers.set_tag(10, true);
+    vm.run()
+        .expect("the declared output replaces the unread private register");
+    assert_eq!(vm.register(10), 7);
+    assert!(!vm.registers.tag(10));
 }
 #[test]
 fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
@@ -799,7 +815,11 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
             self.prepares.set(self.prepares.get() + 1);
             Ok(1_000_000)
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.calls.set(self.calls.get() + 1);
             Ok(1_000_000)
         }

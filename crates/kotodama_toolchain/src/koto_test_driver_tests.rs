@@ -1016,7 +1016,7 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     let compiled = compile_suite(&suite, false).expect("compile suite");
     let mut host = build_host_for_fixture(&compiled, Some("actors")).expect("build host");
     let mut vm = IVM::new(u64::MAX);
-    vm.set_trace_mode(TraceMode::PcOnly);
+    host.configure_trace(&mut vm, TraceMode::PcOnly);
     let put_blob = |vm: &mut IVM, reg: usize, value: &str| {
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Blob, value.as_bytes()))

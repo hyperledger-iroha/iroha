@@ -46,7 +46,7 @@ pub fn entrypoint_return_is_error(
 /// branch words are written. Validation occurs before allocation, so malformed
 /// values cannot partially advance or mutate the VM heap.
 pub fn allocate_words(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     layout: SumLayoutV1,
     tag: u64,
     active_payload: &[u64],
@@ -78,7 +78,7 @@ pub fn allocate_words(
 /// # Errors
 /// Rejects invalid tags, layouts, heap ranges, or nonzero inactive padding.
 pub fn validate_active_words(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     base: u64,
     layout: SumLayoutV1,
 ) -> Result<(bool, u64), VMError> {
@@ -105,7 +105,11 @@ pub fn validate_active_words(
 ///
 /// # Errors
 /// Rejects malformed layout, noncanonical padding, unreadable memory, or local allocation refusal.
-pub fn read_words(vm: &IVM, base: u64, layout: SumLayoutV1) -> Result<(bool, Vec<u64>), VMError> {
+pub fn read_words(
+    vm: &dyn crate::host::SyscallContext,
+    base: u64,
+    layout: SumLayoutV1,
+) -> Result<(bool, Vec<u64>), VMError> {
     let (tag, active_words) = validate_active_words(vm, base, layout)?;
     let mut payload = Vec::new();
     payload

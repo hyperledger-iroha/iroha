@@ -148,7 +148,6 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
         let registers = vm.registers.snapshot();
         let tags = vm.registers.snapshot_tags();
         let gas = vm.remaining_gas();
-        let epoch = vm.proof_state_epoch;
         let pc = vm.pc;
         let max_cycles = vm.max_cycles;
         let diagnostic = recorder(15);
@@ -167,7 +166,6 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
         assert_eq!(vm.registers.snapshot(), registers);
         assert_eq!(vm.registers.snapshot_tags(), tags);
         assert_eq!(vm.remaining_gas(), gas);
-        assert_eq!(vm.proof_state_epoch, epoch);
         assert_eq!(vm.pc, pc);
         assert_eq!(vm.max_cycles, max_cycles);
         assert!(vm.zk_mode_enabled());

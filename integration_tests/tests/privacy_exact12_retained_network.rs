@@ -32,7 +32,8 @@ use iroha::{
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
-            FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+            FeePaymentIntent, PrivacySubmissionRefV1, SignedTransaction, TransactionBuilder,
+            TransactionEntrypoint,
         },
     },
 };
@@ -508,6 +509,11 @@ fn independently_sign_two_submit_transaction(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan canonical action before two-submit adversary")?
         .ok_or_else(|| eyre!("canonical action omitted privacy submission"))?;
+    let PrivacySubmissionRefV1::Exact12(submission) = submission else {
+        return Err(eyre!(
+            "canonical action must contain the original Exact12 instruction"
+        ));
+    };
     let adversarial = TransactionBuilder::from_payload(canonical.payload().clone())
         .wrap_err("reopen canonical payload for two-submit adversary")?
         .with_instructions([submission.clone(), submission.clone()])

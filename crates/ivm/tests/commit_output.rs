@@ -24,10 +24,16 @@ impl IVMHost for CaptureHost {
             _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => {
-                *self.out.lock().expect("output mutex poisoned") = vm.read_output().to_vec();
+                *self.out.lock().expect("output mutex poisoned") = vm
+                    .inspect_public_bytes(Memory::OUTPUT_START, Memory::OUTPUT_SIZE)?
+                    .to_vec();
                 Ok(0)
             }
             _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),

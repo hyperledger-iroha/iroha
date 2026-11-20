@@ -251,3 +251,26 @@ fn final_tls_refund_can_reenter_after_normal_scope_exit() {
 fn final_tls_refund_can_reenter_after_scope_unwind() {
     assert_final_tls_release_reenters(true);
 }
+
+#[test]
+fn competing_trace_custody_failure_preserves_the_first_local_owner() {
+    let pool = AllocationBudget::new(8);
+    let _lease = pool.try_reserve_bytes(8).unwrap();
+    let original = pool.try_reserve_bytes(1).unwrap_err();
+    let local = VMError::Deferred(VmDeferral::AllocationDeferred(original.clone()));
+    let restore = || {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable,
+        ))
+    };
+    assert!(matches!(
+        first_local_host_refusal(Err(local), restore()),
+        VMError::Deferred(VmDeferral::AllocationDeferred(owner)) if owner == original
+    ));
+    assert!(matches!(
+        first_local_host_refusal(Ok(0), restore()),
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
+    ));
+}

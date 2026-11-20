@@ -132,9 +132,6 @@ struct SavedSyscallOutputRegisters {
 struct HostRegisterLogIsolation {
     invocation_log: zk::SharedRegLog,
     detached_log: zk::SharedRegLog,
-    proof_state_epoch: u64,
-    code_hash: [u8; 32],
-    zk_mode: bool,
 }
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 fn isqrt_u64(mut n: u64) -> u64 {
@@ -1235,13 +1232,6 @@ pub struct IVM {
     /// callback. This also gives trace-policy setters an exact TLS identity to
     /// match instead of trusting a sticky boolean after unwinding.
     host_trace_invocation_log: Option<zk::SharedRegLog>,
-    /// Changes whenever proof-facing state is discarded or replaced.
-    ///
-    /// Host callbacks may invoke public VM lifecycle methods. Capturing this
-    /// epoch while the register logger is detached prevents a callback from
-    /// resetting and then reconstructing the same apparent program identity
-    /// before the logger is reattached.
-    proof_state_epoch: u64,
     trace_log: DeltaTraceLog,
     step_log: zk::StepLog,
     trace_mode: TraceMode,
@@ -1521,7 +1511,6 @@ impl IVM {
             reg_log: Some(zk::SharedRegLog::try_new(memory_budget)?),
             host_trace_log_detached: false,
             host_trace_invocation_log: None,
-            proof_state_epoch: 0,
             trace_log: DeltaTraceLog::new(memory_budget),
             step_log: zk::StepLog::new(memory_budget),
             trace_mode: TraceMode::Off,
@@ -1585,7 +1574,6 @@ impl IVM {
         if !enabled {
             self.scrub_private_state()?;
         }
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.zk_mode = enabled;
         if enabled {
             if self.max_cycles == 0 {
@@ -1600,9 +1588,7 @@ impl IVM {
     ///
     /// This does not change ZK-mode execution semantics: ZK opcodes, privacy
     /// tags, assertion handling, max-cycle padding, and gas accounting remain
-    /// active. Disabling this only suppresses proof/telemetry artifacts. A
-    /// change made by a host during execution applies to the next invocation;
-    /// the current invocation keeps the trace policy selected at its start.
+    /// active. An invocation selects its proof and telemetry collection policy at entry.
     pub fn set_zk_trace_enabled(&mut self, enabled: bool) {
         self.zk_trace_enabled = enabled;
         let scoped_invocation_log = zk::scoped_reg_logger();
@@ -1631,10 +1617,6 @@ impl IVM {
     /// Loading a program installs its header bound, so this is a host/tooling override for raw
     /// code or tests. Ordinary (non-ZK) execution has no cycle bound; gas alone limits it.
     pub fn set_max_cycles(&mut self, max: u64) {
-        // The active trace shape is fixed at invocation start. A host callback
-        // may configure a later invocation, but it must not silently truncate
-        // or backfill the proof that is currently being collected.
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.max_cycles = max;
     }
     /// Load raw code bytes under the default non-ZK, non-vector execution profile.
@@ -2339,17 +2321,6 @@ impl IVM {
             }
         }
         Ok(())
-    }
-    /// Prove that a sequence of host TLV allocations can complete atomically
-    /// with the VM's current INPUT cursor and HEAP ownership.
-    ///
-    /// Callers use this before the first allocation so a bounded operation can
-    /// never publish a partial pointer table and then fail for lack of memory.
-    pub(crate) fn preflight_host_tlv_allocations(
-        &self,
-        tlv_lengths: &[usize],
-    ) -> Result<(), VMError> {
-        self.preflight_host_tlv_allocations_with_reserved_heap(tlv_lengths, 0)
     }
     /// Prove that host TLVs and a separate compiler-owned HEAP reservation fit
     /// together before either allocation class mutates the VM.
@@ -3284,7 +3255,6 @@ impl IVM {
         self.trace_mode
     }
     pub fn set_trace_mode(&mut self, mode: TraceMode) {
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.trace_mode = mode;
         self.pc_trace.clear();
         self.delta_trace.scrub();
@@ -3828,9 +3798,6 @@ impl IVM {
             let mut pending_register_batch = O::Batch::<zk::RegEventBatch>::default();
             // Fetch-Decode-Execute loop
             loop {
-                // A host callback may attempt a reload and handle its error.
-                // That cannot authorize another instruction from a partial image.
-                self.ensure_complete_program_image()?;
                 fault_position = iroha_data_model::executor::fault::IvmFaultPositionV1::Execute {
                     pc_offset: self.pc.saturating_sub(self.program_prefix_len),
                 };
@@ -3852,10 +3819,6 @@ impl IVM {
                 }
                 if O::ENABLED {
                     self.publish_trace_cycles(&invocation_trace, &mut last_logged_cycle)?;
-                } else {
-                    // A callback can still replace the full VM. Check original
-                    // trace custody before the next instruction on either path.
-                    invocation_trace.check(self)?;
                 }
                 // Stop the loop if HALT was executed. When a cycle limit is set we
                 // continue executing even after a failed assertion so the trace
@@ -3873,7 +3836,7 @@ impl IVM {
                     return Err(VMError::Trap(VmTrap::ExceededMaxCycles));
                 }
                 if O::ENABLED {
-                    self.record_trace_prefetch(&invocation_trace)?;
+                    self.record_trace_prefetch(&invocation_trace);
                 }
                 if O::ENABLED
                     && let Some(recorder) = recorder.as_deref_mut()
@@ -5397,7 +5360,11 @@ mod tests {
                 self.prepared.set(true);
                 Ok(0)
             }
-            fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                number: u32,
+                _vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 assert_eq!(number, 0x00FD_0001);
                 self.dispatched = true;
                 Ok(0)
@@ -5493,7 +5460,11 @@ mod tests {
                 self.prepared.set(true);
                 Ok(0)
             }
-            fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                _number: u32,
+                _vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 self.dispatched = true;
                 Ok(0)
             }
@@ -5549,7 +5520,11 @@ mod tests {
                 self.prepared.set(true);
                 Ok(0)
             }
-            fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                _number: u32,
+                _vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 self.dispatched = true;
                 Ok(0)
             }
@@ -5724,10 +5699,14 @@ mod tests {
             ) -> Result<u64, VMError> {
                 Ok(0)
             }
-            fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                _number: u32,
+                vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 let next = self.0.get().saturating_add(1);
                 self.0.set(next);
-                vm.set_register(10, next);
+                vm.write_register(10, next)?;
                 Ok(0)
             }
             fn as_any(&mut self) -> &mut dyn Any
@@ -6444,9 +6423,13 @@ mod tests {
             ) -> Result<u64, VMError> {
                 Ok(0)
             }
-            fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                number: u32,
+                vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 self.seen = Some(number);
-                vm.set_register(10, u64::from(number));
+                vm.write_register(10, u64::from(number))?;
                 Ok(0)
             }
             fn as_any(&mut self) -> &mut dyn std::any::Any
@@ -7109,7 +7092,11 @@ mod failed_program_install_tests {
             self.quotes.set(self.quotes.get() + 1);
             Ok(0)
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.calls += 1;
             Ok(0)
         }
@@ -7198,7 +7185,7 @@ mod failed_program_install_tests {
     }
 
     #[test]
-    fn host_catching_failed_reload_cannot_resume_the_guest_loop() {
+    fn failed_child_reload_preserves_the_parent_program() {
         struct ReloadingHost(usize);
         impl IVMHost for ReloadingHost {
             fn prepare_syscall(
@@ -7208,16 +7195,25 @@ mod failed_program_install_tests {
             ) -> Result<u64, VMError> {
                 Ok(0)
             }
-            fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                _number: u32,
+                vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 self.0 += 1;
-                refuse_loader_memory(vm);
+                let mut child = vm.try_new_in_same_memory_pool(1_000_000)?;
+                refuse_loader_memory(&mut child);
                 assert!(matches!(
-                    vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes()),
+                    child.load_code(&crate::encoding::wide::encode_halt().to_le_bytes()),
                     Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::ActiveMemoryCapacity
                     )))
                 ));
-                vm.memory.clear_diagnostic_access_recorder();
+                child.memory.clear_diagnostic_access_recorder();
+                assert!(matches!(
+                    child.run(),
+                    Err(VMError::Trap(VmTrap::InvalidMetadata))
+                ));
                 Ok(0)
             }
             fn as_any(&mut self) -> &mut dyn std::any::Any {
@@ -7232,10 +7228,12 @@ mod failed_program_install_tests {
         let mut vm = IVM::new(1_000_000);
         vm.load_code(&code).unwrap();
         let mut host = ReloadingHost(0);
-        assert!(matches!(
-            vm.run_with_host(&mut host),
-            Err(VMError::Trap(VmTrap::InvalidMetadata))
-        ));
-        assert_eq!(host.0, 1, "the second guest syscall must never execute");
+        let parent_hash = vm.code_hash();
+        vm.run_with_host(&mut host).unwrap();
+        assert_eq!(vm.code_hash(), parent_hash);
+        assert_eq!(
+            host.0, 2,
+            "the parent continues with its original instructions"
+        );
     }
 }

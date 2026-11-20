@@ -3,7 +3,6 @@ use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     host::preflight_reserved_syscall_gas,
-    ivm::IVM,
     pointer_abi::{self, PointerType, Tlv},
 };
 use iroha_crypto::Hash;
@@ -29,20 +28,20 @@ use ivm_abi::{codec::encode_canonical_norito, list::ListLayoutV1};
 #[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
 const STATE_VALUE_GAS_BASE: u64 = 32;
-type AddressResolver = fn(&IVM, u64) -> u64;
+type AddressResolver = fn(&dyn crate::host::SyscallContext, u64) -> u64;
 fn gas(bytes: usize, words: usize) -> u64 {
     STATE_VALUE_GAS_BASE
         .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX))
         .saturating_add(u64::try_from(words).unwrap_or(u64::MAX))
 }
 fn load_tlv<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(&'a [u8], Tlv<'a>), VMError> {
     let original_address = address;
     let address = resolver(vm, address);
-    let tlv = vm.validate_tlv(address).inspect_err(|error| {
+    let tlv = vm.public_tlv(address).inspect_err(|error| {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
                 "[state-value] invalid TLV pointer original=0x{original_address:016x} resolved=0x{address:016x}: {error:?}"
@@ -53,14 +52,14 @@ fn load_tlv<'a>(
         .checked_add(tlv.payload.len())
         .and_then(|len| len.checked_add(Hash::LENGTH))
         .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
-    let envelope = vm.memory.load_region(
+    let envelope = vm.tracked_public_bytes(
         address,
         u64::try_from(total).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
     Ok((envelope, tlv))
 }
 fn load_expected_tlv<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     address: u64,
     expected: PointerType,
     resolver: AddressResolver,
@@ -78,7 +77,7 @@ fn load_expected_tlv<'a>(
     Ok((envelope, tlv))
 }
 fn decode_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(StateValueSchemaV1, &[u8]), VMError> {
@@ -181,7 +180,11 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
     out.extend_from_slice(Hash::new(payload).as_ref());
     Ok(out)
 }
-fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
+fn table_words(
+    vm: &dyn crate::host::SyscallContext,
+    address: u64,
+    count: usize,
+) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
@@ -195,7 +198,7 @@ fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError
         address,
         u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
-    let bytes = vm.memory.load_region(
+    let bytes = vm.tracked_public_bytes(
         address,
         u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
     )?;
@@ -553,11 +556,11 @@ fn decode_validated_state_value_record(
 }
 /// Validate one persisted record against an exact CNTR-derived state schema.
 pub(crate) fn validate_state_value_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &StateValueSchemaV1,
     payload: &[u8],
 ) -> Result<(), VMError> {
-    validate_state_value_record_for_policy(vm.syscall_policy(), schema, payload)
+    validate_state_value_record_for_policy(vm.quote().syscall_policy(), schema, payload)
 }
 pub(crate) fn validate_state_value_record_for_policy(
     policy: ivm_abi::SyscallPolicy,
@@ -570,7 +573,7 @@ pub(crate) fn validate_state_value_record_for_policy(
 }
 #[derive(Clone, Copy)]
 struct StateEncodeContext<'a> {
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     resolver: AddressResolver,
 }
 impl StateEncodeContext<'_> {
@@ -681,7 +684,7 @@ fn encode_state_node(
                     .streams
                     .get(cursor.output)
                     .ok_or(VMError::Trap(VmTrap::DecodeError))?;
-                validate_state_atom_stream(context.vm.syscall_policy(), schema, item)?;
+                validate_state_atom_stream(context.vm.quote().syscall_policy(), schema, item)?;
             }
             Work::FinishList {
                 parent_output,
@@ -1077,10 +1080,13 @@ fn encode_state_node(
     Ok(())
 }
 /// Encode the compiler word table selected by `r11`/`r12` using the schema in `r10`.
-pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
-    let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
-    let count =
-        usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+pub(crate) fn encode_state_value(
+    vm: &mut dyn crate::host::SyscallContext,
+    resolver: AddressResolver,
+) -> Result<u64, VMError> {
+    let (schema, schema_payload) = decode_schema(vm, vm.public_register(10)?, resolver)?;
+    let count = usize::try_from(vm.public_register(12)?)
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     if count
         != schema
             .word_count()
@@ -1088,7 +1094,7 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     {
         return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    let words = table_words(vm, vm.register(11), count)?;
+    let words = table_words(vm, vm.public_register(11)?, count)?;
     let mut atoms = Vec::with_capacity(count);
     let mut pointer_bytes = 0_usize;
     let mut node_index = 0;
@@ -1126,8 +1132,8 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     );
     preflight_reserved_syscall_gas(vm, actual)?;
     let out = encode_tlv(PointerType::NoritoBytes, &payload)?;
-    let pointer = vm.alloc_host_tlv(&out)?;
-    vm.set_register(10, pointer);
+    let pointer = vm.alloc_encoded_host_tlv(&out)?;
+    vm.write_register(10, pointer)?;
     Ok(actual)
 }
 enum PlannedStateWord {
@@ -1605,12 +1611,15 @@ fn planned_state_allocation_shape(planned: &PlannedState, tlv_lengths: &mut Vec<
         bytes.saturating_add(value_bytes)
     })
 }
-fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u64>, VMError> {
+fn materialize_state_words(
+    vm: &mut dyn crate::host::SyscallContext,
+    planned: &PlannedState,
+) -> Result<Vec<u64>, VMError> {
     let mut materialized = Vec::with_capacity(planned.values.len());
     for value in &planned.values {
         let word = match value {
             PlannedStateWord::Scalar(value) => *value,
-            PlannedStateWord::Pointer(envelope) => vm.alloc_host_tlv(envelope)?,
+            PlannedStateWord::Pointer(envelope) => vm.alloc_encoded_host_tlv(envelope)?,
             PlannedStateWord::Sum {
                 layout,
                 tag,
@@ -1661,9 +1670,12 @@ fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u
         .collect()
 }
 /// Decode the record in `r11`, returning an aligned Blob word table in `r10`.
-pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
-    let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
-    let record_pointer = vm.register(11);
+pub(crate) fn decode_state_value(
+    vm: &mut dyn crate::host::SyscallContext,
+    resolver: AddressResolver,
+) -> Result<u64, VMError> {
+    let (schema, schema_payload) = decode_schema(vm, vm.public_register(10)?, resolver)?;
+    let record_pointer = vm.public_register(11)?;
     if record_pointer == 0 {
         // Missing durable values are not valid typed values. StateMap.get/remove
         // branch on presence before typed decoding; top-level Scalar/aggregate
@@ -1675,7 +1687,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let record = decode_validated_state_value_record(
-        vm.syscall_policy(),
+        vm.quote().syscall_policy(),
         &schema,
         schema_payload,
         tlv.payload,
@@ -1708,15 +1720,14 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
             .saturating_add(table_payload_len)
             .saturating_add(Hash::LENGTH),
     );
-    vm.preflight_host_tlv_allocations(&tlv_lengths)?;
+    vm.preflight_host_tlv_allocations_with_reserved_heap(&tlv_lengths, 0)?;
     let raw_heap_bytes =
         u64::try_from(raw_heap_bytes).map_err(|_| VMError::Trap(VmTrap::OutOfMemory))?;
     if vm
-        .memory
         .heap_allocated_len()
         .checked_add(raw_heap_bytes)
         .ok_or(VMError::Trap(VmTrap::OutOfMemory))?
-        > vm.memory.heap_limit()
+        > vm.heap_limit()
     {
         return Err(VMError::Trap(VmTrap::OutOfMemory));
     }
@@ -1727,20 +1738,21 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         table.extend_from_slice(&word.to_le_bytes());
     }
     let out = encode_tlv(PointerType::Blob, &table)?;
-    let pointer = vm.alloc_host_tlv(&out)?;
-    vm.set_register(10, pointer);
+    let pointer = vm.alloc_encoded_host_tlv(&out)?;
+    vm.write_register(10, pointer)?;
     Ok(actual)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
     use crate::error::VmTrap;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     };
-    fn identity_address(_vm: &IVM, address: u64) -> u64 {
+    fn identity_address(_vm: &dyn crate::host::SyscallContext, address: u64) -> u64 {
         address
     }
     fn install_schema(vm: &mut IVM, schema: &StateValueSchemaV1) -> u64 {

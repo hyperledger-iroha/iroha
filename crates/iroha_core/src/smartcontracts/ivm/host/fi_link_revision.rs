@@ -53,23 +53,23 @@ impl QueryStateRef<'_, '_, '_> {
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_fi_link_revision(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
     ) -> Result<u64, ivm::VMError> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
             .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
-        vm.ensure_public_register(10)?;
-        vm.ensure_public_register(11)?;
-        vm.ensure_public_register(12)?;
+        vm.quote().ensure_public_register(10)?;
+        vm.quote().ensure_public_register(11)?;
+        vm.quote().ensure_public_register(12)?;
         let definition: AssetDefinitionId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
         let account: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
         let expected_fi: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(12), PointerType::AccountId)?;
-        let remaining = vm.remaining_gas();
+            Self::decode_tlv_typed(vm, vm.public_register(12)?, PointerType::AccountId)?;
+        let remaining = vm.quote().remaining_gas();
         let gas_context = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&gas_context, remaining)?;
         let state = self
@@ -96,8 +96,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             length,
         )?;
         vm.preflight_host_tlv_allocations_with_reserved_heap(&[encoded.len()], 0)?;
-        let pointer = vm.alloc_host_tlv(&encoded)?;
-        vm.set_register(10, pointer);
+        let pointer = vm.alloc_encoded_host_tlv(&encoded)?;
+        vm.write_register(10, pointer)?;
         Ok(gas)
     }
 }
@@ -343,13 +343,17 @@ mod tests {
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
-                self.input_before = Some(vm.alloc_input_tlv(&[]).unwrap());
+                self.input_before = Some(crate::ivm_test_support::next_host_input_address(vm));
                 self.heap_before = Some(vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
-                self.register_before = Some(vm.register(10));
+                self.register_before = Some(vm.public_register(10)?);
             }
             let result = self.inner.syscall(number, vm);
             if number == ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION {

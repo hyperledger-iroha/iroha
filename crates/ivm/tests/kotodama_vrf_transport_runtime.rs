@@ -47,13 +47,21 @@ impl IVMHost for ObservedVrfHost {
     ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         let result = self.inner.syscall(number, vm);
         if matches!(
             number,
             ivm::syscalls::SYSCALL_VRF_VERIFY | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
         ) {
-            self.status = Some([vm.register(10), vm.register(11), vm.register(12)]);
+            self.status = Some([
+                vm.public_register(10)?,
+                vm.public_register(11)?,
+                vm.public_register(12)?,
+            ]);
         }
         result
     }

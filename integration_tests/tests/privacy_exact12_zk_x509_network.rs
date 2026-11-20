@@ -37,7 +37,7 @@ use iroha::{
             IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
-            PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
+            PrivacyProofV1, PrivacyRuntimeProtocolIdV1, PrivacyStatementV1,
         },
         query::CommittedTransaction,
         sumeragi_finality::{
@@ -45,8 +45,8 @@ use iroha::{
             VerifiedSumeragiBlock,
         },
         transaction::{
-            FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-            TransactionResult, error::TransactionRejectionReason,
+            FeePaymentIntent, PrivacySubmissionRefV1, SignedTransaction, TransactionBuilder,
+            TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
         },
     },
 };
@@ -358,11 +358,15 @@ fn single_zk_x509_proof_bytes<'a>(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("inspect native ZK-X509 proof transaction binding")?
         .ok_or_else(|| eyre!("native ZK-X509 transaction omitted its direct privacy action"))?;
-    let submission_envelope = submission.runtime_envelope();
-    match (&submission_envelope.statement, &submission_envelope.proof) {
+    let PrivacySubmissionRefV1::Exact12(submission) = submission else {
+        return Err(eyre!(
+            "native ZK-X509 transaction must use the Exact12 instruction"
+        ));
+    };
+    match (&submission.envelope.statement, &submission.envelope.proof) {
         (
-            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement),
-            PrivacyRuntimeProofV1::IrohaZkX509StarkP256V1(proof),
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement),
+            PrivacyProofV1::IrohaZkX509StarkP256V1(proof),
         ) => {
             ensure!(
                 statement == expected_statement && statement.context.action_index == 0,

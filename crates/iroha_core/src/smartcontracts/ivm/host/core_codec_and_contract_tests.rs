@@ -374,8 +374,12 @@ fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
         ) -> Result<u64, ivm::VMError> {
             Ok(0)
         }
-        fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-            self.0 = Some(vm.remaining_gas());
+        fn syscall(
+            &mut self,
+            _number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
+            self.0 = Some(vm.quote().remaining_gas());
             Ok(0)
         }
     }

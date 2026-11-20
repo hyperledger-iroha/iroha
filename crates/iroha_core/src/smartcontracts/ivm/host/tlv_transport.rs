@@ -32,12 +32,12 @@ fn write_tlv_payload(
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn alloc_tlv_payload(
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         pointer_type: PointerType,
         payload: &[u8],
     ) -> Result<u64, VMError> {
         let out = Self::encode_tlv_payload(pointer_type, payload)?;
-        vm.alloc_host_tlv(&out)
+        vm.alloc_encoded_host_tlv(&out)
     }
 
     pub(super) fn encode_tlv_payload(
@@ -52,7 +52,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok(out)
     }
 
-    pub(super) fn alloc_norito_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
+    pub(super) fn alloc_norito_bytes(
+        vm: &mut dyn ivm::host::SyscallContext,
+        payload: &[u8],
+    ) -> Result<u64, VMError> {
         Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
     }
 }

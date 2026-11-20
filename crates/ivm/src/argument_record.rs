@@ -570,11 +570,11 @@ fn decoded_table_bytes(word_count: usize) -> usize {
     word_count.saturating_mul(size_of::<u64>())
 }
 fn validate_tlv_any_region(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     address: u64,
     expected: PointerType,
 ) -> Result<Tlv<'_>, VMError> {
-    let tlv = vm.validate_tlv(address)?;
+    let tlv = vm.public_tlv(address)?;
     if tlv.type_id != expected {
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
@@ -706,9 +706,13 @@ fn validate_argument_envelope_payload_lengths(
     }
     Ok(())
 }
-fn quote_argument_envelope_lengths(vm: &IVM) -> Result<(usize, usize), VMError> {
-    let record_bytes = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
-    let schema_bytes = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+fn quote_argument_envelope_lengths(
+    vm: &dyn crate::host::SyscallContext,
+) -> Result<(usize, usize), VMError> {
+    let record_bytes =
+        quote_tlv_payload_len_at(vm, vm.public_register(10)?, PointerType::NoritoBytes)?;
+    let schema_bytes =
+        quote_tlv_payload_len_at(vm, vm.public_register(11)?, PointerType::NoritoBytes)?;
     validate_argument_envelope_payload_lengths(record_bytes, schema_bytes)?;
     Ok((record_bytes, schema_bytes))
 }
@@ -1460,9 +1464,13 @@ pub fn prepare_argument_record_with_gas_limit(
         }),
     })
 }
-fn plan_argument_record_decode(vm: &IVM) -> Result<ArgumentDecodePlan, VMError> {
-    let record_tlv = validate_tlv_any_region(vm, vm.register(10), PointerType::NoritoBytes)?;
-    let schema_tlv = validate_tlv_any_region(vm, vm.register(11), PointerType::NoritoBytes)?;
+fn plan_argument_record_decode(
+    vm: &dyn crate::host::SyscallContext,
+) -> Result<ArgumentDecodePlan, VMError> {
+    let record_tlv =
+        validate_tlv_any_region(vm, vm.public_register(10)?, PointerType::NoritoBytes)?;
+    let schema_tlv =
+        validate_tlv_any_region(vm, vm.public_register(11)?, PointerType::NoritoBytes)?;
     validate_argument_envelope_lengths(&record_tlv, &schema_tlv)?;
     let schema = decode_schema(schema_tlv.payload)?;
     let record_bytes = record_tlv.payload.len();
@@ -1471,13 +1479,15 @@ fn plan_argument_record_decode(vm: &IVM) -> Result<ArgumentDecodePlan, VMError> 
         &schema,
         schema_tlv.payload,
         record,
-        vm.syscall_policy(),
+        vm.quote().syscall_policy(),
         record_bytes,
     )
 }
 /// Compute a conservative gas reserve for [`decode_argument_record`] without
 /// decoding either payload, allocating, or changing VM state.
-pub(crate) fn decode_argument_record_gas_quote(vm: &IVM) -> Result<u64, VMError> {
+pub(crate) fn decode_argument_record_gas_quote(
+    vm: &dyn crate::host::SyscallContext,
+) -> Result<u64, VMError> {
     let (record_bytes, schema_bytes) = quote_argument_envelope_lengths(vm)?;
     Ok(argument_record_runtime_gas_upper_bound(
         record_bytes,
@@ -1488,11 +1498,16 @@ pub(crate) fn decode_argument_record_gas_quote(vm: &IVM) -> Result<u64, VMError>
 ///
 /// On success, `r10` receives an aligned owned-HEAP table address and `r11` its exact word count.
 /// The operation decodes the boundary payload exactly once before allocating typed envelopes.
-pub(crate) fn decode_argument_record(vm: &mut IVM) -> Result<u64, VMError> {
+pub(crate) fn decode_argument_record(
+    vm: &mut dyn crate::host::SyscallContext,
+) -> Result<u64, VMError> {
     let plan = plan_argument_record_decode(vm)?;
     materialize_decode_plan(vm, &plan)
 }
-fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u64, VMError> {
+fn materialize_decode_plan(
+    vm: &mut dyn crate::host::SyscallContext,
+    plan: &ArgumentDecodePlan,
+) -> Result<u64, VMError> {
     let gas = plan.gas();
     let raw_heap_bytes = plan.raw_heap_bytes();
     vm.preflight_host_tlv_allocations_with_reserved_heap(
@@ -1503,7 +1518,7 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
     for (index, value) in plan.decoded.iter().enumerate() {
         let word = match value {
             DecodedArgument::Scalar(value) => Ok(*value),
-            DecodedArgument::Pointer(envelope) => vm.alloc_host_tlv(envelope),
+            DecodedArgument::Pointer(envelope) => vm.alloc_encoded_host_tlv(envelope),
             DecodedArgument::Sum {
                 layout,
                 tag,
@@ -1565,8 +1580,8 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
         }
         pointer
     };
-    vm.set_register(10, table_pointer);
-    vm.set_register(11, words.len() as u64);
+    vm.write_register(10, table_pointer)?;
+    vm.write_register(11, words.len() as u64)?;
     Ok(gas)
 }
 #[cfg(test)]

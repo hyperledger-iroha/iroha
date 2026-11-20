@@ -356,7 +356,10 @@ impl WsvHost {
             .unwrap_or_default()
     }
 
-    fn authenticated_caller(&self, vm: &IVM) -> Result<(ContractAddress, EntryPointKind), VMError> {
+    fn authenticated_caller(
+        &self,
+        vm: &dyn crate::host::SyscallContext,
+    ) -> Result<(ContractAddress, EntryPointKind), VMError> {
         let address = self
             .contract_runtime_address
             .as_ref()
@@ -370,12 +373,14 @@ impl WsvHost {
             .contract_instances
             .get(address)
             .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
-        if instance.lifecycle.active_code_hash != Some(CryptoHash::prehashed(vm.code_hash()))
+        if instance.lifecycle.active_code_hash
+            != Some(CryptoHash::prehashed(vm.quote().code_hash()))
             || self.caller != address.subject_id()
         {
             return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         let entry = vm
+            .quote()
             .contract_interface()
             .and_then(|interface| {
                 interface
@@ -463,27 +468,30 @@ impl WsvHost {
             Err(VMError::Trap(VmTrap::PermissionDenied))
         }
     }
-    pub(super) fn call_contract(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
+    pub(super) fn call_contract(
+        &mut self,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         let mut boundary_gas = gas::G_CALL_CONTRACT;
         let result = self.call_contract_inner(vm, &mut boundary_gas);
         result.map_err(|error| VMError::metered(boundary_gas, error))
     }
     fn call_contract_inner(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn crate::host::SyscallContext,
         boundary_gas: &mut u64,
     ) -> Result<u64, VMError> {
         if self.contract_ancestors.len() >= MAX_NESTED_CALLS {
             return Err(VMError::Trap(VmTrap::CallDepthExceeded));
         }
         let (caller, caller_kind) = self.authenticated_caller(vm)?;
-        let request_bytes = Self::quote_contract_call(vm.syscall_quote())?;
+        let request_bytes = Self::quote_contract_call(vm.quote())?;
         *boundary_gas = gas::syscall_byte_gas(gas::G_CALL_CONTRACT, request_bytes, 0);
         preflight_reserved_syscall_gas(vm, *boundary_gas)?;
-        if vm.remaining_gas() < *boundary_gas {
+        if vm.quote().remaining_gas() < *boundary_gas {
             return Err(VMError::Trap(VmTrap::OutOfGas));
         }
-        let literal = std::str::from_utf8(vm.validate_tlv(vm.register(10))?.payload)
+        let literal = std::str::from_utf8(vm.public_tlv(vm.public_register(10)?)?.payload)
             .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let address: ContractAddress = literal
             .parse()
@@ -494,8 +502,9 @@ impl WsvHost {
         if caller == address || self.contract_ancestors.contains(&address) {
             return Err(VMError::Trap(VmTrap::ReentrantCall));
         }
-        let binding = ContractCallBindingV1::from_bytes(vm.validate_tlv(vm.register(11))?.payload)
-            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        let binding =
+            ContractCallBindingV1::from_bytes(vm.public_tlv(vm.public_register(11)?)?.payload)
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let artifact = self
             .contract_fixture(&address)
             .ok_or(VMError::Trap(VmTrap::PermissionDenied))?
@@ -508,7 +517,7 @@ impl WsvHost {
                 .saturating_mul(artifact.artifact().len() as u64),
         );
         preflight_reserved_syscall_gas(vm, *boundary_gas)?;
-        if vm.remaining_gas() < *boundary_gas {
+        if vm.quote().remaining_gas() < *boundary_gas {
             return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         let entry = artifact
@@ -530,18 +539,18 @@ impl WsvHost {
         let result_words = schema
             .word_count()
             .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
-        if vm.register(15) != result_words as u64 {
+        if vm.public_register(15)? != result_words as u64 {
             return Err(VMError::Trap(VmTrap::DecodeError));
         }
-        let destination = vm.register(14);
+        let destination = vm.public_register(14)?;
         let budget = self.contract_execution_budget.clone();
         let arguments = if let Some(schema) = &entry.argument_schema {
             let quote = value_record::quote_argument_record(
                 vm,
                 schema,
-                vm.register(12),
-                vm.register(13) as usize,
-                vm.remaining_gas().saturating_sub(*boundary_gas),
+                vm.public_register(12)?,
+                vm.public_register(13)? as usize,
+                vm.quote().remaining_gas().saturating_sub(*boundary_gas),
             )?;
             *boundary_gas = boundary_gas
                 .checked_add(quote.gas)
@@ -549,18 +558,18 @@ impl WsvHost {
             Some(value_record::capture_argument_record_funded(
                 vm,
                 schema,
-                vm.register(12),
-                vm.register(13) as usize,
+                vm.public_register(12)?,
+                vm.public_register(13)? as usize,
                 &budget,
             )?)
         } else {
-            if vm.register(13) != 0 {
+            if vm.public_register(13)? != 0 {
                 return Err(VMError::Trap(VmTrap::DecodeError));
             }
             None
         };
         let reserve = vm.syscall_reserved_gas();
-        let child_limit = vm.remaining_gas().saturating_sub(*boundary_gas);
+        let child_limit = vm.quote().remaining_gas().saturating_sub(*boundary_gas);
         let mut child = IVM::try_new_with_memory_budget(child_limit, &budget)?;
         child.load_prepared(&artifact)?;
         child.select_entrypoint(&entry.name)?;
@@ -620,10 +629,9 @@ impl WsvHost {
                 .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             let returned_error = crate::sum::entrypoint_return_is_error(&child, schema)?;
             let captured = value_record::capture_completed_return_funded(&child, schema, &budget)?;
-            let transfer = value_record::transfer_return_record_funded(
+            let transfer = vm.publish_child_return(
                 &captured,
                 schema,
-                vm,
                 destination,
                 result_words,
                 child.remaining_gas().saturating_sub(quote.gas),
@@ -664,16 +672,19 @@ impl WsvHost {
             }
         }
     }
-    pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, VMError> {
+    pub(super) fn emit_contract_event(
+        &mut self,
+        vm: &dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         let (contract, kind) = self.authenticated_caller(vm)?;
         if kind == EntryPointKind::View {
             return Err(VMError::Trap(VmTrap::PermissionDenied));
         }
         for register in 10..=12 {
-            vm.ensure_public_register(register)?;
+            vm.quote().ensure_public_register(register)?;
         }
-        let ordinal =
-            usize::try_from(vm.register(10)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        let ordinal = usize::try_from(vm.public_register(10)?)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let artifact = self
             .contract_fixture(&contract)
             .ok_or(VMError::Trap(VmTrap::PermissionDenied))?
@@ -683,21 +694,21 @@ impl WsvHost {
             .events
             .get(ordinal)
             .ok_or(VMError::Trap(VmTrap::DecodeError))?;
-        let words =
-            usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        let words = usize::try_from(vm.public_register(12)?)
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let quote = value_record::quote_value_record(
             vm,
             &definition.payload_type,
-            vm.register(11),
+            vm.public_register(11)?,
             words,
-            vm.remaining_gas(),
+            vm.quote().remaining_gas(),
         )?;
         preflight_reserved_syscall_gas(vm, quote.gas)?;
         let result = (|| {
             let payload = value_record::capture_value_record_funded(
                 vm,
                 &definition.payload_type,
-                vm.register(11),
+                vm.public_register(11)?,
                 words,
                 &self.contract_execution_budget,
             )?;

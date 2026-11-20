@@ -30,9 +30,13 @@ impl IVMHost for CapturingHost {
         self.inner.prepare_syscall(number, vm)
     }
 
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         if number == syscalls::SYSCALL_DEBUG_LOG {
-            let log = vm.validate_tlv(vm.register(10))?;
+            let log = vm.public_tlv(vm.public_register(10)?)?;
             assert_eq!(log.type_id, PointerType::NoritoBytes);
             self.logs.push(log.payload.to_vec());
         }

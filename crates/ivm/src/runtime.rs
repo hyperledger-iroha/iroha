@@ -23,7 +23,7 @@ pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 pub use crate::stack_policy::IvmStackPolicy;
-use crate::{VMError, host::IVMHost, ivm::IVM};
+use crate::{VMError, host::IVMHost};
 use std::any::Any;
 /// Wrapper that enforces syscall policy and retains the host's prepared argument owner.
 pub(crate) struct SyscallDispatcher<H> {
@@ -46,8 +46,12 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        if !self.allows_syscall(vm.syscall_policy(), number) {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
+        if !self.allows_syscall(vm.quote().syscall_policy(), number) {
             return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
         }
         self.inner.syscall(number, vm)
@@ -81,6 +85,7 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
     use crate::PreparedArgumentRecord;
     use crate::error::VmTrap;
     use iroha_primitives::json::Json;
@@ -101,7 +106,11 @@ mod tests {
             Err(VMError::Trap(VmTrap::PermissionDenied))
         }
 
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             panic!("prepared arguments must not request public input")
         }
 
@@ -176,7 +185,11 @@ mod tests {
         ) -> Result<u64, VMError> {
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.inner.syscall(number, vm)
         }
         fn as_any(&mut self) -> &mut dyn Any {

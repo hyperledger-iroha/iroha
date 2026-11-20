@@ -528,19 +528,23 @@ mod tests {
                 }
                 self.fallback.prepare_syscall(number, vm)
             }
-            fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            fn syscall(
+                &mut self,
+                number: u32,
+                vm: &mut dyn crate::host::SyscallContext,
+            ) -> Result<u64, VMError> {
                 if number == syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION {
                     assert_eq!(
-                        vm.register(11),
+                        vm.public_register(11)?,
                         syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509
                     );
-                    let request = vm.validate_tlv(vm.register(10))?;
+                    let request = vm.public_tlv(vm.public_register(10)?)?;
                     assert_eq!(
                         request.type_id,
                         crate::pointer_abi::PointerType::NoritoBytes
                     );
                     assert_eq!(request.payload, b"typed transport control");
-                    vm.set_register(10, self.ordinal);
+                    vm.write_register(10, self.ordinal)?;
                     return Ok(0);
                 }
                 self.fallback.syscall(number, vm)

@@ -51,7 +51,6 @@ fn vm() -> IVM {
 }
 
 struct Host {
-    change_mode: bool,
     error: Option<VMError>,
     calls: usize,
 }
@@ -59,11 +58,8 @@ impl IVMHost for Host {
     fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(&mut self, _: u32, _: &mut dyn ivm::host::SyscallContext) -> Result<u64, VMError> {
         self.calls += 1;
-        if self.change_mode {
-            vm.set_trace_mode(TraceMode::PcOnly);
-        }
         self.error.take().map_or(Ok(0), Err)
     }
     fn as_any(&mut self) -> &mut dyn Any {
@@ -72,12 +68,13 @@ impl IVMHost for Host {
 }
 
 #[test]
-fn actual_trace_policy_change_cannot_reach_completed_report() {
+fn trace_owner_deferral_cannot_reach_completed_report() {
     let mut vm = vm();
     vm.set_trace_mode(TraceMode::DeltaRegisters);
     let mut host = Host {
-        change_mode: true,
-        error: None,
+        error: Some(VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable,
+        ))),
         calls: 0,
     };
     let mut report_built = false;
@@ -140,7 +137,6 @@ fn allocation_refusal_retains_the_original_pool_release_observation() {
     let refusal = original.try_reserve_bytes(1).unwrap_err();
     let expected = VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone()));
     let mut host = Host {
-        change_mode: false,
         error: Some(VMError::Deferred(VmDeferral::AllocationDeferred(refusal))),
         calls: 0,
     };
@@ -164,11 +160,7 @@ fn ordinary_success_and_semantic_faults_remain_completed_outcomes() {
             _ => unreachable!(),
         };
         let mut vm = vm();
-        let mut host = Host {
-            change_mode: false,
-            error,
-            calls: 0,
-        };
+        let mut host = Host { error, calls: 0 };
         assert!(matches!(
             (fixture, run(&mut vm, &mut host).unwrap()),
             (0, Ok(()))
@@ -288,7 +280,6 @@ fn borrowed_trap_rendering_uses_exact_original_error_and_success_has_no_trap() {
     let source_hash = iroha_crypto::Hash::prehashed(vm.code_hash());
     let original = VMError::Trap(VmTrap::UnknownSyscall(0x7fff));
     let mut host = Host {
-        change_mode: false,
         error: Some(original),
         calls: 0,
     };

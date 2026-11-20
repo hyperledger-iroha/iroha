@@ -18,7 +18,7 @@ use std::num::NonZeroU64;
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_lock_key(
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         pointer: u64,
         controller: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<(EscrowId, Vec<u8>), ivm::VMError> {
@@ -34,7 +34,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 
     pub(super) fn controlled_asset_lock(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         number: u32,
     ) -> Result<u64, ivm::VMError> {
         // Never accept a controller supplied by the guest, an account alias, or metadata.
@@ -46,11 +46,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if context.contract_subject != controller.subject_id() {
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        vm.ensure_public_register(10)?;
+        vm.quote().ensure_public_register(10)?;
         let mut custody_return = None;
         let instruction = match number {
             ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN => {
-                let base = vm.register(10);
+                let base = vm.public_register(10)?;
                 if !base.is_multiple_of(8) {
                     return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                 }
@@ -103,31 +103,34 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN => {
-                vm.ensure_public_register(11)?;
-                vm.ensure_public_register(12)?;
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                vm.quote().ensure_public_register(11)?;
+                vm.quote().ensure_public_register(12)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(DrawdownControlledAssetLockV1 {
                     drawdown: DrawdownAssetLock::new(
                         escrow_id,
-                        Self::decode_quantity(vm, vm.register(11))?,
-                        Self::decode_quantity(vm, vm.register(12))?,
+                        Self::decode_quantity(vm, vm.public_register(11)?)?,
+                        Self::decode_quantity(vm, vm.public_register(12)?)?,
                     ),
                     waterfall: None,
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL => {
-                vm.ensure_public_register(11)?;
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                vm.quote().ensure_public_register(11)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(CancelControlledAssetLockV1 {
                     cancel: CancelAssetLock::new(
                         escrow_id,
-                        Self::decode_quantity(vm, vm.register(11))?,
+                        Self::decode_quantity(vm, vm.public_register(11)?)?,
                     ),
                     waterfall: None,
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE => {
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(ExpireControlledAssetLockV1 {
                     expiry: ExpireAssetLock::new(escrow_id),
                     waterfall: None,
@@ -155,14 +158,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             if !self.try_reserve_serialized_output(&instruction, 1) {
                 return self.ensure_output_budget().map(|()| gas);
             }
-            let pointer = vm.alloc_host_tlv(&encoded_custody)?;
+            let pointer = vm.alloc_encoded_host_tlv(&encoded_custody)?;
             self.queued.push(QueuedEffect {
                 payload: QueuedEffectPayload::Instruction(instruction),
                 authority: self.effect_authority(),
                 contract_runtime_context: self.current_contract_runtime_context.clone(),
                 entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             });
-            vm.set_register(10, pointer);
+            vm.write_register(10, pointer)?;
             return Ok(gas);
         }
         // Other operations retain their original gas and effect-only behavior.
@@ -693,7 +696,11 @@ seiyaku ControlledLock {
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);

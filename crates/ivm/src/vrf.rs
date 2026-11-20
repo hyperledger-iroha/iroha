@@ -21,13 +21,13 @@ pub const fn epoch_seed_gas(found: bool) -> u64 {
 /// Returns deterministic gas, taint or guest-memory faults, preserving local
 /// allocation deferrals. Failure leaves the caller's result registers untouched.
 pub fn publish_epoch_seed(
-    vm: &mut crate::IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     seed: Option<&[u8; 32]>,
 ) -> Result<u64, crate::VMError> {
-    vm.ensure_public_register(10)?;
+    vm.quote().ensure_public_register(10)?;
     let gas = epoch_seed_gas(seed.is_some());
     crate::host::preflight_reserved_syscall_gas(vm, gas)?;
-    if vm.remaining_gas() < gas {
+    if vm.quote().remaining_gas() < gas {
         return Err(crate::VMError::Trap(VmTrap::OutOfGas));
     }
     let pointer = if let Some(seed) = seed {
@@ -37,11 +37,11 @@ pub fn publish_epoch_seed(
         envelope[3..7].copy_from_slice(&32_u32.to_be_bytes());
         envelope[7..39].copy_from_slice(seed);
         envelope[39..].copy_from_slice(iroha_crypto::Hash::new(seed).as_ref());
-        vm.alloc_host_tlv(&envelope)?
+        vm.alloc_encoded_host_tlv(&envelope)?
     } else {
         0
     };
-    vm.set_register(10, pointer);
+    vm.write_register(10, pointer)?;
     Ok(gas)
 }
 

@@ -4,6 +4,8 @@
 //! current candidate positions. Overlay tombstones consume the same position
 //! budget as live keys. A full page carries a continuation without probing for
 //! another key; the following page can therefore be empty.
+#[cfg(test)]
+use crate::IVM;
 use crate::error::{VmDeferral, VmTrap};
 use std::ops::{Bound, ControlFlow};
 
@@ -15,9 +17,7 @@ use iroha_model_base::{name::Name, state_path::StatePath};
 use ivm_abi::codec::decode_canonical_norito;
 use ivm_abi::codec::encode_canonical_norito;
 
-use crate::{
-    IVM, VMError, gas, host, metadata::EmbeddedStateType, pointer_abi::PointerType, syscalls,
-};
+use crate::{VMError, gas, host, metadata::EmbeddedStateType, pointer_abi::PointerType, syscalls};
 
 /// Maximum logical positions examined by one scan, including deleted entries.
 pub const MAX_STATE_SCAN_CANDIDATES_V1: usize = syscalls::STATE_SCAN_MAX_CANDIDATES_V1;
@@ -38,8 +38,12 @@ pub struct StateScanRequest {
     _reservation: Option<AllocationReservation>,
 }
 
-fn payload_at(vm: &IVM, register: usize, maximum: usize) -> Result<&[u8], VMError> {
-    let tlv = vm.validate_tlv(vm.register(register))?;
+fn payload_at(
+    vm: &dyn crate::host::SyscallContext,
+    register: usize,
+    maximum: usize,
+) -> Result<&[u8], VMError> {
+    let tlv = vm.public_tlv(vm.public_register(register)?)?;
     if tlv.type_id != PointerType::NoritoBytes || tlv.payload.len() > maximum {
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
@@ -47,15 +51,21 @@ fn payload_at(vm: &IVM, register: usize, maximum: usize) -> Result<&[u8], VMErro
 }
 
 /// Quote request bytes before inspecting a map, its schema, or any backing state.
-pub fn prepare_minimum(vm: &IVM) -> Result<u64, VMError> {
-    if !(1..=64).contains(&vm.register(12)) || (13..=15).any(|reg| vm.register(reg) != 0) {
+pub fn prepare_minimum(vm: &dyn crate::host::SyscallContext) -> Result<u64, VMError> {
+    if !(1..=64).contains(&vm.public_register(12)?) {
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let path = host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-    let cursor = if vm.register(11) == 0 {
+    for register in 13..=15 {
+        if vm.public_register(register)? != 0 {
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
+        }
+    }
+    let path = host::quote_state_path_payload_len_at(vm, vm.public_register(10)?)?;
+    let cursor = if vm.public_register(11)? == 0 {
         0
     } else {
-        let len = host::quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+        let len =
+            host::quote_tlv_payload_len_at(vm, vm.public_register(11)?, PointerType::NoritoBytes)?;
         if len > MAX_STATE_CURSOR_BYTES_V1 {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
@@ -102,14 +112,14 @@ impl StateScanRequest {
     /// Decode the published inputs and authenticate the cursor's position binding.
     ///
     /// `instance` is derived from host invocation context, never a guest input.
-    pub fn decode(vm: &IVM, instance: &str) -> Result<Self, VMError> {
+    pub fn decode(vm: &dyn crate::host::SyscallContext, instance: &str) -> Result<Self, VMError> {
         let minimum = prepare_minimum(vm)?;
         host::preflight_reserved_syscall_gas(vm, minimum)?;
         if instance.is_empty() || instance.len() > 1024 {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let map_payload = payload_at(vm, 10, syscalls::STATE_MAX_PATH_FRAME_BYTES)?;
-        let cursor_payload = (vm.register(11) != 0)
+        let cursor_payload = (vm.public_register(11)? != 0)
             .then(|| payload_at(vm, 11, MAX_STATE_CURSOR_BYTES_V1))
             .transpose()?;
         let map_limits = norito::canonical_decode_limits(map_payload.len());
@@ -143,6 +153,7 @@ impl StateScanRequest {
             .parse()
             .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         let interface = vm
+            .quote()
             .contract_interface()
             .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         let mut declarations = interface
@@ -223,7 +234,7 @@ impl StateScanRequest {
         Ok(Self {
             map,
             after,
-            limit: vm.register(12) as usize,
+            limit: vm.public_register(12)? as usize,
             instance: owned_instance,
             schema_hash,
             key_schema_hash,
@@ -294,7 +305,7 @@ impl StateScanPage {
     /// store, so its examined bytes are metered even though returned paths are relative.
     pub fn examine(
         &mut self,
-        vm: &IVM,
+        vm: &dyn crate::host::SyscallContext,
         relative: &str,
         physical_bytes: usize,
         present: bool,
@@ -358,7 +369,7 @@ impl StateScanPage {
     }
 
     /// Publish the completed key page and continuation after preflighting both outputs.
-    pub fn publish(self, vm: &mut IVM) -> Result<u64, VMError> {
+    pub fn publish(self, vm: &mut dyn crate::host::SyscallContext) -> Result<u64, VMError> {
         let payload = encode_canonical_norito(&self.selected)?;
         let cursor_payload = if self.bounded {
             let last = self.last.ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
@@ -378,15 +389,15 @@ impl StateScanPage {
         let cursor_pointer = cursor_payload
             .as_ref()
             .map_or(Ok(0), |payload| publish_bytes(vm, payload))?;
-        vm.set_register(10, keys_pointer);
-        vm.set_register(11, cursor_pointer);
-        vm.set_register(12, self.selected.len() as u64);
-        vm.set_register(13, self.examined as u64);
+        vm.write_register(10, keys_pointer)?;
+        vm.write_register(11, cursor_pointer)?;
+        vm.write_register(12, self.selected.len() as u64)?;
+        vm.write_register(13, self.examined as u64)?;
         Ok(gas)
     }
 }
 
-fn publish_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
+fn publish_bytes(vm: &mut dyn crate::host::SyscallContext, payload: &[u8]) -> Result<u64, VMError> {
     let mut tlv = Vec::with_capacity(host::TLV_ENVELOPE_OVERHEAD + payload.len());
     tlv.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
     tlv.push(1);
@@ -397,7 +408,7 @@ fn publish_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
     );
     tlv.extend_from_slice(payload);
     tlv.extend_from_slice(Hash::new(payload).as_ref());
-    vm.alloc_host_tlv(&tlv)
+    vm.alloc_encoded_host_tlv(&tlv)
 }
 
 /// Merge sorted backing keys and transaction entries without collecting either range.

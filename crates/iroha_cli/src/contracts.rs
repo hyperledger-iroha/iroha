@@ -1083,11 +1083,15 @@ where
     ) -> Result<u64, ivm::VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut ivm::IVM) -> Result<u64, ivm::VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let record = LocalContractSyscallTrace {
-            pc: vm.pc(),
+            pc: vm.quote().program_counter(),
             syscall: number,
-            gas_remaining_at_call: vm.remaining_gas(),
+            gas_remaining_at_call: vm.quote().remaining_gas(),
             additional_gas: None,
             error: None,
         };

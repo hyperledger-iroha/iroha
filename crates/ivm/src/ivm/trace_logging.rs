@@ -10,70 +10,21 @@
 use super::zk;
 use super::{IVM, IvmEngine, TraceMode, VMError, completed_instruction_cycles};
 use crate::error::VmDeferral;
-use iroha_allocation::{AllocationBudget, AllocationRefusal, AllocationScope};
+#[cfg(test)]
+use iroha_allocation::AllocationBudget;
+use iroha_allocation::{AllocationRefusal, AllocationScope};
 
 mod change_counts;
 
-/// Move-only identity for one invocation's admitted observation policy.
+/// Trace shape selected once when the VM admits this invocation.
 ///
-/// This stores no private state and owns no caller-supplied row counts. A host
-/// changing the trace mode or resetting/reloading this VM invalidates the token,
-/// including when formal ZK tracing is disabled. Never repair that mismatch by
-/// allocating a replacement observation after the host's effects.
+/// The interpreter owns the VM for the lifetime of the run. A syscall borrows
+/// only its sealed execution context and cannot change the program, trace
+/// policy or allocation pool. Trace storage retains its own allocation owner.
 pub(super) struct InvocationTrace {
-    epoch: u64,
     mode: TraceMode,
-    /// Engine of the loaded image, which fixes the register geometry of delta observations.
     engine: IvmEngine,
     cycles: bool,
-    /// Collection policy of the thread-local invocation scope at admission.
-    ///
-    /// The run installs that scope before admission and keeps it until the
-    /// token finishes, so its policy cannot change in between; reusing it keeps
-    /// the per-step ownership checks free of TLS lookups. Without a scope the
-    /// VM's current configuration is consulted, as `zk_trace_collection_enabled`
-    /// does.
-    scoped_collection: Option<bool>,
-    original: Option<AllocationBudget>,
-}
-impl InvocationTrace {
-    #[inline]
-    fn collection_enabled(&self, vm: &IVM) -> bool {
-        self.scoped_collection
-            .unwrap_or(vm.zk_mode && vm.zk_trace_enabled)
-    }
-    #[inline]
-    fn owns(&self, vm: &IVM) -> bool {
-        self.epoch == vm.proof_state_epoch
-            && self.mode == vm.trace_mode
-            && self.engine == vm.engine()
-            && self.cycles == (self.collection_enabled(vm) && vm.max_cycles != 0)
-            && match (&self.original, vm.memory.allocation_budget()) {
-                (Some(original), Some(current)) => original.same_pool(current),
-                (None, None) => true,
-                _ => false,
-            }
-    }
-    /// Runs several times per step: build the error only on a mismatch, so the
-    /// owning path never constructs and drops a `VMError`.
-    #[inline]
-    pub(super) fn check(&self, vm: &IVM) -> Result<(), VMError> {
-        if self.owns(vm) {
-            Ok(())
-        } else {
-            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
-                crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            )))
-        }
-    }
-    fn discard_unobserved(&self, vm: &mut IVM) {
-        // A newer/replaced invocation owns any new pending quota. Existing
-        // lifecycle operations already scrub the invalidated original logs.
-        if self.owns(vm) {
-            vm.trace_log.discard_unobserved();
-            vm.delta_trace.discard_unobserved();
-        }
-    }
 }
 
 /// Borrowed preparation custody; refusal or unwind cancels only unused spans.
@@ -81,15 +32,14 @@ impl InvocationTrace {
 /// No storage is refunded here. Original allocation scopes and their mutable
 /// log borrows finish before this guard retires; cancellation only clears the
 /// inline pending quota. The enclosing invocation owns the panic boundary.
-struct TracePreparation<'vm, 'invocation> {
+struct TracePreparation<'vm> {
     vm: &'vm mut IVM,
-    invocation: &'invocation InvocationTrace,
     armed: bool,
 }
-impl Drop for TracePreparation<'_, '_> {
+impl Drop for TracePreparation<'_> {
     fn drop(&mut self) {
         if self.armed {
-            self.invocation.discard_unobserved(self.vm);
+            self.vm.discard_unobserved_trace();
         }
     }
 }
@@ -135,21 +85,14 @@ impl IVM {
 
     /// Admit the initial pre-fetch record before root arguments or host effects.
     ///
-    /// Capture after `clear_zk_trace_logs` advances the invocation epoch, and
-    /// before cycle/halt resets or `begin_root_call` argument preparation. The
-    /// root boundary must not clear these logs or advance the epoch again.
-    /// The caller has already scrubbed the preceding invocation. Beginning is
-    /// otherwise observational: no registers, gas, cycles or guest memory change.
+    /// The caller has scrubbed the preceding invocation. Admit storage before
+    /// root arguments, guest state, gas or cycles change.
     pub(super) fn begin_trace_invocation(&mut self) -> Result<InvocationTrace, VMError> {
-        let mut invocation = InvocationTrace {
-            epoch: self.proof_state_epoch,
+        let invocation = InvocationTrace {
             mode: self.trace_mode,
             engine: self.engine(),
-            cycles: false,
-            scoped_collection: crate::zk::scoped_reg_logger_enabled(),
-            original: self.memory.allocation_budget().cloned(),
+            cycles: self.zk_trace_collection_enabled() && self.max_cycles != 0,
         };
-        invocation.cycles = invocation.collection_enabled(self) && self.max_cycles != 0;
         if invocation.cycles && invocation.engine == IvmEngine::Baseline {
             // Completed-cycle proof traces are C10 rows; the baseline producer is not
             // reconstructed (`run_baseline` refuses it first), so never record C10 rows here.
@@ -187,11 +130,7 @@ impl IVM {
 
     /// Publish the already-admitted initial or preceding-instruction observation.
     #[inline]
-    pub(super) fn record_trace_prefetch(
-        &mut self,
-        invocation: &InvocationTrace,
-    ) -> Result<(), VMError> {
-        invocation.check(self)?;
+    pub(super) fn record_trace_prefetch(&mut self, invocation: &InvocationTrace) {
         match invocation.mode {
             TraceMode::Off => {}
             TraceMode::PcOnly => self.pc_trace.record_reserved(self.pc),
@@ -208,7 +147,6 @@ impl IVM {
                 ),
             },
         }
-        Ok(())
     }
 
     /// Admit completed cycles and the next pre-fetch row, then all later preflight.
@@ -223,15 +161,12 @@ impl IVM {
         instruction: u32,
         tail_preflight: impl FnOnce(&mut Self) -> Result<T, VMError>,
     ) -> Result<T, VMError> {
-        invocation.check(self)?;
         if !invocation.cycles && invocation.mode == TraceMode::Off {
             // Ordinary execution has no trace backing to admit or cancel. Do
             // not clone an allocation owner, enter a refund scope, or classify
             // destinations on this hot path. Tail errors (including the
             // earlier ZK privacy check) and panics propagate unchanged.
-            let output = tail_preflight(self)?;
-            invocation.check(self)?;
-            return Ok(output);
+            return tail_preflight(self);
         }
         let changes = if invocation.cycles || invocation.mode == TraceMode::DeltaRegisters {
             match invocation.engine {
@@ -252,7 +187,6 @@ impl IVM {
         };
         let mut preparation = TracePreparation {
             vm: self,
-            invocation,
             armed: true,
         };
         preparation.vm.with_trace_scope(|vm, scope| {
@@ -276,10 +210,6 @@ impl IVM {
             Ok(())
         })?;
         let output = tail_preflight(preparation.vm)?;
-        // No tail may replace the prepaid owner's trace policy and then
-        // authorize guest effects under a stale token. A host isolation error
-        // has already propagated above, retaining ZK PrivacyViolation precedence.
-        invocation.check(preparation.vm)?;
         preparation.armed = false;
         Ok(output)
     }
@@ -294,13 +224,11 @@ impl IVM {
         invocation: &InvocationTrace,
         additional: u64,
     ) -> Result<(), VMError> {
-        invocation.check(self)?;
         if !invocation.cycles || additional == 0 {
             return Ok(());
         }
         let mut preparation = TracePreparation {
             vm: self,
-            invocation,
             armed: true,
         };
         preparation.vm.with_trace_scope(|vm, scope| {
@@ -315,15 +243,13 @@ impl IVM {
 
     /// Flush only completed, pre-admitted cycles after delayed native finish.
     ///
-    /// Every step starts here; the ownership check and the untraced return stay
-    /// inline while the cycle publication itself remains out of line.
+    /// The untraced return stays inline. Publishing funded cycles remains out of line.
     #[inline]
     pub(super) fn publish_trace_cycles(
         &mut self,
         invocation: &InvocationTrace,
         last_logged_cycle: &mut u64,
     ) -> Result<(), VMError> {
-        invocation.check(self)?;
         if !invocation.cycles {
             return Ok(());
         }
@@ -349,8 +275,13 @@ impl IVM {
     }
 
     /// Finish on success, refusal or unwind without erasing initialized history.
-    pub(super) fn finish_trace_invocation(&mut self, invocation: InvocationTrace) {
-        invocation.discard_unobserved(self);
+    pub(super) fn finish_trace_invocation(&mut self, _invocation: InvocationTrace) {
+        self.discard_unobserved_trace();
+    }
+
+    fn discard_unobserved_trace(&mut self) {
+        self.trace_log.discard_unobserved();
+        self.delta_trace.discard_unobserved();
     }
 
     /// Retire all delta/PC backing while keeping each original allocation owner.

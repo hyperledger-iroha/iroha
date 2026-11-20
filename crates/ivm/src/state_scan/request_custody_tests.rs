@@ -151,7 +151,11 @@ fn dispatched_local_refusal_preserves_inputs_and_does_not_refund_unmetered_work(
         ) -> Result<u64, VMError> {
             self.core.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.entered = true;
             self.pool.set_limit_bytes(self.pool.reserved_bytes());
             let result = self.core.syscall(number, vm);

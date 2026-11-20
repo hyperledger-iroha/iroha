@@ -54,7 +54,7 @@ impl QueryStateRef<'_, '_, '_> {
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_uid_holding_quote(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
     ) -> Result<u64, ivm::VMError> {
         let context = self
@@ -62,14 +62,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .as_ref()
             .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         for register in 10..=12 {
-            vm.ensure_public_register(register)?;
+            vm.quote().ensure_public_register(register)?;
         }
         let definition: AssetDefinitionId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
         let account: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
-        let incoming = Self::decode_quantity(vm, vm.register(12))?;
-        let gas_remaining = vm.remaining_gas();
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
+        let incoming = Self::decode_quantity(vm, vm.public_register(12)?)?;
+        let gas_remaining = vm.quote().remaining_gas();
         let gas_context = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&gas_context, gas_remaining)?;
         let state = self
@@ -96,7 +96,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             prepared.encoded_bytes()?,
         )?;
         let table = prepared.materialize(vm)?;
-        vm.set_register(10, table);
+        vm.write_register(10, table)?;
         Ok(gas)
     }
 }
@@ -163,7 +163,7 @@ impl PreparedUidHoldingQuote {
     }
 
     /// Materialize the six-word product only after the caller completes gas preflight.
-    fn materialize(self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn materialize(self, vm: &mut dyn ivm::host::SyscallContext) -> Result<u64, ivm::VMError> {
         let option = ivm::sum::SumLayoutV1::option(1)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let table_bytes = 6 * 8;
@@ -173,18 +173,18 @@ impl PreparedUidHoldingQuote {
                 .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         // Check the whole allocation before publishing a pointer or advancing either arena.
         vm.preflight_host_tlv_allocations_with_reserved_heap(&self.leaf_lengths(), reserved_heap)?;
-        let definition = vm.alloc_host_tlv(&self.definition)?;
-        let account = vm.alloc_host_tlv(&self.account)?;
-        let revision = vm.alloc_host_tlv(&self.revision)?;
-        let holdings = vm.alloc_host_tlv(&self.holdings)?;
+        let definition = vm.alloc_encoded_host_tlv(&self.definition)?;
+        let account = vm.alloc_encoded_host_tlv(&self.account)?;
+        let revision = vm.alloc_encoded_host_tlv(&self.revision)?;
+        let holdings = vm.alloc_encoded_host_tlv(&self.holdings)?;
         let limit = match self.limit {
             Some(value) => {
-                let pointer = vm.alloc_host_tlv(&value)?;
+                let pointer = vm.alloc_encoded_host_tlv(&value)?;
                 ivm::sum::allocate_words(vm, option, 1, &[pointer])?
             }
             None => ivm::sum::allocate_words(vm, option, 0, &[])?,
         };
-        let overflow = vm.alloc_host_tlv(&self.overflow)?;
+        let overflow = vm.alloc_encoded_host_tlv(&self.overflow)?;
         let table = vm.alloc_heap(table_bytes)?;
         for (index, value) in [definition, account, revision, holdings, limit, overflow]
             .into_iter()

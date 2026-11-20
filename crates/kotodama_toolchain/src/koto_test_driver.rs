@@ -1016,6 +1016,8 @@ struct KotoTestHost {
     contract_address: ContractAddress,
     last_failure: Option<TestFailure>,
     supplemental_trace: Option<ivm::zk::RuntimeTraceCapture>,
+    /// The runner selects the same observation mode for the root and nested test VMs.
+    nested_trace_mode: TraceMode,
     lifecycle: Lifecycle,
     fixture_upgrade_staged: bool,
     /// Seiyaku calls made so far, for gas reporting.
@@ -2258,7 +2260,7 @@ fn execute_test(
         .map_err(|err| format!("failed to load compiled suite: {err}"))?;
     vm.set_program_counter(test.pc)
         .map_err(|err| format!("failed to jump to test `{}`: {err}", test.name))?;
-    vm.set_trace_mode(trace_mode);
+    host.configure_trace(&mut vm, trace_mode);
     let started = Instant::now();
     let outcome = vm.run_with_host(&mut host);
     let elapsed = started.elapsed();
@@ -2895,6 +2897,11 @@ enum Lifecycle {
     Active,
 }
 impl KotoTestHost {
+    fn configure_trace(&mut self, vm: &mut IVM, mode: TraceMode) {
+        self.nested_trace_mode = mode;
+        vm.set_trace_mode(mode);
+    }
+
     fn new(
         inner: WsvHost,
         program: Option<ivm::PreparedContract>,
@@ -2949,6 +2956,7 @@ impl KotoTestHost {
             contract_address,
             last_failure: None,
             supplemental_trace: None,
+            nested_trace_mode: TraceMode::Off,
             lifecycle,
             fixture_upgrade_staged: false,
             calls: Vec::new(),
@@ -3091,7 +3099,10 @@ impl KotoTestHost {
         });
     }
     /// Record the call-site announcement in `x10` for the next helper call.
-    fn record_call_site(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn record_call_site(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         use kotodama_lang::testing::TestCallSite;
         let bytes = Self::decode_bytes_arg(vm, 10)?;
         if bytes.len() > TestCallSite::MAX_ENCODED_BYTES {
@@ -3106,12 +3117,16 @@ impl KotoTestHost {
     fn fail_harness<T>(&mut self, message: impl Into<String>) -> Result<T, ivm::VMError> {
         self.fail_test(TestFailure::new(FailureKind::Harness, message))
     }
-    fn decode_alias_arg(vm: &IVM, reg: usize, label: &str) -> Result<String, ivm::VMError> {
-        let ptr = vm.register(reg);
+    fn decode_alias_arg(
+        vm: &dyn ivm::host::SyscallContext,
+        reg: usize,
+        label: &str,
+    ) -> Result<String, ivm::VMError> {
+        let ptr = vm.public_register(reg)?;
         if ptr == 0 {
             return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let tlv = vm.validate_tlv(ptr)?;
+        let tlv = vm.public_tlv(ptr)?;
         match tlv.type_id {
             PointerType::Blob | PointerType::NoritoBytes => String::from_utf8(tlv.payload.to_vec())
                 .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError)),
@@ -3126,24 +3141,27 @@ impl KotoTestHost {
             }
         }
     }
-    fn decode_bytes_arg(vm: &IVM, reg: usize) -> Result<Vec<u8>, ivm::VMError> {
-        let ptr = vm.register(reg);
+    fn decode_bytes_arg(
+        vm: &dyn ivm::host::SyscallContext,
+        reg: usize,
+    ) -> Result<Vec<u8>, ivm::VMError> {
+        let ptr = vm.public_register(reg)?;
         if ptr == 0 {
             return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let tlv = vm.validate_tlv(ptr)?;
+        let tlv = vm.public_tlv(ptr)?;
         match tlv.type_id {
             PointerType::Blob | PointerType::NoritoBytes => Ok(tlv.payload.to_vec()),
             _ => Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         }
     }
     fn alloc_pointer_result(
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         pointer_type: PointerType,
         payload: &[u8],
     ) -> Result<u64, ivm::VMError> {
         let tlv = make_tlv(pointer_type, payload);
-        vm.alloc_host_tlv(&tlv)
+        vm.alloc_encoded_host_tlv(&tlv)
     }
     /// Explain an unknown fixture actor: the declared actors and the closest spelling, or how to
     /// declare one when the test's fixture has none.
@@ -3212,7 +3230,7 @@ impl KotoTestHost {
     /// Accept a pre-execution rejection when the test expected one, or fail with a mismatch.
     fn accept_expected_rejection(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         expectation: Option<&kotodama_lang::testing::RejectionExpectation>,
         accepted: &[kotodama_lang::testing::RejectionExpectation],
         observed: &TestFailure,
@@ -3222,7 +3240,7 @@ impl KotoTestHost {
         if matches!(expected, kotodama_lang::testing::RejectionExpectation::Any)
             || accepted.contains(expected)
         {
-            vm.set_register(10, 0);
+            vm.write_register(10, 0)?;
             return Ok(0);
         }
         self.fail_test(
@@ -3238,13 +3256,13 @@ impl KotoTestHost {
     }
     fn invoke_entrypoint(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         expect_reject: bool,
     ) -> Result<u64, ivm::VMError> {
         use kotodama_lang::testing::RejectionExpectation;
         self.clear_test_error();
         let expectation = if expect_reject {
-            if vm.register(15) != 0 {
+            if vm.public_register(15)? != 0 {
                 return self.fail_harness("rejection expectation has nonzero reserved operands");
             }
             let bytes = Self::decode_bytes_arg(vm, 14)?;
@@ -3260,7 +3278,7 @@ impl KotoTestHost {
         } else {
             None
         };
-        let (actor_alias, actor) = if !expect_reject && vm.register(10) == 0 {
+        let (actor_alias, actor) = if !expect_reject && vm.public_register(10)? == 0 {
             (
                 CURRENT_CALLER.to_owned(),
                 FixtureActor {
@@ -3287,13 +3305,17 @@ impl KotoTestHost {
                 ivm::VMError::Trap(VmTrap::NoritoInvalid),
             )
         })?;
-        let argument_table = vm.register(12);
-        let argument_words = usize::try_from(vm.register(13)).unwrap_or(usize::MAX);
-        let result_table = if expect_reject { 0 } else { vm.register(14) };
+        let argument_table = vm.public_register(12)?;
+        let argument_words = usize::try_from(vm.public_register(13)?).unwrap_or(usize::MAX);
+        let result_table = if expect_reject {
+            0
+        } else {
+            vm.public_register(14)?
+        };
         let return_arity = if expect_reject {
             1
         } else {
-            usize::try_from(vm.register(15)).unwrap_or(TEST_MAX_RETURN_VALUES + 1)
+            usize::try_from(vm.public_register(15)?).unwrap_or(TEST_MAX_RETURN_VALUES + 1)
         };
         if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
             return self.fail_harness(format!(
@@ -3383,7 +3405,7 @@ impl KotoTestHost {
                 schema,
                 argument_table,
                 argument_words,
-                vm.remaining_gas(),
+                vm.quote().remaining_gas(),
             )
             .and_then(|quote| {
                 boundary_gas = quote.gas;
@@ -3433,7 +3455,8 @@ impl KotoTestHost {
             if runtime_entrypoint.return_schema.word_count() != Some(return_arity) {
                 return Err(ivm::VMError::Trap(VmTrap::DecodeError));
             }
-            ivm::value_record::validate_return_destination(vm, result_table, return_arity)?;
+            vm.quote()
+                .validate_return_destination(result_table, return_arity)?;
         }
         let mut nested_vm = vm.try_new_in_same_memory_pool(NESTED_GAS_LIMIT)?;
         nested_vm.reset()?;
@@ -3468,7 +3491,7 @@ impl KotoTestHost {
         }
         drop(captured_arguments);
 
-        nested_vm.set_trace_mode(vm.trace_mode());
+        nested_vm.set_trace_mode(self.nested_trace_mode);
         nested_vm.set_max_cycles(0);
         let event_checkpoint = self.events.len();
         let rollback = self
@@ -3532,22 +3555,22 @@ impl KotoTestHost {
                 let transfer = (|| {
                     let quote = ivm::value_record::quote_completed_return_record(
                         &nested_vm, &runtime_entrypoint.return_schema,
-                        vm.remaining_gas().saturating_sub(boundary_gas),
+                        vm.quote().remaining_gas().saturating_sub(boundary_gas),
                     )?;
                     boundary_gas = boundary_gas.checked_add(quote.gas)
                         .ok_or(ivm::VMError::Trap(VmTrap::OutOfGas))?;
                     let captured = ivm::value_record::capture_completed_return_funded(
                         &nested_vm, &runtime_entrypoint.return_schema, &self.record_budget,
                     )?;
-                    let cost = ivm::value_record::transfer_return_record_funded(
-                        &captured, &runtime_entrypoint.return_schema, vm,
+                    let cost = vm.publish_child_return(
+                &captured, &runtime_entrypoint.return_schema,
                         result_table, return_arity,
-                        vm.remaining_gas().saturating_sub(boundary_gas),
+                        vm.quote().remaining_gas().saturating_sub(boundary_gas),
                         &self.record_budget,
                     )?;
                     boundary_gas = boundary_gas.checked_add(cost).ok_or(ivm::VMError::Trap(VmTrap::OutOfGas))?;
-                    vm.set_register(10, result_table);
-                    vm.set_register(11, return_arity as u64);
+                    vm.write_register(10, result_table)?;
+                    vm.write_register(11, return_arity as u64)?;
                     Ok::<(), ivm::VMError>(())
                 })();
                 if let Err(error) = transfer {
@@ -3623,7 +3646,7 @@ impl KotoTestHost {
                     mismatch.fault = observed.fault;
                     return self.fail_test(mismatch);
                 }
-                vm.set_register(10, 0);
+                vm.write_register(10, 0)?;
                 Ok(0)
             }
             Err(err) => {
@@ -3679,7 +3702,11 @@ impl IVMHost for KotoTestHost {
             self.inner.prepare_syscall(number, vm)
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         if matches!(
             number,
             TEST_SYSCALL_ACTOR_ACCOUNT
@@ -3706,18 +3733,19 @@ impl IVMHost for KotoTestHost {
                 outcome
             }
             ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => {
-                let ordinal = usize::try_from(vm.register(10))
+                let ordinal = usize::try_from(vm.public_register(10)?)
                     .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
-                let words = usize::try_from(vm.register(12))
+                let words = usize::try_from(vm.public_register(12)?)
                     .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let event = vm
+                    .quote()
                     .contract_interface()
                     .and_then(|interface| interface.events.get(ordinal))
                     .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                 let payload = ivm::value_record::capture_value_record(
                     vm,
                     &event.payload_type,
-                    vm.register(11),
+                    vm.public_register(11)?,
                     words,
                 )?;
                 self.events.push(CapturedTestEvent {
@@ -3730,16 +3758,18 @@ impl IVMHost for KotoTestHost {
             TEST_SYSCALL_ASSERT_FAILED => self.assertion_failed(vm),
             TEST_SYSCALL_SET_BLOCK_HEIGHT => {
                 self.clear_test_error();
-                self.inner.wsv.set_current_block_height(vm.register(10));
+                self.inner
+                    .wsv
+                    .set_current_block_height(vm.public_register(10)?);
                 Ok(0)
             }
             TEST_SYSCALL_ADVANCE_BLOCKS => {
                 self.clear_test_error();
                 let current = self.inner.wsv.current_block_height();
-                let Some(height) = current.checked_add(vm.register(10)) else {
+                let Some(height) = current.checked_add(vm.public_register(10)?) else {
                     return self.fail_harness(format!(
                         "advancing block height {current} by {} blocks overflows u64",
-                        vm.register(10)
+                        vm.public_register(10)?
                     ));
                 };
                 self.inner.wsv.set_current_block_height(height);
@@ -3747,7 +3777,7 @@ impl IVMHost for KotoTestHost {
             }
             TEST_SYSCALL_SET_TRANSACTION_TIME_MS => {
                 self.clear_test_error();
-                self.inner.set_current_time_ms(vm.register(10));
+                self.inner.set_current_time_ms(vm.public_register(10)?);
                 Ok(0)
             }
             _ => self.inner.syscall(number, vm),
@@ -3800,7 +3830,11 @@ impl IVMHost for KotoTestHost {
 impl KotoTestHost {
     /// Dispatch a fixture-actor or seiyaku-call helper; [`IVMHost::syscall`] brackets it with the
     /// announced call site.
-    fn helper_syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn helper_syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         match number {
             TEST_SYSCALL_ACTOR_ACCOUNT => {
                 self.clear_test_error();
@@ -3811,7 +3845,7 @@ impl KotoTestHost {
                 let payload = norito::encode_canonical(&actor.account)
                     .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
                 let ptr = Self::alloc_pointer_result(vm, PointerType::AccountId, &payload)?;
-                vm.set_register(10, ptr);
+                vm.write_register(10, ptr)?;
                 Ok(0)
             }
             TEST_SYSCALL_ACTOR_PUBLIC_KEY => {
@@ -3831,7 +3865,7 @@ impl KotoTestHost {
                     PointerType::Blob,
                     signing_key.verifying_key().as_bytes(),
                 )?;
-                vm.set_register(10, ptr);
+                vm.write_register(10, ptr)?;
                 Ok(0)
             }
             TEST_SYSCALL_ACTOR_SIGN => {
@@ -3849,7 +3883,7 @@ impl KotoTestHost {
                 let signing_key = SigningKey::from_bytes(&seed);
                 let signature = signing_key.sign(&message);
                 let ptr = Self::alloc_pointer_result(vm, PointerType::Blob, &signature.to_bytes())?;
-                vm.set_register(10, ptr);
+                vm.write_register(10, ptr)?;
                 Ok(0)
             }
             TEST_SYSCALL_INVOKE_ENTRYPOINT_AS => self.invoke_entrypoint(vm, false),
@@ -3858,7 +3892,10 @@ impl KotoTestHost {
         }
     }
     /// Turn a failed `test::assert`/`test::assert_eq` into a located failure report.
-    fn assertion_failed(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn assertion_failed(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         use kotodama_lang::testing::{AssertionKind, AssertionSite};
         let site_bytes = Self::decode_bytes_arg(vm, 10)?;
         if site_bytes.len() > AssertionSite::MAX_ENCODED_BYTES {
@@ -3881,7 +3918,7 @@ impl KotoTestHost {
             )
             .or(line_text);
         let mut failure = TestFailure::new(FailureKind::Assertion, String::new()).at(location);
-        let dynamic_message = match vm.register(14) {
+        let dynamic_message = match vm.public_register(14)? {
             0 => None,
             pointer => Some(self.render_pointer_text(vm, pointer)),
         };
@@ -3892,7 +3929,10 @@ impl KotoTestHost {
             failure = failure.detail(snippet);
         }
         if site.kind == AssertionKind::AssertEq {
-            match self.render_compared_values(vm) {
+            let actual = vm.public_register(11)?;
+            let expected = vm.public_register(12)?;
+            let schema = vm.public_register(13)?;
+            match self.render_compared_values(vm, actual, expected, schema) {
                 Ok(Some((actual, expected))) => {
                     failure = failure
                         .detail(format!("actual:   {actual}"))
@@ -3913,13 +3953,18 @@ impl KotoTestHost {
         self.fail_test(failure)
     }
     /// Decode the actual/expected state-value records in `x11`/`x12` with the schema in `x13`.
-    fn render_compared_values(&self, vm: &IVM) -> Result<Option<(String, String)>, String> {
-        let (actual, expected, schema) = (vm.register(11), vm.register(12), vm.register(13));
+    fn render_compared_values(
+        &self,
+        vm: &dyn ivm::host::SyscallContext,
+        actual: u64,
+        expected: u64,
+        schema: u64,
+    ) -> Result<Option<(String, String)>, String> {
         if actual == 0 || expected == 0 || schema == 0 {
             return Ok(None);
         }
         let payload = |pointer: u64| {
-            vm.validate_tlv(pointer)
+            vm.public_tlv(pointer)
                 .map(|tlv| tlv.payload.to_vec())
                 .map_err(|error| error.to_string())
         };
@@ -3939,8 +3984,8 @@ impl KotoTestHost {
         Ok(Some((render(actual)?, render(expected)?)))
     }
     /// Text of a dynamic `message:` argument: a string, or an int rendered in decimal.
-    fn render_pointer_text(&self, vm: &IVM, pointer: u64) -> String {
-        let Ok(tlv) = vm.validate_tlv(pointer) else {
+    fn render_pointer_text(&self, vm: &dyn ivm::host::SyscallContext, pointer: u64) -> String {
+        let Ok(tlv) = vm.public_tlv(pointer) else {
             return "<unreadable message>".to_owned();
         };
         if tlv.type_id == PointerType::Blob {

@@ -18,7 +18,7 @@ impl IVMHost for ExhaustAtTrap {
     fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, _: u32, _: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(&mut self, _: u32, _: &mut dyn ivm::host::SyscallContext) -> Result<u64, VMError> {
         self.original.set_limit_bytes(0);
         // The real interpreter has completed its public instruction admission.
         // Observe the trap unwinding and capture, not unrelated VM construction.

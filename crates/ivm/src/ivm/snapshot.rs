@@ -250,7 +250,6 @@ impl IVM {
             reg_log: Some(reg_log),
             host_trace_log_detached: false,
             host_trace_invocation_log: None,
-            proof_state_epoch: self.proof_state_epoch,
             trace_log: traces.trace_log,
             step_log: traces.step_log,
             trace_mode: self.trace_mode,

@@ -49,7 +49,7 @@ impl QueryStateRef<'_, '_, '_> {
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_same_uid(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
     ) -> Result<u64, ivm::VMError> {
         let context = self
@@ -57,15 +57,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .as_ref()
             .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         for register in 10..=12 {
-            vm.ensure_public_register(register)?;
+            vm.quote().ensure_public_register(register)?;
         }
         let definition: AssetDefinitionId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
         let source: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
         let destination: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(12), PointerType::AccountId)?;
-        let remaining = vm.remaining_gas();
+            Self::decode_tlv_typed(vm, vm.public_register(12)?, PointerType::AccountId)?;
+        let remaining = vm.quote().remaining_gas();
         let context_gas = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&context_gas, remaining)?;
         let state = self
@@ -90,7 +90,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         )?;
         // Bool is one canonical public word. No heap/TLV allocation and no queued effect.
         // All source/response gas is preflighted before publishing that word.
-        vm.set_register(10, u64::from(equal));
+        vm.write_register(10, u64::from(equal))?;
         Ok(gas)
     }
 }
@@ -283,13 +283,17 @@ mod tests {
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_SAME_UID {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
-                self.input = Some(vm.alloc_input_tlv(&[]).unwrap());
+                self.input = Some(crate::ivm_test_support::next_host_input_address(vm));
                 self.heap = Some(vm.alloc_heap(0).unwrap());
-                self.argument = Some(vm.register(10));
+                self.argument = Some(vm.public_register(10)?);
             }
             let result = self.inner.syscall(number, vm);
             if number == ivm::syscalls::SYSCALL_ASSET_SAME_UID {

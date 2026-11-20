@@ -29,22 +29,25 @@ impl AssetHost {
         let state = self.state.lock().expect("state mutex poisoned");
         *state.get(&(account.clone(), asset.clone())).unwrap_or(&0)
     }
-    fn decode_account(vm: &IVM, register: usize) -> Result<AccountId, VMError> {
-        let tlv = vm.validate_tlv(vm.register(register))?;
+    fn decode_account(
+        vm: &dyn ivm::host::SyscallContext,
+        register: usize,
+    ) -> Result<AccountId, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(register)?)?;
         if tlv.type_id != PointerType::AccountId {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_asset(vm: &IVM) -> Result<AssetDefinitionId, VMError> {
-        let tlv = vm.validate_tlv(vm.register(12))?;
+    fn decode_asset(vm: &dyn ivm::host::SyscallContext) -> Result<AssetDefinitionId, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(12)?)?;
         if tlv.type_id != PointerType::AssetDefinitionId {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_amount(vm: &IVM) -> Result<u64, VMError> {
-        let tlv = vm.validate_tlv(vm.register(13))?;
+    fn decode_amount(vm: &dyn ivm::host::SyscallContext) -> Result<u64, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(13)?)?;
         if tlv.type_id != PointerType::Quantity {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
@@ -53,8 +56,8 @@ impl AssetHost {
             .into_quantity();
         u64::try_from(quantity.into_numeric()).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_dataspace(vm: &IVM) -> Result<DataSpaceId, VMError> {
-        let tlv = vm.validate_tlv(vm.register(14))?;
+    fn decode_dataspace(vm: &dyn ivm::host::SyscallContext) -> Result<DataSpaceId, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(14)?)?;
         if tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
@@ -72,7 +75,11 @@ impl IVMHost for AssetHost {
             _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 let from = Self::decode_account(vm, 10)?;

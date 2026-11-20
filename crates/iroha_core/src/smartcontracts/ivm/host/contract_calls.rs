@@ -38,7 +38,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
 
     /// Dispatch the exact admitted artifact and ordinal named by the compiler's binding.
-    pub(super) fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn handle_call_contract(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let mut boundary_gas = ivm::gas::G_CALL_CONTRACT;
         let meter = |gas, error| ivm::VMError::metered(gas, error);
         if self.nested_contract_call_depth >= MAX_NESTED_CONTRACT_CALL_DEPTH {
@@ -59,8 +62,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             || caller.contract_address != authorization.contract_address
             || caller.entrypoint != authorization.entrypoint
             || self.authority != authorization.authority
-            || Hash::prehashed(vm.code_hash()) != authorization.code_hash
-            || !vm.contract_interface().is_some_and(|interface| {
+            || Hash::prehashed(vm.quote().code_hash()) != authorization.code_hash
+            || !vm.quote().contract_interface().is_some_and(|interface| {
                 interface
                     .entrypoints
                     .iter()
@@ -72,16 +75,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 ivm::VMError::Trap(VmTrap::PermissionDenied),
             ));
         }
-        let request_bytes = Self::quote_contract_call_descriptors(vm.syscall_quote())
+        let request_bytes = Self::quote_contract_call_descriptors(vm.quote())
             .map_err(|error| meter(boundary_gas, error))?;
         boundary_gas = ivm::gas::syscall_byte_gas(boundary_gas, request_bytes, 0);
         ivm::host::preflight_reserved_syscall_gas(vm, boundary_gas)?;
-        if vm.remaining_gas() < boundary_gas {
+        if vm.quote().remaining_gas() < boundary_gas {
             return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
-        let address_bytes = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::Blob)
-            .map_err(|error| meter(boundary_gas, error))?
-            .payload;
+        let address_bytes =
+            Self::decode_pointer_tlv(vm, vm.public_register(10)?, PointerType::Blob)
+                .map_err(|error| meter(boundary_gas, error))?
+                .payload;
         let literal = std::str::from_utf8(address_bytes)
             .map_err(|_| meter(boundary_gas, ivm::VMError::Trap(VmTrap::DecodeError)))?;
         let address: ContractAddress = literal
@@ -97,7 +101,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             ));
         }
         let binding = ContractCallBindingV1::from_bytes(
-            Self::decode_pointer_tlv(vm, vm.register(11), PointerType::NoritoBytes)
+            Self::decode_pointer_tlv(vm, vm.public_register(11)?, PointerType::NoritoBytes)
                 .map_err(|error| meter(boundary_gas, error))?
                 .payload,
         )
@@ -115,7 +119,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         // Cache warmth cannot change consensus gas. Charge artifact preparation on every call.
         boundary_gas = Self::nested_contract_host_gas(request_bytes, artifact_bytes, 0);
         ivm::host::preflight_reserved_syscall_gas(vm, boundary_gas)?;
-        if vm.remaining_gas() < boundary_gas {
+        if vm.quote().remaining_gas() < boundary_gas {
             return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let prepared = self
@@ -192,21 +196,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let result_words = return_schema
             .word_count()
             .ok_or_else(|| meter(boundary_gas, ivm::VMError::Trap(VmTrap::InvalidMetadata)))?;
-        if vm.register(15) != result_words as u64 {
+        if vm.public_register(15)? != result_words as u64 {
             return Err(meter(boundary_gas, ivm::VMError::Trap(VmTrap::DecodeError)));
         }
-        let result_base = vm.register(14);
+        let result_base = vm.public_register(14)?;
         let budget = self.prepared_contract_cache.execution_budget().clone();
         // Authenticate identity, lifecycle, permissions and exact schemas before copying input.
         let arguments = if let Some(schema) = descriptor.argument_schema.as_ref() {
-            let argument_words = usize::try_from(vm.register(13))
+            let argument_words = usize::try_from(vm.public_register(13)?)
                 .map_err(|_| meter(boundary_gas, ivm::VMError::Trap(VmTrap::DecodeError)))?;
             let quote = value_record::quote_argument_record(
                 vm,
                 schema,
-                vm.register(12),
+                vm.public_register(12)?,
                 argument_words,
-                vm.remaining_gas().saturating_sub(boundary_gas),
+                vm.quote().remaining_gas().saturating_sub(boundary_gas),
             )
             .map_err(|error| meter(boundary_gas, error))?;
             boundary_gas = boundary_gas
@@ -217,21 +221,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 value_record::capture_argument_record_funded(
                     vm,
                     schema,
-                    vm.register(12),
+                    vm.public_register(12)?,
                     argument_words,
                     &budget,
                 )
                 .map_err(|error| meter(boundary_gas, error))?,
             )
         } else {
-            if vm.register(12) != 0 || vm.register(13) != 0 {
+            if vm.public_register(12)? != 0 || vm.public_register(13)? != 0 {
                 return Err(meter(boundary_gas, ivm::VMError::Trap(VmTrap::DecodeError)));
             }
             None
         };
         let reserved_gas = vm.syscall_reserved_gas();
         let call_budget = if reserved_gas == 0 {
-            vm.remaining_gas()
+            vm.quote().remaining_gas()
         } else {
             reserved_gas
         };
@@ -311,7 +315,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         // The child draws from the gas the parent granted it (`child_limit`) and, as the anchor
         // did, from the parent's shared baseline cycle allowance when one is active. Without an
         // active allowance this is an ordinary run.
-        let run_result = child.run_with_host_and_parent_cycle_budget(self, vm);
+        let run_result = vm.run_child(&mut child, self);
         self.nested_contract_call_depth -= 1;
         self.nested_contract_ancestors[self.nested_contract_call_depth] = None;
         let child_spent = child_limit.saturating_sub(child.remaining_gas());
@@ -336,10 +340,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             let returned_error = ivm::sum::entrypoint_return_is_error(&child, return_schema)?;
             let captured =
                 value_record::capture_completed_return_funded(&child, return_schema, &budget)?;
-            let transfer_gas = value_record::transfer_return_record_funded(
+            let transfer_gas = vm.publish_child_return(
                 &captured,
                 return_schema,
-                vm,
                 result_base,
                 result_words,
                 child.remaining_gas().saturating_sub(quote.gas),

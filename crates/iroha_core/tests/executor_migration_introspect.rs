@@ -24,7 +24,11 @@ impl IVMHost for LoggingHost {
     ) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         println!("syscall {number:#x}");
         Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
     }

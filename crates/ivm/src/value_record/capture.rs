@@ -82,7 +82,12 @@ struct Visit {
     stride: u64,
 }
 
-fn table(vm: &IVM, schema: &EntrypointValueTypeV1, base: u64, words: usize) -> Result<(), VMError> {
+fn table(
+    vm: &dyn crate::host::SyscallContext,
+    schema: &EntrypointValueTypeV1,
+    base: u64,
+    words: usize,
+) -> Result<(), VMError> {
     if !schema.validate() || schema.word_count() != Some(words) || !base.is_multiple_of(8) {
         return Err(VMError::Trap(VmTrap::DecodeError));
     }
@@ -106,7 +111,7 @@ fn table(vm: &IVM, schema: &EntrypointValueTypeV1, base: u64, words: usize) -> R
 /// visited (capped at this allowance); callers add their earlier boundary work.
 /// Original local memory refusals remain unmetered deferrals.
 pub fn quote_value_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -369,7 +374,7 @@ pub fn quote_value_record(
 /// # Errors
 /// Preserves original allocation refusals and rejects malformed schema or guest data.
 pub fn capture_value_record_funded(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -431,8 +436,7 @@ pub fn capture_value_record_funded(
         },
     };
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut construction.budget,
     };
@@ -484,7 +488,7 @@ pub fn capture_value_record_funded(
 /// Rejects malformed/private values and oversize records. Callers must quote and
 /// prepay their gas and retained backing before invoking this materialization step.
 pub fn capture_value_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -499,8 +503,7 @@ pub fn capture_value_record(
     })?;
     let mut budget = ReturnRecordBudget::default();
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut budget,
     };
@@ -528,7 +531,7 @@ pub fn capture_value_record(
 /// # Errors
 /// Rejects schema/table mismatches, private or malformed values, and allocation refusals.
 pub fn capture_argument_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
@@ -654,7 +657,7 @@ fn meter_quote_error(gas: u64, limit: u64, error: VMError) -> VMError {
 /// # Errors
 /// Rejects noncanonical tables, invalid schemas, excessive records or unaffordable work.
 pub fn quote_argument_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
@@ -738,7 +741,7 @@ pub fn quote_argument_record(
 /// # Errors
 /// Returns canonical boundary errors or the original local allocation deferral.
 pub fn capture_argument_record_funded(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
@@ -792,8 +795,7 @@ pub fn capture_argument_record_funded(
         },
     };
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut construction.budget,
     };

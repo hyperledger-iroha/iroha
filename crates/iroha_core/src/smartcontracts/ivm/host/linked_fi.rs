@@ -5,7 +5,10 @@ use iroha_data_model::isi::asset_fi::TransferToLinkedFiV1;
 use ivm_abi::error::VmTrap;
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
-    pub(super) fn transfer_to_linked_fi(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn transfer_to_linked_fi(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
@@ -14,16 +17,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         for register in 10..=14 {
-            vm.ensure_public_register(register)?;
+            vm.quote().ensure_public_register(register)?;
         }
         let asset_definition_id =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
-        let account_id = Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
-        let amount = Self::decode_quantity(vm, vm.register(12))?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
+        let account_id =
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
+        let amount = Self::decode_quantity(vm, vm.public_register(12)?)?;
         // Kotodama lowers these two int arguments through checked unsigned-u64
         // conversion. The host retains the entire revision without truncation.
-        let expected_policy_revision = vm.register(13);
-        let expected_link_revision = vm.register(14);
+        let expected_policy_revision = vm.public_register(13)?;
+        let expected_link_revision = vm.public_register(14)?;
         let instruction = TransferToLinkedFiV1 {
             asset_definition_id,
             account_id,

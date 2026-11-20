@@ -75,7 +75,6 @@ impl IVM {
         self.reg_log.clone()
     }
     pub(super) fn clear_zk_trace_logs(&mut self) {
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.mem_log.scrub();
         if let Some(log) = &self.reg_log {
             log.lock().scrub();
@@ -119,9 +118,6 @@ impl IVM {
             isolation: Some(HostRegisterLogIsolation {
                 invocation_log,
                 detached_log,
-                proof_state_epoch: self.proof_state_epoch,
-                code_hash: self.code_hash,
-                zk_mode: self.zk_mode,
             }),
         })
     }
@@ -149,9 +145,6 @@ impl IVM {
                 .is_none_or(|log| !zk::SharedRegLog::ptr_eq(log, &isolation.invocation_log))
             || self.host_trace_log_detached
             || self.host_trace_invocation_log.is_some()
-            || self.proof_state_epoch != isolation.proof_state_epoch
-            || self.code_hash != isolation.code_hash
-            || self.zk_mode != isolation.zk_mode
         {
             isolation.invocation_log.lock().scrub();
             isolation.detached_log.lock().scrub();
@@ -166,9 +159,6 @@ impl IVM {
         Ok(Some(HostRegisterLogIsolation {
             invocation_log: isolation.invocation_log.clone(),
             detached_log: isolation.detached_log.clone(),
-            proof_state_epoch: isolation.proof_state_epoch,
-            code_hash: isolation.code_hash,
-            zk_mode: isolation.zk_mode,
         }))
     }
     pub(super) fn restore_host_register_log(
@@ -187,9 +177,6 @@ impl IVM {
                 .host_trace_invocation_log
                 .as_ref()
                 .is_some_and(|active| zk::SharedRegLog::ptr_eq(active, &isolation.invocation_log))
-            || self.proof_state_epoch != isolation.proof_state_epoch
-            || self.code_hash != isolation.code_hash
-            || self.zk_mode != isolation.zk_mode
         {
             isolation.invocation_log.lock().scrub();
             isolation.detached_log.lock().scrub();

@@ -600,7 +600,7 @@ impl IVM {
                 if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
                     return Err(VMError::Trap(VmTrap::ExceededMaxCycles));
                 }
-                self.record_trace_prefetch(&invocation_trace)?;
+                self.record_trace_prefetch(&invocation_trace);
                 if let Some(recorder) = recorder.as_deref_mut() {
                     pending_step = Some(recorder.begin_step(self.diagnostic_step_state())?);
                     self.memory

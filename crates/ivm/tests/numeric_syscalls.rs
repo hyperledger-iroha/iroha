@@ -2679,7 +2679,7 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
         Local,
         WrongMeter,
         Semantic,
-        PrivateOutput,
+        PrivateRead,
         Unwind,
     }
 
@@ -2689,7 +2689,11 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
             unreachable!("numeric syscalls use staged metering")
         }
 
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             if number == syscalls::SYSCALL_QUANTITY_ADD {
                 return Ok(0);
             }
@@ -2699,8 +2703,8 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
                 ))),
                 Outcome::WrongMeter => Ok(1),
                 Outcome::Semantic => Err(VMError::Trap(VmTrap::OutOfGas)),
-                Outcome::PrivateOutput => {
-                    vm.registers.set_tag(10, true);
+                Outcome::PrivateRead => {
+                    vm.public_register(17)?;
                     Ok(0)
                 }
                 Outcome::Unwind => panic!("local host unwind"),
@@ -2717,7 +2721,7 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
             Outcome::Local,
             Outcome::WrongMeter,
             Outcome::Semantic,
-            Outcome::PrivateOutput,
+            Outcome::PrivateRead,
             Outcome::Unwind,
         ] {
             let mut header = ProgramMetadata::default_for(1, 1, 1);
@@ -2734,6 +2738,8 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
             program.extend(encoding::wide::encode_halt().to_le_bytes());
             let mut vm = IVM::new(10_000);
             vm.load_program(&program).unwrap();
+            vm.registers
+                .set_tag(17, matches!(outcome, Outcome::PrivateRead));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 vm.run_with_host(&mut Host(outcome))
             }));
@@ -2751,12 +2757,12 @@ fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
                     }))),
                 )
                 | (Outcome::Semantic, Ok(Err(VMError::Trap(VmTrap::OutOfGas))))
-                | (Outcome::PrivateOutput, Ok(Err(VMError::Trap(VmTrap::PrivacyViolation))))
+                | (Outcome::PrivateRead, Ok(Err(VMError::Trap(VmTrap::PrivacyViolation))))
                 | (Outcome::Unwind, Err(_)) => {}
                 _ => panic!("incorrect result for {outcome:?}"),
             }
             let expected = match outcome {
-                Outcome::Semantic | Outcome::PrivateOutput => {
+                Outcome::Semantic | Outcome::PrivateRead => {
                     Some((syscalls::SYSCALL_QUANTITY_SUB, SyscallCompletion::Trap))
                 }
                 _ => {

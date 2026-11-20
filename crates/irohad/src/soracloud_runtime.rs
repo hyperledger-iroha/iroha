@@ -110,6 +110,7 @@ use iroha_torii::sorafs::{
     site::{decode_content_cid, encode_content_cid},
 };
 use ivm::error::{VmDeferral, VmErrorRef, VmTrap};
+use ivm::host::SyscallContext;
 use ivm::{
     CoreHost, IVM, IVMHost, Memory, PointerType, PreparedArgumentRecord, PreparedContract,
     RuntimeTemplate, VMError,
@@ -2906,7 +2907,7 @@ impl SoracloudIvmHost {
         Ok(available)
     }
     fn preflight_response_shape(
-        vm: &IVM,
+        vm: &dyn SyscallContext,
         request_bytes: usize,
         operation: SoracloudHostOperationV1,
         shape: SoracloudResponseShape<'_>,
@@ -2915,15 +2916,16 @@ impl SoracloudIvmHost {
         let response_bytes = soracloud_response_encoded_len_bound(operation, shape)
             .ok_or_else(|| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         let gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, response_bytes);
-        ivm::host::preflight_reserved_syscall_gas(vm, gas)
+        vm.preflight_reserved_gas(gas)
     }
     fn read_request_payload(
-        vm: &IVM,
+        vm: &dyn SyscallContext,
         expected_operation: SoracloudHostOperationV1,
         syscall: u32,
     ) -> Result<(SoracloudHostRequestPayloadV1, usize), VMError> {
         let tlv = vm
-            .validate_tlv(vm.register(10))
+            .public_register(10)
+            .and_then(|ptr| vm.public_tlv(ptr))
             .map_err(|err| VMError::metered(ivm::gas::G_SORACLOUD, err))?;
         let request_bytes = tlv.payload.len();
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
@@ -2931,7 +2933,7 @@ impl SoracloudIvmHost {
             return Err(VMError::metered(
                 request_gas,
                 VMError::Trap(VmTrap::AbiTypeNotAllowed {
-                    abi: vm.abi_version(),
+                    abi: vm.quote().abi_version(),
                     type_id: tlv.type_id_raw(),
                 }),
             ));
@@ -2955,7 +2957,7 @@ impl SoracloudIvmHost {
     )]
     fn write_response(
         &self,
-        vm: &mut IVM,
+        vm: &mut dyn SyscallContext,
         operation: SoracloudHostOperationV1,
         payload: SoracloudHostResponsePayloadV1,
         request_bytes: usize,
@@ -2974,14 +2976,14 @@ impl SoracloudIvmHost {
             .map_err(|_| VMError::metered(request_gas, VMError::Trap(VmTrap::NoritoInvalid)))?;
         let gas =
             ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, payload_bytes.len());
-        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+        vm.preflight_reserved_gas(gas)?;
         let tlv = make_pointer_tlv(PointerType::SoracloudResponse, &payload_bytes);
         #[cfg(test)]
         self.record_metering_allocation();
         let ptr = vm
-            .alloc_host_tlv(&tlv)
+            .alloc_encoded_host_tlv(&tlv)
             .map_err(|err| VMError::metered(gas, err))?;
-        vm.set_register(10, ptr);
+        vm.write_register(10, ptr)?;
         Ok(gas)
     }
     fn binding(&self, binding_name: &Name) -> Result<&SoraStateBindingV1, VMError> {
@@ -3260,10 +3262,10 @@ impl SoracloudIvmHost {
                 .map(|entry| entry.envelope.clone()),
         }
     }
-    fn read_public_input(&self, vm: &mut IVM) -> Result<u64, VMError> {
-        let ptr = vm.register(10);
+    fn read_public_input(&self, vm: &mut dyn SyscallContext) -> Result<u64, VMError> {
         let tlv = vm
-            .validate_tlv(ptr)
+            .public_register(10)
+            .and_then(|ptr| vm.public_tlv(ptr))
             .map_err(|error| VMError::metered(ivm::gas::G_SORACLOUD, error))?;
         let request_bytes = tlv.payload.len();
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
@@ -3284,13 +3286,13 @@ impl SoracloudIvmHost {
             ));
         };
         let gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, bytes.len());
-        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+        vm.preflight_reserved_gas(gas)?;
         #[cfg(test)]
         self.record_metering_allocation();
         let dst = vm
-            .alloc_host_tlv(bytes)
+            .alloc_encoded_host_tlv(bytes)
             .map_err(|error| VMError::metered(gas, error))?;
-        vm.set_register(10, dst);
+        vm.write_register(10, dst)?;
         Ok(gas)
     }
     fn into_execution_result(
@@ -3397,7 +3399,11 @@ impl IVMHost for SoracloudIvmHost {
             },
         )
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         Self::ensure_syscall_available(number)?;
         match number {
             ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT => self.read_public_input(vm),

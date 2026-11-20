@@ -506,15 +506,15 @@ impl PreparedCoreQueryWord {
         };
         u64::try_from(len).unwrap_or(u64::MAX)
     }
-    fn materialize(self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn materialize(self, vm: &mut dyn ivm::host::SyscallContext) -> Result<u64, ivm::VMError> {
         match self {
-            Self::Tlv(tlv) => vm.alloc_host_tlv(&tlv),
+            Self::Tlv(tlv) => vm.alloc_encoded_host_tlv(&tlv),
             Self::OptionalTlv(tlv) => {
                 let layout = ivm::sum::SumLayoutV1::option(1)
                     .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                 match tlv {
                     Some(tlv) => {
-                        let pointer = vm.alloc_host_tlv(&tlv)?;
+                        let pointer = vm.alloc_encoded_host_tlv(&tlv)?;
                         ivm::sum::allocate_words(vm, layout, 1, &[pointer])
                     }
                     None => ivm::sum::allocate_words(vm, layout, 0, &[]),
@@ -1494,8 +1494,8 @@ struct CoreQueryAccountFilter {
     _reservation: Option<iroha_allocation::AllocationReservation>,
 }
 impl CoreQueryAccountFilter {
-    fn decode(vm: &IVM, pointer: u64) -> Result<Self, ivm::VMError> {
-        let tlv = vm.validate_tlv(pointer)?;
+    fn decode(vm: &dyn ivm::host::SyscallContext, pointer: u64) -> Result<Self, ivm::VMError> {
+        let tlv = vm.public_tlv(pointer)?;
         if tlv.type_id != PointerType::AccountId {
             return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
@@ -3667,11 +3667,17 @@ const fn nanoseconds_to_millis(ns: u64) -> u32 {
 }
 #[allow(clippy::used_underscore_binding)]
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
-    fn decode_escrow_id(vm: &IVM, ptr: u64) -> Result<EscrowId, ivm::VMError> {
+    fn decode_escrow_id(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<EscrowId, ivm::VMError> {
         let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
         Ok(Self::escrow_id_from_name(&name))
     }
-    fn decode_optional_evidence_hashes(vm: &IVM, ptr: u64) -> Result<Vec<Hash>, ivm::VMError> {
+    fn decode_optional_evidence_hashes(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Vec<Hash>, ivm::VMError> {
         if ptr == 0 {
             return Ok(Vec::new());
         }
@@ -3734,10 +3740,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             )
         )
     }
-    fn reject_soracloud_syscall(vm: &IVM, number: u32) -> Result<u64, ivm::VMError> {
+    fn reject_soracloud_syscall(
+        vm: &dyn ivm::host::SyscallContext,
+        number: u32,
+    ) -> Result<u64, ivm::VMError> {
         let expected = Self::soracloud_operation_for_syscall(number)
             .ok_or(ivm::VMError::Trap(VmTrap::UnknownSyscall(number)))?;
-        let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
+        let tlv =
+            Self::decode_pointer_tlv(vm, vm.public_register(10)?, PointerType::SoracloudRequest)?;
         let request: SoracloudHostRequestEnvelopeV1 = decode_canonical_norito(tlv.payload)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         request
@@ -6497,7 +6507,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .ok_or(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         })
     }
-    fn scan_durable_state_page(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn scan_durable_state_page(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let scope = self.durable_state_scope_prefix();
         let request =
             ivm::state_scan::StateScanRequest::decode(vm, scope.as_deref().unwrap_or("local"))?;
@@ -6542,7 +6555,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn count_durable_state_keys(
         &self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         prefix: &StatePath,
         path_len: usize,
     ) -> Result<(u64, u64), ivm::VMError> {
@@ -6609,14 +6622,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn decode_durable_state_path_payload(
         &self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         pointer: u64,
     ) -> Result<(StatePath, usize), ivm::VMError> {
         // Authenticated execution must bind every state path to the loaded CNTR
         // schema. Local-debug overlays are deliberately uncommittable, so they
         // may inspect ad-hoc paths without fabricating a deployable interface.
         if self.current_contract_runtime_context.is_some()
-            && vm.contract_interface().is_none()
+            && vm.quote().contract_interface().is_none()
             && !self.local_debug_artifacts
         {
             return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
@@ -6633,7 +6646,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn decode_durable_state_path(
         &self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         pointer: u64,
     ) -> Result<(StatePath, usize), ivm::VMError> {
         let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
@@ -6642,14 +6655,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn decode_durable_state_scan_path(
         &self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         pointer: u64,
     ) -> Result<(StatePath, usize), ivm::VMError> {
         let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
         ivm::host::validate_declared_state_scan_path(vm, &path)?;
         Ok((path, path_len))
     }
-    fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), ivm::VMError> {
+    fn load_state_value(
+        vm: &mut dyn ivm::host::SyscallContext,
+        stored: &[u8],
+    ) -> Result<(), ivm::VMError> {
         ivm::host::validate_state_value_payload_len(stored.len())?;
         let mut env = Vec::with_capacity(7 + stored.len() + Hash::LENGTH);
         env.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -6660,8 +6676,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         env.extend_from_slice(stored);
         let h: [u8; Hash::LENGTH] = Hash::new(stored).into();
         env.extend_from_slice(&h);
-        let p = vm.alloc_host_tlv(&env)?;
-        vm.set_register(10, p);
+        let p = vm.alloc_encoded_host_tlv(&env)?;
+        vm.write_register(10, p)?;
         Ok(())
     }
     /// Decode a typed TLV envelope from a provenance-valid pointer-ABI region.
@@ -6676,11 +6692,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Returns an error if the pointer type does not match, the type is not allowed
     /// by the current syscall policy, or the Norito payload cannot be decoded.
     fn decode_pointer_tlv(
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         ptr: u64,
         expected: PointerType,
     ) -> Result<pointer_abi::Tlv<'_>, ivm::VMError> {
-        let tlv = vm.validate_tlv(ptr)?;
+        let tlv = vm.public_tlv(ptr)?;
         if tlv.type_id != expected {
             return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
@@ -6694,20 +6710,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// # Errors
     /// Returns an error if the pointer type does not match, the type is not allowed
     /// by the current syscall policy, or the Norito payload cannot be decoded.
-    pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
+    pub fn decode_tlv_typed<T>(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<T, ivm::VMError>
     where
         T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_quantity(vm: &IVM, ptr: u64) -> Result<Quantity, ivm::VMError> {
+    fn decode_quantity(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Quantity, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
         QuantityValueV1::decode_frame(tlv.payload)
             .map(QuantityValueV1::into_quantity)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Quantity>, ivm::VMError> {
+    fn decode_optional_amount(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Option<Quantity>, ivm::VMError> {
         let layout = ivm::sum::SumLayoutV1::option(1)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
@@ -6720,7 +6746,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         Self::decode_quantity(vm, amount_ptr).map(Some)
     }
-    fn decode_optional_string(vm: &IVM, ptr: u64) -> Result<Option<String>, ivm::VMError> {
+    fn decode_optional_string(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Option<String>, ivm::VMError> {
         let layout = ivm::sum::SumLayoutV1::option(1)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
@@ -6736,7 +6765,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .map(Some)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
+    fn decode_query_key<T>(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<T, ivm::VMError>
     where
         T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
@@ -6744,10 +6777,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
     fn decode_contract_instance_lookup(
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         ptr: u64,
     ) -> Result<ContractInstanceLookup, ivm::VMError> {
-        let tlv = vm.validate_tlv(ptr)?;
+        let tlv = vm.public_tlv(ptr)?;
         match tlv.type_id {
             PointerType::NoritoBytes => decode_canonical_norito::<ContractAddress>(tlv.payload)
                 .map(ContractInstanceLookup::Address)
@@ -6769,7 +6802,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ///
     /// # Errors
     /// Returns an error if the pointer is invalid for the active ABI policy.
-    pub fn decode_tlv_blob(vm: &IVM, ptr: u64) -> Result<Vec<u8>, ivm::VMError> {
+    pub fn decode_tlv_blob(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Vec<u8>, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Blob)?;
         Ok(tlv.payload.to_vec())
     }
@@ -6777,7 +6813,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ///
     /// # Errors
     /// Returns an error if the pointer is invalid for the active ABI policy or the payload fails to decode.
-    pub fn decode_tlv_json(vm: &IVM, ptr: u64) -> Result<Json, ivm::VMError> {
+    pub fn decode_tlv_json(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Json, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Json)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))
     }
@@ -6956,8 +6995,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         Ok(request)
     }
-    fn decode_permission(vm: &IVM, ptr: u64) -> Result<Permission, ivm::VMError> {
-        let tlv = vm.validate_tlv(ptr)?;
+    fn decode_permission(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+    ) -> Result<Permission, ivm::VMError> {
+        let tlv = vm.public_tlv(ptr)?;
         match tlv.type_id {
             PointerType::Name => {
                 let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
@@ -6976,14 +7018,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     {
         decode_canonical_norito(payload).map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))
     }
-    fn expect_tlv(vm: &IVM, ptr: u64, expected: PointerType) -> Result<ivm::Tlv<'_>, ivm::VMError> {
-        let tlv = vm.validate_tlv(ptr)?;
+    fn expect_tlv(
+        vm: &dyn ivm::host::SyscallContext,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<ivm::Tlv<'_>, ivm::VMError> {
+        let tlv = vm.public_tlv(ptr)?;
         if tlv.type_id != expected {
             return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        if !is_type_allowed_for_policy(vm.syscall_policy(), expected) {
+        if !is_type_allowed_for_policy(vm.quote().syscall_policy(), expected) {
             return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
+                abi: vm.quote().abi_version(),
                 type_id: expected as u16,
             }));
         }
@@ -8611,14 +8657,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         })
     }
     fn materialize_prepared_query_words(
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         words: Vec<PreparedCoreQueryWord>,
     ) -> Result<Vec<u64>, ivm::VMError> {
         words.into_iter().map(|word| word.materialize(vm)).collect()
     }
     fn finish_and_materialize_core_query_option<T>(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         (processed_items, processed_bytes): (u64, u64),
@@ -8667,12 +8713,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             }
             None => ivm::sum::allocate_words(vm, layout, 0, &[])?,
         };
-        vm.set_register(10, handle);
+        vm.write_register(10, handle)?;
         Ok(gas)
     }
     fn finish_and_materialize_core_query_page<T>(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         (processed_items, processed_bytes): (u64, u64),
@@ -8725,8 +8771,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let list_handle = ivm::list::allocate_words(vm, list_layout, &elements)?;
         let offset_handle = next_offset.materialize(vm)?;
-        vm.set_register(10, list_handle);
-        vm.set_register(11, offset_handle);
+        vm.write_register(10, list_handle)?;
+        vm.write_register(11, offset_handle)?;
         Ok(gas)
     }
     fn core_query_page_request(
@@ -8810,7 +8856,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         })
     }
     fn finish_core_query_encoded_bytes_gas(
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
         processed_items: u64,
@@ -8834,7 +8880,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn execute_optional_core_query<T>(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
         request: QueryRequest,
         project: impl FnOnce(SingularQueryOutputBox) -> Result<T, ivm::VMError>,
@@ -8844,7 +8890,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
-        let gas_remaining = vm.remaining_gas();
+        let gas_remaining = vm.quote().remaining_gas();
         let gas_ctx = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
         if budget.max_items() == 0 {
@@ -8874,11 +8920,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn execute_core_query_get(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
         tag: CoreQueryEntityTagV1,
     ) -> Result<u64, ivm::VMError> {
-        let id_pointer = vm.register(11);
+        let id_pointer = vm.public_register(11)?;
         match tag {
             CoreQueryEntityTagV1::Account => {
                 let id: AccountId = Self::decode_tlv_typed(vm, id_pointer, PointerType::AccountId)?;
@@ -8972,7 +9018,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn execute_core_query_page(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
         tag: CoreQueryEntityTagV1,
         offset: i64,
@@ -8988,8 +9034,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         let offset_u64 =
             u64::try_from(offset).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
-        vm.ensure_public_register(13)?;
-        let owner_pointer = vm.register(13);
+        vm.quote().ensure_public_register(13)?;
+        let owner_pointer = vm.public_register(13)?;
         let (mut filter, filter_gas) = if owner_pointer == 0 {
             (None, 0)
         } else {
@@ -9000,7 +9046,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 quote_tlv_payload_len_at(vm, owner_pointer, PointerType::AccountId)?;
             let gas = 32_u64.saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-            if gas > vm.remaining_gas() {
+            if gas > vm.quote().remaining_gas() {
                 return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
             }
             let filter = CoreQueryAccountFilter::decode(vm, owner_pointer)
@@ -9009,7 +9055,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         };
         let account = filter.as_mut().and_then(|filter| filter.account.take());
         let request = Self::core_query_page_request(tag, offset_u64, limit, account)?;
-        let gas_remaining = vm.remaining_gas();
+        let gas_remaining = vm.quote().remaining_gas();
         let mut gas_ctx = QueryGasContext::from_request(&request);
         gas_ctx.base = gas_ctx.base.saturating_add(filter_gas);
         let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
@@ -9120,7 +9166,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn execute_singular_query_payload(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
         request: QueryRequest,
         payload_from_output: impl FnOnce(SingularQueryOutputBox) -> Result<Vec<u8>, ivm::VMError>,
@@ -9135,13 +9181,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn execute_singular_query_payload_as(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
         output_type: PointerType,
         request: QueryRequest,
         payload_from_output: impl FnOnce(SingularQueryOutputBox) -> Result<Vec<u8>, ivm::VMError>,
     ) -> Result<u64, ivm::VMError> {
-        let gas_remaining = vm.remaining_gas();
+        let gas_remaining = vm.quote().remaining_gas();
         let gas_ctx = QueryGasContext::from_request(&request);
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }));
@@ -9171,11 +9217,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let ptr = Self::alloc_tlv_payload(vm, output_type, &payload)?;
-        vm.set_register(10, ptr);
+        vm.write_register(10, ptr)?;
         Ok(gas)
     }
     fn finish_direct_singular_query_payload(
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         gas_remaining: u64,
         payload: &[u8],
     ) -> Result<u64, ivm::VMError> {
@@ -9187,13 +9233,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Err(ivm::VMError::Trap(VmTrap::OutOfGas));
         }
         let ptr = Self::alloc_norito_bytes(vm, payload)?;
-        vm.set_register(10, ptr);
+        vm.write_register(10, ptr)?;
         Ok(gas)
     }
     fn gas_for_zk_verify_payload(&self, payload: &[u8]) -> u64 {
         self.zk_gas_schedule.conservative_single_gas(payload.len())
     }
-    fn preflight_zk_verify_payload(&self, vm: &IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
+    fn preflight_zk_verify_payload(
+        &self,
+        vm: &dyn ivm::host::SyscallContext,
+        payload: &[u8],
+    ) -> Result<u64, ivm::VMError> {
         if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.zk_gas_schedule.max_payload_bytes
         {
             return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
@@ -9204,7 +9254,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn decode_metered_zk_envelope(
         &self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         payload: &[u8],
     ) -> Result<(Result<iroha_data_model::zk::OpenVerifyEnvelope, u64>, u64), ivm::VMError> {
         let conservative = self.preflight_zk_verify_payload(vm, payload)?;
@@ -9242,7 +9292,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Effect application retains its ordinary gas/output ownership and immutable authorization.
     fn queue_runtime_obligation(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         operation_tag: u64,
     ) -> Result<u64, ivm::VMError> {
         use iroha_data_model::isi::runtime_obligation::{
@@ -9273,11 +9323,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         // Output admission may retain an original local refusal without enqueueing the effect.
         // Publish the queue-success return only after that same admission has succeeded.
         self.ensure_output_budget()?;
-        vm.set_register(10, 0);
+        vm.write_register(10, 0)?;
         Ok(gas)
     }
-    fn decode_opaque_instruction(&self, vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
-        let pointer = vm.register(10);
+    fn decode_opaque_instruction(
+        &self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<InstructionBox, ivm::VMError> {
+        let pointer = vm.public_register(10)?;
         let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let value = decode_canonical_norito(tlv.payload)
             .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
@@ -9326,7 +9379,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn queue_instruction_after_preflight(
         &mut self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         instruction: InstructionBox,
     ) -> Result<u64, ivm::VMError> {
         self.ensure_instruction_queue_allowed(&instruction)?;
@@ -9338,7 +9391,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn stage_queued_syscall(
         &mut self,
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         action: impl FnOnce(&mut Self) -> Result<u64, ivm::VMError>,
     ) -> Result<u64, ivm::VMError> {
         let prior = std::mem::take(&mut self.queued);
@@ -9394,12 +9447,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok(ivm::gas::G_FASTPQ_BATCH)
     }
     fn decode_transfer_v1_args(
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
     ) -> Result<(AccountId, AccountId, AssetDefinitionId, Quantity), ivm::VMError> {
-        let from_ptr = vm.register(10);
-        let to_ptr = vm.register(11);
-        let asset_def_ptr = vm.register(12);
-        let amount_ptr = vm.register(13);
+        let from_ptr = vm.public_register(10)?;
+        let to_ptr = vm.public_register(11)?;
+        let asset_def_ptr = vm.public_register(12)?;
+        let amount_ptr = vm.public_register(13)?;
         let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
         let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
         let asset_def: AssetDefinitionId =
@@ -9407,7 +9460,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let amount = Self::decode_quantity(vm, amount_ptr)?;
         Ok((from, to, asset_def, amount))
     }
-    fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn push_fastpq_batch_entry(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         if self.fastpq_batch_entries.is_none() {
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
@@ -9441,11 +9497,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.enqueue_fastpq_batch(entries);
         Ok(ivm::gas::G_FASTPQ_BATCH)
     }
-    fn apply_fastpq_batch_from_tlv(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn apply_fastpq_batch_from_tlv(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         if self.fastpq_batch_entries.is_some() {
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::NoritoBytes)?;
+        let tlv = Self::expect_tlv(vm, vm.public_register(10)?, PointerType::NoritoBytes)?;
         let batch: TransferAssetBatch = decode_canonical_norito(tlv.payload)
             .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         if batch.entries().is_empty() {
@@ -9454,9 +9513,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let instr = InstructionBox::from(batch);
         self.queue_instruction(instr)
     }
-    fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn handle_axt_begin(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         self.clear_axt_reject();
-        let ptr = vm.register(10);
+        let ptr = vm.public_register(10)?;
         let descriptor_tlv = Self::expect_tlv(vm, ptr, PointerType::AxtDescriptor)?;
         let gas = Self::axt_gas(descriptor_tlv.payload.len());
         let descriptor: axt::AxtDescriptor = Self::decode_header(descriptor_tlv.payload)?;
@@ -9500,7 +9562,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
         Ok(gas)
     }
-    fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn handle_axt_touch(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         self.clear_axt_reject();
         if self.axt_state.is_none() {
             self.record_axt_reject_detail(
@@ -9513,11 +9578,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             );
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        let ds_ptr = vm.register(10);
+        let ds_ptr = vm.public_register(10)?;
         let ds_tlv = Self::expect_tlv(vm, ds_ptr, PointerType::DataSpaceId)?;
         let mut gas_len = ds_tlv.payload.len();
         let dsid: DataSpaceId = Self::decode_header(ds_tlv.payload)?;
-        let manifest_ptr = vm.register(11);
+        let manifest_ptr = vm.public_register(11)?;
         let manifest = if manifest_ptr == 0 {
             TouchManifest {
                 read: Vec::new(),
@@ -9579,7 +9644,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         Ok(gas)
     }
-    fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn handle_axt_verify_ds_proof(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         self.clear_axt_reject();
         if self.axt_state.is_none() {
             self.record_axt_reject_detail(
@@ -9592,7 +9660,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             );
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        let ds_ptr = vm.register(10);
+        let ds_ptr = vm.public_register(10)?;
         let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)?;
         let expected = {
             let state_view = self.axt_state.as_ref().expect("axt_state checked above");
@@ -9620,7 +9688,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             );
             ivm::VMError::Trap(VmTrap::PermissionDenied)
         })?;
-        let proof_ptr = vm.register(11);
+        let proof_ptr = vm.public_register(11)?;
         if proof_ptr == 0 {
             self.reset_axt_proof_cache_for_slot(Some(policy.current_slot));
             let gas = Self::axt_verify_gas(0);
@@ -9656,7 +9724,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         )?;
         Ok(gas)
     }
-    fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn handle_axt_stage_anchored_spend(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         const MAX_SPEND_FRAME_BYTES_V1: usize = 4 * 1024 * 1024;
 
         self.clear_axt_reject();
@@ -9669,7 +9740,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             );
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         };
-        let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::AxtAnchoredSpendV1)?;
+        let tlv = Self::expect_tlv(vm, vm.public_register(10)?, PointerType::AxtAnchoredSpendV1)?;
         // The canonical proof is capped at 2 MiB; this larger envelope ceiling
         // leaves room for signed source metadata while bounding decode work.
         if tlv.payload.len() > MAX_SPEND_FRAME_BYTES_V1 {
@@ -9701,7 +9772,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .record_spend(spend)?;
         Ok(gas)
     }
-    fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn handle_axt_commit(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let Some(state) = self.axt_state.as_ref() else {
             self.clear_axt_reject();
             self.record_axt_reject(
@@ -10407,12 +10481,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
         }
     }
     #[allow(clippy::too_many_lines)]
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         self.ensure_output_budget()?;
         let result = (|| {
             // Enforce both ABI policy and exhaustive metering classification for
             // direct host calls as well as VM-dispatched execution.
-            ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+            ivm::host::require_host_syscall_metering_spec(vm.quote().syscall_policy(), number)?;
             self.execution_class.ensure_syscall_allowed(number)?;
             // See `prepare_syscall`: production consensus execution has no raw
             // witness transport, even if a caller bypasses the staged VM path and
@@ -10432,14 +10510,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             match number {
                 // ----------------- Domain ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_REGISTER_DOMAIN => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
                     let isi = Register::domain(Domain::new(id));
                     let instr = InstructionBox::from(RegisterBox::from(isi));
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
                     let isi = Unregister::domain(id);
                     let instr = InstructionBox::from(UnregisterBox::from(isi));
@@ -10447,8 +10525,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_TRANSFER_DOMAIN => {
                     // r10=&DomainId, r11=&AccountId(to)
-                    let dptr = vm.register(10);
-                    let tptr = vm.register(11);
+                    let dptr = vm.public_register(10)?;
+                    let tptr = vm.public_register(11)?;
                     let id: DomainId = Self::decode_tlv_typed(vm, dptr, PointerType::DomainId)?;
                     let to: AccountId = Self::decode_tlv_typed(vm, tptr, PointerType::AccountId)?;
                     let from = self.authority.clone();
@@ -10458,14 +10536,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // ----------------- Peer ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_REGISTER_PEER => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let payload: Json = Self::decode_tlv_json(vm, ptr)?;
                     let request = Self::register_peer_from_json(&payload)?;
                     let instr = InstructionBox::from(request);
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_UNREGISTER_PEER => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let payload: Json = Self::decode_tlv_json(vm, ptr)?;
                     let value: json::Value = payload
                         .try_into_any_norito::<json::Value>()
@@ -10477,22 +10555,22 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // ----------------- Account ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
                     let isi = Register::account(Account::new(id));
                     let instr = InstructionBox::from(RegisterBox::from(isi));
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
                     let isi = Unregister::account(id);
                     let instr = InstructionBox::from(UnregisterBox::from(isi));
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_ADD_SIGNATORY => {
-                    let account_ptr = vm.register(10);
-                    let signatory_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let signatory_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
@@ -10502,8 +10580,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                    let account_ptr = vm.register(10);
-                    let signatory_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let signatory_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
@@ -10513,8 +10591,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                    let account_ptr = vm.register(10);
-                    let quorum_raw = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let quorum_raw = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let quorum_u16 = u16::try_from(quorum_raw)
@@ -10534,18 +10612,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     // every host.
                     let id: AssetDefinitionId = Self::decode_tlv_typed(
                         vm,
-                        vm.register(10),
+                        vm.public_register(10)?,
                         PointerType::AssetDefinitionId,
                     )?;
                     let registration =
                         iroha_data_model::asset::definition::ivm_registration::decode_registration(
-                            &Self::decode_tlv_blob(vm, vm.register(11))?,
-                            vm.register(12),
-                            vm.register(13),
+                            &Self::decode_tlv_blob(vm, vm.public_register(11)?)?,
+                            vm.public_register(12)?,
+                            vm.public_register(13)?,
                         )
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let owning_domain: DomainId =
-                        Self::decode_tlv_typed(vm, vm.register(14), PointerType::DomainId)?;
+                        Self::decode_tlv_typed(vm, vm.public_register(14)?, PointerType::DomainId)?;
                     let definition = AssetDefinition::new(
                         id,
                         registration.name,
@@ -10559,7 +10637,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_UNREGISTER_ASSET => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let id: AssetDefinitionId =
                         Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
                     let isi = Unregister::asset_definition(id);
@@ -10567,9 +10645,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_MINT_ASSET => {
-                    let account_ptr = vm.register(10);
-                    let asset_def_ptr = vm.register(11);
-                    let amount_ptr = vm.register(12);
+                    let account_ptr = vm.public_register(10)?;
+                    let asset_def_ptr = vm.public_register(11)?;
+                    let amount_ptr = vm.public_register(12)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let asset_def: AssetDefinitionId =
@@ -10581,9 +10659,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_BURN_ASSET => {
-                    let account_ptr = vm.register(10);
-                    let asset_def_ptr = vm.register(11);
-                    let amount_ptr = vm.register(12);
+                    let account_ptr = vm.public_register(10)?;
+                    let asset_def_ptr = vm.public_register(11)?;
+                    let amount_ptr = vm.public_register(12)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let asset_def: AssetDefinitionId =
@@ -10604,11 +10682,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     if self.fastpq_batch_entries.is_some() {
                         return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     }
-                    let from_ptr = vm.register(10);
-                    let to_ptr = vm.register(11);
-                    let asset_def_ptr = vm.register(12);
-                    let amount_ptr = vm.register(13);
-                    let dataspace_ptr = vm.register(14);
+                    let from_ptr = vm.public_register(10)?;
+                    let to_ptr = vm.public_register(11)?;
+                    let asset_def_ptr = vm.public_register(12)?;
+                    let amount_ptr = vm.public_register(13)?;
+                    let dataspace_ptr = vm.public_register(14)?;
                     let from: AccountId =
                         Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
                     let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
@@ -10640,15 +10718,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => {
-                    let account: AccountId =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let account: AccountId = Self::decode_tlv_typed(
+                        vm,
+                        vm.public_register(10)?,
+                        PointerType::AccountId,
+                    )?;
                     let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
                         vm,
-                        vm.register(11),
+                        vm.public_register(11)?,
                         PointerType::AssetDefinitionId,
                     )?;
-                    let expected_revision = vm.register(12);
-                    let availability_flags = vm.register(13);
+                    let expected_revision = vm.public_register(12)?;
+                    let availability_flags = vm.public_register(13)?;
                     if availability_flags & !0b11 != 0 {
                         return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                     }
@@ -10661,7 +10742,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     };
                     let incoming = availability(0b01);
                     let outgoing = availability(0b10);
-                    let reason = Self::decode_optional_string(vm, vm.register(14))?;
+                    let reason = Self::decode_optional_string(vm, vm.public_register(14)?)?;
                     let instruction = iroha_data_model::isi::SetAssetTransferAvailability::new(
                         account,
                         asset_definition,
@@ -10673,14 +10754,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
                 }
                 ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
-                    let account: AccountId =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let account: AccountId = Self::decode_tlv_typed(
+                        vm,
+                        vm.public_register(10)?,
+                        PointerType::AccountId,
+                    )?;
                     let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
                         vm,
-                        vm.register(11),
+                        vm.public_register(11)?,
                         PointerType::AssetDefinitionId,
                     )?;
-                    let cap = Self::decode_optional_amount(vm, vm.register(12))?;
+                    let cap = Self::decode_optional_amount(vm, vm.public_register(12)?)?;
                     let instruction = iroha_data_model::isi::SetAssetTransferControl::new(
                         account,
                         asset_definition,
@@ -10692,14 +10776,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
                 }
                 ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT => {
-                    let account: AccountId =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let account: AccountId = Self::decode_tlv_typed(
+                        vm,
+                        vm.public_register(10)?,
+                        PointerType::AccountId,
+                    )?;
                     let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
                         vm,
-                        vm.register(11),
+                        vm.public_register(11)?,
                         PointerType::AssetDefinitionId,
                     )?;
-                    let limit = Self::decode_optional_amount(vm, vm.register(12))?;
+                    let limit = Self::decode_optional_amount(vm, vm.public_register(12)?)?;
                     let instruction = iroha_data_model::isi::SetAssetHoldingLimit::new(
                         account,
                         asset_definition,
@@ -10708,7 +10795,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
                 }
                 ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE => {
-                    let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                    let alias_bytes = Self::decode_tlv_blob(vm, vm.public_register(10)?)?;
                     let alias_literal = std::str::from_utf8(&alias_bytes)
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let alias = self
@@ -10716,9 +10803,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         .get()
                         .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
                         .parse_account_alias(alias_literal)?;
-                    let replacement: AccountId =
-                        Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
-                    let request_generation = std::num::NonZeroU64::new(vm.register(12))
+                    let replacement: AccountId = Self::decode_tlv_typed(
+                        vm,
+                        vm.public_register(11)?,
+                        PointerType::AccountId,
+                    )?;
+                    let request_generation = std::num::NonZeroU64::new(vm.public_register(12)?)
                         .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let instruction =
                         iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
@@ -10731,7 +10821,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
                 | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
                 | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
-                    let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                    let alias_bytes = Self::decode_tlv_blob(vm, vm.public_register(10)?)?;
                     let alias_literal = std::str::from_utf8(&alias_bytes)
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let alias = self
@@ -10739,7 +10829,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         .get()
                         .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
                         .parse_account_alias(alias_literal)?;
-                    let request_generation = std::num::NonZeroU64::new(vm.register(11))
+                    let request_generation = std::num::NonZeroU64::new(vm.public_register(11)?)
                         .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
                     let instruction = match number {
                         ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
@@ -10790,10 +10880,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
-                    let escrow_ptr = vm.register(10);
-                    let asset_def_ptr = vm.register(11);
-                    let amount_ptr = vm.register(12);
-                    let evidence_ptr = vm.register(13);
+                    let escrow_ptr = vm.public_register(10)?;
+                    let asset_def_ptr = vm.public_register(11)?;
+                    let amount_ptr = vm.public_register(12)?;
+                    let evidence_ptr = vm.public_register(13)?;
                     let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
                     let asset_definition: AssetDefinitionId =
                         Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
@@ -10808,12 +10898,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_ESCROW_ACCEPT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let escrow_id = Self::decode_escrow_id(vm, vm.public_register(10)?)?;
                     Ok(self
                         .queue_instruction(InstructionBox::from(AcceptAssetEscrow { escrow_id }))?)
                 }
                 ivm::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let escrow_id = Self::decode_escrow_id(vm, vm.public_register(10)?)?;
                     Ok(
                         self.queue_instruction(InstructionBox::from(MarkEscrowPaymentSent {
                             escrow_id,
@@ -10821,7 +10911,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     )
                 }
                 ivm::syscalls::SYSCALL_ESCROW_RELEASE => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let escrow_id = Self::decode_escrow_id(vm, vm.public_register(10)?)?;
                     Ok(
                         self.queue_instruction(InstructionBox::from(ReleaseAssetEscrow {
                             escrow_id,
@@ -10829,14 +10919,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     )
                 }
                 ivm::syscalls::SYSCALL_ESCROW_CANCEL => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let escrow_id = Self::decode_escrow_id(vm, vm.public_register(10)?)?;
                     Ok(self
                         .queue_instruction(InstructionBox::from(CancelAssetEscrow { escrow_id }))?)
                 }
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let escrow_id = Self::decode_escrow_id(vm, vm.public_register(10)?)?;
                     let evidence_hashes =
-                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
+                        Self::decode_optional_evidence_hashes(vm, vm.public_register(11)?)?;
                     Ok(
                         self.queue_instruction(InstructionBox::from(OpenEscrowDispute {
                             escrow_id,
@@ -10845,10 +10935,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     )
                 }
                 ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE => {
-                    let escrow_ptr = vm.register(10);
-                    let buyer_amount_ptr = vm.register(11);
-                    let seller_amount_ptr = vm.register(12);
-                    let evidence_ptr = vm.register(13);
+                    let escrow_ptr = vm.public_register(10)?;
+                    let buyer_amount_ptr = vm.public_register(11)?;
+                    let seller_amount_ptr = vm.public_register(12)?;
+                    let evidence_ptr = vm.public_register(13)?;
                     let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
                     let buyer_amount = Self::decode_quantity(vm, buyer_amount_ptr)?;
                     let seller_amount = Self::decode_quantity(vm, seller_amount_ptr)?;
@@ -10864,9 +10954,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // Account metadata (SetKeyValue<Account>)
                 ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                    let account_ptr = vm.register(10);
-                    let key_ptr = vm.register(11);
-                    let value_ptr = vm.register(12);
+                    let account_ptr = vm.public_register(10)?;
+                    let key_ptr = vm.public_register(11)?;
+                    let value_ptr = vm.public_register(12)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
@@ -10877,8 +10967,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // ----------------- Role and permission ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_CREATE_ROLE => {
-                    let name_ptr = vm.register(10);
-                    let perms_ptr = vm.register(11);
+                    let name_ptr = vm.public_register(10)?;
+                    let perms_ptr = vm.public_register(11)?;
                     let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
                     let perms_json: Json = Self::decode_tlv_json(vm, perms_ptr)?;
                     let permissions = Self::permissions_from_json(&perms_json)?;
@@ -10892,15 +10982,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_DELETE_ROLE => {
-                    let name_ptr = vm.register(10);
+                    let name_ptr = vm.public_register(10)?;
                     let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
                     let isi = Unregister::role(RoleId::new(name));
                     let instr = InstructionBox::from(UnregisterBox::from(isi));
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_GRANT_ROLE => {
-                    let account_ptr = vm.register(10);
-                    let name_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let name_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
@@ -10909,8 +10999,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REVOKE_ROLE => {
-                    let account_ptr = vm.register(10);
-                    let name_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let name_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
@@ -10919,8 +11009,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_GRANT_PERMISSION => {
-                    let account_ptr = vm.register(10);
-                    let perm_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let perm_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let permission = Self::decode_permission(vm, perm_ptr)?;
@@ -10929,8 +11019,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REVOKE_PERMISSION => {
-                    let account_ptr = vm.register(10);
-                    let perm_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let perm_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let permission = Self::decode_permission(vm, perm_ptr)?;
@@ -10940,11 +11030,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
                 | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION => {
-                    let account: AccountId =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let account: AccountId = Self::decode_tlv_typed(
+                        vm,
+                        vm.public_register(10)?,
+                        PointerType::AccountId,
+                    )?;
                     let declaration_name: iroha_model_base::name::Name =
-                        Self::decode_tlv_typed(vm, vm.register(11), PointerType::Name)?;
+                        Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::Name)?;
                     let interface = vm
+                        .quote()
                         .contract_interface()
                         .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     if !interface.permissions.iter().any(|declaration| {
@@ -10971,7 +11065,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instruction)?)
                 }
                 ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let spec: Json = Self::decode_tlv_json(vm, ptr)?;
                     let trigger = if let Ok(trigger) = spec.try_into_any_norito::<Trigger>() {
                         trigger
@@ -11048,7 +11142,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REMOVE_TRIGGER => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
                     let id = TriggerId::new(name);
                     let isi = Unregister::trigger(id);
@@ -11056,8 +11150,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
-                    let ptr = vm.register(10);
-                    let enabled = vm.register(11) != 0;
+                    let ptr = vm.public_register(10)?;
+                    let enabled = vm.public_register(11)? != 0;
                     let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
                     let id = TriggerId::new(name);
                     let key: Name = TRIGGER_ENABLED_METADATA_KEY
@@ -11068,9 +11162,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     // Decode manifest registration request from Norito-encoded TLV bytes.
-                    let tlv = vm.validate_tlv(ptr)?;
+                    let tlv = vm.public_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
                         return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
@@ -11081,14 +11175,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let request: scode::RegisterSmartContractBytes =
                         Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
                     let instr = InstructionBox::from(request);
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let request: scode::ActivateContractInstance =
                         Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
                     let instr = InstructionBox::from(request);
@@ -11096,7 +11190,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let request: scode::DeactivateContractInstance =
                         Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
                     let instr = InstructionBox::from(request);
@@ -11104,7 +11198,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let request: scode::RemoveSmartContractBytes =
                         Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
                     let instr = InstructionBox::from(request);
@@ -11112,8 +11206,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // ----------------- NFT (Non-fungible) ISIs -----------------
                 ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
-                    let nft_id_ptr = vm.register(10);
-                    let owner_ptr = vm.register(11);
+                    let nft_id_ptr = vm.public_register(10)?;
+                    let owner_ptr = vm.public_register(11)?;
                     let owner: AccountId =
                         Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
@@ -11131,9 +11225,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                    let from_ptr = vm.register(10);
-                    let nft_id_ptr = vm.register(11);
-                    let to_ptr = vm.register(12);
+                    let from_ptr = vm.public_register(10)?;
+                    let nft_id_ptr = vm.public_register(11)?;
+                    let to_ptr = vm.public_register(12)?;
                     let from: AccountId =
                         Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
@@ -11143,9 +11237,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_NFT_SET_METADATA => {
-                    let nft_id_ptr = vm.register(10);
-                    let key_ptr = vm.register(11);
-                    let value_ptr = vm.register(12);
+                    let nft_id_ptr = vm.public_register(10)?;
+                    let key_ptr = vm.public_register(11)?;
+                    let value_ptr = vm.public_register(12)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
                     let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
                     let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
@@ -11154,7 +11248,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(self.queue_instruction(instr)?)
                 }
                 ivm::syscalls::SYSCALL_NFT_BURN_ASSET => {
-                    let nft_id_ptr = vm.register(10);
+                    let nft_id_ptr = vm.public_register(10)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
                     let isi = Unregister::nft(nft_id);
                     let instr = InstructionBox::from(UnregisterBox::from(isi));
@@ -11173,7 +11267,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // Set SmartContract execution depth parameter to x10
                 ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
-                    let depth_raw = vm.register(10);
+                    let depth_raw = vm.public_register(10)?;
                     // If zero, treat as no-op to avoid setting an invalid value
                     if depth_raw == 0 {
                         let gas = Self::smartcontract_depth_gas();
@@ -11197,10 +11291,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // Accept one of the operation-tagged instruction bridges used by Kotodama.
                 ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
-                    let operation_tag = vm.register(11);
+                    let operation_tag = vm.public_register(11)?;
                     // Only this explicit named profile gives the new tags any meaning. The
                     // frozen baseline keeps its original decode and rejection precedence.
-                    if vm.syscall_policy() == ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+                    if vm.quote().syscall_policy() == ivm::SyscallPolicy::AbiV1RuntimeLifecycle
                         && matches!(operation_tag,
                             ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION
                             | ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION)
@@ -11257,10 +11351,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
                 | ivm::syscalls::SYSCALL_QUERY_EXECUTE_NORITO => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let request: QueryRequest =
                         Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                    let gas_remaining = vm.remaining_gas();
+                    let gas_remaining = vm.quote().remaining_gas();
                     let gas_ctx = QueryGasContext::from_request(&request);
                     let Some(state_ref) = self.query_state.get() else {
                         return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
@@ -11297,8 +11391,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     out.extend_from_slice(&response_bytes);
                     let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
+                    let p = vm.alloc_encoded_host_tlv(&out)?;
+                    vm.write_register(10, p)?;
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => {
@@ -11308,8 +11402,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     self.stage_queued_syscall(vm, Self::subscription_record_usage)
                 }
                 ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
-                    let gas_remaining = vm.remaining_gas();
-                    let alias_ptr = vm.register(10);
+                    let gas_remaining = vm.quote().remaining_gas();
+                    let alias_ptr = vm.public_register(10)?;
                     let alias_bytes = Self::decode_tlv_blob(vm, alias_ptr)?;
                     let alias_literal = String::from_utf8(alias_bytes)
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
@@ -11339,13 +11433,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     out.extend_from_slice(&payload);
                     let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
+                    let p = vm.alloc_encoded_host_tlv(&out)?;
+                    vm.write_register(10, p)?;
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
-                    let account_ptr = vm.register(10);
-                    let asset_def_ptr = vm.register(11);
+                    let account_ptr = vm.public_register(10)?;
+                    let asset_def_ptr = vm.public_register(11)?;
                     let account: AccountId =
                         Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                     let asset_def: AssetDefinitionId =
@@ -11369,16 +11463,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     )
                 }
                 ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
-                    let name_ptr = vm.register(10);
+                    let name_ptr = vm.public_register(10)?;
                     let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
                     let name = Self::decode_name_payload(tlv.payload)?;
                     if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
                         let Some(args) = self.args.as_ref() else {
                             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                         };
-                        if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
+                        if !is_type_allowed_for_policy(
+                            vm.quote().syscall_policy(),
+                            PointerType::Json,
+                        ) {
                             return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
-                                abi: vm.abi_version(),
+                                abi: vm.quote().abi_version(),
                                 type_id: PointerType::Json as u16,
                             }));
                         }
@@ -11396,30 +11493,30 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes),
                         );
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        let ptr = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, ptr);
+                        let ptr = vm.alloc_encoded_host_tlv(&out)?;
+                        vm.write_register(10, ptr)?;
                         return Ok(gas);
                     }
                     let Some(record) = self.public_inputs.get(&name) else {
                         return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
                     };
-                    if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
+                    if !is_type_allowed_for_policy(vm.quote().syscall_policy(), record.type_id) {
                         return Err(ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed {
-                            abi: vm.abi_version(),
+                            abi: vm.quote().abi_version(),
                             type_id: record.type_id as u16,
                         }));
                     }
                     let gas = record.gas_cost();
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    let ptr = vm.alloc_host_tlv(&record.tlv)?;
-                    vm.set_register(10, ptr);
+                    let ptr = vm.alloc_encoded_host_tlv(&record.tlv)?;
+                    vm.write_register(10, ptr)?;
                     Ok(gas)
                 }
                 // ZK verify syscalls are handled here so CoreHost can enforce VK binding
                 // and run full backend verification before arming ISI latches.
                 ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
+                    let ptr = vm.public_register(10)?;
+                    let tlv = vm.public_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
                         return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
@@ -11427,8 +11524,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let envelope = match envelope {
                         Ok(envelope) => envelope,
                         Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
@@ -11441,13 +11538,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    vm.write_register(10, u64::from(ok))?;
+                    vm.write_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY })?;
                     if ok {
                         Arc::make_mut(&mut self.zk_verified_ballot).push_back(env_hash);
                         Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(env_hash);
@@ -11455,8 +11552,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
+                    let ptr = vm.public_register(10)?;
+                    let tlv = vm.public_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
                         return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
@@ -11464,8 +11561,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let envelope = match envelope {
                         Ok(envelope) => envelope,
                         Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
@@ -11478,13 +11575,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    vm.write_register(10, u64::from(ok))?;
+                    vm.write_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY })?;
                     if ok {
                         Arc::make_mut(&mut self.zk_verified_tally).push_back(env_hash);
                         Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(env_hash);
@@ -11492,8 +11589,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_VERIFY_PROOF => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
+                    let ptr = vm.public_register(10)?;
+                    let tlv = vm.public_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
                         return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
@@ -11501,8 +11598,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let envelope = match envelope {
                         Ok(envelope) => envelope,
                         Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
@@ -11514,18 +11611,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             )));
                         }
                         Err(crate::zk::VerificationAttemptError::Rejected(code)) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, code)?;
                             return Ok(gas);
                         }
                     };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    vm.write_register(10, u64::from(ok))?;
+                    vm.write_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY })?;
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
+                    let ptr = vm.public_register(10)?;
+                    let tlv = vm.public_tlv(ptr)?;
                     if tlv.type_id != PointerType::NoritoBytes {
                         return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
                     }
@@ -11546,9 +11643,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         Ok(envs) => envs,
                         Err(error) => {
                             let status = error.into_status()?;
-                            vm.set_register(10, 0);
-                            vm.set_register(11, status);
-                            vm.set_register(12, u64::MAX);
+                            vm.write_register(10, 0)?;
+                            vm.write_register(11, status)?;
+                            vm.write_register(12, u64::MAX)?;
                             return Ok(quote.gas);
                         }
                     };
@@ -11609,8 +11706,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         statuses.push(status);
                     }
                     if statuses.is_empty() {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ivm::host::ERR_DECODE);
+                        vm.write_register(10, 0)?;
+                        vm.write_register(11, ivm::host::ERR_DECODE)?;
                         return Ok(gas);
                     }
                     let body = Self::encode_norito_payload(&statuses).map_err(|_| {
@@ -11636,23 +11733,23 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
+                    let p = vm.alloc_encoded_host_tlv(&out)?;
+                    vm.write_register(10, p)?;
                     if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
-                        vm.set_register(12, idx as u64);
+                        vm.write_register(12, idx as u64)?;
                     } else {
-                        vm.set_register(12, u64::MAX);
+                        vm.write_register(12, u64::MAX)?;
                     }
                     if let Some(code) = first_error {
-                        vm.set_register(11, code);
+                        vm.write_register(11, code)?;
                     } else {
-                        vm.set_register(11, 0);
+                        vm.write_register(11, 0)?;
                     }
                     Ok(gas)
                 }
                 // ZK roots read: build response from snapshot and return TLV pointer in r10
                 ivm::syscalls::SYSCALL_ZK_ROOTS_GET => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
                     let input_len = req_tlv.payload.len();
                     let req: ivm::zk_verify::RootsGetRequest =
@@ -11670,13 +11767,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
+                    let p = vm.alloc_encoded_host_tlv(&out)?;
+                    vm.write_register(10, p)?;
                     Ok(gas)
                 }
                 // ZK vote tally read: respond from elections snapshot
                 ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
-                    let ptr = vm.register(10);
+                    let ptr = vm.public_register(10)?;
                     let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
                     let input_len = req_tlv.payload.len();
                     let req: ivm::zk_verify::VoteGetTallyRequest =
@@ -11694,12 +11791,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
+                    let p = vm.alloc_encoded_host_tlv(&out)?;
+                    vm.write_register(10, p)?;
                     Ok(gas)
                 }
                 ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
-                    let epoch = vm.register(10);
+                    let epoch = vm.public_register(10)?;
                     ivm::vrf::publish_epoch_seed(vm, self.vrf_epoch_seed(epoch).as_ref())
                 }
                 ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
@@ -11727,7 +11824,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 // Durable state syscalls backed by WSV.
                 ivm::syscalls::SYSCALL_STATE_GET => {
-                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    let (path, path_len) =
+                        self.decode_durable_state_path(vm, vm.public_register(10)?)?;
                     Self::ensure_contract_state_read_allowed(&path)?;
                     let key = self
                         .scoped_durable_state_path(&path)?
@@ -11746,7 +11844,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         let gas = ivm::host::state_path_gas(path_len);
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         self.log_state_read_key(path.as_ref());
-                        vm.set_register(10, 0);
+                        vm.write_register(10, 0)?;
                         return Ok(gas);
                     }
                     if let Some(len) = self.durable_state_base_or_live_value_len(&key)? {
@@ -11768,13 +11866,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         let gas = ivm::host::state_path_gas(path_len);
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         self.log_state_read_key(path.as_ref());
-                        vm.set_register(10, 0);
+                        vm.write_register(10, 0)?;
                         Ok(gas)
                     }
                 }
                 ivm::syscalls::SYSCALL_STATE_SET => {
-                    let path_ptr = vm.register(10);
-                    let val_ptr = vm.register(11);
+                    let path_ptr = vm.public_register(10)?;
+                    let val_ptr = vm.public_register(11)?;
                     let (path, path_len) = self.decode_durable_state_path_payload(vm, path_ptr)?;
                     Self::ensure_contract_state_write_allowed(&path)?;
                     let key = self
@@ -11800,7 +11898,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_STATE_DEL => {
                     let (path, path_len) =
-                        self.decode_durable_state_path_payload(vm, vm.register(10))?;
+                        self.decode_durable_state_path_payload(vm, vm.public_register(10)?)?;
                     Self::ensure_contract_state_write_allowed(&path)?;
                     let scoped_path = self.scoped_durable_state_path(&path)?;
                     let key = scoped_path.unwrap_or_else(|| path.clone());
@@ -11821,40 +11919,42 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_STATE_SCAN => self.scan_durable_state_page(vm),
                 ivm::syscalls::SYSCALL_STATE_HAS => {
-                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    let (path, path_len) =
+                        self.decode_durable_state_path(vm, vm.public_register(10)?)?;
                     Self::ensure_contract_state_read_allowed(&path)?;
                     let present = self.durable_state_key_present(&path)?;
                     self.log_state_read_key(path.as_ref());
-                    vm.set_register(10, u64::from(present));
+                    vm.write_register(10, u64::from(present))?;
                     Ok(ivm::host::state_path_gas(path_len))
                 }
                 ivm::syscalls::SYSCALL_STATE_LEN => {
-                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    let (path, path_len) =
+                        self.decode_durable_state_path(vm, vm.public_register(10)?)?;
                     Self::ensure_contract_state_read_allowed(&path)?;
                     let gas = ivm::host::state_path_gas(path_len);
                     if let Some(len) = self.durable_state_value_len(&path)? {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         self.log_state_read_key(path.as_ref());
-                        vm.set_register(10, u64::try_from(len).unwrap_or(u64::MAX));
-                        vm.set_register(11, 1);
+                        vm.write_register(10, u64::try_from(len).unwrap_or(u64::MAX))?;
+                        vm.write_register(11, 1)?;
                         Ok(gas)
                     } else {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         self.log_state_read_key(path.as_ref());
-                        vm.set_register(10, 0);
-                        vm.set_register(11, 0);
+                        vm.write_register(10, 0)?;
+                        vm.write_register(11, 0)?;
                         Ok(gas)
                     }
                 }
                 ivm::syscalls::SYSCALL_STATE_COUNT => {
                     let (prefix, path_len) =
-                        self.decode_durable_state_scan_path(vm, vm.register(10))?;
+                        self.decode_durable_state_scan_path(vm, vm.public_register(10)?)?;
                     let (total, scan_work_gas) =
                         self.count_durable_state_keys(vm, &prefix, path_len)?;
                     let gas = ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                     self.log_state_read_key(prefix.as_ref());
-                    vm.set_register(10, total);
+                    vm.write_register(10, total)?;
                     Ok(gas)
                 }
                 // Norito serialization and numeric helpers delegate to the IVM codec host.
@@ -11884,8 +11984,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     let h = iroha_crypto::Hash::new(&payload);
                     blob.extend_from_slice(h.as_ref());
                     // Prefer INPUT and spill to owned HEAP without overwriting earlier TLVs.
-                    let ptr = vm.alloc_host_tlv(&blob)?;
-                    vm.set_register(10, ptr);
+                    let ptr = vm.alloc_encoded_host_tlv(&blob)?;
+                    vm.write_register(10, ptr)?;
                     Ok(Self::sysvar_gas(payload.len()))
                 }
                 ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
@@ -11896,42 +11996,42 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                     let payload = Self::encode_norito_payload(subject)?;
                     let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
-                    vm.set_register(10, ptr);
+                    vm.write_register(10, ptr)?;
                     Ok(Self::sysvar_gas(payload.len()))
                 }
                 ivm::syscalls::SYSCALL_CURRENT_TIME_MS
                 | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS => {
-                    vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
+                    vm.write_register(10, self.current_block_time_ms.unwrap_or(0))?;
                     Ok(Self::sysvar_gas(0))
                 }
                 ivm::syscalls::SYSCALL_SYSVAR_CHAIN_ID => {
                     if self.chain_id_bytes.is_empty() {
-                        vm.set_register(10, 0);
+                        vm.write_register(10, 0)?;
                         Ok(Self::sysvar_gas(0))
                     } else {
                         let ptr =
                             Self::alloc_tlv_payload(vm, PointerType::Blob, &self.chain_id_bytes)?;
-                        vm.set_register(10, ptr);
+                        vm.write_register(10, ptr)?;
                         Ok(Self::sysvar_gas(self.chain_id_bytes.len()))
                     }
                 }
                 ivm::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT => {
-                    vm.set_register(10, self.current_block_height.unwrap_or(0));
+                    vm.write_register(10, self.current_block_height.unwrap_or(0))?;
                     Ok(Self::sysvar_gas(0))
                 }
                 ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => {
                     let Some(context) = self.current_contract_runtime_context.as_ref() else {
-                        vm.set_register(10, 0);
+                        vm.write_register(10, 0)?;
                         return Ok(Self::sysvar_gas(0));
                     };
                     let payload = context.contract_address.as_str().as_bytes();
                     let ptr = Self::alloc_tlv_payload(vm, PointerType::Blob, payload)?;
-                    vm.set_register(10, ptr);
+                    vm.write_register(10, ptr)?;
                     Ok(Self::sysvar_gas(payload.len()))
                 }
                 ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT => {
                     let Some(context) = self.current_contract_runtime_context.as_ref() else {
-                        vm.set_register(10, 0);
+                        vm.write_register(10, 0)?;
                         return Ok(Self::sysvar_gas(0));
                     };
                     let ptr = Self::alloc_tlv_payload(
@@ -11939,24 +12039,28 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         PointerType::Blob,
                         context.entrypoint.as_bytes(),
                     )?;
-                    vm.set_register(10, ptr);
+                    vm.write_register(10, ptr)?;
                     Ok(Self::sysvar_gas(context.entrypoint.len()))
                 }
                 ivm::syscalls::SYSCALL_CORE_QUERY_GET => {
-                    let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
+                    let tag = CoreQueryEntityTagV1::try_from(vm.public_register(10)?)
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
                     self.execute_core_query_get(vm, number, tag)
                 }
                 ivm::syscalls::SYSCALL_CORE_QUERY_PAGE => {
-                    let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
+                    let tag = CoreQueryEntityTagV1::try_from(vm.public_register(10)?)
                         .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
-                    let offset = i64::from_ne_bytes(vm.register(11).to_ne_bytes());
-                    let limit = vm.register(12);
+                    let offset = i64::from_ne_bytes(vm.public_register(11)?.to_ne_bytes());
+                    let limit = vm.public_register(12)?;
                     self.execute_core_query_page(vm, number, tag, offset, limit)
                 }
                 ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST => {
                     let artifact_id: iroha_data_model::smart_contract::ContractArtifactId =
-                        Self::decode_query_key(vm, vm.register(10), PointerType::NoritoBytes)?;
+                        Self::decode_query_key(
+                            vm,
+                            vm.public_register(10)?,
+                            PointerType::NoritoBytes,
+                        )?;
                     let request =
                     QueryRequest::Singular(SingularQueryBox::FindContractManifestByArtifactId(
                         iroha_data_model::query::smart_contract::prelude::FindContractManifestByArtifactId {
@@ -11977,8 +12081,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 }
                 ivm::syscalls::SYSCALL_QUERY_GET_PARAMETER => {
                     let name: Name =
-                        Self::decode_query_key(vm, vm.register(10), PointerType::Name)?;
-                    let gas_remaining = vm.remaining_gas();
+                        Self::decode_query_key(vm, vm.public_register(10)?, PointerType::Name)?;
+                    let gas_remaining = vm.quote().remaining_gas();
                     let gas_ctx = QueryGasContext::singular();
                     let Some(state_ref) = self.query_state.get() else {
                         return Err(ivm::VMError::Trap(VmTrap::NotImplemented {
@@ -11993,8 +12097,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     Self::finish_direct_singular_query_payload(vm, gas_remaining, &(payload))
                 }
                 ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => {
-                    let lookup = Self::decode_contract_instance_lookup(vm, vm.register(10))?;
-                    let gas_remaining = vm.remaining_gas();
+                    let lookup =
+                        Self::decode_contract_instance_lookup(vm, vm.public_register(10)?)?;
+                    let gas_remaining = vm.quote().remaining_gas();
                     let gas_ctx = QueryGasContext::singular();
                     let Some(state_ref) = self.query_state.get() else {
                         return Err(ivm::VMError::Trap(VmTrap::NotImplemented {

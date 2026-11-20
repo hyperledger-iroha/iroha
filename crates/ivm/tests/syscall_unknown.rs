@@ -46,7 +46,11 @@ impl IVMHost for PermissiveHost {
     ) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        _number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.called = true;
         Ok(0)
     }

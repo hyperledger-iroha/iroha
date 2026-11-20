@@ -67,10 +67,14 @@ impl ivm::IVMHost for ExtraCostHost {
         assert_eq!(number, 1);
         Ok(2)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
-        let a0 = vm.register(10);
-        vm.set_register(10, a0.wrapping_add(1));
+        let a0 = vm.public_register(10)?;
+        vm.write_register(10, a0.wrapping_add(1))?;
         Ok(2) // additional gas cost
     }
     fn as_any(&mut self) -> &mut dyn std::any::Any {
@@ -87,7 +91,11 @@ impl ivm::IVMHost for MeteredErrorHost {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Ok(7)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Err(VMError::metered(7, VMError::Trap(VmTrap::PermissionDenied)))
     }
@@ -107,7 +115,11 @@ impl ivm::IVMHost for UnmeteredErrorHost {
         assert_eq!(number, 1);
         Ok(7)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.calls += 1;
         Err(VMError::Trap(VmTrap::PermissionDenied))
@@ -128,7 +140,11 @@ impl ivm::IVMHost for SideEffectHost {
         assert_eq!(number, 1);
         Ok(2)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.calls += 1;
         Ok(2)
@@ -149,9 +165,13 @@ impl ivm::IVMHost for RefundingHost {
         assert_eq!(number, 1);
         Ok(7)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
-        self.observed_remaining = vm.remaining_gas();
+        self.observed_remaining = vm.quote().remaining_gas();
         Ok(2)
     }
     fn as_any(&mut self) -> &mut dyn std::any::Any {
@@ -168,7 +188,11 @@ impl ivm::IVMHost for UnderquotingHost {
         assert_eq!(number, 1);
         Ok(1)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
@@ -192,7 +216,11 @@ impl ivm::IVMHost for CompactProofHost {
         ));
         Ok(2)
     }
-    fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        _number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.calls += 1;
         Ok(2)
     }

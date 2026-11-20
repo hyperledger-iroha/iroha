@@ -84,7 +84,11 @@ pub(crate) fn state_map_key_schema(ty: &Embedded) -> Result<StateValueSchemaV1, 
 
 /// Validate the exact canonical state record while its decoded graph remains in
 /// one bounded scope funded from the executing VM's original allocation pool.
-pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Result<(), VMError> {
+pub(super) fn validate_key_record(
+    vm: &dyn crate::host::SyscallContext,
+    ty: &Embedded,
+    bytes: &[u8],
+) -> Result<(), VMError> {
     if bytes.is_empty() || bytes.len() > syscalls::STATE_MAP_MAX_KEY_BYTES {
         return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
@@ -95,7 +99,6 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
     let scratch =
         MAX_STATE_VALUE_NODES * core::mem::size_of::<Node>() + 4 * MAX_STATE_VALUE_SCHEMA_BYTES;
     let mut reservation = vm
-        .memory
         .allocation_budget()
         .map(|pool| {
             pool.try_reserve_bytes(
@@ -151,7 +154,7 @@ pub(super) fn validate_key_record(vm: &IVM, ty: &Embedded, bytes: &[u8]) -> Resu
                             crate::numeric_tlv::decode_quantity_bytes(envelope).map(drop)?
                         }
                         _ => crate::state_value_runtime::validate_state_pointer_atom(
-                            vm.syscall_policy(),
+                            vm.quote().syscall_policy(),
                             *kind,
                             envelope,
                         )?,

@@ -351,7 +351,11 @@ mod koto_test_harness_tests {
         ) -> Result<u64, VMError> {
             Ok(0)
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
         fn allows_syscall(&self, _policy: SyscallPolicy, _number: u32) -> bool {

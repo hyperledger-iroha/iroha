@@ -17,13 +17,7 @@ use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_primitives::json::Json;
 use ivm_abi::arguments::encode_argument_record_from_json;
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
-use std::{
-    any::Any,
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    mem::size_of,
-    sync::Arc,
-};
+use std::{any::Any, cell::Cell, collections::BTreeMap, mem::size_of, sync::Arc};
 
 const LIMIT: usize = 128 * 1024 * 1024;
 const GAS: u64 = 1_000_000;
@@ -81,7 +75,11 @@ impl IVMHost for InputHost {
     ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.inner.syscall(number, vm)
     }
     fn as_any(&mut self) -> &mut dyn Any {
@@ -336,11 +334,14 @@ impl IVMHost for AllRegisters {
             Ok(0)
         }
     }
-    fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        _: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.calls += 1;
         for index in 1..crate::parallel::REGISTER_COUNT {
-            vm.set_register(index, index as u64 + 100);
-            vm.registers.set_tag(index, false);
+            vm.write_register(index, index as u64 + 100)?;
         }
         Ok(0)
     }
@@ -671,7 +672,6 @@ fn default_root_shell_refusal_precedes_argument_gas_heap_and_descriptors() {
 
 struct ShrinkingShellHost {
     original: AllocationBudget,
-    shell: RefCell<Option<zk::SharedRegLog>>,
     calls: usize,
     panic_in_body: bool,
     expected_peak: usize,
@@ -692,17 +692,17 @@ impl IVMHost for ShrinkingShellHost {
         ));
         Ok(7)
     }
-    fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        let detached = vm.reg_log.as_ref().unwrap();
-        assert!(detached.belongs_to(&self.original));
-        assert!(vm.host_trace_log_detached);
-        // The quote exhausted the pool. This shell must already have been
-        // funded during admission; replacing it in the body would refuse.
-        *self.shell.borrow_mut() = Some(detached.clone());
+    fn syscall(
+        &mut self,
+        _: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
+        // Preparation emptied the pool. The callback can finish using the shell
+        // charged to the original owner before output preparation.
+        assert_eq!(self.original.reserved_bytes(), self.expected_peak);
         self.calls += 1;
         for index in 1..crate::parallel::REGISTER_COUNT {
-            vm.set_register(index, index as u64 + 100);
-            vm.registers.set_tag(index, false);
+            vm.write_register(index, index as u64 + 100)?;
         }
         if self.panic_in_body {
             panic!("host body after original pool shrink");
@@ -728,7 +728,6 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
         let scope = zk::RegLoggerGuard::install(Some(log.clone()));
         let mut host = ShrinkingShellHost {
             original: original.clone(),
-            shell: RefCell::new(None),
             calls: 0,
             panic_in_body,
             expected_peak: baseline + zk::SharedRegLog::allocation_layout().size(),
@@ -760,13 +759,6 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
         assert!(!vm.host_trace_log_detached);
         assert!(vm.host_trace_invocation_log.is_none());
         assert!(zk::SharedRegLog::ptr_eq(&log, vm.reg_log.as_ref().unwrap()));
-        assert_eq!(
-            original.reserved_bytes(),
-            baseline + zk::SharedRegLog::allocation_layout().size()
-        );
-        let shell = host.shell.get_mut().take().unwrap();
-        assert!(shell.lock().as_slice().is_empty());
-        drop(shell);
         assert_eq!(original.reserved_bytes(), baseline);
         if panic_in_body {
             original.set_limit_bytes(LIMIT);

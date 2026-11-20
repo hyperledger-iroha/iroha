@@ -1718,6 +1718,39 @@ fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
     Ok(())
 }
 #[test]
+fn ivm_host_refuses_tagged_service_input_before_query_or_allocation() -> Result<()> {
+    let bundle = load_deployment_bundle_fixture()?;
+    let temp_dir = canonical_runtime_fixture_tempdir()?;
+    let request = sample_ordered_mailbox_request(
+        &bundle,
+        "query",
+        sample_mailbox_message(&bundle, "query", b"public-query".to_vec()),
+    );
+    let input_name: Name = "_request_body".parse()?;
+    let input_tlv = make_pointer_tlv(PointerType::Name, &norito::to_bytes(&input_name)?);
+    let mut host = SoracloudIvmHost::new(request, temp_dir.path().to_path_buf(), BTreeMap::new())
+        .with_public_inputs(BTreeMap::from([(input_name, input_tlv.clone())]));
+    let mut vm = IVM::new(10_000);
+    vm.set_zk_mode(true)?;
+    let address = vm.alloc_input_tlv(&input_tlv)?;
+    vm.set_register(10, address);
+    vm.registers.set_tag(10, true);
+    for number in [
+        ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT,
+        SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+    ] {
+        let error = host.syscall(number, &mut vm).unwrap_err();
+        assert!(matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::PrivacyViolation)
+        ));
+        assert_eq!(vm.register(10), address);
+        assert_eq!(host.metering_query_count(), 0);
+        assert_eq!(host.metering_allocation_count(), 0);
+    }
+    Ok(())
+}
+#[test]
 fn ivm_host_out_of_gas_does_not_query_or_allocate_public_input() -> Result<()> {
     let bundle = load_deployment_bundle_fixture()?;
     let temp_dir = canonical_runtime_fixture_tempdir()?;

@@ -33,8 +33,8 @@ struct DecodedRequest {
     allowance: AllocationReservation,
 }
 impl DecodedRequest {
-    fn decode(vm: &IVM) -> Result<Self, ivm::VMError> {
-        let tlv = vm.validate_tlv(vm.register(10))?;
+    fn decode(vm: &dyn ivm::host::SyscallContext) -> Result<Self, ivm::VMError> {
+        let tlv = vm.public_tlv(vm.public_register(10)?)?;
         if tlv.type_id != PointerType::NoritoBytes
             || tlv.payload.len()
                 > SubmitPrivacyZkX509CertificateV1::canonical_instruction_box_frame_byte_limit_v1()
@@ -333,7 +333,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok(bytes)
     }
 
-    pub(super) fn queue_x509_attachment(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn queue_x509_attachment(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let request = DecodedRequest::decode(vm)?;
         self.ensure_instruction_queue_allowed(&request.instruction)?;
         let typed = request
@@ -396,7 +399,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .retain_metadata(metadata);
         // This ordinal observes only successful queue insertion. It is neither
         // a proof result nor authority to branch on an unapplied ledger effect.
-        vm.set_register(10, u64::from(ordinal));
+        vm.write_register(10, u64::from(ordinal))?;
         Ok(gas)
     }
 }
