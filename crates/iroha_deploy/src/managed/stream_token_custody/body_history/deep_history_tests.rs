@@ -85,7 +85,7 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
 #[inline(never)]
 fn exercise_deep_history(mut fixture: Fixture, complete_before: Instant) {
     let completed = populate_deep_history(&mut fixture, complete_before);
-    verify_deep_history(&fixture, completed);
+    verify_deep_history(&fixture, completed, complete_before);
     assert!(Instant::now() < complete_before);
 }
 
@@ -405,7 +405,11 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
 }
 
 #[inline(never)]
-fn verify_deep_history(fixture: &Fixture, completed: CompletedDeepHistory) {
+fn verify_deep_history(
+    fixture: &Fixture,
+    completed: CompletedDeepHistory,
+    complete_before: Instant,
+) {
     let CompletedDeepHistory {
         history,
         originals,
@@ -518,6 +522,9 @@ fn verify_deep_history(fixture: &Fixture, completed: CompletedDeepHistory) {
         assert_eq!(wallet.join("retired.json").exists(), index < 63);
     }
     let selected = history.retained_selected(&fixture.owner).unwrap();
+    // The last signing turn has expired. Bound the independent read of its retained request
+    // and current certified custody by both the native turn and the original campaign deadline.
+    fixture.set_deadline((Instant::now() + BODY_TURN).min(complete_before));
     assert_eq!(
         selected
             .request(fixture.deadline())
