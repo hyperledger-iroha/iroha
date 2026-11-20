@@ -2128,6 +2128,39 @@ fn validate_reputation_archive_presence(
         }
     }
 }
+fn provider_ingest_archive_start_report(
+    error: sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1,
+) -> Report<StartError> {
+    use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+    use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+
+    // These protocol failures contain only public network identities, heights and bounds.
+    // Other native causes can carry filesystem paths or underlying I/O and codec text.
+    let report = match &error {
+        Startup::Archive { source, .. }
+            if matches!(
+                source.as_ref(),
+                Cause::ArchiveCoverageGap { .. }
+                    | Cause::ArchiveAheadOfKura { .. }
+                    | Cause::ArchiveKuraTipLagExceeded { .. }
+                    | Cause::FinalizedFork { .. }
+                    | Cause::PredecessorSubstitution { .. }
+            ) =>
+        {
+            Report::new(error).change_context(StartError::StartP2p)
+        }
+        Startup::KuraBoundary { .. } => Report::new(StartError::StartP2p)
+            .attach(
+                "finalized provider-ingest startup could not read the exact durable Kura boundary",
+            )
+            .attach_opaque(error),
+        _ => Report::new(StartError::StartP2p)
+            .attach(error.to_string())
+            .attach_opaque(error),
+    };
+    report.attach("failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup")
+}
+
 fn validate_provider_ingest_archive_presence(
     runtime_enabled: bool,
     archive_present: bool,
@@ -2453,6 +2486,7 @@ impl Iroha {
             lifetime,
             listeners,
         } = prepared;
+        let managed_launch = listeners.is_some();
         let (p2p_listener, torii_listener) = match listeners {
             Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
             None => (None, None),
@@ -3392,11 +3426,7 @@ impl Iroha {
                             .sorafs_provider_ingest_retention_authority
                             .clone(),
                     )
-                    .map_err(|error| {
-                        Report::new(StartError::StartP2p).attach(format!(
-                            "failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup: {error}"
-                        ))
-                    })?;
+                    .map_err(provider_ingest_archive_start_report)?;
             if let Some(retention) = prepared.retention_authority() {
                 iroha_logger::info!(
                     authority_handle = retention.authority().handle(),
@@ -3666,6 +3696,19 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
+        // Native service commissioning can itself need a transaction committed by the peers.
+        let (torii_started, relay_task) = network_relay::NetworkRelay {
+            tx_gossiper,
+            peers_gossiper,
+            network: network.clone(),
+            streaming: streaming.clone(),
+            low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
+                &config.network,
+            ),
+            emergency_fast,
+        }
+        .commission(managed_launch, supervisor.shutdown_signal());
+        supervisor.monitor(task::spawn(relay_task));
         if let Some(handle) = sumeragi.as_ref() {
             // Storage maintenance is authorized only by completed native recovery.
             // A failed consensus owner revokes further snapshot publication.
@@ -4404,9 +4447,9 @@ impl Iroha {
                 stream_token_reputation_delivery,
             )
             .map_err(|error| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to initialise qualified stream-token gateway admission: {error:#}"
-                ))
+                Report::new(error)
+                    .change_context(StartError::StartTorii)
+                    .attach("failed to initialise qualified stream-token gateway admission")
             })?
         };
         if let Some(capture) = sorafs_stream_token_admission_capture.as_ref() {
@@ -4985,20 +5028,7 @@ impl Iroha {
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
-        let network_relay_shutdown = supervisor.shutdown_signal();
-        supervisor.monitor(task::spawn(
-            network_relay::NetworkRelay {
-                tx_gossiper,
-                peers_gossiper,
-                network: network.clone(),
-                streaming: streaming.clone(),
-                low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
-                    &config.network,
-                ),
-                emergency_fast,
-            }
-            .run(network_relay_shutdown),
-        ));
+        let _ = torii_started.send(());
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
@@ -10294,6 +10324,41 @@ mod tests {
         );
     }
     #[test]
+    fn provider_ingest_startup_reports_typed_coverage_and_keeps_private_paths_opaque() {
+        use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+        use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+        let stage = "exact Kura-tip reconciliation";
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"ingest-startup-report"),
+            ));
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::ArchiveCoverageGap {
+                network_id,
+                missing_height: 33,
+                observed_height: 34,
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(diagnostic.contains("missing height 33 before 34"));
+        let private = "private-path-must-remain-opaque";
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::InvalidStorage {
+                path: private.into(),
+                reason: "unexpected object",
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(!diagnostic.contains(private));
+    }
+
+    #[test]
     fn provider_ingest_archive_presence_matches_runtime_enablement() {
         assert!(validate_provider_ingest_archive_presence(false, false).is_ok());
         assert!(validate_provider_ingest_archive_presence(true, true).is_ok());
@@ -10648,14 +10713,21 @@ mod tests {
                 .contains("lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};")
         );
 
-        // Fast registers one bounded peer/trust subscriber and nothing else.
-        let relay: String = include_str!("network_relay.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        assert!(relay.contains(
-            "letsubscriptions=ifshared.emergency_fast{vec![(SubscriberFilter::topics([Topic::PeerGossip,Topic::TrustGossip]),EMERGENCY_FAST_SUBSCRIBER_CAP,)]}"
-        ));
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        assert!(
+            network_relay::early_subscription(network_relay::RelayStartup::EmergencyFast, 64)
+                .is_none()
+        );
+        assert_eq!(
+            network_relay::subscriptions_after_torii(
+                network_relay::RelayStartup::EmergencyFast,
+                64
+            ),
+            vec![(
+                SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip]),
+                32
+            )]
+        );
     }
     #[test]
     fn emergency_fast_disables_streaming_persistence_and_control() {

@@ -2,7 +2,9 @@
 //! It never starts/stops children, renews initial custody, submits a transaction or extends a timer.
 
 use super::{
-    activation::{Budget, ReadinessExpiry, validate_live},
+    activation::{
+        Budget, ReadinessExpiry, catalog, observe_native_set, validate_gateways, validate_live,
+    },
     owned::OwnedGateway,
     progress::{Failure, Phase, Progress},
     renewal,
@@ -10,7 +12,7 @@ use super::{
 use crate::localnet::service_authorities::RetainedProviderServicePlan;
 use crate::managed::{
     ManagedProviderAdvertisement, PreparedLocalnet, Result,
-    build_registry::{self, DISCOVERY_FRESHNESS, GeneratedServiceObservation},
+    build_registry::{DISCOVERY_FRESHNESS, GeneratedServiceObservation},
     gateway_compliance::{ManagedGatewayCompliance, PromotedGeneratedCatalog},
     native_operation::{ManagedTransactionFinality, invalid, now_ms},
 };
@@ -41,7 +43,7 @@ impl Interval {
 }
 
 #[derive(Clone)]
-pub(super) struct Selection {
+struct Selection {
     continuation: renewal::Continuation,
     terminal: ManagedTransactionFinality,
     catalog: PromotedGeneratedCatalog,
@@ -109,6 +111,14 @@ impl Timing {
         self.next_utc = next_utc;
         Ok(())
     }
+    /// A fresh discovery may replace discovery timing for every provider. An already-due
+    /// signed advertisement or catalog still needs its own owner's turn.
+    fn retain_due_publication(&mut self, previous: &Self, signed_midpoint: u64, observed_utc: u64) {
+        if signed_midpoint <= observed_utc {
+            self.next_monotonic = self.next_monotonic.min(previous.next_monotonic);
+            self.next_utc = self.next_utc.min(previous.next_utc);
+        }
+    }
     fn current_at(&self, enrollment: ReadinessExpiry, now: Instant, utc: u64) -> bool {
         self.expiry.current_at(now, utc) && enrollment.current_at(now, utc)
     }
@@ -116,6 +126,39 @@ impl Timing {
         now >= self.next_monotonic || utc >= self.next_utc
     }
 }
+
+/// Overdue observations keep their priority across another provider's turn. Either clock
+/// can make a slot due. Ties retain the original provider order.
+fn oldest_due_slot<'a>(
+    timings: impl Iterator<Item = &'a Timing>,
+    now: Instant,
+    utc: u64,
+) -> Option<usize> {
+    timings
+        .enumerate()
+        .filter(|(_, timing)| timing.due_at(now, utc))
+        .min_by_key(|(_, timing)| {
+            std::cmp::Reverse(
+                now.saturating_duration_since(timing.next_monotonic)
+                    .max(Duration::from_millis(utc.saturating_sub(timing.next_utc))),
+            )
+        })
+        .map(|(slot, _)| slot)
+}
+/// A failed native check defers only its own slot. Other observations retain their original
+/// schedules even if they came due while the physical turn was running.
+fn defer_failed_slot<'a>(
+    mut timings: impl Iterator<Item = &'a mut Timing>,
+    slot: usize,
+    now: Instant,
+    utc: u64,
+) -> Result<()> {
+    timings
+        .nth(slot)
+        .ok_or_else(|| invalid("unknown original provider slot"))?
+        .schedule(utc, now, utc)
+}
+
 impl ProviderObservation {
     pub(super) fn new(
         continuation: renewal::Continuation,
@@ -155,91 +198,49 @@ impl ProviderObservation {
             timing,
         })
     }
-    pub(super) fn due(&self) -> Result<bool> {
-        Ok(self.timing.due_at(Instant::now(), now_ms()?))
-    }
-    pub(super) fn begin(&self, cancelled: Arc<AtomicBool>) -> Result<(Selection, Budget)> {
+    fn begin(&self, cancelled: Arc<AtomicBool>) -> Result<Budget> {
         let started = Instant::now();
         let deadline = self.timing.expiry.deadline(TURN_MAXIMUM)?;
         let timeout = deadline
             .checked_duration_since(started)
             .filter(|value| !value.is_zero())
             .ok_or_else(|| invalid("maintenance observation expired"))?;
-        Ok((
-            self.selection.clone(),
-            Budget {
-                started,
-                timeout,
-                startup_deadline_ns: None,
-                utc_ceiling_unix_ms: Some(self.timing.expiry.utc_ceiling()),
-                cancelled,
-                progress: Arc::new(Progress::default()),
-            },
-        ))
-    }
-    pub(super) fn retry(&mut self) -> Result<()> {
-        let utc = now_ms()?;
-        self.timing.schedule(utc, Instant::now(), utc)
+        Ok(Budget {
+            started,
+            timeout,
+            startup_deadline_ns: None,
+            utc_ceiling_unix_ms: Some(self.timing.expiry.utc_ceiling()),
+            cancelled,
+            progress: Arc::new(Progress::default()),
+        })
     }
 }
 
-/// One refresh attempt. Every signature uses its existing original-only owner; the old observation
-/// remains held by the main loop throughout the attempt and wins over a late success.
-fn refresh_provider(
+/// Only the selected original may publish its advertisement or advance its catalog.
+fn update_selected(
     prepared: &PreparedLocalnet,
-    selected: Selection,
-    mut live: OwnedGateway,
+    selected: &Selection,
+    live: &mut OwnedGateway,
     budget: &Budget,
-) -> std::result::Result<ProviderObservation, Failure> {
-    budget.check()?;
-    if live.provider() != selected.continuation.provider() {
-        return Err(budget.progress.unconfirmed());
-    }
-    validate_live(prepared, &mut live, budget)?;
+) -> std::result::Result<Option<PromotedGeneratedCatalog>, Failure> {
     let now = budget.call(|_| now_ms())?;
     if now >= selected.advert_interval.midpoint() {
         budget.progress.enter(Phase::ProviderAdvertisement);
+        validate_live(prepared, live, budget)?;
         budget.call(|deadline| {
             ManagedProviderAdvertisement::open(prepared, live.provider())?.publish(deadline)
         })?;
-        validate_live(prepared, &mut live, budget)?;
+        validate_live(prepared, live, budget)?;
     }
-    let publisher = budget.call(|_| ManagedGatewayCompliance::open(prepared, live.provider()))?;
-    let catalog = if now >= selected.catalog_interval.midpoint() {
+    if now >= selected.catalog_interval.midpoint() {
         budget.progress.enter(Phase::Catalog);
-        budget.call(|deadline| publisher.advance(&mut live, deadline))?
-    } else {
-        selected.catalog
-    };
-    budget.progress.enter(Phase::PromotedCatalog);
-    budget.call(|deadline| publisher.observe_promoted(&mut live, catalog, deadline))?;
-    drop(publisher);
-    budget.progress.enter(Phase::Discovery);
-    let observed_at = Instant::now();
-    let observed_utc = budget.call(|_| now_ms())?;
-    let current = budget.call(|deadline| {
-        let enrollment = live.selected_enrollment(selected.terminal)?;
-        build_registry::observe_generated_service(
-            prepared,
-            live.provider(),
-            enrollment,
-            selected.terminal,
-            deadline,
-        )
-    })?;
-    let observation = budget.call(|_| {
-        ProviderObservation::new(
-            selected.continuation,
-            selected.terminal,
-            catalog,
-            current,
-            observed_at,
-            observed_utc,
-        )
-    })?;
-    validate_live(prepared, &mut live, budget)?;
-    budget.check()?;
-    Ok(observation)
+        return budget
+            .call(|deadline| {
+                ManagedGatewayCompliance::open(prepared, live.provider())?.advance(live, deadline)
+            })
+            .map(Some);
+    }
+    Ok(None)
 }
 
 /// All three finite observations, in the original profile's validated provider-slot order.
@@ -249,14 +250,8 @@ pub(super) struct Observation {
 }
 
 pub(super) struct RefreshSelection {
-    selected: Selection,
     original: Observation,
     slot: usize,
-}
-impl RefreshSelection {
-    pub(super) fn provider(&self) -> iroha_data_model::sorafs::capacity::ProviderId {
-        self.selected.continuation.provider()
-    }
 }
 impl Observation {
     /// Combine observations only after the caller freshly selects the original provider order.
@@ -287,26 +282,22 @@ impl Observation {
                 .current_at(value.selection.continuation.expiry(), mono, utc)
         }))
     }
-    pub(super) fn due(&self) -> Result<bool> {
-        let mono = Instant::now();
-        let utc = now_ms()?;
-        Ok(self
-            .providers
-            .iter()
-            .any(|value| value.timing.due_at(mono, utc)))
+    pub(super) fn due_slot(&self) -> Result<Option<usize>> {
+        Ok(oldest_due_slot(
+            self.providers.iter().map(|value| &value.timing),
+            Instant::now(),
+            now_ms()?,
+        ))
     }
-    pub(super) fn begin(&self, cancelled: Arc<AtomicBool>) -> Result<(RefreshSelection, Budget)> {
+    pub(super) fn begin(
+        &self,
+        slot: usize,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<(RefreshSelection, Budget)> {
         if !self.current()? {
             return Err(invalid("aggregate refresh observation expired"));
         }
-        let mono = Instant::now();
-        let utc = now_ms()?;
-        let slot = self
-            .providers
-            .iter()
-            .position(|value| value.timing.due_at(mono, utc))
-            .ok_or_else(|| invalid("no original provider observation is due"))?;
-        let (selected, mut budget) = self.providers[slot].begin(cancelled)?;
+        let mut budget = self.providers[slot].begin(cancelled)?;
         budget.cap_to_expiries(
             self.providers
                 .iter()
@@ -315,19 +306,20 @@ impl Observation {
         )?;
         Ok((
             RefreshSelection {
-                selected,
                 original: self.clone(),
                 slot,
             },
             budget,
         ))
     }
-    pub(super) fn retry(&mut self) -> Result<()> {
-        for value in &mut self.providers {
-            if value.due()? {
-                value.retry()?;
-            }
-        }
+    pub(super) fn retry(&mut self, slot: usize) -> Result<()> {
+        let utc = now_ms()?;
+        defer_failed_slot(
+            self.providers.iter_mut().map(|value| &mut value.timing),
+            slot,
+            Instant::now(),
+            utc,
+        )?;
         if !self.current()? {
             return Err(invalid("aggregate retry observation expired"));
         }
@@ -359,31 +351,81 @@ impl Observation {
     }
 }
 
-/// One physical background refresh preserves every other provider's exact original timer.
+/// One bounded physical turn refreshes each provider only after all three independently
+/// authenticate their exact catalogs, native rows and custody at the fresh Global cut.
 pub(super) fn refresh(
     prepared: &PreparedLocalnet,
     selected: RefreshSelection,
-    live: OwnedGateway,
+    mut live: [OwnedGateway; 3],
     budget: &Budget,
 ) -> std::result::Result<Observation, Failure> {
+    let RefreshSelection { original, slot } = selected;
     budget.check()?;
-    let RefreshSelection {
-        selected,
-        mut original,
-        slot,
-    } = selected;
-    let next = refresh_provider(prepared, selected, live, budget)?;
-    // Refuse success across any gap in the old aggregate, including an unchanged provider.
+    for (gateway, provider) in live.iter().zip(&original.providers) {
+        if gateway.provider() != provider.selection.continuation.provider() {
+            return Err(budget.progress.unconfirmed());
+        }
+    }
+    validate_gateways(prepared, &mut live, budget)?;
+    let written = update_selected(
+        prepared,
+        &original.providers[slot].selection,
+        &mut live[slot],
+        budget,
+    )?;
+    budget.progress.enter(Phase::PromotedCatalog);
+    let catalogs = original
+        .providers
+        .each_ref()
+        .map(|provider| provider.selection.catalog);
+    let promoted = catalog::observe(prepared, &mut live, catalogs, budget)?;
+    // The old lease supplies every anchor, including the writer's. A durably committed
+    // catalog from a failed earlier turn is recoverable. Any effect just returned by this
+    // turn must also agree exactly with the independently authenticated serving head.
+    budget.call(|_| promoted[slot].require_writer_receipt(written))?;
+    let floors = original
+        .providers
+        .each_ref()
+        .map(|provider| provider.selection.terminal);
+    let (currents, observed_at, observed_utc) =
+        observe_native_set(prepared, &live, floors, budget)?;
+    validate_gateways(prepared, &mut live, budget)?;
+    drop(live);
+    // The old aggregate remains current without interruption even after all fresh rows return.
     if !original.current().unwrap_or(false) {
         return Err(Failure::ObservationExpired);
     }
-    original.providers[slot] = next;
     budget.call(|_| {
-        // Refresh keeps its original standalone capture after the owned gateway has dropped.
+        let replace = |index: usize| {
+            let old = &original.providers[index].selection;
+            let mut next = ProviderObservation::new(
+                old.continuation.clone(),
+                old.terminal,
+                promoted[index],
+                currents[index],
+                observed_at,
+                observed_utc,
+            )?;
+            if index != slot {
+                let midpoint = next
+                    .selection
+                    .advert_interval
+                    .midpoint()
+                    .min(next.selection.catalog_interval.midpoint());
+                next.timing.retain_due_publication(
+                    &original.providers[index].timing,
+                    midpoint,
+                    observed_utc,
+                );
+            }
+            Ok::<_, crate::managed::Error>(next)
+        };
+        let providers = [replace(0)?, replace(1)?, replace(2)?];
+        // Release all owned gateway references before the original standalone profile capture.
         let plans = prepared
             .provider_service_plans()?
             .ok_or_else(|| invalid("original provider plans absent"))?;
-        Observation::new(&plans, original.providers)
+        Observation::new(&plans, providers)
     })
 }
 

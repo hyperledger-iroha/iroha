@@ -33,7 +33,7 @@ use std::{
 };
 
 #[path = "activation/catalog.rs"]
-mod catalog;
+pub(super) mod catalog;
 
 pub(super) struct Budget {
     pub(super) started: Instant,
@@ -382,7 +382,7 @@ impl Recheck {
         let observations = observe_published_gateways(
             &mut live,
             |index, gateway| self.publish_provider(prepared, index, gateway, budget),
-            |index, gateway, floor| self.observe_provider(prepared, index, gateway, floor, budget),
+            |gateways, floors| self.observe_providers(prepared, gateways, floors, budget),
         )?;
         let observation = budget.call(|_| {
             let plans = live[0]
@@ -427,80 +427,105 @@ impl Recheck {
         Ok(floor)
     }
 
-    fn observe_provider(
+    fn observe_providers(
         &self,
         prepared: &PreparedLocalnet,
-        index: usize,
-        gateway: &mut OwnedGateway,
-        floor: ManagedTransactionFinality,
+        live: &mut [OwnedGateway; 3],
+        floors: [ManagedTransactionFinality; 3],
         budget: &Budget,
-    ) -> std::result::Result<maintenance::ProviderObservation, Failure> {
-        let provider = gateway.provider();
-        budget.progress.enter(Phase::Discovery);
-        let observed_at = Instant::now();
-        let observed_utc = budget.call(|_| now_ms())?;
-        let current = budget.call(|deadline| {
-            build_registry::observe_generated_service(
-                prepared,
-                provider,
-                gateway.selected_enrollment(floor)?,
-                floor,
-                deadline,
-            )
-        })?;
-        let continuation = budget.call(|_| {
-            let enrollment = gateway.selected_enrollment(floor)?;
-            match &self.retained {
-                Some(retained) if provider != retained.renewed => {
-                    let original = &retained.originals[index];
-                    original.revalidate(provider, enrollment, &self.receipt)?;
-                    Ok(original.clone())
+    ) -> std::result::Result<[maintenance::ProviderObservation; 3], Failure> {
+        let (currents, observed_at, observed_utc) =
+            observe_native_set(prepared, live, floors, budget)?;
+        let mut finish = |index: usize| -> std::result::Result<_, Failure> {
+            let gateway = &mut live[index];
+            let provider = gateway.provider();
+            let floor = floors[index];
+            let current = currents[index];
+            let continuation = budget.call(|_| {
+                let enrollment = gateway.selected_enrollment(floor)?;
+                match &self.retained {
+                    Some(retained) if provider != retained.renewed => {
+                        let original = &retained.originals[index];
+                        original.revalidate(provider, enrollment, &self.receipt)?;
+                        Ok(original.clone())
+                    }
+                    _ => {
+                        let plan = gateway
+                            .original_provider_plan(prepared)?
+                            .ok_or_else(|| invalid("renewal requires original provider plan"))?;
+                        renewal::Continuation::new(
+                            &plan,
+                            Arc::clone(&self.receipt),
+                            enrollment,
+                            observed_at,
+                            observed_utc,
+                        )
+                    }
                 }
-                _ => {
-                    let plan = gateway
-                        .original_provider_plan(prepared)?
-                        .ok_or_else(|| invalid("renewal requires original provider plan"))?;
-                    renewal::Continuation::new(
-                        &plan,
-                        Arc::clone(&self.receipt),
-                        enrollment,
-                        observed_at,
-                        observed_utc,
-                    )
-                }
-            }
-        })?;
-        let observation = budget.call(|_| {
-            maintenance::ProviderObservation::new(
-                continuation,
-                floor,
-                self.catalogs[index],
-                current,
-                observed_at,
-                observed_utc,
-            )
-        })?;
-        validate_live(prepared, gateway, budget)?;
-        Ok(observation)
+            })?;
+            let observation = budget.call(|_| {
+                maintenance::ProviderObservation::new(
+                    continuation,
+                    floor,
+                    self.catalogs[index],
+                    current,
+                    observed_at,
+                    observed_utc,
+                )
+            })?;
+            validate_live(prepared, gateway, budget)?;
+            Ok(observation)
+        };
+        Ok([finish(0)?, finish(1)?, finish(2)?])
     }
 }
 
-// Each discovery starts a finite eligibility window. Complete all three publications before
-// starting those clocks; each native observation and the final aggregate still check expiry.
+/// All native provider and signer checks use one original clock pair and certified Global cut.
+pub(super) fn observe_native_set(
+    prepared: &PreparedLocalnet,
+    live: &[OwnedGateway; 3],
+    floors: [ManagedTransactionFinality; 3],
+    budget: &Budget,
+) -> std::result::Result<
+    (
+        [build_registry::GeneratedServiceObservation; 3],
+        Instant,
+        u64,
+    ),
+    Failure,
+> {
+    budget.progress.enter(Phase::Discovery);
+    let observed_at = Instant::now();
+    let observed_utc = budget.call(|_| now_ms())?;
+    let currents = budget.call(|deadline| {
+        let enrollments = OwnedGateway::read_enrollments(live, floors)?;
+        let reads = std::array::from_fn(|index| build_registry::ServiceRead {
+            provider: live[index].provider(),
+            enrollment: enrollments[index],
+            required: floors[index],
+        });
+        build_registry::observe_generated_service_set(
+            prepared,
+            live[0].read_renderer(),
+            reads,
+            deadline,
+        )
+    })?;
+    Ok((currents, observed_at, observed_utc))
+}
+
+// Complete all three publications before sampling either shared observation clock.
+// Each native row and the final aggregate still check the applicable expiry.
 fn observe_published_gateways<G, P, O>(
     gateways: &mut [G; 3],
     mut publish: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
-    mut observe: impl FnMut(usize, &mut G, P) -> std::result::Result<O, Failure>,
+    observe: impl FnOnce(&mut [G; 3], [P; 3]) -> std::result::Result<[O; 3], Failure>,
 ) -> std::result::Result<[O; 3], Failure> {
     let [first, second, third] = gateways;
     let first_floor = publish(0, first)?;
     let second_floor = publish(1, second)?;
     let third_floor = publish(2, third)?;
-    Ok([
-        observe(0, first, first_floor)?,
-        observe(1, second, second_floor)?,
-        observe(2, third, third_floor)?,
-    ])
+    observe(gateways, [first_floor, second_floor, third_floor])
 }
 
 pub(super) fn validate_gateways(

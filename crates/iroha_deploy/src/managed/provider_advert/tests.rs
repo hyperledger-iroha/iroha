@@ -15,38 +15,82 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+struct ReceivedPost {
+    peer: usize,
+    request: WalletHttpRequest,
+    received: Instant,
+    responding: Instant,
+}
+
 struct Peers {
     stopped: Arc<AtomicBool>,
-    requests: Arc<Mutex<Vec<(usize, WalletHttpRequest)>>>,
+    requests: Arc<Mutex<Vec<ReceivedPost>>>,
     workers: Vec<JoinHandle<io::Result<()>>>,
 }
 impl Peers {
     fn start(prepared: &PreparedLocalnet, statuses: [u16; 4]) -> Self {
+        Self::with_delays(prepared, statuses, [Duration::ZERO; 4])
+    }
+
+    fn with_delays(prepared: &PreparedLocalnet, statuses: [u16; 4], delays: [Duration; 4]) -> Self {
         let stopped = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let workers = prepared.peers.iter().enumerate().map(|(index, peer)| {
+        let mut workers = Vec::new();
+        for (index, peer) in prepared.peers.iter().enumerate() {
             let url: url::Url = peer.torii_url.parse().unwrap();
             assert_eq!(url.host_str(), Some("127.0.0.1"));
             let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, url.port().unwrap())).unwrap();
             listener.set_nonblocking(true).unwrap();
-            let stop = stopped.clone(); let seen = requests.clone(); let status = statuses[index];
-            thread::spawn(move || {
+            let stop = stopped.clone();
+            let seen = requests.clone();
+            let status = statuses[index];
+            let response = format!(
+                "HTTP/1.1 {status} AdvertFixture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let delay = delays[index];
+            workers.push(thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut socket, _)) => {
                             let request = wallet_request(&mut socket)?;
-                            let mut requests = seen.lock().unwrap();
-                            if requests.len() >= 32 { return Err(io::Error::other("advert fixture request bound")); }
-                            requests.push((index, request)); drop(requests);
-                            write!(socket, "HTTP/1.1 {status} AdvertFixture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+                            let received = Instant::now();
+                            thread::sleep(delay);
+                            let responding = Instant::now();
+                            {
+                                let mut requests = seen.lock().unwrap();
+                                if requests.len() >= 32 {
+                                    return Err(io::Error::other("advert fixture request bound"));
+                                }
+                                requests.push(ReceivedPost {
+                                    peer: index,
+                                    request,
+                                    received,
+                                    responding,
+                                });
+                            }
+                            if let Err(error) = socket.write_all(response.as_bytes()) {
+                                // A bounded request can close its socket during the fixture delay.
+                                if delay.is_zero()
+                                    || !matches!(
+                                        error.kind(),
+                                        io::ErrorKind::BrokenPipe
+                                            | io::ErrorKind::ConnectionReset
+                                            | io::ErrorKind::ConnectionAborted
+                                    )
+                                {
+                                    return Err(error);
+                                }
+                            }
                         }
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(5)),
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5))
+                        }
                         Err(error) => return Err(error),
                     }
                 }
                 Ok(())
-            })
-        }).collect();
+            }));
+        }
         Self {
             stopped,
             requests,
@@ -126,7 +170,7 @@ fn each_original_provider_publishes_its_own_exact_advert_under_independent_custo
             assert_eq!(
                 requests
                     .iter()
-                    .filter(|(selected, request)| *selected == peer && request.body == bytes)
+                    .filter(|post| post.peer == peer && post.request.body == bytes)
                     .count(),
                 1
             );
@@ -196,12 +240,10 @@ fn publisher_partial_peers_reopen_repeats_exact_original_without_readiness_claim
     let requests = peers.requests.lock().unwrap();
     assert_eq!(requests.len(), 8);
     for index in 0..4 {
-        assert_eq!(
-            requests.iter().filter(|(peer, _)| *peer == index).count(),
-            2
-        );
+        assert_eq!(requests.iter().filter(|post| post.peer == index).count(), 2);
     }
-    for (_, request) in requests.iter() {
+    for post in requests.iter() {
+        let request = &post.request;
         assert_eq!(request.method, "POST");
         assert_eq!(
             request.target.path(),
@@ -274,4 +316,129 @@ fn publisher_deadline_divides_remaining_peers_without_extending_original_budget(
     assert_eq!(peer_deadline(now, now, 4), None);
     assert_eq!(peer_deadline(now, deadline, 0), None);
     assert_eq!(peer_deadline(now, now + Duration::from_nanos(1), 4), None);
+}
+
+struct TimedPublication {
+    report: Result<ManagedProviderAdvertisementReport>,
+    started: Instant,
+    finished: Instant,
+    posts: [ReceivedPost; 4],
+}
+
+fn observe_publication(
+    statuses: [u16; 4],
+    delays: [Duration; 4],
+    budget: Duration,
+) -> TimedPublication {
+    let (_temporary, prepared) = fixture();
+    let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+    let publisher = ManagedProviderAdvertisement::open(&prepared, provider).unwrap();
+    let advert = prepared
+        .provider_advert(provider, now_ms().unwrap() / 1_000)
+        .unwrap();
+    let exact = norito::encode_canonical(&advert).unwrap();
+    let mut peers = Peers::with_delays(&prepared, statuses, delays);
+
+    let started = Instant::now();
+    let report = publisher.publish_original(&advert, started + budget);
+    let finished = Instant::now();
+    peers.finish();
+    let mut posts = std::mem::take(&mut *peers.requests.lock().unwrap());
+    posts.sort_by_key(|post| post.peer);
+    assert_eq!(posts.len(), 4);
+    for (index, post) in posts.iter().enumerate() {
+        assert_eq!(post.peer, index);
+        assert_eq!(post.request.method, "POST");
+        assert_eq!(
+            post.request.target.path(),
+            iroha_torii_shared::route_catalog::sorafs::PROVIDER_ADVERT.path()
+        );
+        assert!(
+            post.request.body == exact,
+            "peer {index} received a different advert"
+        );
+        assert!(
+            post.received <= finished,
+            "peer {index} received its POST after the caller returned"
+        );
+    }
+    if let Ok(report) = &report {
+        assert_eq!(report.issued_at, advert.issued_at);
+        assert_eq!(report.expires_at, advert.expires_at);
+    }
+    TimedPublication {
+        report,
+        started,
+        finished,
+        posts: posts.try_into().ok().unwrap(),
+    }
+}
+
+#[test]
+fn publisher_dispatches_to_healthy_peers_while_the_first_response_is_delayed() {
+    let _resources = crate::managed::native_test_guard();
+    let case = observe_publication(
+        [503, 200, 200, 200],
+        [1_200, 150, 150, 150].map(Duration::from_millis),
+        Duration::from_secs(30),
+    );
+    let first_post = case.posts.iter().map(|post| post.received).min().unwrap();
+    let last_healthy_post = case.posts[1..]
+        .iter()
+        .map(|post| post.received)
+        .max()
+        .unwrap();
+    let slow_response = case.posts[0].responding;
+    let elapsed = case.finished.duration_since(case.started);
+    eprintln!(
+        "advert_dispatch elapsed_us={} first_post_to_last_healthy_us={} start_to_last_healthy_us={} start_to_slow_reply_us={}",
+        elapsed.as_micros(),
+        last_healthy_post.duration_since(first_post).as_micros(),
+        last_healthy_post.duration_since(case.started).as_micros(),
+        slow_response.duration_since(case.started).as_micros(),
+    );
+    assert_eq!(case.report.unwrap().acknowledged_peers, 3);
+    assert!(
+        case.posts
+            .iter()
+            .all(|post| post.responding <= case.finished),
+        "publisher returned with responses still outstanding"
+    );
+    assert!(
+        last_healthy_post < slow_response,
+        "healthy peers waited for the first peer's delayed 503"
+    );
+}
+
+#[test]
+fn publisher_bounds_a_stalled_response_by_the_original_deadline() {
+    let _resources = crate::managed::native_test_guard();
+    let budget = Duration::from_secs(4);
+    let case = observe_publication(
+        [200; 4],
+        [7_000, 0, 0, 0].map(Duration::from_millis),
+        budget,
+    );
+    assert!(
+        case.posts[1..]
+            .iter()
+            .all(|post| post.responding < case.finished)
+    );
+    assert!(
+        case.finished < case.posts[0].responding,
+        "the late HTTP 200 held the caller beyond its deadline"
+    );
+    match case.report {
+        Ok(report) => {
+            assert!(
+                case.finished <= case.started + budget,
+                "publisher returned success after its deadline"
+            );
+            assert_eq!(report.acknowledged_peers, 3);
+        }
+        Err(error) => assert!(
+            matches!(error, crate::managed::Error::NativeDeadline),
+            "{error}"
+        ),
+    }
 }

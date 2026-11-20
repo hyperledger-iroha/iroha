@@ -407,10 +407,44 @@ discovery; a cold fetch authenticates the current provider policy and native tok
 signer against a newly observed parent decision. A private child context cannot
 select its own registry or forward its listener credentials.
 
+After consensus and the transaction gossiper start, managed validators receive transaction gossip
+through their bounded low-priority relay. This lets peers include the original signed gateway
+qualification Check while Torii is still starting. The relay keeps its per-peer ingress limits
+and its single low-priority queue through startup. Other messages enter normal service at the
+Torii handoff. Standalone daemons open all relay classes at the usual Torii handoff. Emergency Fast retains its bounded peer and trust subscription after that handoff.
+
+The daemon reports the native gateway qualification or initial pending-reconciliation phase on a
+startup refusal. Its provider-ingest archive startup report names the missing and observed heights
+for an authenticated coverage gap and keeps private filesystem and codec errors opaque.
+
 The composed cold-package workflow remains unqualified. Initial funding, governed token
 custody, signed compliance catalog installation and runtime activation are wired into the
 startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
-replacing its finite readiness observation. Restart reconstructs each provider's native-selected
+replacing its finite readiness observation. The worker services the longest-overdue provider
+on either clock first. A failed turn delays only the attempted provider. All three original
+expiries still bound every turn. After the three catalog and advertisement publications,
+startup verifies the three provider discoveries and custody records against one freshly
+authenticated Global decision. One cursor owns finality and each provider retains its own
+custody lock. A shared renderer supplies the immutable input for opening that cursor, Bootstrap
+and the existing promoted catalog journals. Each purpose reacquires its own physical lock and
+revalidates the source. Concurrent read-only verifiers join before the aggregate accepts any row.
+The common UTC and monotonic clocks start before the first proof. An active decode owner
+keeps the independent serial proof operations and requires the same certified decision across
+all three. Each bounded maintenance turn allows only the chosen provider to publish
+an advertisement or advance a catalog. It then checks every provider's exact promoted catalog,
+owns one fresh Global cut for all three independent signer/custody reads, and revalidates the
+owned launch. The old aggregate remains authoritative until every check has returned and all
+old UTC and monotonic bounds still hold. When publication succeeds before a later proof fails,
+the next turn can recover that provider’s signed, acknowledged and currently serving descendant
+from its original catalog chain. For a shared renderer, the three status GETs join between fresh
+original child, renderer, plan and private-catalog checks. Each gateway independently verifies its
+original chain, acknowledgement, endpoint, status and exclusive validity. The subsequent native
+read selects each provider's enrolled custody from the same authenticated original revision.
+Owned profiles and active decoder limits keep the independent per-provider reads. The selected writer keeps its previous
+anchor throughout the turn and checks any new promotion receipt against the independently
+authenticated head.
+Catalog recovery alone grants no readiness. A read-only refresh of another provider preserves
+that provider's place if its signed publication is due. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid
@@ -419,6 +453,17 @@ providers keep their original monotonic enrollment timers across another provide
 Startup continuation and aggregate construction select immutable provider plans through the
 retained renderer, with fresh whole-profile and operation-lock checks at each selection.
 Current enrollment, discovery, live gateway validation and observation clocks remain independent.
+
+Cold restart after an active storage launch remains open. In a four-validator restart, the
+Catalog launch committed H33 and H34 with provider ingest disabled. Each provider archive
+ended at H32. The next StreamTokens launch correctly refused the missing H33. The warm
+restart carries its paid receipt, native transaction carriers and validated revision in
+memory. A cold worker must independently authenticate the selected enrollments and their
+revocation and expiry before using a retained revision. Deploy and SoraFS own the choice of
+that cold-start proof or a design that continuously captures certified heights while retaining
+the exact sealed outbox and its admission pins. The [storage contract](sorafs/sorafs_node_storage.md)
+defines the archive's zero-gap startup check.
+
 Active decode owners and independently owned profiles keep standalone capture. Ordinary refresh
 also keeps its standalone capture after releasing its gateway owner.
 Each runtime selection owns one bounded checkpoint-import scope across its three temporary custody

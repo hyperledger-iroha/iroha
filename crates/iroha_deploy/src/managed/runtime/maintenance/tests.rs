@@ -206,3 +206,70 @@ fn aggregate_refresh_expired_input_refuses_without_partially_replacing_original_
     );
     assert_eq!((budget.timeout, budget.utc_ceiling_unix_ms), original);
 }
+
+#[test]
+fn overdue_untouched_providers_keep_their_turn_when_one_native_read_fails() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let long = signed_window(utc, 86_400_000);
+    let mut timings = [0, 5_000, 8_000].map(|offset| {
+        Timing::select(
+            utc + 86_400_000,
+            long,
+            long,
+            mono - Duration::from_millis(offset),
+            utc - offset,
+        )
+        .unwrap()
+    });
+    let before = timings.map(|timing| timing.expiry);
+    let now = mono + Duration::from_secs(16);
+    let wall = utc + 16_000;
+    assert_eq!(oldest_due_slot(timings.iter(), now, wall), Some(2));
+    // Slot 1 remains due even after the refused slot becomes eligible to retry.
+    defer_failed_slot(timings.iter_mut(), 2, now, wall).unwrap();
+    assert_eq!(oldest_due_slot(timings.iter(), now, wall), Some(1));
+    assert_eq!(
+        oldest_due_slot(timings.iter(), now + RETRY_DELAY, wall + 1_000),
+        Some(1)
+    );
+    defer_failed_slot(timings.iter_mut(), 1, now, wall).unwrap();
+    assert_eq!(oldest_due_slot(timings.iter(), now, wall), Some(0));
+    assert_eq!(timings.map(|timing| timing.expiry), before);
+}
+
+#[test]
+fn due_order_uses_either_clock_and_preserves_original_order_on_ties() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let long = signed_window(utc, 86_400_000);
+    let base = Timing::select(utc + 86_400_000, long, long, mono, utc).unwrap();
+    let mut timings = [base; 3];
+    assert_eq!(oldest_due_slot(timings.iter(), mono, utc), None);
+    let now = mono + DISCOVERY_FRESHNESS / 2;
+    assert_eq!(oldest_due_slot(timings.iter(), now, utc), Some(0));
+    timings[2].next_utc = utc - 5_000;
+    assert_eq!(oldest_due_slot(timings.iter(), now, utc), Some(2));
+    timings[1].next_monotonic = now - Duration::from_secs(6);
+    assert_eq!(oldest_due_slot(timings.iter(), now, utc), Some(1));
+}
+
+#[test]
+fn grouped_native_read_keeps_another_owners_overdue_signed_publication_ahead_of_retry() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let long = signed_window(utc, 86_400_000);
+    let mut old = Timing::select(utc + 60_000, long, long, mono, utc).unwrap();
+    old.next_monotonic = mono - Duration::from_secs(2);
+    old.next_utc = utc - 2_000;
+    let fresh = Timing::select(utc + 60_000, long, long, mono, utc).unwrap();
+    let mut untouched = fresh;
+    untouched.retain_due_publication(&old, utc - 10, utc);
+    assert_eq!(untouched.next_monotonic, old.next_monotonic);
+    assert_eq!(untouched.next_utc, old.next_utc);
+    assert_eq!(untouched.expiry, fresh.expiry);
+    let mut only_discovery_was_due = fresh;
+    only_discovery_was_due.retain_due_publication(&old, utc + 1, utc);
+    assert_eq!(only_discovery_was_due.next_monotonic, fresh.next_monotonic);
+    assert_eq!(only_discovery_was_due.next_utc, fresh.next_utc);
+}

@@ -20,6 +20,7 @@ enum At {
     Entry,
     Provider(usize),
     Binding(usize),
+    Running(ProviderId),
 }
 
 type Hook = (At, Box<dyn FnOnce()>);
@@ -82,6 +83,7 @@ pub(in crate::managed::runtime::owned) fn running(provider: ProviderId) {
             value.running.push(provider);
         }
     });
+    after(At::Running(provider));
 }
 
 pub(in crate::managed::runtime::owned) fn after_entry() {
@@ -146,6 +148,102 @@ fn budget() -> activation::Budget {
         cancelled: Arc::new(AtomicBool::new(false)),
         progress: Arc::new(Progress::default()),
     }
+}
+
+#[test]
+fn acquire_gateway_handles_from_one_revision_preserves_each_child_and_closes_material() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let providers = fixture.gateways.each_ref().map(OwnedGateway::provider);
+    let original_at = Instant::now();
+    let (original, individual) = trace(|| original_handles(&fixture.processes));
+    original.unwrap();
+    let original_elapsed = original_at.elapsed();
+    let shared_at = Instant::now();
+    let (result, observed) = trace(|| fixture.processes.gateways());
+    let acquired = result.unwrap();
+    eprintln!(
+        "direct gateway handles: individual={original_elapsed:?}, shared={:?}",
+        shared_at.elapsed()
+    );
+    assert_eq!(individual.revisions, 3);
+    assert_eq!(observed.revisions, 2);
+    assert_eq!(observed.running, [providers, providers].concat());
+    for (prior, current) in fixture.gateways.iter().zip(acquired) {
+        assert_eq!(prior.provider(), current.provider());
+        assert!(Arc::ptr_eq(&prior.child, &current.child));
+        assert!(Arc::ptr_eq(&prior.launch, &current.launch));
+    }
+
+    let path = fixture.gateways[0]
+        .launch
+        .revision
+        .peer(1)
+        .unwrap()
+        .path()
+        .to_owned();
+    let bytes = std::fs::read(&path).unwrap();
+    on(At::Running(providers[0]), move || {
+        let mut changed = bytes;
+        changed.extend_from_slice(b"\n# changed between original child selections\n");
+        std::fs::write(path, changed).unwrap();
+    });
+    let (result, changed) = trace(|| fixture.processes.gateways());
+    assert!(result.is_err());
+    assert_eq!(changed.revisions, 2);
+    fixture.processes.stop().unwrap();
+}
+
+fn original_handles(processes: &PeerProcesses) -> Result<[OwnedGateway; 3]> {
+    let launch = processes.launch.as_ref().unwrap();
+    let [a, b, c] = launch
+        .owner
+        .original_provider_plans(&launch.original)?
+        .unwrap();
+    Ok([
+        processes.gateway(a.provider_id())?,
+        processes.gateway(b.provider_id())?,
+        processes.gateway(c.provider_id())?,
+    ])
+}
+
+#[test]
+fn acquire_gateway_handles_preserves_active_decode_allocation_and_stopped_child_refusal() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let processes = &fixture.processes;
+    let original = || original_handles(processes);
+    let finite = 64 * 1024 * 1024;
+    let limits = |alloc| norito::DecodeLimits::new(finite, finite, finite, alloc, 64);
+    let baseline = DecodeBudgetContext::new(limits(finite));
+    baseline.with(original).unwrap();
+    let charge = usize::try_from(baseline.consumed_allocated_bytes()).unwrap();
+    assert!(charge > 1);
+    for allocated in [1, charge - 1, charge] {
+        let before = DecodeBudgetContext::new(limits(allocated));
+        let after = DecodeBudgetContext::new(limits(allocated));
+        let describe = |result: Result<[OwnedGateway; 3]>| {
+            result
+                .map(|handles| handles.each_ref().map(OwnedGateway::provider))
+                .map_err(|error| error.to_string())
+        };
+        let (expected, old_trace) = trace(|| describe(before.with(original)));
+        let (actual, new_trace) = trace(|| describe(after.with(|| processes.gateways())));
+        assert_eq!(actual, expected);
+        assert_eq!(new_trace.revisions, old_trace.revisions);
+        assert_eq!(new_trace.running, old_trace.running);
+        assert_eq!(
+            after.consumed_allocated_bytes(),
+            before.consumed_allocated_bytes()
+        );
+    }
+    {
+        let mut child = fixture.processes.children[1].lock().unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    assert!(fixture.processes.gateways().is_err());
+    fixture.processes.stop().unwrap();
 }
 
 // Literal pre-grouping recipe, including each independent Budget::call and final check.
@@ -444,4 +542,106 @@ fn gateway_compliance_pair_closes_persistent_change_and_ordinary_error_at_full_e
     fixture.gateways[1].provider = selected;
     grouped(&mut fixture, &budget()).unwrap();
     fixture.processes.stop().unwrap();
+}
+
+#[test]
+fn catalog_status_round_checks_three_original_children_and_their_independent_plans() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let plans = fixture.gateways.each_ref().map(|gateway| {
+        gateway
+            .original_gateway_compliance_plan(&fixture.prepared)
+            .unwrap()
+            .unwrap()
+    });
+    assert!(fixture.gateways[0].read_renderer().is_some());
+    let renderer = fixture.gateways[0].read_renderer().unwrap();
+    let mut foreign = fixture.prepared.clone();
+    foreign.context.name.push_str("-foreign");
+    let provider = fixture.gateways[0].provider();
+    assert!(renderer.open_catalog_reader(&foreign, provider).is_err());
+    assert!(renderer.open_observation(&foreign).is_err());
+    // An observation cannot create a missing catalog purpose or take another owner's lock.
+    assert!(
+        renderer
+            .open_catalog_reader(&fixture.prepared, provider)
+            .is_err()
+    );
+    let original = crate::managed::gateway_compliance::ManagedGatewayCompliance::open(
+        &fixture.prepared,
+        provider,
+    )
+    .unwrap();
+    assert!(
+        renderer
+            .open_catalog_reader(&fixture.prepared, provider)
+            .is_err()
+    );
+    drop(original);
+    let catalog = renderer
+        .open_catalog_reader(&fixture.prepared, provider)
+        .unwrap();
+    assert!(
+        crate::managed::gateway_compliance::ManagedGatewayCompliance::open(
+            &fixture.prepared,
+            provider,
+        )
+        .is_err()
+    );
+    drop(catalog);
+    let cursor = renderer.open_observation(&fixture.prepared).unwrap();
+    let identity = cursor.directory.identity().unwrap();
+    assert!(renderer.open_observation(&fixture.prepared).is_err());
+    drop(cursor);
+    let reopened = crate::managed::service_authority::ServiceAuthority::open_network_existing(
+        &fixture.prepared,
+        crate::managed::service_authority::NetworkPurpose::ServiceObservation,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(reopened.directory.identity().unwrap(), identity);
+    drop(reopened);
+    let check = |f: &Fixture, indices: [usize; 3]| {
+        OwnedGateway::validate_catalog_read(
+            &f.prepared,
+            &f.gateways,
+            indices.map(|index| &plans[index]),
+        )
+    };
+    let (success, accounted) = trace(|| check(&fixture, [0, 1, 2]));
+    success.unwrap();
+    assert_eq!(accounted.revisions, 1);
+    let ids = fixture.gateways.each_ref().map(|gateway| gateway.provider);
+    assert_eq!(
+        accounted.running,
+        [ids[0], ids[1], ids[2], ids[0], ids[1], ids[2]]
+    );
+    assert!(check(&fixture, [1, 0, 2]).is_err());
+    let saved = Arc::clone(&fixture.gateways[0].child);
+    fixture.gateways[0].child = Arc::clone(&fixture.gateways[1].child);
+    assert!(check(&fixture, [0, 1, 2]).is_err());
+    fixture.gateways[0].child = saved;
+    fixture.processes.stop().unwrap();
+    assert!(check(&fixture, [0, 1, 2]).is_err());
+}
+
+#[test]
+fn enrollment_read_requires_an_admitted_stream_token_revision_before_returning_any_row() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let floor = crate::managed::native_operation::ManagedTransactionFinality {
+        transaction_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"catalog-has-no-transaction",
+        )),
+        height: 13,
+        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"catalog-has-no-carrier",
+        )),
+        block_time_ms: 1,
+    };
+    let limits = DecodeBudgetContext::new(norito::DecodeLimits::new(1, 1, 1, 1, 1));
+    limits.with(|| assert!(fixture.gateways[0].read_renderer().is_none()));
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
+    fixture.processes.stop().unwrap();
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
 }
