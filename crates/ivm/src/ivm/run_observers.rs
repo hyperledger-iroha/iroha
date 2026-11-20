@@ -55,17 +55,37 @@ impl<T> ObservationSlot<T> for NoObservation<T> {
 
 /// Only the instrumented interpreter needs pending diagnostic snapshots or proof batches.
 pub(super) trait RunObservers: RegisterObserver {
-    type Pending<T>: ObservationSlot<T>;
+    type Step<T>: ObservationSlot<T>;
+    type Batch<T>: ObservationSlot<T>;
     const ENABLED: bool;
 }
 
 impl RunObservers for UnobservedRegisters {
-    type Pending<T> = NoObservation<T>;
+    type Step<T> = NoObservation<T>;
+    type Batch<T> = NoObservation<T>;
     const ENABLED: bool = false;
 }
 
+/// Diagnostic steps, native packets, or PC deltas without a proof register logger.
+#[derive(Clone, Copy)]
+pub(super) struct LocalObservers;
+
+impl RegisterObserver for LocalObservers {
+    #[inline]
+    fn observe(self, build: impl FnOnce() -> crate::zk::RegEvent) {
+        UnobservedRegisters.observe(build);
+    }
+}
+
+impl RunObservers for LocalObservers {
+    type Step<T> = Option<T>;
+    type Batch<T> = NoObservation<T>;
+    const ENABLED: bool = true;
+}
+
 impl RunObservers for ScopedRegisters {
-    type Pending<T> = Option<T>;
+    type Step<T> = Option<T>;
+    type Batch<T> = Option<T>;
     const ENABLED: bool = true;
 }
 
@@ -75,13 +95,35 @@ mod tests {
 
     #[test]
     fn disabled_step_and_register_batch_have_no_backing() {
-        type Pending<T> = <UnobservedRegisters as RunObservers>::Pending<T>;
-        assert_eq!(size_of::<Pending<super::super::PendingDiagnosticStep>>(), 0);
-        assert_eq!(size_of::<Pending<crate::zk::RegEventBatch>>(), 0);
-        assert!(Pending::<u64>::default().take().is_none());
-        let mut observed = <ScopedRegisters as RunObservers>::Pending::<u64>::default();
+        type Step = super::super::PendingDiagnosticStep;
+        type Batch = crate::zk::RegEventBatch;
+        assert_eq!(
+            size_of::<<UnobservedRegisters as RunObservers>::Step<Step>>(),
+            0
+        );
+        assert_eq!(
+            size_of::<<UnobservedRegisters as RunObservers>::Batch<Batch>>(),
+            0
+        );
+        assert!(
+            <UnobservedRegisters as RunObservers>::Step::<u64>::default()
+                .take()
+                .is_none()
+        );
+        let mut observed = <ScopedRegisters as RunObservers>::Step::<u64>::default();
         observed.insert_observation(8);
         *ObservationSlot::as_mut(&mut observed).unwrap() = 9;
         assert_eq!(observed.take(), Some(9));
+    }
+
+    #[test]
+    fn local_observation_records_steps_without_register_events_or_batch_backing() {
+        let mut step = <LocalObservers as RunObservers>::Step::<u64>::default();
+        step.insert_observation(9);
+        assert_eq!(step.take(), Some(9));
+        type Batch = <LocalObservers as RunObservers>::Batch<crate::zk::RegEventBatch>;
+        assert_eq!(size_of::<Batch>(), 0);
+        assert!(Batch::default().take().is_none());
+        LocalObservers.observe(|| panic!("local observation requested a proof register event"));
     }
 }

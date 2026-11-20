@@ -489,7 +489,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/host/syscall_context.rs",
-        SyscallTrap: [MemoryOutOfBounds, RegisterOutOfBounds],
+        SyscallTrap: [MemoryOutOfBounds, NoritoInvalid, PermissionDenied, RegisterOutOfBounds],
     ),
     producer!(
         "crates/ivm/src/host/syscall_quote.rs",

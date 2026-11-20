@@ -3817,7 +3817,7 @@ impl IVM {
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
         self.memory.call_frames.clear();
-        let mut pending_step = O::Pending::<PendingDiagnosticStep>::default();
+        let mut pending_step = O::Step::<PendingDiagnosticStep>::default();
         let mut fault_position =
             iroha_data_model::executor::fault::IvmFaultPositionV1::Initialization;
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3825,7 +3825,7 @@ impl IVM {
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
             self.begin_root_call(host)?;
             let mut last_logged_cycle = 0;
-            let mut pending_register_batch = O::Pending::<zk::RegEventBatch>::default();
+            let mut pending_register_batch = O::Batch::<zk::RegEventBatch>::default();
             // Fetch-Decode-Execute loop
             loop {
                 // A host callback may attempt a reload and handle its error.

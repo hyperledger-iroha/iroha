@@ -47,7 +47,7 @@ use ivm_abi::{
     },
     private_input::{
         MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
-        MAX_PRIVATE_INPUTS_V1, PrivateInputKindV1, PrivateInputRecordV1,
+        MAX_PRIVATE_INPUTS_V1, PrivateInputRecordV1,
     },
 };
 use norito::{
@@ -2281,30 +2281,13 @@ impl DefaultHost {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("[DefaultHost] decode_any_tlv ptr=0x{ptr:08x} resolved=0x{resolved:08x}");
         }
-        vm.validate_tlv(resolved)
+        vm.public_tlv(resolved)
     }
-    fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
-        use iroha_crypto::Hash;
-        let mut out = Vec::with_capacity(7 + payload.len() + 32);
-        out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
-        out.push(1);
-        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        out.extend_from_slice(payload);
-        let h: [u8; 32] = Hash::new(payload).into();
-        out.extend_from_slice(&h);
-        vm.alloc_host_tlv(&out)
+    fn alloc_blob_tlv(vm: &mut dyn SyscallContext, payload: &[u8]) -> Result<u64, VMError> {
+        vm.alloc_public_tlv(PointerType::Blob, payload)
     }
-    fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
-        use iroha_crypto::Hash;
-        let mut out = Vec::with_capacity(7 + payload.len() + 32);
-        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-        out.push(1);
-        let len = u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(payload);
-        let h: [u8; 32] = Hash::new(payload).into();
-        out.extend_from_slice(&h);
-        vm.alloc_host_tlv(&out)
+    fn alloc_norito_bytes_tlv(vm: &mut dyn SyscallContext, payload: &[u8]) -> Result<u64, VMError> {
+        vm.alloc_public_tlv(PointerType::NoritoBytes, payload)
     }
     fn blake2b256(payload: &[u8]) -> [u8; 32] {
         Blake2b::<U32>::digest(payload).into()
@@ -3836,42 +3819,14 @@ impl IVMHost for DefaultHost {
                 vm.set_register(12, u64::MAX);
                 Ok(success_gas)
             }
-            crate::syscalls::SYSCALL_GROW_HEAP => {
-                // Increase heap limit by `x10` bytes.
-                let size = vm.register(10);
-                let new_limit = vm.grow_heap(size)?;
-                vm.set_register(10, new_limit);
-                Ok(Self::grow_heap_gas(size))
-            }
+            crate::syscalls::SYSCALL_GROW_HEAP => vm.grow_selected_heap(),
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => {
                 // Decode only after the VM has debited the fixed maximum quote.
-                let expected = PrivateInputKindV1::from_tag(vm.register(11))
-                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
-                let raw = usize::try_from(vm.register(10))
-                    .ok()
-                    .and_then(|index| self.private_inputs.get(index))
-                    .ok_or(VMError::Trap(VmTrap::PermissionDenied))?;
-                let value = crate::private_input::decode_record(raw, expected)?;
-                debug_assert_eq!(value.kind, expected);
-                let pointer = vm.alloc_host_private_tlv(&value.envelope)?;
-                vm.set_register(10, pointer);
+                vm.install_selected_private_input(&self.private_inputs)?;
                 Ok(GET_PRIVATE_INPUT_GAS)
             }
             crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => {
-                use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
-                // The two complete opaque inputs are snapshotted and validated
-                // before any public result allocation occurs.
-                let value =
-                    vm.snapshot_private_tlv(vm.register(10), MAX_QUANTITY_ENVELOPE_BYTES_V1)?;
-                let blind =
-                    vm.snapshot_private_tlv(vm.register(11), MAX_QUANTITY_ENVELOPE_BYTES_V1)?;
-                let value_kind = crate::private_input::validate_private_numeric_envelope(&value)?;
-                let blind_kind = crate::private_input::validate_private_numeric_envelope(&blind)?;
-                let commitment =
-                    crate::private_input::valcom(value_kind, &value, blind_kind, &blind)?;
-                let output = ivm_abi::numeric_tlv::encode_int(&commitment)?;
-                let pointer = vm.alloc_host_tlv(&output)?;
-                vm.set_register(10, pointer);
+                vm.commit_private_numeric_inputs()?;
                 Ok(PRIVATE_NUMERIC_VALCOM_GAS)
             }
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
@@ -3914,7 +3869,7 @@ impl IVMHost for DefaultHost {
                 let output_len = vm.output_used_len();
                 let gas = gas::commit_output_gas(output_len);
                 preflight_reserved_syscall_gas(vm, gas)?;
-                self.pub_output = vm.read_output_used().to_vec();
+                self.pub_output = vm.public_output()?.to_vec();
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_EXECUTION_SUMMARY => {
@@ -6972,7 +6927,7 @@ mod tests {
         vm.set_zk_mode(true)
             .expect("private lifecycle cleanup succeeds");
         vm.set_register(10, 0);
-        vm.set_register(11, PrivateInputKindV1::Int.tag());
+        vm.set_register(11, ivm_abi::private_input::PrivateInputKindV1::Int.tag());
         assert_eq!(
             (host.syscall(syscalls::SYSCALL_GET_PRIVATE_INPUT, &mut vm))
                 .expect("expected successful fixture result"),

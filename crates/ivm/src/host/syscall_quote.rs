@@ -50,8 +50,7 @@ impl<'a> SyscallQuote<'a> {
         self.vm.contract_interface()
     }
 
-    /// Check a register before its value crosses the host boundary.
-    pub fn ensure_public_register(self, index: usize) -> Result<(), VMError> {
+    pub(super) fn check_register_index(self, index: usize) -> Result<(), VMError> {
         if index
             >= match self.vm.engine() {
                 crate::IvmEngine::C10 => crate::parallel::REGISTER_COUNT,
@@ -60,6 +59,12 @@ impl<'a> SyscallQuote<'a> {
         {
             return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
         }
+        Ok(())
+    }
+
+    /// Check a register before its value crosses the host boundary.
+    pub fn ensure_public_register(self, index: usize) -> Result<(), VMError> {
+        self.check_register_index(index)?;
         self.vm.ensure_public_register(index)
     }
 

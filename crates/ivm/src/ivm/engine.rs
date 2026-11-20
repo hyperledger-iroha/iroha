@@ -67,12 +67,13 @@ impl ProfileEngine for C10Engine {
         host: &mut dyn IVMHost,
         recorder: Option<&mut DiagnosticStepRecorder>,
     ) -> Result<(), VMError> {
-        if recorder.is_some()
+        if vm.zk_mode && vm.zk_trace_enabled {
+            vm.run_with_host_ref(crate::registers::ScopedRegisters, host, recorder)
+        } else if recorder.is_some()
             || vm.native_packets.is_some()
             || vm.trace_mode != TraceMode::Off
-            || (vm.zk_mode && vm.zk_trace_enabled)
         {
-            vm.run_with_host_ref(crate::registers::ScopedRegisters, host, recorder)
+            vm.run_with_host_ref(super::run_observers::LocalObservers, host, recorder)
         } else {
             vm.run_with_host_ref(crate::registers::UnobservedRegisters, host, recorder)
         }
