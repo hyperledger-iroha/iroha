@@ -15,6 +15,7 @@ import {
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 import { networkIdBytes } from "./networkId.js";
+import { requireToriiNativeIdentity } from "./nativeAccountInspection.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -501,12 +502,14 @@ const APPROVAL_FIELDS = new Set([
 ]);
 const BROWSER_CONNECT_APPROVAL_FIELDS = new Set([
   "accountId",
+  "networkId",
+  "nativeIdentity",
   "signingPublicKey",
   "walletPublicKey",
   "signature",
 ]);
 
-function projectBrowserConnectApproval(value) {
+function projectBrowserConnectApproval(value, preview, config) {
   // Browser Connect verifies the approval proof; the facade keeps only the
   // account identity and never treats the X25519 wallet key as a signing key.
   let approval;
@@ -517,10 +520,26 @@ function projectBrowserConnectApproval(value) {
       "browser Connect approval",
       "invalid_wallet_approval",
     );
+    const network = networkIdBytes(approval.networkId, "browser Connect approval.networkId");
+    const previewNetwork = preview == null ? undefined : ownDataDescriptor(
+      preview, "networkId", "Connect preview", "invalid_wallet_approval",
+    )?.value;
+    const expectedNetwork = previewNetwork ?? config.networkId;
+    if (expectedNetwork !== undefined &&
+        !Buffer.from(network).equals(networkIdBytes(expectedNetwork, "Connect session networkId"))) {
+      throw new TypeError("browser Connect approval belongs to another network");
+    }
+    if (Object.hasOwn(approval, "nativeIdentity")) {
+      requireToriiNativeIdentity(approval.nativeIdentity, {
+        accountId: approval.accountId,
+        networkId: approval.networkId,
+        baseUrl: config.connectBaseUrl ?? config.toriiBaseUrl ?? config.baseUrl,
+      });
+    }
   } catch (error) {
     throw new NexusAppError(
       "invalid_wallet_approval",
-      "browser Connect approval must be an exact data-only proof envelope",
+      "browser Connect approval must be an exact data-only proof envelope for this session",
       error,
     );
   }
@@ -2200,7 +2219,7 @@ export class NexusAppClient {
           error,
         );
       }
-      approved = projectBrowserConnectApproval(browserApproval);
+      approved = projectBrowserConnectApproval(browserApproval, normalized.preview, this.config);
     }
     approved = snapshotDataFields(
       approved,

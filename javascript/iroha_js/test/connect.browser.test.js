@@ -1835,6 +1835,30 @@ function nativeInspectedTestSession(inspectAccountIdentity) {
   return { account, preview, session, socket, approve };
 }
 
+test("wallet facade rejects a substituted browser approval network and unbound inspection", async () => {
+  const account = makeNativeInspectionFixtureAccount();
+  const validProof = {
+    accountId: account.accountId, networkId: CANONICAL_NETWORK_ID,
+    signingPublicKey: account.publicKey, walletPublicKey: new Uint8Array(32),
+    signature: new Uint8Array(64),
+  };
+  const facade = new NexusAppClient({
+    networkId: CANONICAL_NETWORK_ID, chainDiscriminant: 753, baseUrl: "https://taira.sora.org",
+  });
+  for (const fields of [
+    { networkId: NetworkId.fromBytes(new Uint8Array(32).fill(3)) },
+    { networkId: CANONICAL_NETWORK_ID.literal },
+    { nativeIdentity: { accountId: account.accountId } },
+  ]) {
+    await assert.rejects(
+      facade.awaitApproval({
+        sid: "invalid-browser-context", appSession: { waitForApproval: () => ({ ...validProof, ...fields }) },
+      }),
+      { code: "invalid_wallet_approval" },
+    );
+  }
+});
+
 test("Connect verifies native-inspected approval and retains the exact identity", async () => {
   let identity;
   const { account, session, approve } = nativeInspectedTestSession(async (accountId, { signal }) => {
@@ -1848,6 +1872,12 @@ test("Connect verifies native-inspected approval and retains the exact identity"
   assert.equal(approved.nativeIdentity, identity);
   assert.deepEqual(approved.signingPublicKey, account.publicKey);
   assert.equal((await createConnectCanonicalRequestAuth(session)).nativeIdentity, identity);
+  const facade = new NexusAppClient({
+    chainDiscriminant: 753, networkId: CANONICAL_NETWORK_ID, baseUrl: "https://taira.sora.org",
+  });
+  const projected = await facade.awaitApproval({ sid: "inspected-session", appSession: session });
+  assert.equal(projected.accountId, approved.accountId);
+  assert.deepEqual(projected.signingPublicKey, Buffer.from(approved.signingPublicKey));
   session.close();
 });
 
@@ -1913,7 +1943,7 @@ test("browser-only Connect verifies approval and raw signature using native Tori
   });
   assert.ok(!Object.keys(compiled.metafile.inputs).some(path => /(?:^|\/)native\.js$/u.test(path)));
   const browser = await import(`data:text/javascript;base64,${Buffer.from(`${compiled.outputFiles[0].text}\n//# sourceURL=browser-connect-native-inspection.mjs`).toString("base64")}`);
-  const account = makeAccount();
+  const account = makeNativeInspectionFixtureAccount();
   const preview = browser.createConnectSessionPreview({
     networkId: browser.NetworkId.parse(CANONICAL_NETWORK_ID.toString()),
     node: "https://taira.sora.org", nonce: new Uint8Array(16).fill(0x11),
@@ -1922,7 +1952,7 @@ test("browser-only Connect verifies approval and raw signature using native Tori
   const publicClient = new browser.ToriiBrowserClient("https://taira.sora.org", {
     networkId: preview.networkId,
     fetchImpl: async (_url, init) => new Response(JSON.stringify({
-      ...JSON.parse(init.body), canonical_hex: AccountAddress.fromI105(account.accountId).canonicalHex().toLowerCase(),
+      ...JSON.parse(init.body), canonical_hex: account.canonicalHex,
       controller: { kind: "single", algorithm: "ed25519", public_key_hex: Buffer.from(account.publicKey).toString("hex") },
     }), { headers: { "content-type": "application/json" } }),
   });
@@ -1952,11 +1982,11 @@ test("browser-only Connect verifies approval and raw signature using native Tori
   const request = decodeAppSignRequest(preview, keys, socket.sent[1]);
   const enveloped = ed25519.sign(
     rawEnvelope(
-      { canonicalHex: AccountAddress.fromI105(account.accountId).canonicalHex().toLowerCase() },
+      account,
       signingKey,
       TORII_CANONICAL_REQUEST_DOMAIN_TAG,
       message,
-      preview.networkId,
+      NetworkId.parse(preview.networkId.literal),
     ),
     signingKey.privateKey,
   );
