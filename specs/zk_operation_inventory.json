@@ -5426,7 +5426,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_AXT_COMMIT: u32 = 0xB2;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_commit( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/block.rs", "symbol": "pub fn validate_axt_envelopes<'block>("}
     ]
@@ -5464,7 +5464,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "AxtProofAdmission::StandaloneUnanchored,"},
      {"path": "crates/iroha_core/src/block.rs", "symbol": "fastpq_prover::verify_axt_proof_envelope_with_outer_metadata("}
@@ -5511,7 +5511,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_AXT_STAGE_ANCHORED_SPEND: u32 = 0xB5;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_stage_anchored_spend( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/block.rs", "symbol": ".find(|envelope| !envelope.spends.is_empty())"}
     ]
@@ -7607,7 +7607,7 @@
     "kotodama_builtins": ["AxtBegin"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_begin( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_BEGIN"},
     "operation": "axt.envelope"
@@ -7620,7 +7620,7 @@
     "kotodama_builtins": ["AxtTouch"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_touch( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_TOUCH"},
     "operation": "axt.envelope"
@@ -7633,7 +7633,7 @@
     "kotodama_builtins": ["AxtCommit"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_commit( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_COMMIT"},
     "relation": "fastpq.axt",
@@ -7647,7 +7647,7 @@
     "kotodama_builtins": ["VerifyDsProof"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/VERIFY_DS_PROOF"},
     "relation": "fastpq.axt",
@@ -7661,7 +7661,7 @@
     "kotodama_builtins": ["StageAnchoredSpend"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_stage_anchored_spend( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_STAGE_ANCHORED_SPEND"},
     "relation": "fastpq.axt",
@@ -10403,7 +10403,7 @@
     {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "pub fn set_verifying_keys("},
     {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     {"path": "crates/iroha_core/src/block.rs", "symbol": "pub fn validate_axt_envelopes<'block>("}
    ],

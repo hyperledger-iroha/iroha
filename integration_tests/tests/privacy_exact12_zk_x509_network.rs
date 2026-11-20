@@ -39,7 +39,7 @@ use iroha::{
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
             PrivacyProofV1, PrivacyRuntimeProtocolIdV1, PrivacyStatementV1,
         },
-        query::CommittedTransaction,
+        query::{CommittedTransaction, error::FindError},
         sumeragi_finality::{
             FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier,
             VerifiedSumeragiBlock,
@@ -650,10 +650,34 @@ async fn submit_expecting_rejection(
     context: &str,
     unexpected_acceptance: &str,
 ) -> Result<eyre::Report> {
-    match submit_signed_transaction(client, transaction, context).await {
-        Ok(_) => Err(eyre!("{unexpected_acceptance}")),
-        Err(error) => Ok(error),
-    }
+    let error = submit_signed_transaction(client, transaction, context)
+        .await
+        .err()
+        .ok_or_else(|| eyre!("{unexpected_acceptance}"))?;
+    let failure = error
+        .downcast_ref::<iroha::client::TransactionFinalityFailure>()
+        .ok_or_else(|| {
+            eyre!("{context}: submission failed before certified rejection: {error:?}")
+        })?;
+    failure.validate_for_hash(transaction.hash())?;
+    ensure!(
+        failure.response().status.kind == "Rejected",
+        "{context}: expected a rejected transaction, got {failure}"
+    );
+    // Public finality identifies the terminal status. Only the signed details and both
+    // inclusion proofs authenticate the execution reason for that exact transaction.
+    wait_for_transaction_result_on_peers(std::slice::from_ref(client), transaction, false, context)
+        .await?;
+    let committed = exact_committed_transaction(client, transaction)
+        .await?
+        .ok_or_else(|| eyre!("{context}: certified transaction disappeared"))?;
+    let reason = committed
+        .result()
+        .as_ref()
+        .err()
+        .and_then(|reason| reason.baseline())
+        .ok_or_else(|| eyre!("{context}: expected a certified baseline rejection"))?;
+    Ok(eyre::Report::new(reason.clone()))
 }
 async fn submit_instruction(
     client: &X509Peer,
@@ -1121,20 +1145,26 @@ async fn certified_x509_reader_binds_voter_tip_and_both_transaction_outcomes() -
             applied_tip.parent_hash == Some(before.hash),
             "reader success has a different parent"
         );
+        let missing = iroha_model_base::domain::DomainId::try_new("x509missing", "universal")?;
         let rejected = instruction_transaction(
             peer,
-            iroha::data_model::isi::Unregister::domain(
-                iroha_model_base::domain::DomainId::try_new("x509missing", "universal")?,
-            ),
+            iroha::data_model::isi::Unregister::domain(missing.clone()),
             70_003,
         )?;
-        submit_expecting_rejection(
+        let rejection = submit_expecting_rejection(
             peer,
             &rejected,
             "reader missing domain",
             "accepted missing domain removal",
         )
         .await?;
+        ensure!(
+            rejection.chain().any(|cause| matches!(
+                cause.downcast_ref::<FindError>(),
+                Some(FindError::Domain(id)) if id == &missing
+            )),
+            "reader returned a different certified rejection: {rejection:?}"
+        );
         wait_for_transaction_result_on_peers(
             &peers,
             &rejected,

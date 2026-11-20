@@ -21,7 +21,7 @@ use iroha_data_model::{
         },
     },
 };
-use ivm::{IVM, VMError, value_record::capture_value_record_funded};
+use ivm::{VMError, value_record::capture_value_record_funded};
 
 /// One complete emission and its original allocation ledgers, moved together.
 ///
@@ -365,6 +365,7 @@ mod tests {
     use iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_test_samples::ALICE_ID;
+    use ivm::IVM;
     use ivm_abi::error::VmDeferral;
 
     #[test]

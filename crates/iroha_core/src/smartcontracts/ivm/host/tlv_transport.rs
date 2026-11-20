@@ -3,7 +3,7 @@
 use super::{CoreHostImpl, QueryStateAccess};
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1;
-use ivm::{IVM, PointerType, VMError};
+use ivm::{PointerType, VMError};
 use ivm_abi::error::VmTrap;
 
 fn envelope_bytes(payload_bytes: usize) -> Result<usize, VMError> {
