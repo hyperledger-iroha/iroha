@@ -401,6 +401,12 @@ discovery; a cold fetch authenticates the current provider policy and native tok
 signer against a newly observed parent decision. A private child context cannot
 select its own registry or forward its listener credentials.
 
+After consensus and the transaction gossiper start, managed validators receive transaction gossip
+through their bounded low-priority relay. This lets peers include the original signed gateway
+qualification Check while Torii is still starting. The relay keeps its per-peer ingress limits
+and its single low-priority queue through startup. Other messages enter normal service at the
+Torii handoff. Standalone daemons open all relay classes at the usual Torii handoff. Emergency Fast retains its bounded peer and trust subscription after that handoff.
+
 The daemon reports the native gateway qualification or initial pending-reconciliation phase on a
 startup refusal. Its provider-ingest archive startup report names the missing and observed heights
 for an authenticated coverage gap and keeps private filesystem and codec errors opaque.

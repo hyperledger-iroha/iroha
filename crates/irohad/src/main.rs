@@ -2486,6 +2486,7 @@ impl Iroha {
             lifetime,
             listeners,
         } = prepared;
+        let managed_launch = listeners.is_some();
         let (p2p_listener, torii_listener) = match listeners {
             Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
             None => (None, None),
@@ -3695,6 +3696,19 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
+        // Native service commissioning can itself need a transaction committed by the peers.
+        let (torii_started, relay_task) = network_relay::NetworkRelay {
+            tx_gossiper,
+            peers_gossiper,
+            network: network.clone(),
+            streaming: streaming.clone(),
+            low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
+                &config.network,
+            ),
+            emergency_fast,
+        }
+        .commission(managed_launch, supervisor.shutdown_signal());
+        supervisor.monitor(task::spawn(relay_task));
         if let Some(handle) = sumeragi.as_ref() {
             // Storage maintenance is authorized only by completed native recovery.
             // A failed consensus owner revokes further snapshot publication.
@@ -5014,20 +5028,7 @@ impl Iroha {
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
-        let network_relay_shutdown = supervisor.shutdown_signal();
-        supervisor.monitor(task::spawn(
-            network_relay::NetworkRelay {
-                tx_gossiper,
-                peers_gossiper,
-                network: network.clone(),
-                streaming: streaming.clone(),
-                low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
-                    &config.network,
-                ),
-                emergency_fast,
-            }
-            .run(network_relay_shutdown),
-        ));
+        let _ = torii_started.send(());
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
@@ -10712,14 +10713,21 @@ mod tests {
                 .contains("lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};")
         );
 
-        // Fast registers one bounded peer/trust subscriber and nothing else.
-        let relay: String = include_str!("network_relay.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        assert!(relay.contains(
-            "letsubscriptions=ifshared.emergency_fast{vec![(SubscriberFilter::topics([Topic::PeerGossip,Topic::TrustGossip]),EMERGENCY_FAST_SUBSCRIBER_CAP,)]}"
-        ));
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        assert!(
+            network_relay::early_subscription(network_relay::RelayStartup::EmergencyFast, 64)
+                .is_none()
+        );
+        assert_eq!(
+            network_relay::subscriptions_after_torii(
+                network_relay::RelayStartup::EmergencyFast,
+                64
+            ),
+            vec![(
+                SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip]),
+                32
+            )]
+        );
     }
     #[test]
     fn emergency_fast_disables_streaming_persistence_and_control() {
