@@ -44,9 +44,39 @@ pub(super) fn promote(
 }
 
 /// Verify all three retained promoted catalogs after the selected owner's effects finish.
-/// Each HTTP call uses that provider's own live child and original catalog authority. Only
-/// full launch revalidation is serialized because it reopens shared native custody.
+/// Each HTTP call uses that provider's own live child and original catalog authority. The shared launch is
+/// freshly validated on each side of the joined reads; signing and publication stay separate.
 pub(in crate::managed::runtime) fn observe(
+    prepared: &PreparedLocalnet,
+    live: &mut [OwnedGateway; 3],
+    expected: [PromotedGeneratedCatalog; 3],
+    budget: &Budget,
+) -> std::result::Result<[PromotedGeneratedCatalog; 3], Failure> {
+    budget.check()?;
+    if !live[0].shares_original_for_read() {
+        return observe_independently(prepared, live, expected, budget);
+    }
+    let owners = crate::managed::provider_round::run(
+        live.each_ref(),
+        true,
+        |gateway| budget.call(|_| ManagedGatewayCompliance::open(prepared, gateway.provider())),
+        || budget.progress.unconfirmed(),
+    )?;
+    budget.call(|deadline| {
+        ManagedGatewayCompliance::recover_promoted_set(&owners, expected, deadline, |plans| {
+            budget
+                .check()
+                .map_err(|f| crate::managed::Error::Invalid(f.message()))?;
+            let result = OwnedGateway::validate_catalog_read(prepared, live, plans);
+            budget
+                .check()
+                .map_err(|f| crate::managed::Error::Invalid(f.message()))?;
+            result
+        })
+    })
+}
+
+fn observe_independently(
     prepared: &PreparedLocalnet,
     live: &mut [OwnedGateway; 3],
     expected: [PromotedGeneratedCatalog; 3],

@@ -498,19 +498,13 @@ pub(super) fn observe_native_set(
     let observed_at = Instant::now();
     let observed_utc = budget.call(|_| now_ms())?;
     let currents = budget.call(|deadline| {
-        let select = |index: usize| -> Result<_> {
-            let gateway = &live[index];
-            Ok(build_registry::ServiceRead {
-                provider: gateway.provider(),
-                enrollment: gateway.selected_enrollment(floors[index])?,
-                required: floors[index],
-            })
-        };
-        build_registry::observe_generated_service_set(
-            prepared,
-            [select(0)?, select(1)?, select(2)?],
-            deadline,
-        )
+        let enrollments = OwnedGateway::read_enrollments(live, floors)?;
+        let reads = std::array::from_fn(|index| build_registry::ServiceRead {
+            provider: live[index].provider(),
+            enrollment: enrollments[index],
+            required: floors[index],
+        });
+        build_registry::observe_generated_service_set(prepared, reads, deadline)
     })?;
     Ok((currents, observed_at, observed_utc))
 }

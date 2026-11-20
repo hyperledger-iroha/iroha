@@ -445,3 +445,59 @@ fn gateway_compliance_pair_closes_persistent_change_and_ordinary_error_at_full_e
     grouped(&mut fixture, &budget()).unwrap();
     fixture.processes.stop().unwrap();
 }
+
+#[test]
+fn catalog_status_round_checks_three_original_children_and_their_independent_plans() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let plans = fixture.gateways.each_ref().map(|gateway| {
+        gateway
+            .original_gateway_compliance_plan(&fixture.prepared)
+            .unwrap()
+            .unwrap()
+    });
+    assert!(fixture.gateways[0].shares_original_for_read());
+    let check = |f: &Fixture, indices: [usize; 3]| {
+        OwnedGateway::validate_catalog_read(
+            &f.prepared,
+            &f.gateways,
+            indices.map(|index| &plans[index]),
+        )
+    };
+    let (success, accounted) = trace(|| check(&fixture, [0, 1, 2]));
+    success.unwrap();
+    assert_eq!(accounted.revisions, 1);
+    let ids = fixture.gateways.each_ref().map(|gateway| gateway.provider);
+    assert_eq!(
+        accounted.running,
+        [ids[0], ids[1], ids[2], ids[0], ids[1], ids[2]]
+    );
+    assert!(check(&fixture, [1, 0, 2]).is_err());
+    let saved = Arc::clone(&fixture.gateways[0].child);
+    fixture.gateways[0].child = Arc::clone(&fixture.gateways[1].child);
+    assert!(check(&fixture, [0, 1, 2]).is_err());
+    fixture.gateways[0].child = saved;
+    fixture.processes.stop().unwrap();
+    assert!(check(&fixture, [0, 1, 2]).is_err());
+}
+
+#[test]
+fn enrollment_read_requires_an_admitted_stream_token_revision_before_returning_any_row() {
+    let _resources = crate::managed::native_test_guard();
+    let mut fixture = fixture();
+    let floor = crate::managed::native_operation::ManagedTransactionFinality {
+        transaction_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"catalog-has-no-transaction",
+        )),
+        height: 13,
+        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"catalog-has-no-carrier",
+        )),
+        block_time_ms: 1,
+    };
+    let limits = DecodeBudgetContext::new(norito::DecodeLimits::new(1, 1, 1, 1, 1));
+    limits.with(|| assert!(!fixture.gateways[0].shares_original_for_read()));
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
+    fixture.processes.stop().unwrap();
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
+}

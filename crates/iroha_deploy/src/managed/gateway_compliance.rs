@@ -82,6 +82,22 @@ impl PromotedGeneratedCatalog {
     }
 }
 
+/// Lexical original proof held until its matching live status and filesystem exit checks.
+struct RetainedCatalogRead {
+    directory: PrivateDirectory,
+    inventory: Vec<std::ffi::OsString>,
+    chain: Vec<GatewayComplianceCatalogV1>,
+    child: PrivateDirectory,
+    acknowledgement: GatewayComplianceAcknowledgementV1,
+}
+impl RetainedCatalogRead {
+    fn selected(&self) -> Result<&GatewayComplianceCatalogV1> {
+        self.chain
+            .last()
+            .ok_or_else(|| invalid("original promoted catalog is absent"))
+    }
+}
+
 pub(super) struct ManagedGatewayCompliance {
     authority: ServiceAuthority,
     plan: RetainedGatewayCompliancePlan,
@@ -309,6 +325,20 @@ impl ManagedGatewayCompliance {
         allow_successor: bool,
     ) -> Result<PromotedGeneratedCatalog> {
         self.validate(live, deadline)?;
+        let read = self.read_observation(previous, allow_successor)?;
+        self.validate(live, deadline)?;
+        let status = self.fetch_observation(&read, deadline);
+        self.validate(live, deadline)?;
+        let promoted = self.finish_observation(&read, &status?)?;
+        self.validate(live, deadline)?;
+        Ok(promoted)
+    }
+
+    fn read_observation(
+        &self,
+        previous: PromotedGeneratedCatalog,
+        allow_successor: bool,
+    ) -> Result<RetainedCatalogRead> {
         let directory = self.authority.directory.open_child("catalogs")?;
         let inventory = directory.entries(MAX_CATALOGS)?;
         let chain = self.read_chain(&directory)?;
@@ -328,30 +358,96 @@ impl ManagedGatewayCompliance {
         let acknowledgement = self
             .read_ack(&child, selected)?
             .ok_or_else(|| invalid("original promoted catalog acknowledgement is absent"))?;
-        let status = self.call_retained(
-            live,
-            deadline,
-            &child,
-            selected,
-            Some(&acknowledgement),
-            |client| {
-                client
-                    .get_sorafs_gateway_compliance_status()
-                    .map_err(|_| invalid("original gateway compliance status is unavailable"))
-            },
-        )?;
-        self.validate_status(&status)?;
-        directory.revalidate()?;
-        if directory.entries(MAX_CATALOGS)? != inventory || self.read_chain(&directory)? != chain {
+        Ok(RetainedCatalogRead {
+            directory,
+            inventory,
+            chain,
+            child,
+            acknowledgement,
+        })
+    }
+
+    fn fetch_observation(
+        &self,
+        read: &RetainedCatalogRead,
+        deadline: Instant,
+    ) -> Result<GatewayComplianceStatusResponseV1> {
+        let selected = read.selected()?;
+        self.request(deadline, |client| {
+            self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+            let result = client
+                .get_sorafs_gateway_compliance_status()
+                .map_err(|_| invalid("original gateway compliance status is unavailable"));
+            self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+            result
+        })
+    }
+
+    fn finish_observation(
+        &self,
+        read: &RetainedCatalogRead,
+        status: &GatewayComplianceStatusResponseV1,
+    ) -> Result<PromotedGeneratedCatalog> {
+        let selected = read.selected()?;
+        self.validate_status(status)?;
+        read.directory.revalidate()?;
+        if read.directory.entries(MAX_CATALOGS)? != read.inventory
+            || self.read_chain(&read.directory)? != read.chain
+        {
             return Err(invalid("retained catalog chain changed during observation"));
         }
-        self.validate_retained(&child, selected, Some(&acknowledgement))?;
-        self.require_fresh_promoted(&status, selected, now_ms()? / 1_000)?;
-        self.validate(live, deadline)?;
+        self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+        self.require_fresh_promoted(status, selected, now_ms()? / 1_000)?;
+        report(selected)
+    }
+
+    /// Only status GETs are supported in this round. All publishers keep their private
+    /// original, signed chain, ACK and request endpoint. The caller freshly binds every
+    /// supplied plan to its live original before and after dispatch.
+    pub(super) fn recover_promoted_set(
+        owners: &[Self; 3],
+        previous: [PromotedGeneratedCatalog; 3],
+        deadline: Instant,
+        mut bind: impl FnMut([&RetainedGatewayCompliancePlan; 3]) -> Result<()>,
+    ) -> Result<[PromotedGeneratedCatalog; 3]> {
+        let mut validate = || {
+            super::provider_round::run(
+                owners.each_ref(),
+                true,
+                |owner| owner.validate_material(deadline),
+                || invalid("catalog material validation worker failed"),
+            )?;
+            bind(owners.each_ref().map(|owner| &owner.plan))?;
+            require_deadline(deadline)
+        };
+        validate()?;
+        let read = |index: usize| owners[index].read_observation(previous[index], true);
+        let reads = super::provider_round::run([0, 1, 2], true, read, || {
+            invalid("retained catalog read worker failed")
+        })?;
+        validate()?;
+        let get = |index: usize| owners[index].fetch_observation(&reads[index], deadline);
+        let statuses = super::provider_round::run([0, 1, 2], true, get, || {
+            invalid("catalog status worker failed")
+        });
+        // Join every dispatched GET and revalidate even when one gateway refused.
+        validate()?;
+        let statuses = statuses?;
+        let finish =
+            |index: usize| owners[index].finish_observation(&reads[index], &statuses[index]);
+        let promoted = super::provider_round::run([0, 1, 2], true, finish, || {
+            invalid("catalog status verification worker failed")
+        })?;
+        validate()?;
         Ok(promoted)
     }
 
     fn validate(&self, live: &mut impl LiveGatewayProcess, deadline: Instant) -> Result<()> {
+        self.validate_material(deadline)?;
+        live.validate(&self.authority.prepared, &self.plan)
+    }
+
+    fn validate_material(&self, deadline: Instant) -> Result<()> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         let current = self
@@ -363,7 +459,7 @@ impl ManagedGatewayCompliance {
         {
             return Err(invalid("original generated compliance plan changed"));
         }
-        live.validate(&self.authority.prepared, &self.plan)
+        Ok(())
     }
 
     fn call<T>(
@@ -373,6 +469,17 @@ impl ManagedGatewayCompliance {
         operation: impl FnOnce(&Client) -> Result<T>,
     ) -> Result<T> {
         self.validate(live, deadline)?;
+        let result = self.request(deadline, operation);
+        self.validate(live, deadline)?;
+        result
+    }
+
+    fn request<T>(
+        &self,
+        deadline: Instant,
+        operation: impl FnOnce(&Client) -> Result<T>,
+    ) -> Result<T> {
+        require_deadline(deadline)?;
         let client = &self
             .authority
             .peers
@@ -383,9 +490,7 @@ impl ManagedGatewayCompliance {
             .checked_add(Duration::from_secs(5))
             .ok_or_else(|| invalid("gateway request deadline overflow"))?
             .min(deadline);
-        let result = operation(&client.with_request_deadline(local_deadline));
-        self.validate(live, deadline)?;
-        result
+        operation(&client.with_request_deadline(local_deadline))
     }
 
     fn validate_retained(

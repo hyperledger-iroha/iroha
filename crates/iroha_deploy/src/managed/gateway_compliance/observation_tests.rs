@@ -237,11 +237,49 @@ fn failed_group_keeps_original_anchors_for_two_durable_owner_promotions() {
             .is_err()
     );
     let second = advance(&owners[1]);
-    let resolved = [
-        observe(0, Observation::PromotedSuccessor).unwrap(),
-        observe(1, Observation::PromotedSuccessor).unwrap(),
-        observe(2, Observation::Promoted).unwrap(),
+    let joined = |statuses: [Observation; 3], refuse_at: Option<usize>| {
+        let mut servers = std::array::from_fn::<_, 3, _>(|index| {
+            serve(&owners[index], vec![Step::Status(statuses[index])])
+        });
+        let mut phases = 0;
+        let result = ManagedGatewayCompliance::recover_promoted_set(
+            &owners,
+            original,
+            deadline(),
+            |plans| {
+                phases += 1;
+                for (owner, plan) in owners.iter().zip(plans) {
+                    assert_eq!(owner.plan.gateway_id(), plan.gateway_id());
+                    assert_eq!(owner.plan.original_commitment(), plan.original_commitment());
+                }
+                if Some(phases) == refuse_at {
+                    return Err(invalid("original child stopped during status"));
+                }
+                Ok(())
+            },
+        );
+        for server in &mut servers {
+            server.finish();
+            let calls = server.requests.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "GET");
+        }
+        (result, phases)
+    };
+    let statuses = [
+        Observation::PromotedSuccessor,
+        Observation::PromotedSuccessor,
+        Observation::Promoted,
     ];
+    let (failed, phases) = joined(statuses, Some(3));
+    assert!(failed.is_err());
+    assert_eq!(phases, 3);
+    let mut foreign = statuses;
+    foreign[1] = Observation::ForeignHead;
+    assert!(joined(foreign, None).0.is_err());
+    let (resolved, phases) = joined(statuses, None);
+    let resolved = resolved.unwrap();
+    assert_eq!(phases, 4);
     assert_eq!(resolved, [first, second, original[2]]);
     resolved[0].require_writer_receipt(None).unwrap();
     resolved[1].require_writer_receipt(Some(second)).unwrap();

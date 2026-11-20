@@ -306,6 +306,11 @@ pub(super) struct GeneratedServiceRuntime {
     authority: ServiceAuthority,
 }
 impl GeneratedServiceRuntime {
+    /// A read-only projection shares a renderer only outside a caller's physical admission.
+    pub(super) fn shares_original_for_read(&self) -> bool {
+        self.authority.shares_original_for_read()
+    }
+
     #[cfg(test)]
     pub(super) fn open(prepared: &PreparedLocalnet) -> Result<Self> {
         Ok(Self {

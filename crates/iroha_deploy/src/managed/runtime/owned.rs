@@ -687,5 +687,7 @@ impl LiveGatewayProcess for OwnedGateway {
     }
 }
 
+mod read_round;
+
 #[cfg(test)]
 mod tests;

@@ -353,12 +353,16 @@ impl ServiceAuthority {
         Ok(OriginalServiceIntent { authority: self })
     }
 
+    /// Whether this read may project an existing immutable shared original.
+    pub(super) fn shares_original_for_read(&self) -> bool {
+        !norito::core::decode_limits_active()
+            && matches!(&self.profile, AuthorityProfile::Shared(_))
+    }
+
     /// Borrow immutable constructor intent only outside active physical decode admission.
     /// Owned originals and active callers must use their original standalone producer.
     pub(super) fn original_intent_if_shared(&self) -> Result<Option<OriginalServiceIntent<'_>>> {
-        if norito::core::decode_limits_active()
-            || matches!(&self.profile, AuthorityProfile::Owned(_))
-        {
+        if !self.shares_original_for_read() {
             return Ok(None);
         }
         self.original_intent().map(Some)
