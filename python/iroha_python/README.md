@@ -1153,15 +1153,15 @@ if status_snapshot.status.lane_governance_sealed_total:
 params = client.get_sumeragi_params_typed()
 print(params.block_cadence_ms, params.max_clock_drift_ms, params.chain_height)
 
-# Manage triggers
-trigger_payload = {
-    "id": "notify-admins",
-    "action": {"Mint": {"asset_id": "<base58-asset-definition-id>#<i105-account-id>", "value": 1}},
-    "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    "filter": {"ByTime": {"schedule_ms": 60_000}},
-}
-client.register_trigger(trigger_payload)
-client.delete_trigger("notify-admins")
+# Read the trigger completion history (operator route), newest first. The
+# route is a history collection: `filter`, `select`, `limit` and `cursor`, with
+# `trigger_id`, `outcome`, `from_height` and `to_height` as filter shorthands.
+page = client.list_trigger_completions(trigger_id="notify-admins", outcome="Failure", limit=50)
+for completion in page:
+    print(completion.block_height, completion.step_index, completion.message)
+# Follow every `next_cursor`; a page may be short or empty and still continue.
+for completion in client.iter_trigger_completions(filter=F.block_height >= 1_200):
+    print(completion.trigger_id, completion.outcome)
 
 # Submit authenticated SoraFS PoR lifecycle evidence. Challenge issuance is
 # owned by the coordinator scheduler; the client exposes no manual ingress.
@@ -2480,18 +2480,24 @@ envelope, status = client.build_and_submit_transaction(
 )
 assert status["status"]["kind"] == "Applied"  # rejection or expiry raises
 
-# 3) Inspect the registered trigger via REST.
-details = client.get_trigger(trigger_id)
-print(details["status"])
+# 3) Read the trigger's committed completions, newest first. Operator route:
+#    `operator_client` is a ToriiClient built with the node operator's
+#    `operator_signing_context` (see "Runtime upgrades and ABI helpers").
+for completion in operator_client.iter_trigger_completions(trigger_id=trigger_id):
+    print(completion.block_height, completion.outcome, completion.message)
 
 # 4) Watch pipeline outcomes with the event-stream filter grammar.
 for event in client.stream_events(filter=F.tx_status.in_("Approved", "Rejected")):
     print("Transaction outcome:", event.hash, event.status, event.rejection_code)
     break  # demonstration
 
-# 5) Unregister the trigger when no longer needed.
-client.delete_trigger(trigger_id)
+# 5) Unregister the trigger when no longer needed: submit this instruction in
+#    another transaction, as in step 2.
+unregister = Instruction.unregister_trigger(trigger_id)
 ```
+
+Triggers are registered and removed only through transactions; Torii has no
+`/v1/triggers` registry routes.
 
 ## Pipeline monitoring & SSE playbook
 
@@ -2628,6 +2634,34 @@ requires `pytest` and exits non-zero on any regression so Norito RPC helpers
 stay aligned with Torii.
 
 ## Norito fixtures
+
+Python's Norito codec supports the current layout (header minor `0`, flags `0x00`
+or `0x02`) and the dense layout (minor `1`, flags `0x00`). Framed readers select
+the layout from the header, reject unknown minors, and never inspect payload
+bytes to guess a layout. Dense frames have no alignment padding.
+
+The native typed transaction paths expose explicit `layout="current"` (compact
+lengths) and `layout="dense"` choices. `TransactionBuilder` provides
+`encode_payload_with_layout`, `payload_hash_with_layout`, and `sign_with_layout`;
+the last returns bare signed bytes. The functions
+`decode_transaction_payload_with_layout` / `encode_transaction_payload_with_layout`
+and `decode_signed_transaction_with_layout` / `encode_signed_transaction_with_layout`
+round-trip the existing Rust models through their Norito JSON representation.
+They require `chain_discriminant` for account presentation, and accept
+`framed=True` for complete canonical frames; framed decoding also requires the
+advertised header to match the explicit expected layout. Bare bytes always
+require a layout. `transaction_payload_hash_with_layout` computes the typed
+signing prehash, and `sign_transaction_payload_with_layout` reconstructs and signs
+the same typed payload with that layout's hash. These APIs are exported from
+`iroha_python.crypto` and the package root and require the matching native extension.
+
+Dense codec output is not a current versioned submission envelope. No network
+selects dense yet; ordinary `sign` and submission retain their current wire.
+Codec decoding alone does not authenticate a signed transaction. Shared dense
+transaction conformance tests load
+`fixtures/norito_rpc/transaction_fixtures.dense.json` directly, alongside the
+current manifest, and check typed round-trips, signing hashes and deterministic
+re-signing with the fixture key.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. Python does not own or copy shared `.norito` payload blobs;
@@ -2929,14 +2963,13 @@ no environment variables need to be exported.
   `RuntimeUpgradesSnapshot`, and typed wrappers around `propose_runtime_upgrade` and
   `cancel_runtime_upgrade`) to inspect the committed selection, the change-set
   lifecycle and the drafted Parliament proposals without hand-decoding JSON payloads.
-- Provide trigger helpers for registering time/pre-commit actions, executing triggers, and
-  minting/burning/unregistering repetitions so automation flows avoid manual Norito. Typed trigger
-  listings (`TriggerRecord`, `TriggerListPage`) and mutation responses
-  (`TriggerMutationResponse` via `register_trigger_typed`/`delete_trigger_typed`) surface structured results and
-  governance drafts for `/v1/triggers`, `/v1/triggers/query`, and the lifecycle endpoints.
-- Add Torii trigger lifecycle wrappers (`register_trigger`, `register_trigger_typed`,
-  `delete_trigger`, `delete_trigger_typed`, `get_trigger`, `list_triggers`)
-  so automation flows can manage schedules directly from Python while validating governance payloads when desired.
+- Provide trigger instruction helpers for registering time/pre-commit actions, executing
+  triggers, and minting/burning/unregistering repetitions so automation flows avoid manual
+  Norito. Triggers change only through transactions.
+- Read the operator-signed trigger completion history (`GET /v1/triggers/completed`) with
+  `list_trigger_completions` and `iter_trigger_completions`: the shared collection controls
+  (`filter`, `select`, `limit`, `cursor`), the `trigger_id`/`outcome`/`from_height`/`to_height`
+  filter shorthands, and typed `TriggerCompletionRecord` rows in `Page` envelopes.
 - Read every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
   account assets, asset holders, account transactions, repo agreements) through one
   `Collection` surface (`list`, `iter`, `pages`, `rows`, `iter_rows`, `count`) built on the

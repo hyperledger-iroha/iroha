@@ -14970,7 +14970,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) sorafs_repair_entrypoint: Option<[u8; 32]>,
     /// Exact signed activation plan admitted by the owner-authorized Taira boundary.
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
-    pub(crate) taira_activation_entrypoint: Option<[u8; 32]>,
+    pub(crate) taira_activation_entrypoint:
+        Option<crate::runtime::taira_activation::AdmittedSchedule>,
     /// Captured call graph of the registered obligation's terminal effect being executed
     /// (`specs/live_runtime_upgrades.md` §7.2). Admission closure and completion-only permit
     /// only the bindings this capture reaches; unrelated callback instructions retain ordinary

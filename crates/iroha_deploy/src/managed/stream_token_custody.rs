@@ -57,6 +57,9 @@ use super::{
 };
 use body_history::{BodyHistory, SigningTurn};
 use journal::{Action, Original};
+#[path = "stream_token_custody/original_proof.rs"]
+pub(in crate::managed) mod original_proof;
+use original_proof::{CapturedCustody, SelectionWitness};
 #[path = "stream_token_custody/initial_admission.rs"]
 mod initial_admission;
 use initial_admission::InitialAdmission;
@@ -280,7 +283,7 @@ impl ManagedStreamTokenCustody {
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
     ) -> Result<(Original, Option<InitialAdmission<'a>>)> {
-        self.select_configuration_using(directory, policy, deadline, Self::observe)
+        self.select_configuration_using(directory, policy, deadline, Self::observe_captured)
     }
     fn select_configuration_using<'a>(
         &mut self,
@@ -291,7 +294,7 @@ impl ManagedStreamTokenCustody {
             &mut Self,
             &SignerCustodyBindingV1,
             Instant,
-        ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)>,
+        ) -> Result<(FinalityVerifier, CapturedCustody)>,
     ) -> Result<(Original, Option<InitialAdmission<'a>>)> {
         journal::recover_intent(directory, |original| {
             original.matches_configuration(policy)?;
@@ -304,7 +307,13 @@ impl ManagedStreamTokenCustody {
             return Ok((original, None));
         }
         attempts::metadata::require_unselected(directory)?;
-        let (verifier, current) = observe(self, &policy.binding, deadline)?;
+        let (
+            verifier,
+            CapturedCustody {
+                state: current,
+                frame,
+            },
+        ) = observe(self, &policy.binding, deadline)?;
         if current.current().is_some() {
             return Err(invalid("initial custody configuration already exists"));
         }
@@ -314,6 +323,10 @@ impl ManagedStreamTokenCustody {
             checkpoint: checkpoint_bytes(&verifier)?,
         };
         self.validate_original(&original, CustodyPurpose::Configure)?;
+        SelectionWitness::Captured(&frame).publish(
+            self,
+            verifier.checkpoint().tip().block_header.hash().as_ref(),
+        )?;
         let admission = journal::publish_intent(directory, &original)?
             .map(|published| InitialAdmission::new(published, verifier, current));
         Ok((original, admission))
@@ -345,18 +358,24 @@ impl ManagedStreamTokenCustody {
             existing.ok_or_else(|| invalid("selected enrollment absent"))?
         } else {
             let terms = Terms::new(interval.deadline_unix_ms, options)?;
-            let (unsigned, current) =
-                self.select_initial_unsigned(&policy, &finalized, interval, options.deadline)?;
+            let (
+                unsigned,
+                CapturedCustody {
+                    state: current,
+                    frame,
+                },
+            ) = self.select_initial_unsigned(&policy, &finalized, interval, options.deadline)?;
             let turn = SigningTurn::Explicit(&terms);
             let history = match existing {
                 Some(history) => history,
-                None => BodyHistory::initialize(
+                None => BodyHistory::initialize_with_witness(
                     self,
                     CustodyPurpose::InitialEnroll,
                     unsigned,
                     &terms.fees,
                     &turn,
                     options.deadline,
+                    SelectionWitness::Captured(&frame),
                 )?,
             };
             history.finish_pending(self, &current, &turn, options.deadline)?
@@ -385,11 +404,9 @@ impl ManagedStreamTokenCustody {
         finalized: &ManagedTransactionFinality,
         interval: ManagedCustodyEnrollmentInterval,
         deadline: Instant,
-    ) -> Result<(
-        body_history::UnsignedEnrollment,
-        VerifiedStreamTokenCustodyStateV1,
-    )> {
-        let (verifier, current) = self.observe(&policy.binding, deadline)?;
+    ) -> Result<(body_history::UnsignedEnrollment, CapturedCustody)> {
+        let (verifier, captured) = self.observe_captured(&policy.binding, deadline)?;
+        let current = &captured.state;
         let selected = current
             .current()
             .ok_or_else(|| invalid("custody policy absent"))?;
@@ -407,10 +424,10 @@ impl ManagedStreamTokenCustody {
         }
         let observed = now_ms()?;
         validate_interval(interval, observed)?;
-        let unsigned = self.unsigned_enrollment(policy, &current, &verifier, interval, observed)?;
+        let unsigned = self.unsigned_enrollment(policy, current, &verifier, interval, observed)?;
         self.authority.validate_profile()?;
         require_deadline(deadline)?;
-        Ok((unsigned, current))
+        Ok((unsigned, captured))
     }
     pub(super) fn advance_configure_selected(
         &mut self,
@@ -491,24 +508,37 @@ impl ManagedStreamTokenCustody {
             let terms = authorization.terms(deadline, Some(policy.active_until_unix_ms))?;
             let interval = provider_policies
                 .initial_enrollment(now_ms()?, terms.requested_deadline_unix_ms)?;
-            let (unsigned, current) =
-                self.select_initial_unsigned(policy, &finalized, interval, deadline)?;
+            let (
+                unsigned,
+                CapturedCustody {
+                    state: current,
+                    frame,
+                },
+            ) = self.select_initial_unsigned(policy, &finalized, interval, deadline)?;
             let turn = SigningTurn::Generated(authorization);
             let history = match existing {
-                None => BodyHistory::initialize(
+                None => BodyHistory::initialize_with_witness(
                     self,
                     CustodyPurpose::InitialEnroll,
                     unsigned.clone(),
                     authorization.fees(),
                     &turn,
                     deadline,
+                    SelectionWitness::Captured(&frame),
                 )?,
                 Some(history) => history,
             }
             .finish_pending(self, &current, &turn, deadline)?;
             if history.body_expired()? {
                 history
-                    .reserve_successor(self, unsigned, &current, authorization, deadline)?
+                    .reserve_successor_with_witness(
+                        self,
+                        unsigned,
+                        &current,
+                        authorization,
+                        deadline,
+                        SelectionWitness::Captured(&frame),
+                    )?
                     .finish_pending(self, &current, &turn, deadline)?
             } else {
                 history
@@ -601,7 +631,8 @@ impl ManagedStreamTokenCustody {
     ) -> Result<Observation> {
         self.authority.validate_profile()?;
         let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
-        let historical = self.read_current(&original.selection.binding, &checkpoint, deadline)?;
+        let historical =
+            self.historical_custody(&original.selection.binding, &checkpoint, deadline)?;
         let (_, current) = self.observe(&original.selection.binding, deadline)?;
         self.fresh_predecessor_observation(original, &historical, &current, deadline)
     }
@@ -1199,6 +1230,19 @@ impl ManagedStreamTokenCustody {
         Ok((verifier, current))
     }
 
+    fn observe_captured(
+        &mut self,
+        binding: &SignerCustodyBindingV1,
+        deadline: Instant,
+    ) -> Result<(FinalityVerifier, CapturedCustody)> {
+        let verifier = self.authority.observe_finality(deadline)?;
+        let tip = verifier
+            .verified_tip_ref()
+            .map_err(|_| invalid("invalid certified custody tip"))?;
+        let captured = self.capture_current_at(binding, tip, deadline)?;
+        Ok((verifier, captured))
+    }
+
     fn read_current(
         &self,
         binding: &SignerCustodyBindingV1,
@@ -1217,6 +1261,16 @@ impl ManagedStreamTokenCustody {
         block: &VerifiedSumeragiBlock,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        self.capture_current_at(binding, block, deadline)
+            .map(|captured| captured.state)
+    }
+
+    fn capture_current_at(
+        &self,
+        binding: &SignerCustodyBindingV1,
+        block: &VerifiedSumeragiBlock,
+        deadline: Instant,
+    ) -> Result<CapturedCustody> {
         require_deadline(deadline)?;
         block
             .verify_global_scope(
@@ -1232,13 +1286,14 @@ impl ManagedStreamTokenCustody {
         read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
             client
                 .with_request_deadline(deadline)
-                .get_stream_token_custody_state(
+                .get_stream_token_custody_state_with_proof(
                     self.authority.provider_id()?,
                     owner,
                     binding,
                     schema.as_slice(),
                     block,
                 )
+                .map(|(state, frame)| CapturedCustody { state, frame })
                 .map_err(|_| invalid("native custody candidate is unavailable or invalid"))
         })
     }
@@ -1308,7 +1363,7 @@ fn validate_enrollment_slots(
     // The outer bootstrap census still owns unknown-name and dependency-order admission.
     // This independent fresh census shares only joint absence, never present-body validation.
     let result = owner.authority.directory.read_scope(|scope| {
-        let names = scope.entries(131)?;
+        let names = scope.entries(132)?;
         let result = (|| {
             for purpose in std::iter::once(CustodyPurpose::InitialEnroll)
                 .chain((2..=64).map(CustodyPurpose::Renewal))
@@ -1329,7 +1384,7 @@ fn validate_enrollment_slots(
             }
             Ok(())
         })();
-        if scope.entries(131)? != names {
+        if scope.entries(132)? != names {
             return Err(invalid(
                 "custody enrollment census changed during inspection",
             ));

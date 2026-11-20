@@ -2,7 +2,6 @@ import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  ToriiClient,
   buildMintTriggerRepetitionsInstruction,
   buildPrecommitTriggerAction,
   buildTimeTriggerAction,
@@ -10,20 +9,12 @@ import {
 import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const BASE_URL = "https://example.test";
 const CANONICAL_AUTHORITY = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     "hex",
   ),
 }).toI105();
 const test = makeNativeTest(baseTest);
-
-function okJsonResponse(body = {}) {
-  return new Response(JSON.stringify(body), {
-    status: 202,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 test("buildTimeTriggerAction encodes Norito payload", () => {
   const action = buildTimeTriggerAction({
@@ -43,13 +34,7 @@ test("buildTimeTriggerAction encodes Norito payload", () => {
   assert.ok(action.length > 0);
 });
 
-test("registerTrigger accepts base64 trigger action", async (t) => {
-  let captured;
-  const fetchImpl = async (_url, init) => {
-    captured = JSON.parse(init.body);
-    return okJsonResponse({ ok: true });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+test("buildPrecommitTriggerAction encodes canonical base64 Norito", (t) => {
   const action = buildPrecommitTriggerAction({
     authority: CANONICAL_AUTHORITY,
     instructions: [
@@ -59,13 +44,9 @@ test("registerTrigger accepts base64 trigger action", async (t) => {
       }),
     ],
   });
-  await client.registerTrigger({
-    id: "apps::guardian_refill",
-    namespace: "apps",
-    action,
-  });
-  assert.ok(captured);
-  assert.equal(typeof captured.action, "string");
-  assert.equal(captured.action, action);
+  assert.equal(typeof action, "string");
+  assert.ok(action.length > 0);
+  // The action is canonical padded base64 of the Norito `Action` frame.
+  assert.equal(Buffer.from(action, "base64").toString("base64"), action);
   t.diagnostic(`encoded trigger payload length=${action.length}`);
 });

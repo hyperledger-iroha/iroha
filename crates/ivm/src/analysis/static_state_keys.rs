@@ -203,12 +203,10 @@ pub(super) struct KeyScratch {
 impl KeyScratch {
     pub(super) fn new(
         engine: crate::IvmEngine,
-        decoded: &[DecodedOp],
+        decoded: impl Iterator<Item = DecodedOp> + Clone,
         budget: &AllocationBudget,
     ) -> Result<Self, VMError> {
-        let sites = decoded
-            .iter()
-            .filter(move |op| state_syscall(engine, op).is_some());
+        let sites = decoded.filter(move |op| state_syscall(engine, op).is_some());
         let count = sites.clone().count();
         let plan = ExecutionMemoryPlan::array::<Site>(count)
             .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;

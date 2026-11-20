@@ -1227,22 +1227,7 @@ extension AccountAddressError {
 
 extension AccountAddress {
     func noritoAccountControllerPayload() throws -> Data {
-        var writer = CanonicalNoritoWriter()
-        switch controller {
-        case .singleKey(let curve, let publicKey):
-            let keyPayload = try noritoPublicKeyPayload(curve: curve, publicKey: publicKey)
-            writer.writeUInt32LE(0)
-            writer.writeLength(UInt64(keyPayload.count))
-            writer.writeBytes(keyPayload)
-        case .multiSig(let version, let threshold, let members):
-            let policyPayload = try noritoMultisigPolicyPayload(version: version,
-                                                                threshold: threshold,
-                                                                members: members)
-            writer.writeUInt32LE(1)
-            writer.writeLength(UInt64(policyPayload.count))
-            writer.writeBytes(policyPayload)
-        }
-        return writer.data
+        try noritoAccountControllerPayload(layout: .fixed)
     }
 
     /// Encode this address as the bare compact-Norito `AccountId` controller payload.
@@ -1252,63 +1237,71 @@ extension AccountAddress {
     /// account identifiers in larger compact-Norito structures without
     /// reimplementing single-key and multisig layouts.
     public func compactNoritoAccountControllerPayload() throws -> Data {
-        var writer = CompactNoritoWriter()
+        try noritoAccountControllerPayload(layout: .compact)
+    }
+
+    /// Encode this address as the bare Norito `AccountId` controller payload in
+    /// `layout`. `.compact` is the layout every current ledger wire uses; the
+    /// owner of the enclosing payload names the layout.
+    public func noritoAccountControllerPayload(layout: NoritoWireLayout) throws -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
         switch controller {
         case .singleKey(let curve, let publicKey):
-            let keyPayload = try compactNoritoPublicKeyPayload(curve: curve, publicKey: publicKey)
-            writer.writeUInt32LE(0)
+            let keyPayload = try noritoPublicKeyPayload(
+                curve: curve,
+                publicKey: publicKey,
+                layout: layout
+            )
+            writer.writeEnumTag(0)
             writer.writeField(keyPayload)
         case .multiSig(let version, let threshold, let members):
-            let policyPayload = try compactNoritoMultisigPolicyPayload(version: version,
-                                                                       threshold: threshold,
-                                                                       members: members)
-            writer.writeUInt32LE(1)
+            let policyPayload = try noritoMultisigPolicyPayload(
+                version: version,
+                threshold: threshold,
+                members: members,
+                layout: layout
+            )
+            writer.writeEnumTag(1)
             writer.writeField(policyPayload)
         }
         return writer.data
     }
 
     // Full AccountId frame callers still perform framing, checksum and byte-for-byte checks.
-    static func fromCanonicalCompactAccountPayload(_ payload: Data) throws -> AccountAddress {
-        let (controller, addressClass) = try decodeCompactNoritoAccountControllerPayload(payload)
+    static func fromCanonicalCompactAccountPayload(
+        _ payload: Data,
+        layout: NoritoWireLayout = .compact
+    ) throws -> AccountAddress {
+        let (controller, addressClass) = try decodeCompactNoritoAccountControllerPayload(
+            payload,
+            layout: layout
+        )
         let address = AccountAddress(header: try AddressHeader.new(version: 0,
             classId: addressClass, normVersion: 1), controller: controller, rawCanonicalBytes: nil)
         let validated = try fromCanonicalBytes(address.canonicalBytes())
-        guard try validated.compactNoritoAccountControllerPayload() == payload else {
+        guard try validated.noritoAccountControllerPayload(layout: layout) == payload else {
             throw AccountAddressError.invalidLength
         }
         return validated
     }
 
-    /// Returns whether `payload` is one exact compact-Norito `AccountId`
-    /// controller encoding supported by this SDK build.
-    static func isCanonicalCompactNoritoAccountControllerPayload(_ payload: Data) -> Bool {
-        do {
-            let (controller, addressClass) = try Self.decodeCompactNoritoAccountControllerPayload(
-                payload
-            )
-            let address = AccountAddress(
-                header: try AddressHeader.new(
-                    version: 0,
-                    classId: addressClass,
-                    normVersion: 1
-                ),
-                controller: controller,
-                rawCanonicalBytes: nil
-            )
-            let validated = try fromCanonicalBytes(address.canonicalBytes())
-            return try validated.compactNoritoAccountControllerPayload() == payload
-        } catch {
-            return false
-        }
+    /// Returns whether `payload` is one exact `AccountId` controller encoding
+    /// supported by this SDK build in `layout` (compact-Norito unless the owner
+    /// of the enclosing payload names another varint-length layout).
+    static func isCanonicalCompactNoritoAccountControllerPayload(
+        _ payload: Data,
+        layout: NoritoWireLayout = .compact
+    ) -> Bool {
+        (try? fromCanonicalCompactAccountPayload(payload, layout: layout)) != nil
     }
 
     private static func decodeCompactNoritoAccountControllerPayload(
-        _ payload: Data
+        _ payload: Data,
+        layout: NoritoWireLayout
     ) throws -> (ControllerPayload, AddressClass) {
         var reader = CanonicalNoritoReader(data: payload)
-        let discriminant = try reader.readUInt32LE()
-        let body = try reader.readCompactField()
+        let discriminant = try reader.readEnumTag(layout: layout)
+        let body = try reader.readField(layout: layout)
         guard reader.remaining() == 0 else {
             throw CanonicalNoritoDecodingError.invalidField(
                 "compact AccountId contains trailing bytes"
@@ -1316,14 +1309,14 @@ extension AccountAddress {
         }
         switch discriminant {
         case 0:
-            let key = try decodeCompactNoritoPublicKeyPayload(body)
+            let key = try decodeCompactNoritoPublicKeyPayload(body, layout: layout)
             return (
                 .singleKey(curve: key.curve, publicKey: key.publicKey),
                 .singleKey
             )
         case 1:
             return (
-                try decodeCompactNoritoMultisigPolicyPayload(body),
+                try decodeCompactNoritoMultisigPolicyPayload(body, layout: layout),
                 .multiSig
             )
         default:
@@ -1334,27 +1327,27 @@ extension AccountAddress {
     }
 
     private static func decodeCompactNoritoPublicKeyPayload(
-        _ payload: Data
+        _ payload: Data,
+        layout: NoritoWireLayout
     ) throws -> (curve: CurveId, publicKey: Data) {
         var reader = CanonicalNoritoReader(data: payload)
-        let count = try reader.readUInt64LE()
+        let count = try reader.readCount(layout: layout)
+        // A dense byte element is one raw byte; the current layouts frame it.
+        let minimumElementBytes = layout == .dense ? 1 : 2
         guard count > 1,
               count <= UInt64(UInt16.max) + 1,
-              count <= UInt64(reader.remaining() / 2) else {
+              count <= UInt64(reader.remaining() / minimumElementBytes) else {
             throw CanonicalNoritoDecodingError.invalidField(
                 "compact AccountId public key length is invalid"
             )
         }
-        var bytes = Data()
-        bytes.reserveCapacity(Int(count))
-        for _ in 0..<count {
-            let element = try reader.readCompactField()
-            guard element.count == 1 else {
-                throw CanonicalNoritoDecodingError.invalidField(
-                    "compact AccountId public key element is not canonical"
-                )
-            }
-            bytes.append(element[0])
+        let bytes: Data
+        do {
+            bytes = try reader.readByteFields(count: Int(count), layout: layout)
+        } catch CanonicalNoritoDecodingError.invalidField {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId public key element is not canonical"
+            )
         }
         guard reader.remaining() == 0,
               let algorithmByte = bytes.first,
@@ -1438,11 +1431,12 @@ extension AccountAddress {
     }
 
     private static func decodeCompactNoritoMultisigPolicyPayload(
-        _ payload: Data
+        _ payload: Data,
+        layout: NoritoWireLayout
     ) throws -> ControllerPayload {
         var policy = CanonicalNoritoReader(data: payload)
 
-        var version = CanonicalNoritoReader(data: try policy.readCompactField())
+        var version = CanonicalNoritoReader(data: try policy.readField(layout: layout))
         let versionValue = try version.readUInt8()
         guard versionValue == 1, version.remaining() == 0 else {
             throw CanonicalNoritoDecodingError.invalidField(
@@ -1450,7 +1444,7 @@ extension AccountAddress {
             )
         }
 
-        var threshold = CanonicalNoritoReader(data: try policy.readCompactField())
+        var threshold = CanonicalNoritoReader(data: try policy.readField(layout: layout))
         let thresholdValue = try threshold.readUInt16LE()
         guard thresholdValue > 0, threshold.remaining() == 0 else {
             throw CanonicalNoritoDecodingError.invalidField(
@@ -1458,8 +1452,8 @@ extension AccountAddress {
             )
         }
 
-        var members = CanonicalNoritoReader(data: try policy.readCompactField())
-        let memberCount = try members.readUInt64LE()
+        var members = CanonicalNoritoReader(data: try policy.readField(layout: layout))
+        let memberCount = try members.readCount(layout: layout)
         guard memberCount > 0,
               memberCount <= UInt64(multisigMemberMax),
               memberCount <= UInt64(members.remaining()) else {
@@ -1472,9 +1466,12 @@ extension AccountAddress {
         var totalWeight: UInt64 = 0
         var previousSortKey: Data?
         for _ in 0..<memberCount {
-            var member = CanonicalNoritoReader(data: try members.readCompactField())
-            let key = try decodeCompactNoritoPublicKeyPayload(member.readCompactField())
-            var weight = CanonicalNoritoReader(data: try member.readCompactField())
+            var member = CanonicalNoritoReader(data: try members.readField(layout: layout))
+            let key = try decodeCompactNoritoPublicKeyPayload(
+                member.readField(layout: layout),
+                layout: layout
+            )
+            var weight = CanonicalNoritoReader(data: try member.readField(layout: layout))
             let weightValue = try weight.readUInt16LE()
             let sortKey = try compactNoritoMultisigMemberSortKey(
                 curve: key.curve,
@@ -1510,60 +1507,41 @@ extension AccountAddress {
         )
     }
 
-    private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
+    private func noritoPublicKeyPayload(
+        curve: CurveId,
+        publicKey: Data,
+        layout: NoritoWireLayout
+    ) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         var bytes = Data([algorithm.noritoDiscriminant])
         bytes.append(publicKey)
-        return CanonicalNorito.encodeConstVec(bytes)
-    }
-
-    private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
-        let algorithm = try noritoSigningAlgorithm(for: curve)
-        var bytes = Data([algorithm.noritoDiscriminant])
-        bytes.append(publicKey)
-        var writer = CompactNoritoWriter()
-        writer.writeUInt64LE(UInt64(bytes.count))
-        writer.writeByteFields(bytes)
-        return writer.data
+        return NoritoLayoutCodec.encodeConstVec(bytes, layout: layout)
     }
 
     private func noritoMultisigPolicyPayload(
         version: UInt8,
         threshold: UInt16,
-        members: [ControllerPayload.MultisigMember]
+        members: [ControllerPayload.MultisigMember],
+        layout: NoritoWireLayout
     ) throws -> Data {
-        var writer = CanonicalNoritoWriter()
-        writer.writeField(CanonicalNorito.encodeUInt8(version))
-        writer.writeField(CanonicalNorito.encodeUInt16(threshold))
-        let membersPayload = try CanonicalNorito.encodeVec(members) { member in
-            var memberWriter = CanonicalNoritoWriter()
-            let keyPayload = try noritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
-            memberWriter.writeField(keyPayload)
-            memberWriter.writeField(CanonicalNorito.encodeUInt16(member.weight))
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeField(Data([version]))
+        var thresholdWriter = NoritoLayoutWriter(layout: layout)
+        thresholdWriter.writeUInt16LE(threshold)
+        writer.writeField(thresholdWriter.data)
+        let membersPayload = try NoritoLayoutCodec.encodeVec(members, layout: layout) { member in
+            var memberWriter = NoritoLayoutWriter(layout: layout)
+            memberWriter.writeField(try noritoPublicKeyPayload(
+                curve: member.curve,
+                publicKey: member.publicKey,
+                layout: layout
+            ))
+            var weightWriter = NoritoLayoutWriter(layout: layout)
+            weightWriter.writeUInt16LE(member.weight)
+            memberWriter.writeField(weightWriter.data)
             return memberWriter.data
         }
         writer.writeField(membersPayload)
-        return writer.data
-    }
-
-    private func compactNoritoMultisigPolicyPayload(
-        version: UInt8,
-        threshold: UInt16,
-        members: [ControllerPayload.MultisigMember]
-    ) throws -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeUInt8(version))
-        writer.writeField(CompactNorito.encodeUInt16(threshold))
-        var membersPayload = CompactNoritoWriter()
-        membersPayload.writeUInt64LE(UInt64(members.count))
-        for member in members {
-            var memberWriter = CompactNoritoWriter()
-            let keyPayload = try compactNoritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
-            memberWriter.writeField(keyPayload)
-            memberWriter.writeField(CompactNorito.encodeUInt16(member.weight))
-            membersPayload.writeField(memberWriter.data)
-        }
-        writer.writeField(membersPayload.data)
         return writer.data
     }
 

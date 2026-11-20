@@ -146,6 +146,150 @@ public sealed class NoritoCodecTests
         Assert.Single(new HashSet<NoritoHeader> { first, second });
     }
 
+    [Theory]
+    [InlineData(NoritoWireLayout.Compact, 0, 0x02)]
+    [InlineData(NoritoWireLayout.Fixed, 0, 0x00)]
+    [InlineData(NoritoWireLayout.Dense, 1, 0x00)]
+    public void EncodeWithLayoutDeclaresTheLayoutInTheHeaderMinorAndFlags(
+        NoritoWireLayout layout,
+        byte expectedMinor,
+        byte expectedFlags)
+    {
+        var payload = new byte[] { 1, 2, 3 };
+        var encoded = NoritoCodec.EncodeWithLayout(TestTypeName, payload, layout);
+
+        Assert.Equal(NoritoHeader.EncodedLength + payload.Length, encoded.Length);
+        Assert.Equal(0, encoded[4]);
+        Assert.Equal(expectedMinor, encoded[5]);
+        Assert.Equal(expectedFlags, encoded[NoritoHeader.EncodedLength - 1]);
+        Assert.Equal(layout, NoritoCodec.ReadLayout(encoded));
+        Assert.Equal(payload, NoritoCodec.DecodeWithLayout(TestTypeName, encoded, layout));
+
+        // A frame is read only as the layout its header declares.
+        foreach (var other in Enum.GetValues<NoritoWireLayout>())
+        {
+            if (other != layout)
+            {
+                Assert.Throws<ArgumentException>(() => NoritoCodec.DecodeWithLayout(TestTypeName, encoded, other));
+            }
+        }
+
+        if (layout == NoritoWireLayout.Dense)
+        {
+            // The current-layout reader refuses a dense frame instead of returning flags 0x00.
+            Assert.Throws<ArgumentException>(() => NoritoCodec.Decode(TestTypeName, encoded));
+            Assert.Throws<ArgumentException>(
+                () => NoritoCodec.DecodeWithSchemaHash(NoritoCodec.SchemaHash(TestTypeName), encoded));
+        }
+        else
+        {
+            // The current-layout entry points produce and read the same frame.
+            Assert.Equal(encoded, NoritoCodec.Encode(TestTypeName, payload, expectedFlags));
+            Assert.Equal(expectedFlags, NoritoCodec.Decode(TestTypeName, encoded).Flags);
+        }
+    }
+
+    [Fact]
+    public void LayoutFramesCarryExactlyTheTypeAlignmentPaddingAndDenseCarriesNone()
+    {
+        var payload = new byte[] { 1, 2, 3, 4 };
+        foreach (var (alignment, padding) in new[] { (1, 0), (2, 0), (4, 0), (8, 0), (16, 8), (32, 24), (64, 24) })
+        {
+            Assert.Equal(padding, NoritoCodec.PayloadPadding(NoritoWireLayout.Compact, alignment));
+            Assert.Equal(padding, NoritoCodec.PayloadPadding(NoritoWireLayout.Fixed, alignment));
+            Assert.Equal(0, NoritoCodec.PayloadPadding(NoritoWireLayout.Dense, alignment));
+
+            var compact = NoritoCodec.EncodeWithLayout(TestTypeName, payload, NoritoWireLayout.Compact, alignment);
+            Assert.Equal(NoritoHeader.EncodedLength + padding + payload.Length, compact.Length);
+            Assert.All(compact[NoritoHeader.EncodedLength..^payload.Length], static value => Assert.Equal(0, value));
+            Assert.Equal(payload, NoritoCodec.DecodeWithLayout(TestTypeName, compact, NoritoWireLayout.Compact, alignment));
+            // The untyped current-layout reader accepts the zero padding.
+            Assert.Equal(payload, NoritoCodec.Decode(TestTypeName, compact).Payload);
+
+            var dense = NoritoCodec.EncodeWithLayout(TestTypeName, payload, NoritoWireLayout.Dense, alignment);
+            Assert.Equal(NoritoHeader.EncodedLength + payload.Length, dense.Length);
+            Assert.Equal(payload, NoritoCodec.DecodeWithLayout(TestTypeName, dense, NoritoWireLayout.Dense, alignment));
+
+            if (padding != 0)
+            {
+                // A typed read requires the exact padding of its alignment.
+                Assert.Throws<ArgumentException>(
+                    () => NoritoCodec.DecodeWithLayout(TestTypeName, compact, NoritoWireLayout.Compact));
+                Assert.Throws<ArgumentException>(
+                    () => NoritoCodec.DecodeWithLayout(TestTypeName, InsertPadding(dense, padding), NoritoWireLayout.Dense, alignment));
+            }
+        }
+
+        foreach (var alignment in new[] { 0, -1, 3, 12, 128 })
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => NoritoCodec.PayloadPadding(NoritoWireLayout.Compact, alignment));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => NoritoCodec.EncodeWithLayout(TestTypeName, payload, NoritoWireLayout.Dense, alignment));
+        }
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => NoritoCodec.EncodeWithLayout(TestTypeName, payload, (NoritoWireLayout)99));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => NoritoCodec.DecodeWithLayout(TestTypeName, new byte[NoritoHeader.EncodedLength], (NoritoWireLayout)99));
+    }
+
+    [Fact]
+    public void ReadLayoutUsesOnlyTheHeaderMinorAndFlags()
+    {
+        var encoded = NoritoCodec.Encode(TestTypeName, new byte[] { 1, 2, 3 }, CompactLenFlag);
+
+        for (var minor = 0; minor <= byte.MaxValue; minor++)
+        {
+            for (var flags = 0; flags <= byte.MaxValue; flags++)
+            {
+                var header = Mutate(Mutate(encoded, 5, (byte)minor), NoritoHeader.EncodedLength - 1, (byte)flags);
+                NoritoWireLayout? expected = (minor, flags) switch
+                {
+                    (0, 0x02) => NoritoWireLayout.Compact,
+                    (0, 0x00) => NoritoWireLayout.Fixed,
+                    (1, 0x00) => NoritoWireLayout.Dense,
+                    _ => null,
+                };
+                if (expected is { } layout)
+                {
+                    Assert.Equal(layout, NoritoCodec.ReadLayout(header));
+                }
+                else
+                {
+                    Assert.Throws<ArgumentException>(() => NoritoCodec.ReadLayout(header));
+                }
+            }
+        }
+
+        Assert.Throws<ArgumentException>(() => NoritoCodec.ReadLayout(encoded[..(NoritoHeader.EncodedLength - 1)]));
+        Assert.Throws<ArgumentException>(() => NoritoCodec.ReadLayout(Mutate(encoded, 0, (byte)'X')));
+        Assert.Throws<ArgumentException>(() => NoritoCodec.ReadLayout(Mutate(encoded, 4, 1)));
+    }
+
+    [Fact]
+    public void NoritoHeaderEncodesAndComparesTheMinorVersion()
+    {
+        var current = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, CompactLenFlag);
+        var dense = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 0) { Minor = 1 };
+
+        Assert.Equal(0, current.Minor);
+        Assert.Equal(0, current.Encode()[5]);
+        Assert.Equal(1, dense.Encode()[5]);
+        Assert.Equal(0, dense.Encode()[NoritoHeader.EncodedLength - 1]);
+        Assert.NotEqual(dense, dense with { Minor = 0 });
+        Assert.Equal(dense, new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 0) { Minor = 1 });
+        Assert.Equal(dense.GetHashCode(), (dense with { }).GetHashCode());
+
+        // Dense headers carry no flags; no minor beyond 1 exists.
+        Assert.Throws<ArgumentOutOfRangeException>(() => (current with { Minor = 1 }).Encode());
+        for (var minor = 2; minor <= byte.MaxValue; minor++)
+        {
+            var value = (byte)minor;
+            Assert.Throws<ArgumentOutOfRangeException>(() => (dense with { Minor = value }).Encode());
+        }
+    }
+
     private static void AssertRejects(byte[] archive)
     {
         Assert.Throws<ArgumentException>(() => NoritoCodec.Decode(TestTypeName, archive));

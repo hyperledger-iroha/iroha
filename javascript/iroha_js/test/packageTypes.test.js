@@ -506,6 +506,51 @@ test("Torii client declarations never promise unimplemented methods", async () =
   }
 });
 
+test("Torii client exposes no trigger registry methods without a Torii route", async () => {
+  // Torii serves no `/v1/triggers`, `/v1/triggers/{id}` or `/v1/triggers/query` route.
+  const retiredMethods = [
+    "listTriggers",
+    "iterateTriggers",
+    "getTrigger",
+    "registerTrigger",
+    "registerTriggerTyped",
+    "deleteTrigger",
+    "deleteTriggerTyped",
+    "queryTriggers",
+    "iterateTriggersQuery",
+  ];
+  for (const runtimeTarget of ["../src/toriiClient.js", "../dist/toriiClient.js"]) {
+    const { ToriiClient } = await import(runtimeTarget);
+    for (const name of retiredMethods) {
+      assert.equal(name in ToriiClient.prototype, false, `${runtimeTarget} still has ${name}`);
+    }
+  }
+
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const source = parseTypeScriptSource(declarationPath, fs.readFileSync(declarationPath, "utf8"));
+  const declaredNames = new Set(source.statements.map((statement) => statement.name?.text));
+  for (const retiredType of [
+    "TriggerListOptions",
+    "TriggerIteratorOptions",
+    "TriggerQueryIteratorOptions",
+    "IterableQueryOptions",
+    "ToriiTriggerUpsertRequest",
+    "ToriiTriggerMutationResponse",
+    "ToriiTriggerRecord",
+    "ToriiTriggerListPage",
+  ]) {
+    assert.equal(declaredNames.has(retiredType), false, `${retiredType} is still declared`);
+  }
+  const client = source.statements.find(
+    (statement) => ts.isClassDeclaration(statement) && statement.name?.text === "ToriiClient",
+  );
+  assert.ok(client, "missing ToriiClient declaration");
+  const declaredMethods = new Set(client.members.map((member) => member.name?.getText(source)));
+  for (const name of retiredMethods) {
+    assert.equal(declaredMethods.has(name), false, `ToriiClient.${name} is still declared`);
+  }
+});
+
 test("native private settlement subpath exposes only its opaque declared values", async () => {
   const descriptor = readPackageJson().exports["./private-settlement"];
   assert.equal(descriptor.browser, undefined);

@@ -59332,6 +59332,92 @@
         ],
         "type": "object"
       },
+      "TriggerCompletionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerCompletionRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "TriggerCompletionRow": {
+        "additionalProperties": false,
+        "description": "One trigger completion persisted in a committed execution output. Without `select` every field is present; `select` may omit any field.",
+        "properties": {
+          "block_height": {
+            "description": "Height of the block holding the execution output.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "completion_index": {
+            "description": "Position of the completion in its output's completion list.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entrypoint_index": {
+            "description": "Position of the Network input in its block; null for Pipeline and Time outputs.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "Failure reason; null for a successful completion.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "Retained callback outcome.",
+            "enum": [
+              "Success",
+              "Failure"
+            ],
+            "type": "string"
+          },
+          "output_index": {
+            "description": "Position of the execution output in its block.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_index": {
+            "description": "Invocation ordinal of the callback within its root call; the root is zero.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trigger_execution_hash": {
+            "description": "Execution call hash of the output's root call: the entrypoint hash of a Network input, or the invocation hash of a Pipeline or Time output.",
+            "type": "string"
+          },
+          "trigger_id": {
+            "description": "Trigger that produced this completion.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TriggerLifecycleActivationV1": {
         "additionalProperties": false,
         "description": "Observation of this validator's committed lifecycle activation and original consensus configuration fingerprint. The existing v2_activation_height JSON member is the native response name; this read is not an independent activation proof.",
@@ -90538,7 +90624,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Read the exact requested Global State rows at the certified non-genesis tip. Each row returns its original bytes or proven absence under the same post-execution root. Supply 1 to 32 (table, key) positions in strictly ascending order. Each read requires current CanReadAllLedgerData or a direct CanReadStateRow grant for every position. Independently verify the batch against finality and a pinned schema.",
+        "description": "Read the exact requested Global State rows at the certified non-genesis tip. Each row returns its original bytes or proven absence under the same post-execution root. Supply 1 to 32 (table, key) positions in strictly ascending order. Each position requires current CanReadAllLedgerData, a direct CanReadStateRow grant, or a matching direct CanReadStateScope grant under its active definition. Opaque escrow and claim IDs require a present matching certified record for scoped reads. Independently verify the batch against finality and a pinned schema.",
         "operationId": "ledgerStateRowsV1",
         "parameters": [
           {
@@ -133535,17 +133621,78 @@
     },
     "/v1/triggers/completed": {
       "get": {
-        "description": "Return the bounded completion records retained for executed triggers.",
+        "description": "Trigger completions persisted in committed execution outputs: one row per completion of a Network, Pipeline or Time output, newest first by block height, output index and completion index. A history collection: accepts shared filter, select, limit and cursor; bounds on `block_height` in the filter's top-level `and` bound the blocks a page examines. Each page has a bounded history-scan budget, so continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate and any other parameter are rejected: select a trigger, an outcome or a height range with filter. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Text filter, e.g. `trigger_id = \"clock\" and outcome = \"Failure\" and block_height >= 1200`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `block_height,trigger_id,outcome`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TriggerCompletionPage"
                 }
               }
             },
             "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid collection query (`invalid_query`, `invalid_filter`, `invalid_select`, `invalid_limit`, `invalid_cursor`, `invalid_sort`, `invalid_include_total`), or `query_scan_limit_exceeded` when one page's history budget cannot read its first block.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -133566,7 +133713,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "List completed triggers.",
+        "summary": "List trigger completions.",
         "tags": [
           "Transactions"
         ],

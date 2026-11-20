@@ -379,80 +379,11 @@ impl Recheck {
         )?;
         budget.check()?;
         confirm_carriers(prepared, &self.required, budget)?;
-        let mut observations = Vec::with_capacity(3);
-        for (index, gateway) in live.iter_mut().enumerate() {
-            let provider = gateway.provider();
-            let floor = budget.call(|_| {
-                if gateway.required_transactions()? != self.required.as_slice() {
-                    return Err(invalid(
-                        "restarted launch changed exact required transactions",
-                    ));
-                }
-                gateway.observation_floor()
-            })?;
-            budget.progress.enter(Phase::PromotedCatalog);
-            budget.call(|deadline| {
-                ManagedGatewayCompliance::open(prepared, provider)?.observe_promoted(
-                    gateway,
-                    self.catalogs[index],
-                    deadline,
-                )
-            })?;
-            budget.progress.enter(Phase::ProviderAdvertisement);
-            validate_live(prepared, gateway, budget)?;
-            budget.call(|deadline| {
-                ManagedProviderAdvertisement::open(prepared, provider)?.publish(deadline)
-            })?;
-            validate_live(prepared, gateway, budget)?;
-            budget.progress.enter(Phase::Discovery);
-            let observed_at = Instant::now();
-            let observed_utc = budget.call(|_| now_ms())?;
-            let current = budget.call(|deadline| {
-                build_registry::observe_generated_service(
-                    prepared,
-                    provider,
-                    gateway.selected_enrollment(floor)?,
-                    floor,
-                    deadline,
-                )
-            })?;
-            let continuation = budget.call(|_| {
-                let enrollment = gateway.selected_enrollment(floor)?;
-                match &self.retained {
-                    Some(retained) if provider != retained.renewed => {
-                        let original = &retained.originals[index];
-                        original.revalidate(provider, enrollment, &self.receipt)?;
-                        Ok(original.clone())
-                    }
-                    _ => {
-                        let plan = gateway
-                            .original_provider_plan(prepared)?
-                            .ok_or_else(|| invalid("renewal requires original provider plan"))?;
-                        renewal::Continuation::new(
-                            &plan,
-                            Arc::clone(&self.receipt),
-                            enrollment,
-                            observed_at,
-                            observed_utc,
-                        )
-                    }
-                }
-            })?;
-            observations.push(budget.call(|_| {
-                maintenance::ProviderObservation::new(
-                    continuation,
-                    floor,
-                    self.catalogs[index],
-                    current,
-                    observed_at,
-                    observed_utc,
-                )
-            })?);
-            validate_live(prepared, gateway, budget)?;
-        }
-        let observations = observations
-            .try_into()
-            .map_err(|_| budget.progress.unconfirmed())?;
+        let observations = observe_published_gateways(
+            &mut live,
+            |index, gateway| self.publish_provider(prepared, index, gateway, budget),
+            |index, gateway, floor| self.observe_provider(prepared, index, gateway, floor, budget),
+        )?;
         let observation = budget.call(|_| {
             let plans = live[0]
                 .original_provider_plans(prepared)?
@@ -463,6 +394,113 @@ impl Recheck {
         budget.check()?;
         Ok(Outcome::Complete(Some(Box::new(observation))))
     }
+    fn publish_provider(
+        &self,
+        prepared: &PreparedLocalnet,
+        index: usize,
+        gateway: &mut OwnedGateway,
+        budget: &Budget,
+    ) -> std::result::Result<ManagedTransactionFinality, Failure> {
+        let provider = gateway.provider();
+        let floor = budget.call(|_| {
+            if gateway.required_transactions()? != self.required.as_slice() {
+                return Err(invalid(
+                    "restarted launch changed exact required transactions",
+                ));
+            }
+            gateway.observation_floor()
+        })?;
+        budget.progress.enter(Phase::PromotedCatalog);
+        budget.call(|deadline| {
+            ManagedGatewayCompliance::open(prepared, provider)?.observe_promoted(
+                gateway,
+                self.catalogs[index],
+                deadline,
+            )
+        })?;
+        budget.progress.enter(Phase::ProviderAdvertisement);
+        validate_live(prepared, gateway, budget)?;
+        budget.call(|deadline| {
+            ManagedProviderAdvertisement::open(prepared, provider)?.publish(deadline)
+        })?;
+        validate_live(prepared, gateway, budget)?;
+        Ok(floor)
+    }
+
+    fn observe_provider(
+        &self,
+        prepared: &PreparedLocalnet,
+        index: usize,
+        gateway: &mut OwnedGateway,
+        floor: ManagedTransactionFinality,
+        budget: &Budget,
+    ) -> std::result::Result<maintenance::ProviderObservation, Failure> {
+        let provider = gateway.provider();
+        budget.progress.enter(Phase::Discovery);
+        let observed_at = Instant::now();
+        let observed_utc = budget.call(|_| now_ms())?;
+        let current = budget.call(|deadline| {
+            build_registry::observe_generated_service(
+                prepared,
+                provider,
+                gateway.selected_enrollment(floor)?,
+                floor,
+                deadline,
+            )
+        })?;
+        let continuation = budget.call(|_| {
+            let enrollment = gateway.selected_enrollment(floor)?;
+            match &self.retained {
+                Some(retained) if provider != retained.renewed => {
+                    let original = &retained.originals[index];
+                    original.revalidate(provider, enrollment, &self.receipt)?;
+                    Ok(original.clone())
+                }
+                _ => {
+                    let plan = gateway
+                        .original_provider_plan(prepared)?
+                        .ok_or_else(|| invalid("renewal requires original provider plan"))?;
+                    renewal::Continuation::new(
+                        &plan,
+                        Arc::clone(&self.receipt),
+                        enrollment,
+                        observed_at,
+                        observed_utc,
+                    )
+                }
+            }
+        })?;
+        let observation = budget.call(|_| {
+            maintenance::ProviderObservation::new(
+                continuation,
+                floor,
+                self.catalogs[index],
+                current,
+                observed_at,
+                observed_utc,
+            )
+        })?;
+        validate_live(prepared, gateway, budget)?;
+        Ok(observation)
+    }
+}
+
+// Each discovery starts a finite eligibility window. Complete all three publications before
+// starting those clocks; each native observation and the final aggregate still check expiry.
+fn observe_published_gateways<G, P, O>(
+    gateways: &mut [G; 3],
+    mut publish: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
+    mut observe: impl FnMut(usize, &mut G, P) -> std::result::Result<O, Failure>,
+) -> std::result::Result<[O; 3], Failure> {
+    let [first, second, third] = gateways;
+    let first_floor = publish(0, first)?;
+    let second_floor = publish(1, second)?;
+    let third_floor = publish(2, third)?;
+    Ok([
+        observe(0, first, first_floor)?,
+        observe(1, second, second_floor)?,
+        observe(2, third, third_floor)?,
+    ])
 }
 
 pub(super) fn validate_gateways(

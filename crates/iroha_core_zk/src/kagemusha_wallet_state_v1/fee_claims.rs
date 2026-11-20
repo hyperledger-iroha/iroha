@@ -1,19 +1,16 @@
 //! Separate earned-fee Payment custody and exact finalized-payout acknowledgements.
 use super::*;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
-use iroha_data_model::sumeragi_finality::{
-    VerifiedSumeragiBlock, VerifiedWorldStateSnapshotV1, WorldStateSchemaPolicyV1,
-    native_world_schema_family_v1,
-};
+use iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock;
 
-/// Opaque native finality and authenticated World evidence for one immutable payout row.
+/// Native finality and profile-selected State evidence for one immutable payout row.
 /// The wallet additionally checks its own artifact-selected scheme and Global chain scope.
 /// A transaction submission result or a server acknowledgement cannot construct this evidence.
 pub struct FinalizedPayoutEvidence<'a> {
     /// Certified native successor on the selected Global chain.
     pub block: &'a VerifiedSumeragiBlock,
-    /// Complete World snapshot already authenticated against that exact successor.
-    pub world: &'a VerifiedWorldStateSnapshotV1,
+    /// State evidence authenticated under the commitment profile selected at that cut.
+    pub state: FinalizedPayoutStateV1<'a>,
     /// Original immutable payout row, authenticated below by its native table key/value.
     pub payout: KagemushaWalletPayoutRecordV1,
 }
@@ -146,9 +143,6 @@ fn verify_payout(
     valid(scheme.validate())?;
     let network = evidence.block.commitment().schedule.current.network_id;
     if network.as_bytes() != &scheme.network_id
-        || evidence.world.height() != evidence.block.height()
-        || evidence.world.context_id() != evidence.block.context_id()
-        || evidence.block.execution().world_state_root != evidence.world.world_root()
         || evidence.payout.key != KagemushaWalletPayoutKeyV1::Fee(credit)
         || evidence.payout.source != claim.payment
         || evidence.payout.amount != claim.fee
@@ -161,22 +155,9 @@ fn verify_payout(
         .block
         .verify_global_scope(network, chain)
         .map_err(|_| Error::Invalid("finalized fee payout scope"))?;
-    native_world_schema_family_v1()
-        .as_slice()
-        .select_schema(evidence.world.schema_hash())
-        .map_err(|_| Error::Invalid("finalized fee payout World schema"))?;
-    // Core records the canonical framed row as Vec<u8>; authenticate that exact semantic
-    // value, not the payout structure under a different snapshot schema.
-    let bytes =
-        norito::to_bytes(&evidence.payout).map_err(|_| Error::Invalid("payout encoding"))?;
     evidence
-        .world
-        .verify_table_value(
-            "world.kagemusha_wallet_ledger",
-            &evidence.payout.key.ledger_key(scheme.scheme_id()),
-            &bytes,
-        )
-        .map_err(|_| Error::Invalid("finalized fee payout row"))
+        .state
+        .verify(evidence.block, scheme.scheme_id(), credit, &evidence.payout)
 }
 
 fn check_claim_original(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Final, Optional, Tuple
 
-from .errors import UnsupportedCompressionError
+from .errors import DecodeError, LengthMismatchError, UnsupportedCompressionError
 
 _COMPRESSION_ZSTD: Final[int] = 1
 _ZSTD_MIN_LEVEL: Final[int] = 1
@@ -136,9 +136,15 @@ def decompress_zstd(data: bytes, *, target_size: Optional[int] = None) -> bytes:
     if _zstd is None:
         raise UnsupportedCompressionError(_COMPRESSION_ZSTD)
     decompressor = _zstd.ZstdDecompressor()
-    if target_size is None:
-        return decompressor.decompress(data)
-    return decompressor.decompress(data, max_output_size=target_size)
+    try:
+        payload = decompressor.decompress(
+            data, max_output_size=target_size or 0, allow_extra_data=False
+        )
+    except _zstd.ZstdError as exc:
+        raise DecodeError("invalid Zstandard payload", cause=exc) from exc
+    if target_size is not None and len(payload) != target_size:
+        raise LengthMismatchError(target_size, len(payload))
+    return payload
 
 
 __all__ = [

@@ -8,12 +8,15 @@ import {
   type NexusTransactionCodec,
   type NexusWaitFinalizeOptions,
 } from "@iroha/iroha-js/nexus-app";
-import { NetworkId } from "@iroha/iroha-js";
+import { NetworkId, validateNoritoFrame, type NoritoWireLayout, decodeTransactionPayloadJson, encodeTransactionPayloadJson, decodeSignedTransaction, encodeSignedTransaction, signTransactionPayload, transactionPayloadSigningHash, noritoEncodeInstruction, noritoDecodeInstructionBoxArchive, buildTransaction, type TransactionAssemblyInput } from "@iroha/iroha-js";
 import {
   browserTransactionCodec,
   buildBrowserExecutableBatchPayload,
   buildBrowserTransferPayload,
   validateBrowserTransferSignable,
+  browserTransactionPayloadHashHex,
+  browserSignedTransactionHashHex,
+  finalizeBrowserSignedTransaction,
   type BrowserTransactionSignable,
   type BrowserExecutableBatchInput,
   type BrowserTransferInput,
@@ -41,6 +44,20 @@ const input: BrowserTransferInput = {
 };
 
 const stronglyTypedPayload: Uint8Array = buildBrowserTransferPayload(input);
+const denseLayout: NoritoWireLayout = "dense";
+const densePayload: Uint8Array = buildBrowserTransferPayload(input, { layout: denseLayout });
+browserTransactionPayloadHashHex(densePayload, 753, { layout: denseLayout });
+browserSignedTransactionHashHex(new Uint8Array(), 753, { layout: denseLayout, format: "bare" });
+const frameLayout: NoritoWireLayout = validateNoritoFrame(new Uint8Array(), { expectedLayout: denseLayout }).layout;
+void frameLayout;
+// @ts-expect-error A dense bare archive must never masquerade as version-1 submission wire.
+browserSignedTransactionHashHex(new Uint8Array(), 753, { layout: "dense" });
+// @ts-expect-error Unknown layout names are not aliases.
+buildBrowserTransferPayload(input, { layout: "compact" });
+// @ts-expect-error Options are exact.
+buildBrowserTransferPayload(input, { layout: "dense", flags: 0 });
+// @ts-expect-error Dense signing requires explicit offline bare format.
+finalizeBrowserSignedTransaction({} as BrowserTransactionSignable, new Uint8Array(64), new Uint8Array(32), { layout: "dense", format: "versioned" });
 const retiredChain: BrowserTransferInput = {
   ...input,
   // @ts-expect-error chain is not an ordinary-transaction domain.
@@ -133,3 +150,23 @@ void invalidFailureOverride;
 void invalidTerminalOverride;
 void submittedErrorContext;
 void invalidNoWaitOptions;
+
+// Native typed model APIs retain exact JSON text and explicitly select archive format.
+const nativeOptions = { layout: "dense", format: "bare" } as const;
+const nativeJson: string = decodeTransactionPayloadJson(densePayload, 753, nativeOptions);
+encodeTransactionPayloadJson(nativeJson, 753, nativeOptions);
+const nativeSignedJson: string = decodeSignedTransaction(densePayload, 753, { ...nativeOptions, parseJson: false });
+encodeSignedTransaction(nativeSignedJson, 753, nativeOptions);
+signTransactionPayload(networkId, densePayload, new Uint8Array(32), 753, nativeOptions);
+transactionPayloadSigningHash(densePayload, nativeOptions);
+noritoEncodeInstruction({}, 753, { layout: "dense" });
+noritoDecodeInstructionBoxArchive(densePayload, 753, { layout: "dense" });
+buildTransaction({} as TransactionAssemblyInput, nativeOptions);
+// @ts-expect-error Dense has no versioned signed mapping.
+encodeSignedTransaction(nativeSignedJson, 753, { layout: "dense" });
+// @ts-expect-error Typed JSON encoding requires lossless JSON text.
+encodeTransactionPayloadJson({}, 753, nativeOptions);
+// @ts-expect-error Payloads have no versioned mapping.
+transactionPayloadSigningHash(densePayload, { format: "versioned" });
+// @ts-expect-error No layout inference/alias option.
+decodeSignedTransaction(densePayload, 753, { auto: true });

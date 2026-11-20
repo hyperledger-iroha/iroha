@@ -908,86 +908,6 @@ pub struct PipelineTransactionStatusResponse {
     /// Source used to resolve the status (`cache`, `queue`, `state`).
     pub resolved_from: String,
 }
-/// Compact trigger completion included in authenticated detail and historical evidence.
-#[derive(
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_torii_shared::TriggerCompletionSummary")]
-pub struct TriggerCompletionSummary {
-    /// Trigger identifier.
-    pub trigger_id: String,
-    /// Entrypoint hash for this trigger execution.
-    pub trigger_execution_hash: String,
-    /// Step index within the entrypoint execution.
-    pub step_index: u32,
-    /// `Success` or `Failure`.
-    pub outcome: String,
-    /// Failure message when present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-/// Historical trigger completion record returned by `/v1/triggers/completed`.
-#[derive(
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_torii_shared::TriggerCompletionRecord")]
-pub struct TriggerCompletionRecord {
-    /// Block height containing this trigger completion.
-    pub block_height: u64,
-    /// Entrypoint/result index in the block when it can be resolved.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub entrypoint_index: Option<u64>,
-    /// Compact completion payload.
-    pub completion: TriggerCompletionSummary,
-    /// Evidence source. Always `execution_output`: completions are read only from the
-    /// block's persisted execution outputs.
-    pub source: String,
-}
-/// Historical trigger completion query response.
-#[derive(
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_torii_shared::TriggerCompletionListResponse")]
-pub struct TriggerCompletionListResponse {
-    /// Latest committed block height observed by the serving node.
-    pub latest_height: u64,
-    /// First block height scanned.
-    pub from_height: u64,
-    /// Last block height scanned.
-    pub to_height: u64,
-    /// Number of block heights inspected.
-    pub scanned_blocks: u64,
-    /// Maximum number of records requested.
-    pub limit: u64,
-    /// Matching completion records, newest block first.
-    pub completions: Vec<TriggerCompletionRecord>,
-}
 /// Status details embedded in [`PipelineTransactionStatusResponse`].
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -2647,17 +2567,29 @@ mod tests {
 
     #[test]
     fn transaction_details_rejects_retired_parallel_completion_layout() {
+        // The retired compact completion row; no shipped type carries this layout.
+        #[derive(
+            norito::NoritoSerialize, norito::NoritoSchema, norito::derive::JsonSerialize, Clone,
+        )]
+        #[norito_schema(name = "iroha_torii_shared::TriggerCompletionSummary")]
+        struct RetiredCompletionSummary {
+            trigger_id: String,
+            trigger_execution_hash: String,
+            step_index: u32,
+            outcome: String,
+            message: Option<String>,
+        }
         #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
         #[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
         struct RetiredDetails {
             hash: String,
             transaction: iroha_data_model::query::CommittedTransaction,
-            trigger_completions: Vec<super::TriggerCompletionSummary>,
+            trigger_completions: Vec<RetiredCompletionSummary>,
         }
         let details = canonical_details_fixture(false);
         for completions in [
             Vec::new(),
-            vec![super::TriggerCompletionSummary {
+            vec![RetiredCompletionSummary {
                 trigger_id: "retired-completion".into(),
                 trigger_execution_hash: details.hash.clone(),
                 step_index: 0,
@@ -2794,15 +2726,6 @@ mod captured_frame_identity_tests {
         );
         crate::captured_identity_tests::assert_bidirectional::<super::QueueErrorSnapshot>(
             "iroha_torii_shared::QueueErrorSnapshot",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionListResponse>(
-            "iroha_torii_shared::TriggerCompletionListResponse",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionRecord>(
-            "iroha_torii_shared::TriggerCompletionRecord",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionSummary>(
-            "iroha_torii_shared::TriggerCompletionSummary",
         );
     }
 }

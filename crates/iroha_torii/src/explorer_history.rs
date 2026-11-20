@@ -686,6 +686,30 @@ mod tests {
     }
 
     #[test]
+    fn block_summaries_own_no_heap_so_the_cache_bound_is_a_byte_bound() {
+        // A summary without drop glue owns no vector, string, map or shared body: every
+        // field is inline, whatever the block's transaction count or route plans were.
+        assert!(!std::mem::needs_drop::<ExplorerBlockSummary>());
+        let entry = std::mem::size_of::<ExplorerBlockSummary>();
+        assert!(entry <= 256, "{entry} bytes per retained summary");
+        assert!(
+            entry.saturating_mul(EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY) <= 4 * 1024 * 1024,
+            "all readers together retain at most the cache capacity in fixed-size summaries"
+        );
+        // A row restored from a summary carries the same fixed fields and nothing else.
+        let row = summary(7).row();
+        assert_eq!(
+            (
+                row.height,
+                row.transactions_total,
+                row.transactions_rejected
+            ),
+            (7, 1, 0)
+        );
+        assert!(!std::mem::needs_drop::<HistoryBlockRow>());
+    }
+
+    #[test]
     fn block_summary_cache_binds_counts_to_visibility_and_bounds_all_scopes_together() {
         let cache = ExplorerBlockSummaryCache::new(2);
         let public = summary(7);

@@ -64,6 +64,42 @@ fn proof_crypto_uses_consensus_suite_and_preserves_pop_admission() {
 }
 
 #[test]
+fn single_vote_verification_matches_raw_keys_for_members_and_outsiders() {
+    let fixture = Fixture::new();
+    let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+    let block = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
+    let mut qc: Qc =
+        norito::decode_canonical(block.commit_certificate().unwrap().commit_qc()).unwrap();
+    let original = qc.preimage();
+    qc.result.0[0] ^= 1;
+    let changed = qc.preimage();
+    let outsider = iroha_crypto::KeyPair::from_seed(vec![0xEE; 32], Algorithm::BlsNormal);
+    let member = &fixture.keys[0];
+    for (signer, other, is_member) in [(member, &outsider, true), (&outsider, member, false)] {
+        let key = CoreKey::new(signer.public_key().try_to_bytes().unwrap().1.to_vec()).unwrap();
+        assert_eq!(crypto.keys.contains_key(&key), is_member);
+        let signature =
+            Signature(consensus::sign_preimage(signer.private_key(), &original).unwrap());
+        let wrong_key =
+            Signature(consensus::sign_preimage(other.private_key(), &original).unwrap());
+        let malformed = Signature([0; 96]);
+        for (message, vote, expected) in [
+            (&original, &signature, true),
+            (&changed, &signature, false),
+            (&original, &wrong_key, false),
+            (&original, &malformed, false),
+        ] {
+            let digest = ConsensusDigest::from_preimage(message).unwrap();
+            let raw =
+                consensus::verify_public_key(key.as_bytes().try_into().unwrap(), &digest, &vote.0);
+            assert_eq!(raw, expected);
+            assert_eq!(crypto.verify(&key, message, vote), raw);
+        }
+        assert!(!crypto.verify(&key, b"unlisted", &signature));
+    }
+}
+
+#[test]
 fn proof_crypto_multi_message_aggregate_binds_each_allowlisted_digest() {
     let fixture = Fixture::new();
     let (crypto, committee) = ProofCrypto::new(&fixture.validators).unwrap();

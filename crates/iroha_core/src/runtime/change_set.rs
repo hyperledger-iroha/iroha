@@ -519,6 +519,21 @@ pub fn activate_due(
                     {
                         return true;
                     }
+                    let scoped_before = super::state_scope_permission::selected(&current);
+                    let scoped_after = super::state_scope_permission::selected(&applied.selection);
+                    if scoped_after && !super::keyed_state::selected(&applied.selection) {
+                        iroha_logger::warn!(change_set = %id, "scoped reads require keyed State");
+                        return false;
+                    }
+                    let loses_revoke = scoped_before && scoped_after
+                        && super::state_scope_permission::revocation_executable(&current)
+                        && !super::state_scope_permission::revocation_executable(&applied.selection);
+                    if (scoped_before != scoped_after || loses_revoke)
+                        && let Err(reason) = super::state_scope_permission::validate_activation_inventory(&*wtx)
+                    {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     if !super::state_row_permission::selected(&current)
                         && super::state_row_permission::selected(&applied.selection)
                         && let Err(reason) = super::state_row_permission::validate_activation_inventory(&*wtx)

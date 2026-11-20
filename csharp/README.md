@@ -355,6 +355,70 @@ state; a repeated cast is not an update.
 the exact caller-trusted network, authority, invocation, metadata and fee before
 returning a draft for local signing. Retired admission-intent layouts are rejected.
 
+## Norito layouts
+
+The Norito codec speaks both V1 payload layouts of
+[`norito.md`](../norito.md#dense-layout-header-minor-1): the current layout (header
+minor `0`) and the dense layout (header minor `1`, flags `0x00`). Dense writes every
+sequence, map and set count and every enum discriminant as a shortest-form varint,
+byte sequences and fixed byte arrays as raw bytes, instruction envelopes as the wire ID
+plus the bare payload with no nested header, and frames without alignment padding.
+Field order, per-value length prefixes, `Option`/`Result`/`bool` tags, fixed-width
+scalars, schema hashes and CRC64 are the same in both.
+
+The layout is always explicit. Nothing infers it from payload bytes:
+
+- A frame declares its layout in the header. `NoritoCodec.ReadLayout(frame)` reads only
+  the minor version and flag byte. `NoritoCodec.EncodeWithLayout(typeName, payload,
+  layout)` writes that header, and `NoritoCodec.DecodeWithLayout(typeName, frame,
+  layout)` accepts a frame only when its header declares exactly `layout`. The
+  flag-typed `Encode`/`Decode` overloads stay current-layout entry points and refuse a
+  dense frame. Unknown minors, any flag on a dense header, padding in a dense frame,
+  truncated input and trailing bytes are rejected.
+- A headerless payload has no header, so its owner names the layout as a
+  `NoritoWireLayout`: `Compact` (minor `0` with `COMPACT_LEN`, the default of every
+  encoder) or `Dense`. `Fixed` (minor `0`, flags `0x00`) is supported for frames only.
+
+For transactions, `TransactionBuilder.BuildSigned(seed)` is unchanged and produces the
+compact, versioned submission envelope. `TransactionBuilder.BuildSignedBare(seed,
+layout)` signs the payload as encoded in `layout` and returns a `BareSignedTransaction`:
+the headerless signed transaction, its payload bytes and the `SigningHash` the
+signature covers. A signature verifies only against the layout it was made in.
+`BareSignedTransaction.Decode(bytes, layout)` and `DecodeFrame(frame)` strictly decode a
+single-signature transaction and require it to re-encode to the same bytes; bytes of the
+other layout are refused, not misread. Decoding checks structure and canonical
+encoding only: it does not verify the signature or admit account identities, and it
+keeps instruction payloads uninterpreted. Multisig signature bundles, signed
+attachments and `IvmProved` executables are refused.
+
+```csharp
+var dense = builder.BuildSignedBare(seed, NoritoWireLayout.Dense);
+var decoded = BareSignedTransaction.Decode(dense.SignedTransactionBytes, NoritoWireLayout.Dense);
+var fromFrame = BareSignedTransaction.DecodeFrame(dense.EncodeFrame()); // header minor 1 selects Dense
+```
+
+No ledger selects the dense layout yet and no transaction wire version names it, so a
+dense transaction has no versioned submission bytes or entrypoint hash, and Torii
+submission stays compact. Managed dense encoders exist for the transaction envelope and
+for the transfer, mint, burn, key-value and trigger instructions. Every other instruction
+type reaches the dense layout through the native bridge
+(`connect_norito_transcode_instruction_v1`), which transcodes its compact frame by wire
+id. Decoding a dense transaction likewise admits each instruction body only as the
+canonical dense payload of the instruction the bridge registers under its wire id; an
+unregistered wire id stays an opaque envelope.
+
+The shared vectors `fixtures/norito_dense/vectors.json` and
+`fixtures/norito_rpc/transaction_fixtures.dense.json` pin the bytes. The vector suite
+needs no native bridge; dense transaction decoding and the typed dense builds do:
+
+```bash
+dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build -- \
+  --filter-class '*NoritoDenseLayoutVectorTests' \
+  --filter-class '*NoritoDenseTransactionFixtureTests' \
+  --filter-class '*TransactionWireCodecTests' \
+  --filter-class '*TransactionBuilderDenseLayoutTests'
+```
+
 ## Run the sample
 
 ```bash

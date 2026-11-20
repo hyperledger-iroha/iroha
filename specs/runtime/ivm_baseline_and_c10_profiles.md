@@ -739,13 +739,9 @@ below records publication of the dormant addition and its governed activation te
   when a cached artifact's profile was not selected by the executing root (phase 2's
   `require_prepared_policy` fallback). Fixed here (As built, "Warm and cold caches agree"); it was
   reachable only with the runtime-lifecycle profile selected in one root and not in another.
-- `koto test trace` (`TraceMode::DeltaRegisters`) on a default (baseline) build is refused
-  locally (`ExecutionDeferred(TraceOwnerUnavailable)`): the baseline engine does not reconstruct
-  the proof-trace and step-recorder producers (phase 3). `kotodama_toolchain`'s
-  `coverage_and_trace_attribute_runtime_and_test_steps_separately` fails on this since phase 4; it
-  is left failing and visible (a fix compiles traced test runs for C10 or reconstructs the
-  baseline producers). Fixed in the continuation below by reconstructing the baseline's
-  delta-register producer.
+- Local `koto test trace` records the selected engine's register deltas, including all 256
+  baseline registers. Baseline proof traces, native packets and diagnostic step records
+  remain unimplemented.
 - The guard's artifact-map rule is stricter: a row the ABI V1 carrier leaves out must carry a
   declared profile hash. `test_artifact_map_carrier_owners_exclude_other_engine_rows` now
   declares the other engine's profile instead of leaving its row undeclared.
@@ -790,7 +786,7 @@ Test binaries ran from their package directories. Logs: `artifacts/continuation-
 | `ivm` | same run | lib 1 574 (6 ignored); `ivm_group_01` … `_10`: 136, 79, 86, 152, 244, 108, 88, 129, 66, 29; custody 1, 9; 0 failed |
 | `ivm_artifact_admission` | same run | lib 60, `current_artifact` 16, `preparation_error_custody` 3; 0 failed |
 | `kotodama_lang` | same run | lib 1 575 (6 ignored), `kotodama_integration` 104; 0 failed |
-| `kotodama_toolchain` | same run | lib 140/1, `koto` 39/1 (the new `host_profile_names_select_their_compiled_profiles` passes), `cli_smoke` 12/2. The lib failure is the `koto test trace` regression under Findings; the other three were fixed afterwards (test fixtures only, strict Clippy clean) but not rerun: the shared host's free-disk gate refused the rebuild. |
+| `kotodama_toolchain` | same run | lib 140/1, `koto` 39/1 (the new `host_profile_names_select_their_compiled_profiles` passes), `cli_smoke` 12/2. The library failure exposed the missing baseline delta trace, fixed in the Phase 5 continuation. The three fixture fixes later passed strict Clippy. The shared host's free-disk gate prevented a test rerun at the time. |
 | Torii, `irohad`, CLI (earlier binaries) | `test --locked --offline --no-run -p iroha_torii -p irohad_lib -p iroha_cli_lib --lib` before the warm/cold cache fix; filters below | `irohad` `soracloud_runtime` 287 (1 ignored), CLI `contracts::` 58, Torii `validation_fee contract gov test_utils multisig` 637; 0 failed |
 | Strict Clippy | `clippy --locked --offline --all-targets -p iroha_data_model -p ivm_abi -p ivm -p ivm_artifact_admission -p kotodama_lang -p kotodama_toolchain -p iroha_core -p iroha_torii -p irohad_lib -p iroha_cli_lib -p integration_tests --keep-going -- -D warnings`; then `clippy --locked --offline --all-targets -p iroha_core -- -D warnings` | the first pass stopped on the pre-existing `block.rs` expectation; after its fix both exit 0 (warnings only in vendored crates and `zk-spartan`) |
 | Format | `rustfmt --edition 2024 --check` over the 45 changed Rust files | clean; the only reported diff is the unchanged, pre-existing `iroha_data_model/src/sumeragi_finality.rs`, reached through `lib.rs` |

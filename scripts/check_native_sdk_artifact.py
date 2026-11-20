@@ -259,6 +259,15 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
     )
 )
 
+# Typed instruction bodies in an explicit Norito layout (C# and Kotlin dense envelopes).
+INSTRUCTION_LAYOUT_C_EXPORTS = ("connect_norito_transcode_instruction_v1",)
+INSTRUCTION_LAYOUT_JNI_EXPORTS = (
+    "Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeBridgeAbiVersion",
+    "Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeTranscodeInstruction",
+)
+# Superseded by the explicit-layout `connect_norito_decode_signed_transaction_json_v1`.
+RETIRED_TRANSACTION_LAYOUT_C_EXPORTS = ("connect_norito_decode_signed_transaction_json",)
+
 ZK_X509_TRANSACTION_C_EXPORTS = (
     "connect_norito_zk_x509_transaction_prepare_v1",
     "connect_norito_zk_x509_transaction_projection_v1",
@@ -276,6 +285,8 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *KAGEMUSHA_WALLET_JNI_EXPORTS,
         *KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS,
         *PRIVACY_BRIDGE_JNI_EXPORTS,
+        *INSTRUCTION_LAYOUT_C_EXPORTS,
+        *INSTRUCTION_LAYOUT_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_name_validate_v1",
@@ -308,6 +319,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_confidential_owner_tag_derive_v3",
         "connect_norito_confidential_note_commitment_derive_v3",
         "connect_norito_confidential_merkle_path_derive_v3",
+        *INSTRUCTION_LAYOUT_C_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_name_validate_v1",
@@ -371,9 +383,11 @@ RETIRED_PROTOCOL_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *RETIRED_FIRST_DEVICE_AUTH_JNI_EXPORTS,
         *RETIRED_TIMED_OVN_C_EXPORTS,
         *RETIRED_TIMED_OVN_JNI_EXPORTS,
+        *RETIRED_TRANSACTION_LAYOUT_C_EXPORTS,
     ),
     "csharp": (
         *RETIRED_TIMED_OVN_C_EXPORTS,
+        *RETIRED_TRANSACTION_LAYOUT_C_EXPORTS,
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_kagemusha_device_response_authenticator_v1_verify",

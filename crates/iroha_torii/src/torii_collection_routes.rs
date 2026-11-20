@@ -401,6 +401,40 @@ async fn execute_scoped_direct_collection_read(
     query: ListQuery,
     visibility: routing::DataspaceReadVisibility,
 ) -> Result<Response, Error> {
+    execute_retaining_direct_collection_read(app, target, query, visibility, ()).await
+}
+
+/// Execute a collection read served by this node alone for a reader of all ledger
+/// data that already holds `admission`. The page worker keeps those permits until
+/// its response is encoded, so cancelling the HTTP task frees no query capacity
+/// while committed history is still being read.
+#[cfg(feature = "app_api")]
+async fn execute_admitted_direct_collection_read(
+    app: &SharedAppState,
+    target: routing::collection_sources::CollectionTarget,
+    query: ListQuery,
+    admission: QueryAdmissionPermit,
+) -> Result<Response, Error> {
+    execute_retaining_direct_collection_read(
+        app,
+        target,
+        query,
+        routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
+        admission,
+    )
+    .await
+}
+
+/// One direct collection read under a fresh (or the request's admitted) query owner;
+/// `retained` moves into the physical worker with that owner.
+#[cfg(feature = "app_api")]
+async fn execute_retaining_direct_collection_read<G: Send + 'static>(
+    app: &SharedAppState,
+    target: routing::collection_sources::CollectionTarget,
+    query: ListQuery,
+    visibility: routing::DataspaceReadVisibility,
+    retained: G,
+) -> Result<Response, Error> {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
@@ -408,13 +442,14 @@ async fn execute_scoped_direct_collection_read(
     let telemetry = app.telemetry_handle();
     let result = COLLECTION_READ_MEMORY_RESERVATION
         .scope(reservation.clone(), async {
-            routing::collection_sources::execute_collection_response(
+            routing::collection_sources::execute_collection_response_retaining(
                 Some(app),
                 &app.state,
                 &target,
                 query,
                 &telemetry,
                 &visibility,
+                retained,
             )
             .await
         })

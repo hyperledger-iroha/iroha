@@ -3,6 +3,9 @@ use super::tests::{fixture, ingest, options};
 use super::*;
 use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::attempts::metadata;
+use crate::managed::native_operation::test_support::{
+    request_only_expiry_ms, wait_for_original_expiry,
+};
 use crate::managed::native_operation::{
     test_support::{
         UnavailablePeers,
@@ -235,7 +238,7 @@ fn genuine_ingest_original_expiry_never_creates_wallet_or_requests_http() {
         &owner.inner,
         &directory,
         &original,
-        || now_ms().unwrap() + 500,
+        request_only_expiry_ms,
         &options(),
     );
     let bytes = std::fs::read(directory.path().join("original.nrt")).unwrap();
@@ -255,11 +258,7 @@ fn genuine_ingest_original_expiry_never_creates_wallet_or_requests_http() {
         }
     };
     let prefix = prefix_names.map(&retained_bytes);
-    let end = Instant::now() + Duration::from_secs(2);
-    while now_ms().unwrap() < original.terms.signing_deadline_unix_ms {
-        assert!(Instant::now() < end);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_original_expiry(original.terms.signing_deadline_unix_ms);
     let mut peers = UnavailablePeers::start(&prepared);
     for mode in [Mode::ObserveOnly, Mode::SubmitOriginal] {
         let progress = owner

@@ -150,6 +150,12 @@ implicitly. Canonical stream transport checks endpoint and network identity.
 
 ## Focused checks
 
+`ci/check_mochi.sh --ui-fast` exercises Mochi's headless views, activity filters,
+widgets, small-window review and disabled actions, plus Izanami's configuration
+form, without launching validators, opening a window,
+or needing a terminal. It reuses incremental builds; the first build still
+compiles both applications' dependencies. Omit the flag for the full Mochi gate.
+
 ```sh
 scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p mochi-ui --features gui --bin mochi
 cargo test -p mochi-core
@@ -157,6 +163,40 @@ cargo test -p mochi-integration
 cargo test -p mochi-ui --features gui --bin mochi
 ci/check_mochi.sh
 ```
+
+The UI attachment regression uses a stopped generation to check selection and
+replacement. It does not launch validators or establish parent finality. To test
+attachment separately, run the installed-runtime regression with matching
+`kagami` and `iroha3d` from this checkout:
+
+```sh
+cargo build --release --locked -p iroha_kagami --bin kagami -p irohad --bin iroha3d
+IROHA_TEST_RUNTIME_DIRECTORY="$PWD/target/release" cargo test --release --locked -p iroha_deploy --lib \
+  managed::tests::attachment_installed::installed_parent_attachment_private_contracts_and_payload_isolation \
+  -- --exact --ignored --nocapture
+```
+
+This runs four parent and four child validators on loopback, not public Taira.
+The installed Kagami generates a fresh Sora Nexus parent with a funded faucet
+and account onboarding; ordinary developer localnets remain faucet-free. The
+check verifies parent inclusion, private execution and payload isolation. It
+stops both networks and the loopback ingress before deleting successful runs.
+
+To exercise the native macOS window instead of initiating attachment from the
+CLI, build the matching `mochi` binary in the same runtime directory and run:
+
+```sh
+cargo build --release --locked -p mochi-ui --features gui --bin mochi
+IROHA_TEST_RUNTIME_DIRECTORY="$PWD/target/release" cargo test --release --locked -p iroha_deploy --lib \
+  managed::tests::attachment_installed::desktop::installed_mochi_window_attachment \
+  -- --exact --ignored --nocapture
+```
+
+In the window, choose **Private dataspace…**, name it `dpn`, select parent
+`fixture`, and start it. Compare the displayed network, validator count and
+parent receipt with `ATTACHMENT_DESKTOP_VERIFIED` in the test output. Click
+**Stop**, wait for **Stopped**, then quit Mochi. The test verifies the signed
+parent record and checks that all 20 validator and ingress listeners close.
 
 Design previews render every view headlessly to PPM images. The harness runs a
 genuine Quickstart with matching installed programs, then stages phases and

@@ -347,8 +347,28 @@ struct CanonicalNumeric {
     }
 }
 
-struct CanonicalNoritoWriter {
+/// Norito payload writer for one explicit layout (`norito.md`).
+///
+/// The layouts share field order and the positions of per-value length
+/// prefixes. They differ only in the encodings this type selects:
+///
+/// | Encoding                  | `.fixed`          | `.compact`        | `.dense` |
+/// | ------------------------- | ----------------- | ----------------- | -------- |
+/// | per-value length prefix   | `u64` LE          | varint            | varint   |
+/// | sequence, map, set count  | `u64` LE          | `u64` LE          | varint   |
+/// | enum discriminant         | `u32` LE          | `u32` LE          | varint   |
+/// | `u8` element              | `[len = 1][byte]` | `[len = 1][byte]` | raw byte |
+///
+/// `Option`, `Result` and `bool` tags and fixed-width scalars are the same in
+/// every layout. `CanonicalNoritoWriter` and `CompactNoritoWriter` are this
+/// writer pinned to `.fixed` and `.compact`.
+struct NoritoLayoutWriter {
+    let layout: NoritoWireLayout
     private(set) var data = Data()
+
+    init(layout: NoritoWireLayout) {
+        self.layout = layout
+    }
 
     mutating func writeUInt8(_ value: UInt8) {
         data.append(value)
@@ -369,57 +389,8 @@ struct CanonicalNoritoWriter {
         withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
-    mutating func writeLength(_ value: UInt64) {
-        writeUInt64LE(value)
-    }
-
-    mutating func writeBytes(_ bytes: Data) {
-        data.append(bytes)
-    }
-
-    mutating func writeField(_ payload: Data) {
-        writeLength(UInt64(payload.count))
-        writeBytes(payload)
-    }
-
-    mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
-        let (fieldBytes, fieldBytesOverflow) = bytes.count.multipliedReportingOverflow(by: 9)
-        if !fieldBytesOverflow {
-            let (capacity, capacityOverflow) = data.count.addingReportingOverflow(fieldBytes)
-            if !capacityOverflow {
-                data.reserveCapacity(capacity)
-            }
-        }
-        for byte in bytes {
-            writeUInt64LE(1)
-            writeUInt8(byte)
-        }
-    }
-}
-
-struct CompactNoritoWriter {
-    private(set) var data = Data()
-
-    mutating func writeUInt8(_ value: UInt8) {
-        data.append(value)
-    }
-
-    mutating func writeUInt16LE(_ value: UInt16) {
-        var le = value.littleEndian
-        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
-    }
-
-    mutating func writeUInt32LE(_ value: UInt32) {
-        var le = value.littleEndian
-        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
-    }
-
-    mutating func writeUInt64LE(_ value: UInt64) {
-        var le = value.littleEndian
-        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
-    }
-
-    mutating func writeLength(_ value: UInt64) {
+    /// Unsigned LEB128 in shortest form.
+    mutating func writeVarint(_ value: UInt64) {
         var remaining = value
         while remaining >= 0x80 {
             data.append(UInt8(remaining & 0x7F) | 0x80)
@@ -428,6 +399,36 @@ struct CompactNoritoWriter {
         data.append(UInt8(remaining))
     }
 
+    /// Per-value length prefix of a field, sequence element, string or blob.
+    mutating func writeLength(_ value: UInt64) {
+        switch layout {
+        case .fixed:
+            writeUInt64LE(value)
+        case .compact, .dense:
+            writeVarint(value)
+        }
+    }
+
+    /// Element count of a sequence, map or set.
+    mutating func writeCount(_ value: UInt64) {
+        switch layout {
+        case .fixed, .compact:
+            writeUInt64LE(value)
+        case .dense:
+            writeVarint(value)
+        }
+    }
+
+    /// Enum discriminant. `Option`, `Result` and `bool` use `writeUInt8` instead.
+    mutating func writeEnumTag(_ tag: UInt32) {
+        switch layout {
+        case .fixed, .compact:
+            writeUInt32LE(tag)
+        case .dense:
+            writeVarint(UInt64(tag))
+        }
+    }
+
     mutating func writeBytes(_ bytes: Data) {
         data.append(bytes)
     }
@@ -437,17 +438,39 @@ struct CompactNoritoWriter {
         writeBytes(payload)
     }
 
+    /// The elements of a fixed `[u8; N]` or of a `u8` element sequence, without
+    /// a count. The current layouts frame every byte as `[len = 1][byte]`; the
+    /// dense layout writes the raw bytes.
     mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
-        let (fieldBytes, fieldBytesOverflow) = bytes.count.multipliedReportingOverflow(by: 2)
+        let bytesPerElement: Int
+        switch layout {
+        case .fixed:
+            bytesPerElement = 9
+        case .compact:
+            bytesPerElement = 2
+        case .dense:
+            bytesPerElement = 1
+        }
+        let (fieldBytes, fieldBytesOverflow) = bytes.count.multipliedReportingOverflow(by: bytesPerElement)
         if !fieldBytesOverflow {
             let (capacity, capacityOverflow) = data.count.addingReportingOverflow(fieldBytes)
             if !capacityOverflow {
                 data.reserveCapacity(capacity)
             }
         }
-        for byte in bytes {
-            data.append(1)
-            data.append(byte)
+        switch layout {
+        case .fixed:
+            for byte in bytes {
+                writeUInt64LE(1)
+                writeUInt8(byte)
+            }
+        case .compact:
+            for byte in bytes {
+                data.append(1)
+                data.append(byte)
+            }
+        case .dense:
+            data.append(contentsOf: bytes)
         }
     }
 
@@ -457,13 +480,171 @@ struct CompactNoritoWriter {
     }
 }
 
-enum CompactNorito {
-    static func encodeString(_ value: String) -> Data {
-        var writer = CompactNoritoWriter()
+/// `NoritoLayoutWriter` pinned to `NoritoWireLayout.fixed`.
+struct CanonicalNoritoWriter {
+    private var writer = NoritoLayoutWriter(layout: .fixed)
+
+    var data: Data { writer.data }
+
+    mutating func writeUInt8(_ value: UInt8) {
+        writer.writeUInt8(value)
+    }
+
+    mutating func writeUInt16LE(_ value: UInt16) {
+        writer.writeUInt16LE(value)
+    }
+
+    mutating func writeUInt32LE(_ value: UInt32) {
+        writer.writeUInt32LE(value)
+    }
+
+    mutating func writeUInt64LE(_ value: UInt64) {
+        writer.writeUInt64LE(value)
+    }
+
+    mutating func writeLength(_ value: UInt64) {
+        writer.writeLength(value)
+    }
+
+    mutating func writeBytes(_ bytes: Data) {
+        writer.writeBytes(bytes)
+    }
+
+    mutating func writeField(_ payload: Data) {
+        writer.writeField(payload)
+    }
+
+    mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+        writer.writeByteFields(bytes)
+    }
+}
+
+/// `NoritoLayoutWriter` pinned to `NoritoWireLayout.compact`.
+struct CompactNoritoWriter {
+    private var writer = NoritoLayoutWriter(layout: .compact)
+
+    var data: Data { writer.data }
+
+    mutating func writeUInt8(_ value: UInt8) {
+        writer.writeUInt8(value)
+    }
+
+    mutating func writeUInt16LE(_ value: UInt16) {
+        writer.writeUInt16LE(value)
+    }
+
+    mutating func writeUInt32LE(_ value: UInt32) {
+        writer.writeUInt32LE(value)
+    }
+
+    mutating func writeUInt64LE(_ value: UInt64) {
+        writer.writeUInt64LE(value)
+    }
+
+    mutating func writeLength(_ value: UInt64) {
+        writer.writeLength(value)
+    }
+
+    mutating func writeBytes(_ bytes: Data) {
+        writer.writeBytes(bytes)
+    }
+
+    mutating func writeField(_ payload: Data) {
+        writer.writeField(payload)
+    }
+
+    mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+        writer.writeByteFields(bytes)
+    }
+
+    mutating func wipe() {
+        writer.wipe()
+    }
+}
+
+/// Encoders for the shapes typed Norito paths share, in one explicit layout.
+///
+/// `CanonicalNorito` and `CompactNorito` are these encoders pinned to
+/// `NoritoWireLayout.fixed` and `NoritoWireLayout.compact`. A typed path that
+/// supports the dense layout takes a `layout` argument and passes it here.
+enum NoritoLayoutCodec {
+    /// `String`: `[len][UTF-8 bytes]`.
+    static func encodeString(_ value: String, layout: NoritoWireLayout) -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
         let bytes = Data(value.utf8)
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
+    }
+
+    /// `Option<T>`: a one-byte tag, then the length-prefixed value when present.
+    static func encodeOption<T>(
+        _ value: T?,
+        layout: NoritoWireLayout,
+        encode: (T) throws -> Data
+    ) rethrows -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        guard let value else {
+            writer.writeUInt8(0)
+            return writer.data
+        }
+        writer.writeUInt8(1)
+        writer.writeField(try encode(value))
+        return writer.data
+    }
+
+    /// A generic element sequence: `[count]` then every element length-prefixed.
+    static func encodeVec<T>(
+        _ values: [T],
+        layout: NoritoWireLayout,
+        encode: (T) throws -> Data
+    ) rethrows -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeCount(UInt64(values.count))
+        for value in values {
+            writer.writeField(try encode(value))
+        }
+        return writer.data
+    }
+
+    /// `Vec<u8>`: `[count][raw bytes]` in every layout.
+    static func encodeBytesVec(_ bytes: Data, layout: NoritoWireLayout) -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeCount(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    /// `ConstVec<u8>` and every other `u8` element sequence: `[count]` then the
+    /// elements, framed per byte in the current layouts and raw in the dense one.
+    static func encodeConstVec(_ bytes: Data, layout: NoritoWireLayout) -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeCount(UInt64(bytes.count))
+        writer.writeByteFields(bytes)
+        return writer.data
+    }
+
+    /// A fixed `[u8; N]` outside a record field: the elements without a count.
+    static func encodeByteArray(_ bytes: Data, layout: NoritoWireLayout) -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeByteFields(bytes)
+        return writer.data
+    }
+
+    /// An enum value: the discriminant, then every variant field length-prefixed.
+    static func encodeEnum(tag: UInt32, fields: [Data], layout: NoritoWireLayout) -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
+        writer.writeEnumTag(tag)
+        for field in fields {
+            writer.writeField(field)
+        }
+        return writer.data
+    }
+}
+
+enum CompactNorito {
+    static func encodeString(_ value: String) -> Data {
+        NoritoLayoutCodec.encodeString(value, layout: .compact)
     }
 
     static func encodeUInt8(_ value: UInt8) -> Data {
@@ -493,40 +674,22 @@ enum CompactNorito {
     }
 
     static func encodeOption<T>(_ value: T?, encode: (T) throws -> Data) throws -> Data {
-        var writer = CompactNoritoWriter()
-        guard let value else {
-            writer.writeUInt8(0)
-            return writer.data
-        }
-        writer.writeUInt8(1)
-        writer.writeField(try encode(value))
-        return writer.data
+        try NoritoLayoutCodec.encodeOption(value, layout: .compact, encode: encode)
     }
 
     static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
-        var writer = CompactNoritoWriter()
         // `COMPACT_LEN` applies to fields, not sequence element counts.
-        writer.writeUInt64LE(UInt64(values.count))
-        for value in values {
-            writer.writeField(try encode(value))
-        }
-        return writer.data
+        try NoritoLayoutCodec.encodeVec(values, layout: .compact, encode: encode)
     }
 
     /// Encode a flat `Vec<u8>` with its fixed-width element count and raw bytes.
     static func encodeBytesVec(_ bytes: Data) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt64LE(UInt64(bytes.count))
-        writer.writeBytes(bytes)
-        return writer.data
+        NoritoLayoutCodec.encodeBytesVec(bytes, layout: .compact)
     }
 
     /// Encode `ConstVec<u8>` with compact per-element field prefixes.
     static func encodeConstVec(_ bytes: Data) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt64LE(UInt64(bytes.count))
-        writer.writeByteFields(bytes)
-        return writer.data
+        NoritoLayoutCodec.encodeConstVec(bytes, layout: .compact)
     }
 
     static func encodeHash(_ bytes: Data) throws -> Data {
@@ -695,8 +858,14 @@ public enum CanonicalNorito {
     /// Encode a canonical I105 account literal as a bare compact-Norito
     /// `AccountId` payload.
     public static func encodeCompactAccountId(_ value: String) throws -> Data {
+        try encodeAccountId(value, layout: .compact)
+    }
+
+    /// Encode a canonical I105 account literal as a bare Norito `AccountId`
+    /// payload in `layout`.
+    public static func encodeAccountId(_ value: String, layout: NoritoWireLayout) throws -> Data {
         try canonicalEncodedAccount(value).address
-            .compactNoritoAccountControllerPayload()
+            .noritoAccountControllerPayload(layout: layout)
     }
 
     /// Encode a canonical asset-definition address as a bare compact-Norito
@@ -739,9 +908,19 @@ public enum CanonicalNorito {
     /// Exact current Metadata under the transaction COMPACT_LEN layout.
     /// Names are explicit canonical native names; sorting follows UTF-8 bytes.
     static func encodeCompactMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
-        var writer = CompactNoritoWriter()
+        try encodeTransactionMetadata(metadata, layout: .compact)
+    }
+
+    /// Exact transaction `Metadata` in `layout`: the entry count, then every
+    /// `(Name, Json)` entry length-prefixed in UTF-8 byte order of its name.
+    /// Names are explicit canonical native names.
+    static func encodeTransactionMetadata(
+        _ metadata: [String: ToriiJSONValue],
+        layout: NoritoWireLayout
+    ) throws -> Data {
+        var writer = NoritoLayoutWriter(layout: layout)
         let keys = metadata.keys.sorted { Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8)) }
-        writer.writeUInt64LE(UInt64(keys.count))
+        writer.writeCount(UInt64(keys.count))
         for key in keys {
             guard !key.isEmpty, key.utf8.count <= 255,
                   // Swift String equality normalizes Unicode; canonical Name wire
@@ -755,10 +934,10 @@ public enum CanonicalNorito {
                   }), let value = metadata[key] else {
                 throw CanonicalNoritoError.invalidMetadata("noncanonical metadata Name")
             }
-            var entry = CompactNoritoWriter()
-            entry.writeField(CompactNorito.encodeString(key))
-            var json = CompactNoritoWriter()
-            json.writeField(CompactNorito.encodeString(try jsonString(from: value)))
+            var entry = NoritoLayoutWriter(layout: layout)
+            entry.writeField(NoritoLayoutCodec.encodeString(key, layout: layout))
+            var json = NoritoLayoutWriter(layout: layout)
+            json.writeField(NoritoLayoutCodec.encodeString(try jsonString(from: value), layout: layout))
             entry.writeField(json.data)
             writer.writeField(entry.data)
         }

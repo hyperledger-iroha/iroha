@@ -720,239 +720,6 @@ struct PipelineStatusQuery {
     #[norito(default)]
     scope: Option<String>,
 }
-#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
-#[norito(deny_unknown_fields)]
-struct TriggerCompletionQuery {
-    #[norito(default)]
-    id: Option<String>,
-    #[norito(default)]
-    entrypoint_hash: Option<String>,
-    #[norito(default)]
-    outcome: Option<String>,
-    #[norito(default)]
-    from_height: Option<u64>,
-    #[norito(default)]
-    to_height: Option<u64>,
-    #[norito(default)]
-    limit: Option<u64>,
-    #[norito(default)]
-    scan_limit_blocks: Option<u64>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TriggerCompletionOutcomeFilter {
-    All,
-    Success,
-    Failure,
-}
-impl TriggerCompletionOutcomeFilter {
-    fn parse(raw: Option<&str>) -> Result<Self, Error> {
-        let normalized = raw
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("all")
-            .to_ascii_lowercase();
-        match normalized.as_str() {
-            "all" | "*" => Ok(Self::All),
-            "success" | "ok" => Ok(Self::Success),
-            "failure" | "failed" | "error" => Ok(Self::Failure),
-            _ => Err(conversion_error(format!(
-                "invalid outcome query parameter \"{normalized}\" (expected all|success|failure)"
-            ))),
-        }
-    }
-    fn matches(self, outcome: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Success => matches!(outcome, "Success"),
-            Self::Failure => matches!(outcome, "Failure"),
-        }
-    }
-}
-const TRIGGER_COMPLETION_DEFAULT_LIMIT: u64 = 100;
-const TRIGGER_COMPLETION_MAX_LIMIT: u64 = 1_000;
-const TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS: u64 = 1_000;
-const TRIGGER_COMPLETION_MAX_SCAN_BLOCKS: u64 = 10_000;
-fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static str, Option<String>) {
-    match outcome {
-        TriggerCompletedOutcome::Success => ("Success", None),
-        TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
-    }
-}
-fn trigger_completion_record_matches(
-    record: &TriggerCompletionRecord,
-    trigger_id: Option<&str>,
-    entrypoint_hash: Option<&str>,
-    outcome: TriggerCompletionOutcomeFilter,
-) -> bool {
-    if let Some(trigger_id) = trigger_id
-        && record.completion.trigger_id != trigger_id
-    {
-        return false;
-    }
-    if let Some(entrypoint_hash) = entrypoint_hash
-        && record.completion.trigger_execution_hash != entrypoint_hash
-    {
-        return false;
-    }
-    outcome.matches(&record.completion.outcome)
-}
-fn visit_trigger_completion_records_for_block<F>(
-    block: &iroha_data_model::block::SignedBlock,
-    block_height: u64,
-    mut visit: F,
-) -> Result<bool, Error>
-where
-    F: FnMut(TriggerCompletionRecord) -> bool,
-{
-    block
-        .validate_output_merkle_cache()
-        .map_err(pipeline_status_projection_error)?;
-    for output in block.execution_outputs() {
-        // A governance block-start row runs no trigger: it has neither an execution call
-        // nor a completion.
-        if output.governance_block_start().is_some() {
-            continue;
-        }
-        let call_hash = output
-            .execution_call_hash(block.hash(), block)
-            .map_err(pipeline_status_projection_error)?;
-        let entrypoint_index = output.network_index().map(u64::from);
-        for completion in output.completions() {
-            let (outcome, message) = trigger_completion_outcome(&completion.outcome);
-            if !visit(TriggerCompletionRecord {
-                block_height,
-                entrypoint_index,
-                completion: TriggerCompletionSummary {
-                    trigger_id: completion.trigger_id.to_string(),
-                    trigger_execution_hash: call_hash.to_string(),
-                    step_index: completion.callback_index,
-                    outcome: outcome.to_owned(),
-                    message,
-                },
-                source: "execution_output".to_owned(),
-            }) {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
-}
-fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
-    let scan_limit = query
-        .scan_limit_blocks
-        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
-        .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
-    let bounded_from = requested_to
-        .saturating_sub(scan_limit.saturating_sub(1))
-        .max(1);
-    query.from_height.unwrap_or(1).max(1).max(bounded_from)
-}
-fn trigger_completion_query_response(
-    app: &SharedAppState,
-    query: &TriggerCompletionQuery,
-) -> Result<TriggerCompletionListResponse, Error> {
-    let latest_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
-    let limit = query
-        .limit
-        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
-        .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
-    let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
-    let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
-    if latest_height == 0 || requested_to == 0 {
-        return Ok(TriggerCompletionListResponse {
-            latest_height,
-            from_height: 0,
-            to_height: requested_to,
-            scanned_blocks: 0,
-            limit,
-            completions: Vec::new(),
-        });
-    }
-    let from_height = trigger_completion_from_height(query, requested_to);
-    if from_height > requested_to {
-        return Ok(TriggerCompletionListResponse {
-            latest_height,
-            from_height,
-            to_height: requested_to,
-            scanned_blocks: 0,
-            limit,
-            completions: Vec::new(),
-        });
-    }
-    let anchor_index = usize::try_from(requested_to - 1)
-        .map_err(|_| pipeline_status_projection_error("completion anchor exceeds host index"))?;
-    let anchor = app
-        .state
-        .view()
-        .block_hashes()
-        .get(anchor_index)
-        .copied()
-        .ok_or_else(|| {
-            pipeline_status_projection_error("completion history anchor is unavailable")
-        })?;
-    let mut completions = Vec::new();
-    let mut scanned_blocks = 0_u64;
-    let mut remaining_work = routing::app_query_limits().max_fetch_size;
-    let mut remaining_bytes =
-        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(remaining_work);
-    // HTTP observation: one request owner authenticates every carrier through State/checkpoint
-    // ancestry. Each read stays inside the unchanged remaining cumulative work and bytes.
-    let owner = crate::history_producer::HistoryProducerOwner::authentication_read(app)?;
-    owner.scope(|| {
-        for height in (from_height..=requested_to).rev() {
-            scanned_blocks = scanned_blocks.saturating_add(1);
-            let height_usize = usize::try_from(height)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| {
-                    pipeline_status_projection_error("completion height exceeds host index")
-                })?;
-            let original = read_pipeline_execution_carrier_within(
-                app,
-                height_usize,
-                remaining_work,
-                remaining_bytes,
-            )?;
-            remaining_work -= original.carrier.work_items();
-            remaining_bytes -= original.carrier.wire_bytes();
-            let mut reached_limit = false;
-            visit_trigger_completion_records_for_block(
-                original.carrier.block(),
-                height,
-                |record| {
-                    if !trigger_completion_record_matches(
-                        &record,
-                        query.id.as_deref(),
-                        query.entrypoint_hash.as_deref(),
-                        outcome,
-                    ) {
-                        return true;
-                    }
-                    completions.push(record);
-                    reached_limit = u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit;
-                    !reached_limit
-                },
-            )?;
-            if reached_limit {
-                break;
-            }
-        }
-        Ok::<(), Error>(())
-    })?;
-    if app.state.view().block_hashes().get(anchor_index).copied() != Some(anchor) {
-        return Err(pipeline_status_projection_error(
-            "completion history changed during authentication",
-        ));
-    }
-    Ok(TriggerCompletionListResponse {
-        latest_height,
-        from_height,
-        to_height: requested_to,
-        scanned_blocks,
-        limit,
-        completions,
-    })
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
     Local,
@@ -1114,16 +881,6 @@ fn read_pipeline_execution_carrier(
 ) -> Result<AuthenticatedPipelineCarrier, Error> {
     let work = routing::app_query_limits().max_fetch_size;
     let bytes = iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work);
-    read_pipeline_execution_carrier_within(app, height, work, bytes)
-}
-// A multi-carrier scan passes its remaining cumulative work and bytes, so each read is
-// refused inside that bound instead of being charged after a wider read.
-fn read_pipeline_execution_carrier_within(
-    app: &SharedAppState,
-    height: NonZeroUsize,
-    work: u64,
-    bytes: u64,
-) -> Result<AuthenticatedPipelineCarrier, Error> {
     let owner = crate::history_producer::HistoryProducerOwner::authentication_read(app)?;
     read_execution_carrier_under_owner(app, owner, height, work, bytes)
 }
@@ -2163,17 +1920,16 @@ async fn handler_pipeline_transaction_details(
     let owner = crate::history_producer::HistoryProducerOwner::authentication_read(&app)?;
     pipeline_transaction_details_http_response(&app, &authority, entrypoint_hash, format, &owner)
 }
+/// Operator read of committed trigger completions through the collection contract
+/// (`specs/torii/collection_queries.md`): the shared `filter`, `select`, `limit` and
+/// `cursor` controls, the page envelope and the collection error envelope.
+#[cfg(feature = "app_api")]
 async fn handler_trigger_completions(
     State(app): State<SharedAppState>,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    AxQuery(query): AxQuery<TriggerCompletionQuery>,
 ) -> Result<Response, Error> {
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(format) => format,
-        Err(resp) => return Ok(resp),
-    };
     check_operator_rate_limit(
         &app,
         &headers,
@@ -2182,21 +1938,16 @@ async fn handler_trigger_completions(
         true,
     )
     .await?;
+    // Reject an invalid query before it can wait for, or occupy, query capacity.
+    let query = list_query_from_query_string(uri.query())?;
     let admission = acquire_query_admission(&app, true).await?;
-    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
-        // Keep the admission permits inside the physical task. Dropping the
-        // HTTP future must not free capacity while Kura reconstruction still
-        // consumes CPU and memory.
-        let result = trigger_completion_query_response(&app, &query);
-        (result, admission)
-    });
-    let (result, _admission) = crate::panic_recovery::join_recoverable(worker)
-        .await
-        .map_err(|error| Error::AppServiceUnavailable {
-            code: "trigger_completion_worker_failed",
-            message: error.to_string(),
-        })?;
-    Ok(crate::utils::respond_with_format(&(result?), format))
+    execute_admitted_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::TriggerCompletions,
+        query,
+        admission,
+    )
+    .await
 }
 async fn handler_policy(
     State(app): State<SharedAppState>,

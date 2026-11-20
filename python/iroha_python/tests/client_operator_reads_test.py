@@ -313,6 +313,10 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
         ),
     ),
     ("/v1/sumeragi/params", lambda client: client.get_sumeragi_params()),
+    (
+        "/v1/triggers/completed?filter=trigger_id+%3D+%22clock%22+and+block_height+%3E%3D+7&limit=2",
+        lambda client: client.list_trigger_completions(trigger_id="clock", from_height=7, limit=2),
+    ),
 )
 
 

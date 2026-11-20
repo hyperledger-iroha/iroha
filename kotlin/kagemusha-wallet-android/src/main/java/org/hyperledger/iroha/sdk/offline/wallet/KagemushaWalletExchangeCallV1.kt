@@ -211,10 +211,12 @@ class KagemushaWalletExchangeCallV1 internal constructor(
             { epoch, bytes -> continuation.useCall { ingestEpochBoundaryAccepted(epoch, bytes) } })
     }
 
-    /** Native authenticates exact World and payout-row originals against its selected tip. */
-    fun acknowledgeFeePayout(creditId: ByteArray, world: ByteArray, payout: ByteArray) = task.useCall { acknowledgeFeePayoutAccepted(creditId, world, payout) }
-    private fun acknowledgeFeePayoutAccepted(creditId: ByteArray, world: ByteArray, payout: ByteArray) {
-        val result = setup(KagemushaWalletSetupInputV1(25, identity = creditId, first = world, second = payout))
+    /** Native authenticates exact selected State and payout-row originals against its selected tip.
+     * [selection] carries canonical (RootSelectionV1, Vec<DefinitionDescriptorV1>); Native
+     * authenticates the committed profile before choosing the State evidence decoder. */
+    fun acknowledgeFeePayout(creditId: ByteArray, state: ByteArray, payout: ByteArray, selection: ByteArray) = task.useCall { acknowledgeFeePayoutAccepted(creditId, state, payout, selection) }
+    private fun acknowledgeFeePayoutAccepted(creditId: ByteArray, state: ByteArray, payout: ByteArray, selection: ByteArray) {
+        val result = setup(KagemushaWalletSetupInputV1(25, identity = creditId, first = state, second = payout, third = selection))
         if (result.status != 35) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
     }
 

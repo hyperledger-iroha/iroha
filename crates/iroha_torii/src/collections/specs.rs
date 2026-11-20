@@ -691,8 +691,32 @@ pub static ACCOUNT_ROLES: CollectionSpec = CollectionSpec {
     ordered: true,
 };
 
+/// `/v1/triggers/completed`: trigger completions persisted in committed execution
+/// outputs, newest first. One row per completion, positioned by its block, the
+/// output's place in that block and the completion's place in that output.
+pub static TRIGGER_COMPLETIONS: CollectionSpec = CollectionSpec {
+    id: "trigger_completions",
+    tag: 23,
+    fields: &[
+        number("block_height"),
+        number("output_index"),
+        number("completion_index"),
+        text("trigger_id"),
+        text("trigger_execution_hash"),
+        number("entrypoint_index"),
+        number("step_index"),
+        text("outcome"),
+        text("message"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &["block_height", "output_index", "completion_index"],
+    positioned: 3,
+    ordered: false,
+};
+
 /// Every collection, in cursor-tag order.
-pub const ALL: [&CollectionSpec; 22] = [
+pub const ALL: [&CollectionSpec; 23] = [
     &DOMAINS,
     &ACCOUNTS,
     &ASSET_DEFINITIONS,
@@ -715,6 +739,7 @@ pub const ALL: [&CollectionSpec; 22] = [
     &ASSET_MOVEMENTS,
     &ROLES,
     &ACCOUNT_ROLES,
+    &TRIGGER_COMPLETIONS,
 ];
 
 #[cfg(test)]
@@ -804,6 +829,29 @@ mod tests {
         assert!(!aliases.list && !aliases.sortable);
         assert!(ACCOUNTS.field("aliases.alias").is_none());
         assert!(DOMAINS.field("aliases").is_none());
+    }
+
+    #[test]
+    fn trigger_completions_are_positioned_by_block_output_and_completion() {
+        let spec = &TRIGGER_COMPLETIONS;
+        assert_eq!(spec.positioned, 3);
+        assert_eq!(
+            spec.identity,
+            &["block_height", "output_index", "completion_index"]
+        );
+        for name in ["trigger_id", "trigger_execution_hash", "outcome", "message"] {
+            let field = spec.field(name).expect(name);
+            assert_eq!(field.ty, FieldType::String, "{name}");
+            assert!(!field.account && !field.list, "{name}");
+        }
+        for name in ["entrypoint_index", "step_index"] {
+            assert_eq!(spec.field(name).expect(name).ty, FieldType::Number);
+        }
+        // The retired request controls are not row fields.
+        for retired in ["id", "entrypoint_hash", "source", "completion"] {
+            assert!(spec.field(retired).is_none(), "{retired}");
+        }
+        assert!(!spec.metadata && !spec.ordered);
     }
 
     #[test]

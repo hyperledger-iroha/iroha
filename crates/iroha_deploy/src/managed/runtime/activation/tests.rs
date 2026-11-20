@@ -384,3 +384,51 @@ fn later_and_equal_height_transactions_do_not_replace_any_original_receipt() {
 
 #[path = "bootstrap_handoff_tests.rs"]
 mod bootstrap_handoff_tests;
+
+#[test]
+fn slow_advertisement_does_not_consume_another_providers_discovery_window() {
+    use std::cell::Cell;
+
+    let freshness = crate::managed::build_registry::DISCOVERY_FRESHNESS;
+    let elapsed = Cell::new(Duration::ZERO);
+    let mut gateways = [0, 1, 2];
+    let starts = observe_published_gateways(
+        &mut gateways,
+        |index, provider| {
+            assert_eq!(index, *provider);
+            elapsed.set(elapsed.get() + freshness);
+            Ok(*provider)
+        },
+        |index, provider, floor| {
+            assert_eq!(index, *provider);
+            assert_eq!(floor, *provider);
+            let observed = elapsed.get();
+            elapsed.set(observed + Duration::from_secs(1));
+            Ok(observed)
+        },
+    )
+    .unwrap();
+    assert!(
+        starts
+            .into_iter()
+            .all(|start| elapsed.get() - start < freshness)
+    );
+
+    let observations = Cell::new(0);
+    let result = observe_published_gateways(
+        &mut gateways,
+        |index, _| {
+            if index == 2 {
+                Err(budget().progress.unconfirmed())
+            } else {
+                Ok(())
+            }
+        },
+        |_, _, ()| {
+            observations.set(observations.get() + 1);
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(observations.get(), 0);
+}

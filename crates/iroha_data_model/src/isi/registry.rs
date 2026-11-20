@@ -495,16 +495,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and thirty-five additions: thirteen game
-        // partition, three Ironwood, the endorsed runtime-upgrade proposal, account
-        // signing keys, the Taira repair and activation, two SoraFS authority
-        // instructions, the five of the kernel's lifecycle State (the registration of a
-        // contract's or another obligation, its completion, the ratification of the
-        // adoption anchor and the raising of the startup floor), the two current-binding
-        // consents, the retirement of a runtime definition and the anonymous Parliament
-        // family's three interfaces, plus the two C10 registrations.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 445;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 445;
+        // The frozen baseline has 410 instructions. The 39 additions include both
+        // C10 registrations, the Taira scoped-read schedule and three Spartan instructions.
+        const EXPECTED_TYPED_CODEC_REGISTRARS: usize = 449;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -519,16 +512,16 @@ mod tests {
             .expect("single inventory boundary");
         assert_eq!(
             inventory.matches("_wire_id!(").count(),
-            EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             "typed codec registrations changed; update the canonical inventory and this bound together"
         );
         assert_eq!(
-            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             wire_ids::ALL.len(),
             "typed codec and wire-ID inventories must remain one-to-one"
         );
         assert_eq!(
-            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             inventory.matches("built_in_wire_id!(").count()
                 + inventory.matches("governance_wire_id!(").count(),
             "source inventory and complete compiled inventory length diverged"
@@ -659,6 +652,9 @@ mod tests {
                 crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1::WIRE_ID,
                 crate::governance::anonymous_ballot::RegisterParliamentCredentialV1::WIRE_ID,
                 "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
+                crate::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1::WIRE_ID,
+                crate::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1::WIRE_ID,
+                crate::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1::WIRE_ID,
                 privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
                 privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,
                 privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
@@ -670,6 +666,7 @@ mod tests {
                 crate::isi::runtime_obligation::RegisterContractRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_obligation::RegisterRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_retirement::RetireRuntimeDefinitionV1::WIRE_ID,
+                "iroha.runtime.taira_read_scope.schedule.v1",
                 "iroha.runtime.taira_time_ironwood.schedule.v1",
                 crate::ivm_c10::RegisterSmartContractCodeC10V1::WIRE_ID,
                 "iroha.sorafs.authority.attempt.create.v1",

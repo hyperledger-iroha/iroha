@@ -3939,6 +3939,150 @@
       "test_note": "The test pins the 2,048-byte cap, roundtrips a valid companion, enforces the nested credential cap and rejects a 2,049-byte frame before decoding. It does not construct a valid companion of exactly 2,048 bytes; canonical size follows from the credential and its one issuer certificate."
     },
     {
+      "id": "attachment.kagemusha_spartan_installation_bytes",
+      "group": "attachment",
+      "what": "Largest fixed-layout Spartan program installation instruction frame accepted by Core.",
+      "unit": "bytes",
+      "value": 10485760,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/spartan.rs",
+        "symbol": "MAX_BYTES",
+        "kind": "const",
+        "anchor": "impl InstallKagemushaSpartanProgramsV1 {",
+        "expr": "10 * 1024 * 1024"
+      },
+      "inclusive": true,
+      "framing": "Counts the complete encoded installation with its manifest, signature, program bundle and identifiers.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/spartan.rs",
+          "contains": "norito::core::encoded_frame_len(installation).map_err(|_| Error::Binding)? > Install::MAX_BYTES"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "install.programs.len() > Install::MAX_BYTES"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "norito::core::encoded_frame_len(install).map_err(io::Error::other)? > Install::MAX_BYTES"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "row.original.bytes > Install::MAX_BYTES as u64"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "total.is_none_or(|n| n > Install::MAX_BYTES as u64)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "header.original.bytes > Install::MAX_BYTES as u64"
+        }
+      ],
+      "test_note": "all_four_metadata_lengths_count_towards_carrier_limit. The artifact producer accepts a combined carrier exactly at the cap and refuses the first byte beyond it. It also refuses a declared original length one byte over. Execution independently checks the complete installation frame.",
+      "test_gap": {
+        "owner": "F.2",
+        "summary": "The captured Core tests do not exercise this exact length and the first refused length through the governed instruction."
+      }
+    },
+    {
+      "id": "attachment.kagemusha_spartan_installation_manifest_bytes",
+      "group": "attachment",
+      "what": "Largest signed manifest byte field admitted within a Spartan program installation.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/spartan.rs",
+        "symbol": "MAX_MANIFEST_BYTES",
+        "kind": "const",
+        "anchor": "impl InstallKagemushaSpartanProgramsV1 {",
+        "expr": "16 * 1024"
+      },
+      "inclusive": true,
+      "framing": "Counts the original manifest before decoding. The installation separately bounds the complete frame.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/spartan.rs",
+          "contains": "installation.manifest.len() > Install::MAX_MANIFEST_BYTES"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "install.manifest.len() > Install::MAX_MANIFEST_BYTES"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+          "contains": "header.manifest.len() > Install::MAX_MANIFEST_BYTES"
+        }
+      ],
+      "test_gap": {
+        "owner": "F.2",
+        "summary": "The captured Core tests do not exercise this exact length and the first refused length through the governed instruction."
+      }
+    },
+    {
+      "id": "attachment.kagemusha_spartan_activation_claim_bytes",
+      "group": "attachment",
+      "what": "Largest signed Bootstrap claim accepted by the governed Spartan Activate instruction.",
+      "unit": "bytes",
+      "value": 32768,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/spartan.rs",
+        "symbol": "MAX_ACTIVATION_BYTES",
+        "kind": "const",
+        "anchor": "impl ActivateKagemushaSpartanV1 {",
+        "expr": "32 * 1024"
+      },
+      "inclusive": true,
+      "framing": "Counts the original activation byte field before wallet lookup and proof reservation.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/spartan.rs",
+          "contains": "request.activation.len() > Activate::MAX_ACTIVATION_BYTES"
+        },
+        {
+          "stage": "block",
+          "path": "crates/iroha_core/src/state/block_proofs.rs",
+          "contains": "activation.activation.len() <= ActivateKagemushaSpartanV1::MAX_ACTIVATION_BYTES"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/activation.rs",
+          "contains": ".read_object(&plan.output, MAX_ACTIVATION)"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/activation.rs",
+          "contains": ".write_object(&bytes, MAX_ACTIVATION)"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/activation.rs",
+          "contains": "(MAX_ACTIVATION + 96 + 64) as u64"
+        }
+      ],
+      "test_note": "block_proofs_kagemusha_owner_names_only_explicit_activate_and_unload_frames. The signed-transaction owner test records one well-formed activation and excludes a second claim one byte over the cap. Core independently enforces the same bound in the governed instruction.",
+      "test_gap": {
+        "owner": "F.2",
+        "summary": "The captured Core tests do not exercise this exact length and the first refused length through the governed instruction."
+      }
+    },
+    {
       "id": "x509.max_proof_bytes",
       "group": "x509",
       "what": "zk-X509 proof ceiling: the largest canonical X5S1 proof.",
@@ -21047,11 +21191,7 @@
               "PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT",
               "PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES",
               "PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES",
-              "PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES",
-              "TRIGGER_COMPLETION_DEFAULT_LIMIT",
-              "TRIGGER_COMPLETION_MAX_LIMIT",
-              "TRIGGER_COMPLETION_MAX_SCAN_BLOCKS",
-              "TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS"
+              "PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES"
             ],
             "exprs": {
               "PIPELINE_RECOVERY_SOURCE_MAX_BYTES": "iroha_core::kura::MAX_PIPELINE_RECOVERY_SIDECAR_BYTES",
@@ -21060,11 +21200,7 @@
               "PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT": "64",
               "PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES": "8 * 1024 * 1024",
               "PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES": "16 * 1024 * 1024",
-              "PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES": "24 * 1024 * 1024",
-              "TRIGGER_COMPLETION_DEFAULT_LIMIT": "100",
-              "TRIGGER_COMPLETION_MAX_LIMIT": "1_000",
-              "TRIGGER_COMPLETION_MAX_SCAN_BLOCKS": "10_000",
-              "TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS": "1_000"
+              "PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES": "24 * 1024 * 1024"
             }
           },
           {
@@ -24139,7 +24275,7 @@
         ]
       },
       {
-        "reason": "KAGEMUSHA offline-wallet component shapes: current enrollment policy, original evidence, carrier, journal, state storage, artifact inventory and custody records, with their own byte/count/depth bounds: among them the encoded transport of the artifact originals and the stored closure of one operation, the archived preparation plan, the staged preparation drafts of a wallet operation (one derivation of fixed geometry) and the durable archive-retirement journal cell. These are product-internal records and producer inputs; transaction.max_tx_bytes and the generic proof/frame bounds continue to limit submitted carriers. This classification does not certify these product-specific boundaries or change their enforcement. The suffix unload adds its header, anchor, step, chunk, finalize, recovery, review, progress, status, instruction and signed-wire frames, its per-chunk and per-suffix step and chunk counts and smallest stream entry, the node's begin, stage and final suffix rows with their segment record, and the wallet's suffix ledger, custody, frozen-execution and native frame bounds and its deferred-step counts; the per-chunk step count also keeps one Append's verification inside the block execution budget as a product bound beside the generic proof-call quota.",
+        "reason": "KAGEMUSHA offline-wallet component shapes: current enrollment policy, original evidence, carrier, journal, state storage, artifact inventory and custody records, with their own byte/count/depth bounds: among them the encoded transport of the artifact originals and the stored closure of one operation, the archived preparation plan, the staged preparation drafts of a wallet operation (one derivation of fixed geometry) and the durable archive-retirement journal cell. These are product-internal records and producer inputs; transaction.max_tx_bytes and the generic proof/frame bounds continue to limit submitted carriers. This classification does not certify these product-specific boundaries or change their enforcement. The suffix unload adds its header, anchor, step, chunk, finalize, recovery, review, progress, status, instruction and signed-wire frames, its per-chunk and per-suffix step and chunk counts and smallest stream entry, the node's begin, stage and final suffix rows with their segment record, and the wallet's suffix ledger, custody, frozen-execution and native frame bounds and its deferred-step counts; the per-chunk step count also keeps one Append's verification inside the block execution budget as a product bound beside the generic proof-call quota. The keyed payout acknowledgement adds the bound of its certified runtime-selection original.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality.rs",
@@ -24432,7 +24568,7 @@
               "ANDROID_CHAIN_MAX": "8",
               "ANDROID_CERTIFICATE_MAX_BYTES": "16_384",
               "ANDROID_CHAIN_MAX_BYTES": "65_536",
-              "RESULT_MAX_BYTES": "262_144",
+              "RESULT_MAX_BYTES": "crate::kagemusha_wallet_advance_v1::KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1",
               "ANDROID_CHAIN_MIN": "2"
             }
           },
@@ -24638,6 +24774,15 @@
             ],
             "exprs": {
               "ACTION_MAX": "KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 4096"
+            }
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/payout_state.rs",
+            "symbols": [
+              "PAYOUT_SELECTION_MAX_BYTES_V1"
+            ],
+            "exprs": {
+              "PAYOUT_SELECTION_MAX_BYTES_V1": "16 * 1024 * 1024"
             }
           },
           {
@@ -26326,8 +26471,93 @@
             "exprs": {
               "TAIRA_ACTIVATION_MAX_CERTIFICATE_BYTES_V1": "8 * 1024 * 1024"
             }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/taira_read_scope.rs",
+            "symbols": [
+              "TAIRA_READ_SCOPE_MAX_CERTIFICATE_BYTES_V1"
+            ],
+            "exprs": {
+              "TAIRA_READ_SCOPE_MAX_CERTIFICATE_BYTES_V1": "8 * 1024 * 1024"
+            }
           }
         ]
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/activation.rs",
+        "reason": "The wallet producer imports the same claim limit as the governed Activate instruction. A compile-time assertion checks the native engine bound. The canonical claim limit is recorded under attachment.kagemusha_spartan_activation_claim_bytes.",
+        "symbols": [
+          "MAX_ACTIVATION"
+        ],
+        "exprs": {
+          "MAX_ACTIVATION": "ActivateKagemushaSpartanV1::MAX_ACTIVATION_BYTES"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/custody_archive.rs",
+        "reason": "The wallet provider limits the protected debit-review record in its private storage and decoder. The record binds local user presence for a future debit.",
+        "symbols": [
+          "MAX_DEBIT_APPROVAL_BYTES"
+        ],
+        "exprs": {
+          "MAX_DEBIT_APPROVAL_BYTES": "1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/open_request.rs",
+        "reason": "The native wallet object store bounds its preparation plan and original Request at separate addresses. Reads and writes use the same per-object ceilings during recovery.",
+        "symbols": [
+          "PLAN_LIMIT",
+          "WIRE_LIMIT"
+        ],
+        "exprs": {
+          "PLAN_LIMIT": "8 * 1024",
+          "WIRE_LIMIT": "12_182"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_actions.rs",
+        "reason": "The native wallet transfer journal retains one peer original per operation. The addressable record includes the additional framing allowed at its object-store reads and writes.",
+        "symbols": [
+          "MAX_ORIGINAL"
+        ],
+        "exprs": {
+          "MAX_ORIGINAL": "12_182"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_maps.rs",
+        "reason": "The wallet object store applies this byte cap to an individual staged transfer-map descriptor during lookup and update.",
+        "symbols": [
+          "DESCRIPTOR_LIMIT"
+        ],
+        "exprs": {
+          "DESCRIPTOR_LIMIT": "1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/archive.rs",
+        "reason": "The wallet retains one complete E6 issuer result as the durable enrollment winner. Its carrier imports this cap for the exact same bytes on delivery.",
+        "symbols": [
+          "KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1"
+        ],
+        "exprs": {
+          "KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1": "262_144"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs",
+        "reason": "The file-backed producer checks the verifier pack, inventory and single-original JSON document lengths when reading the wallet artifact set. The pack includes a bounded manifest and its header. Core separately checks the installation instruction and manifest.",
+        "symbols": [
+          "MAX_PACK_BYTES",
+          "MAX_INVENTORY_BYTES",
+          "MAX_JSON_BYTES"
+        ],
+        "exprs": {
+          "MAX_PACK_BYTES": "Install::MAX_MANIFEST_BYTES + 2048",
+          "MAX_INVENTORY_BYTES": "4096",
+          "MAX_JSON_BYTES": "2048"
+        }
       }
     ],
     "literals": {
@@ -26801,6 +27031,18 @@
               "path": "crates/iroha_core/src/runtime/keyed_state.rs",
               "sites": {
                 "effective_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/taira_read_scope.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/taira_read_scope.rs",
+              "sites": {
+                "self.change_set.effective_height < 2": 1
               }
             },
             {
@@ -28808,13 +29050,6 @@
               }
             },
             {
-              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native.rs",
-              "sites": {
-                "choices.preparations.len() >= 256": 1,
-                "choices.anchors.len() >= 256": 1
-              }
-            },
-            {
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix/prepare.rs",
               "sites": {
                 "count > 4096": 1
@@ -30267,6 +30502,61 @@
               "sites": {
                 ".saturating_add(refill) .min(u64::from(burst.get()) * 1_000)": 1,
                 "self.milli_tokens < 1_000": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The wallet provider admits 256 outstanding preparation choices in its local map. Retries return the retained choice and release removes the completed operation.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native.rs",
+              "sites": {
+                "choices.len() >= 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Core caches two mounted program sets in the process. A third key can evict an idle slot. When both slots are borrowed the instruction boundary projects VerifierArtifactsUnavailable as a local execution deferral.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/kagemusha_wallet_v1/spartan.rs",
+              "sites": {
+                "entries.len() >= 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The wallet's protected debit-review record bounds the DER signature length together with scope and current-key matching, before DER decoding and signature verification.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/debit_confirmation.rs",
+              "sites": {
+                "(8..=72).contains(&signature_der.len())": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The native provider bounds the account companion returned with an offline Request before constructing the operation.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/open_request.rs",
+              "sites": {
+                "account.len() > 2048": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The wallet verifier bounds the signed Unload or Activate transaction original submitted to it with a finality proof. Each entry point enforces the same byte cap on its input.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/settlement.rs",
+              "sites": {
+                "signed_wire.len() > 64 * 1024": 2
               }
             }
           ]

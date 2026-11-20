@@ -804,7 +804,8 @@ mod setup_boundary_tests {
                 request.second = original.as_ptr();
                 request.second_length = original.len();
             }
-            if selector == 34 {
+            // The fee payout carries its certified runtime selection as the third original.
+            if matches!(selector, 25 | 34) {
                 request.third = original.as_ptr();
                 request.third_length = original.len();
             }

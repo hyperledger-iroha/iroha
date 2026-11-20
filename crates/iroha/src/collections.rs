@@ -57,6 +57,12 @@
 //! `field("block_height").gte(1_200) & field("result_ok").eq(true)` reads only
 //! heights from 1200 upwards.
 //!
+//! The operator-only trigger completion history, `GET /v1/triggers/completed`,
+//! follows the same rules with one row per completion, newest first by
+//! `block_height`, `output_index` and `completion_index`. It is read with
+//! [`Client::get_trigger_completions`], which signs the request with the operator
+//! key, so it is not a [`Collection`] variant.
+//!
 //! # Aggregates
 //!
 //! [`ListQuery::aggregate`] groups rows where they live. A read whose visible
@@ -317,24 +323,7 @@ impl Collection {
         if !self.has_fixed_order() {
             return Ok(());
         }
-        let rejected = if !query.sort.is_empty() {
-            Some(("sort", "`sort`"))
-        } else if query.include_total {
-            Some(("include_total", "`include_total`"))
-        } else if query.aggregate.is_some() {
-            Some(("aggregate", "`aggregate`"))
-        } else {
-            None
-        };
-        rejected.map_or(Ok(()), |(control, spelling)| {
-            Err(ListQueryError::new(
-                control,
-                format!(
-                    "{spelling} is not supported by `{}`: this bounded collection has a fixed order; use filter, select, limit and cursor",
-                    self.name()
-                ),
-            ))
-        })
+        reject_fixed_order_controls(self.name(), query)
     }
 
     /// Canonical operation name used in errors, for example `collections.asset_definitions`.
@@ -481,6 +470,47 @@ impl Collection {
             ],
         })
     }
+}
+
+/// Stable name of the operator-only trigger completion history,
+/// `GET /v1/triggers/completed` ([`Client::get_trigger_completions`]).
+pub const TRIGGER_COMPLETIONS: &str = "trigger_completions";
+
+/// Check `query` for the trigger completion history without contacting Torii:
+/// the list-query rules, then the fixed newest-first order of a
+/// [history collection](self#history-collections).
+///
+/// # Errors
+/// Returns the first invalid control with the code Torii returns for it.
+pub fn validate_trigger_completions_query(
+    query: &ListQuery,
+) -> core::result::Result<(), ListQueryError> {
+    query.validate()?;
+    reject_fixed_order_controls(TRIGGER_COMPLETIONS, query)
+}
+
+/// Reject the controls a fixed-order collection named `collection` does not accept.
+fn reject_fixed_order_controls(
+    collection: &str,
+    query: &ListQuery,
+) -> core::result::Result<(), ListQueryError> {
+    let rejected = if !query.sort.is_empty() {
+        Some(("sort", "`sort`"))
+    } else if query.include_total {
+        Some(("include_total", "`include_total`"))
+    } else if query.aggregate.is_some() {
+        Some(("aggregate", "`aggregate`"))
+    } else {
+        None
+    };
+    rejected.map_or(Ok(()), |(control, spelling)| {
+        Err(ListQueryError::new(
+            control,
+            format!(
+                "{spelling} is not supported by `{collection}`: this bounded collection has a fixed order; use filter, select, limit and cursor"
+            ),
+        ))
+    })
 }
 
 impl fmt::Display for Collection {
@@ -891,6 +921,31 @@ mod tests {
             );
             assert_eq!(collection.operation(), format!("collections.{name}"));
         }
+    }
+
+    #[test]
+    fn trigger_completion_queries_follow_the_history_rules_before_dispatch() {
+        let bounded = ListQuery::new()
+            .filter(field("trigger_id").eq("clock") & field("block_height").gte(1_200))
+            .select(["block_height", "trigger_id", "outcome"])
+            .limit(50)
+            .cursor("opaque");
+        assert_eq!(validate_trigger_completions_query(&bounded), Ok(()));
+        for (query, code) in [
+            (
+                ListQuery::new().sort_by(SortKey::desc("block_height")),
+                "invalid_sort",
+            ),
+            (ListQuery::new().include_total(), "invalid_include_total"),
+            (ListQuery::new().limit(0), "invalid_limit"),
+        ] {
+            let error = validate_trigger_completions_query(&query).expect_err("history rule");
+            assert_eq!(error.code(), code, "{error}");
+        }
+        let error = validate_trigger_completions_query(&ListQuery::new().include_total())
+            .expect_err("fixed order");
+        assert!(error.message.contains(TRIGGER_COMPLETIONS), "{error}");
+        assert!(error.message.contains("fixed order"), "{error}");
     }
 
     #[test]

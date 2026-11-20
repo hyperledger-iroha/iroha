@@ -1,18 +1,17 @@
-//! Canonical compact instruction archives at the browser signing boundary.
+//! Canonical explicit-layout instruction archives at the browser signing boundary.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use iroha_data_model::account::address::ChainDiscriminantGuard;
 use iroha_data_model::isi::InstructionBox;
+use norito::core::WireLayout;
 
 use crate::{
     CodecError, CodecResult, codec_error, instruction_from_json, instruction_to_json_value,
 };
 
-fn encode_archive(instruction: &InstructionBox) -> CodecResult<Vec<u8>> {
-    let mut bytes = Vec::new();
-    norito::codec::encode_adaptive_into(instruction, &mut bytes).map_err(codec_error)?;
-    Ok(bytes)
+fn encode_archive(instruction: &InstructionBox, layout: WireLayout) -> CodecResult<Vec<u8>> {
+    norito::codec::encode_bare_with_layout(instruction, layout).map_err(codec_error)
 }
 
 /// Encode strict instruction JSON as the compact archive embedded in a transaction.
@@ -27,9 +26,21 @@ fn encode_archive(instruction: &InstructionBox) -> CodecResult<Vec<u8>> {
 /// contract or names an account outside `network_prefix`, or when the instruction
 /// cannot be Norito-encoded.
 pub fn encode_instruction_archive(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
+    encode_instruction_archive_with_layout(json_payload, network_prefix, WireLayout::Compact)
+}
+
+/// Encode a typed instruction archive with an explicitly selected layout.
+///
+/// # Errors
+/// Returns an error for invalid JSON, account admission or Norito encoding.
+pub fn encode_instruction_archive_with_layout(
+    json_payload: &str,
+    network_prefix: u16,
+    layout: WireLayout,
+) -> CodecResult<Vec<u8>> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
-    encode_archive(&instruction)
+    encode_archive(&instruction, layout)
 }
 
 /// Decode one exact compact instruction archive into the strict instruction JSON contract.
@@ -44,14 +55,26 @@ pub fn encode_instruction_archive(json_payload: &str, network_prefix: u16) -> Co
 /// (including trailing bytes, public frames and decoder panics), or when the decoded
 /// instruction has no strict JSON rendering.
 pub fn decode_instruction_archive(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
+    decode_instruction_archive_with_layout(bytes, network_prefix, WireLayout::Compact)
+}
+
+/// Decode exactly one typed instruction archive in its owner's declared layout.
+///
+/// # Errors
+/// Returns an error for malformed, mismatched or noncanonical bytes or invalid JSON rendering.
+pub fn decode_instruction_archive_with_layout(
+    bytes: &[u8],
+    network_prefix: u16,
+    layout: WireLayout,
+) -> CodecResult<String> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
-    // `decode_adaptive` resets its decoder state. Preserve the caller's flags at
-    // this public operation boundary before entering that decoder.
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    // The canonical bare decoder resets its thread-local decode state. Preserve
+    // the caller's selection across that reset, including error paths.
+    let _flags = norito::core::WireLayoutGuard::enter(layout);
     let result = catch_unwind(AssertUnwindSafe(|| {
         let instruction: InstructionBox =
-            norito::codec::decode_adaptive(bytes).map_err(codec_error)?;
-        if encode_archive(&instruction)?.as_slice() != bytes {
+            norito::codec::decode_bare_with_layout(bytes, layout).map_err(codec_error)?;
+        if encode_archive(&instruction, layout)?.as_slice() != bytes {
             return Err(CodecError::failure(
                 "instruction archive is not canonical Norito",
             ));

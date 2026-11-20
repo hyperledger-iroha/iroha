@@ -196,6 +196,34 @@ account grant. This grant authorizes reading that key's value or absence
 on the signed Global State row proof route; it grants no other row or write
 authority. Activation rejects pre-existing direct grants carrying that name.
 
+A subsequent permission-only change selects `CanReadStateScope` on a keyed
+root. The issuer is a holder of the genesis-only `CanReadAllLedgerData`
+permission. The grant and revoke instructions target the reader account directly.
+Selecting or removing the definition requires an empty account and role
+inventory for that name. Any restriction closes new grants and reads while
+the issuer retains revocation authority. Issuing a new grant also requires an executable
+revocation binding.
+
+The [direct permission schema](runtime/state_scope_grant.schema.json) describes the
+`Grant.Permission.object`. Its payload contains one `scope` object with fields
+`kind` and `value`.
+The value uses the ordinary Norito JSON representation of the type below.
+
+| Kind | Value | Authorized position in the certified cut |
+| --- | --- | --- |
+| `AssetBalances` | `AssetDefinitionId` | `world.assets` for any canonical `AssetId` of that definition, including an absent balance. |
+| `ContractStatePrefix` | `StatePath` | Keys in `world.smart_contract_state` beginning with the specified slash-terminated path of nonempty segments. |
+| `AssetEscrows` | `AssetDefinitionId` | A present `world.asset_escrows` record whose ID matches the requested key and whose asset definition matches the grant. |
+| `IdentifierClaims` | `IdentifierPolicyId` | A present `world.identifier_claims` record whose opaque ID matches the requested key and whose policy matches the grant. |
+| `MultisigRecords` | `AccountId` | Canonical approval-outcome and proposal-terminal-execution keys in `world.smart_contract_state` for that account, across entrypoint and proposal IDs, including absence. |
+
+For example, the payload
+`{"scope":{"kind":"ContractStatePrefix","value":"sc/native/asset_escrow_scope_v1/0011/"}}`
+selects descendants of that exact path. The issuer supplies the selected asset's
+complete ID segment when provisioning a real escrow namespace.
+Absence under an opaque escrow or claim ID needs a direct exact-row grant or
+global authority, since there is no certified record to establish its scope.
+
 `CanPublishContentBundle` has the exact unit (`null`) payload and carries
 authority only on a root whose selection activates its governed Permission
 definition (`content_hosting.md`, "Publishers"). There it is a direct account

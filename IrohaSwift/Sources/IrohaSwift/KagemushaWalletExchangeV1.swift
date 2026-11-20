@@ -112,11 +112,13 @@ public final class KagemushaWalletExchangeCallV1: @unchecked Sendable {
       try .init(setup(.init(selector: 53, amount: .init(low: expectedEpoch, high: 0), first: original)))
     }
   }
-  /// Authenticate exact payout-row and full World originals against native's selected tip.
+  /// Authenticate exact payout-row and selected State originals against native's selected tip.
+  /// `selection` is the canonical (RootSelectionV1, Vec<DefinitionDescriptorV1>) bundle;
+  /// Native authenticates its committed profile before choosing the State evidence decoder.
   /// Only successful durable acknowledgement releases the separate retained fee claim.
-  public func acknowledgeFeePayout(creditId: Data, world: Data, payout: Data) throws {
+  public func acknowledgeFeePayout(creditId: Data, state: Data, payout: Data, selection: Data) throws {
     return try task.withUse {
-      let result = try setup(.init(selector: 25, identity: creditId, first: world, second: payout))
+      let result = try setup(.init(selector: 25, identity: creditId, first: state, second: payout, third: selection))
       guard result.status == 35 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     }
   }

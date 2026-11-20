@@ -226,10 +226,14 @@ public enum FeePaymentIntent: Sendable, Equatable {
 
     /// Canonical (fixed-length field) Norito payload for `FeePaymentIntent`.
     public func canonicalNorito() throws -> Data {
-        try encodeNorito(compact: false)
+        try encodeNorito(layout: .fixed)
     }
 
-    func compactNorito() throws -> Data { try encodeNorito(compact: true) }
+    func compactNorito() throws -> Data { try encodeNorito(layout: .compact) }
+
+    /// Bare Norito payload for `FeePaymentIntent` in `layout`. The owner of the
+    /// enclosing transaction payload names the layout.
+    func norito(layout: NoritoWireLayout) throws -> Data { try encodeNorito(layout: layout) }
 
     static func validate(chargeLimits: [FeeChargeLimit], gasLimit: UInt64?) throws {
         if gasLimit == 0 { throw FeePaymentIntentError.zeroGasLimit }
@@ -972,53 +976,52 @@ private extension FeePaymentIntent {
         }
     }
 
-    func encodeNorito(compact: Bool) throws -> Data {
+    func encodeNorito(layout: NoritoWireLayout) throws -> Data {
         switch self {
         case let .authority(chargeLimits, gasLimit):
             try Self.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
-            return try encodeEnum(tag: 0, compact: compact, body: encodeAuthority(
+            return NoritoLayoutCodec.encodeEnum(tag: 0, fields: [try encodeAuthority(
                 chargeLimits: chargeLimits,
                 gasLimit: gasLimit,
-                compact: compact
-            ))
+                layout: layout
+            )], layout: layout)
         case let .sponsor(programId, programRevision, chargeLimits, gasLimit):
             guard programRevision > 0 else { throw FeePaymentIntentError.zeroProgramRevision }
             try Self.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
-            return try encodeEnum(tag: 1, compact: compact, body: encodeSponsor(
+            return NoritoLayoutCodec.encodeEnum(tag: 1, fields: [try encodeSponsor(
                 programId: programId,
                 programRevision: programRevision,
                 chargeLimits: chargeLimits,
                 gasLimit: gasLimit,
-                compact: compact
-            ))
+                layout: layout
+            )], layout: layout)
         }
     }
 
 }
 
-private func encodeEnum(tag: UInt32, compact: Bool, body: Data) throws -> Data {
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt32LE(tag)
-        writer.writeField(body)
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeUInt32LE(tag)
-    writer.writeField(body)
+private func encodeUInt64(_ value: UInt64, layout: NoritoWireLayout) -> Data {
+    var writer = NoritoLayoutWriter(layout: layout)
+    writer.writeUInt64LE(value)
     return writer.data
 }
 
-private func encodeAuthority(chargeLimits: [FeeChargeLimit], gasLimit: UInt64?, compact: Bool) throws -> Data {
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeField(try encodeChargeLimits(chargeLimits, compact: true))
-        writer.writeField(try CompactNorito.encodeOption(gasLimit, encode: CompactNorito.encodeUInt64))
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeField(try encodeChargeLimits(chargeLimits, compact: false))
-    writer.writeField(try CanonicalNorito.encodeOption(gasLimit, encode: CanonicalNorito.encodeUInt64))
+private func encodeUInt32(_ value: UInt32, layout: NoritoWireLayout) -> Data {
+    var writer = NoritoLayoutWriter(layout: layout)
+    writer.writeUInt32LE(value)
+    return writer.data
+}
+
+private func encodeAuthority(
+    chargeLimits: [FeeChargeLimit],
+    gasLimit: UInt64?,
+    layout: NoritoWireLayout
+) throws -> Data {
+    var writer = NoritoLayoutWriter(layout: layout)
+    writer.writeField(try encodeChargeLimits(chargeLimits, layout: layout))
+    writer.writeField(NoritoLayoutCodec.encodeOption(gasLimit, layout: layout) {
+        encodeUInt64($0, layout: layout)
+    })
     return writer.data
 }
 
@@ -1027,35 +1030,23 @@ private func encodeSponsor(
     programRevision: UInt64,
     chargeLimits: [FeeChargeLimit],
     gasLimit: UInt64?,
-    compact: Bool
+    layout: NoritoWireLayout
 ) throws -> Data {
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeField(try encodeProgramId(programId, compact: true))
-        writer.writeField(CompactNorito.encodeUInt64(programRevision))
-        writer.writeField(try encodeChargeLimits(chargeLimits, compact: true))
-        writer.writeField(try CompactNorito.encodeOption(gasLimit, encode: CompactNorito.encodeUInt64))
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeField(try encodeProgramId(programId, compact: false))
-    writer.writeField(CanonicalNorito.encodeUInt64(programRevision))
-    writer.writeField(try encodeChargeLimits(chargeLimits, compact: false))
-    writer.writeField(try CanonicalNorito.encodeOption(gasLimit, encode: CanonicalNorito.encodeUInt64))
+    var writer = NoritoLayoutWriter(layout: layout)
+    writer.writeField(try encodeProgramId(programId, layout: layout))
+    writer.writeField(encodeUInt64(programRevision, layout: layout))
+    writer.writeField(try encodeChargeLimits(chargeLimits, layout: layout))
+    writer.writeField(NoritoLayoutCodec.encodeOption(gasLimit, layout: layout) {
+        encodeUInt64($0, layout: layout)
+    })
     return writer.data
 }
 
-private func encodeProgramId(_ value: FeeSponsorProgramId, compact: Bool) throws -> Data {
+private func encodeProgramId(_ value: FeeSponsorProgramId, layout: NoritoWireLayout) throws -> Data {
     let address = try canonicalFeeSponsorAddress(value.sponsor)
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeField(try address.compactNoritoAccountControllerPayload())
-        writer.writeField(CompactNorito.encodeString(value.name))
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeField(try address.noritoAccountControllerPayload())
-    writer.writeField(CanonicalNorito.encodeString(value.name))
+    var writer = NoritoLayoutWriter(layout: layout)
+    writer.writeField(try address.noritoAccountControllerPayload(layout: layout))
+    writer.writeField(NoritoLayoutCodec.encodeString(value.name, layout: layout))
     return writer.data
 }
 
@@ -1110,60 +1101,37 @@ func isCanonicalFeeSponsorProgramName(_ value: String) -> Bool {
     }
 }
 
-private func encodeChargeLimits(_ values: [FeeChargeLimit], compact: Bool) throws -> Data {
-    if compact {
-        var writer = CompactNoritoWriter()
-        // Norito's COMPACT_LEN flag applies to enclosing field and element
-        // lengths, not to the sequence element count itself.
-        writer.writeUInt64LE(UInt64(values.count))
-        for value in values { writer.writeField(try encodeChargeLimit(value, compact: true)) }
-        return writer.data
+private func encodeChargeLimits(_ values: [FeeChargeLimit], layout: NoritoWireLayout) throws -> Data {
+    // In the current layouts Norito's COMPACT_LEN flag applies to enclosing
+    // field and element lengths, not to the sequence element count itself; the
+    // dense layout writes the count as a varint too.
+    try NoritoLayoutCodec.encodeVec(values, layout: layout) {
+        try encodeChargeLimit($0, layout: layout)
     }
-    var writer = CanonicalNoritoWriter()
-    writer.writeLength(UInt64(values.count))
-    for value in values { writer.writeField(try encodeChargeLimit(value, compact: false)) }
-    return writer.data
 }
 
-private func encodeChargeLimit(_ value: FeeChargeLimit, compact: Bool) throws -> Data {
+private func encodeChargeLimit(_ value: FeeChargeLimit, layout: NoritoWireLayout) throws -> Data {
     guard let assetBytes = AssetDefinitionAddressCodec.uuidBytes(value.assetDefinitionId) else {
         throw FeePaymentIntentError.invalidAssetDefinitionId(value.assetDefinitionId)
     }
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeUInt32(value.kind.rawValue))
-        writer.writeField(encodeFixedBytes(assetBytes, compact: true))
-        writer.writeField(try encodeQuantity(value.maxAmount, compact: true))
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeField(CanonicalNorito.encodeUInt32(value.kind.rawValue))
-    writer.writeField(encodeFixedBytes(assetBytes, compact: false))
-    writer.writeField(try CanonicalNorito.encodeNumeric(value.maxAmount))
+    var writer = NoritoLayoutWriter(layout: layout)
+    // `FeeChargeKind` is a unit enum: its payload is the bare discriminant.
+    writer.writeField(NoritoLayoutCodec.encodeEnum(tag: value.kind.rawValue, fields: [], layout: layout))
+    writer.writeField(NoritoLayoutCodec.encodeByteArray(assetBytes, layout: layout))
+    writer.writeField(try encodeQuantity(value.maxAmount, layout: layout))
     return writer.data
 }
 
-private func encodeFixedBytes(_ bytes: Data, compact: Bool) -> Data {
-    if compact {
-        var writer = CompactNoritoWriter()
-        writer.writeByteFields(bytes)
-        return writer.data
-    }
-    var writer = CanonicalNoritoWriter()
-    writer.writeByteFields(bytes)
-    return writer.data
-}
-
-private func encodeQuantity(_ value: String, compact: Bool) throws -> Data {
-    guard compact else { return try CanonicalNorito.encodeNumeric(value) }
+private func encodeQuantity(_ value: String, layout: NoritoWireLayout) throws -> Data {
     let numeric = try CanonicalNorito.parseNumeric(value)
     let mantissaBytes = try numeric.mantissaBytes(maxBytes: CanonicalNorito.maxBigIntBytes)
-    var bigint = CompactNoritoWriter()
+    // The `BigInt` byte count is a fixed `u32` in every layout (`norito.md`).
+    var bigint = NoritoLayoutWriter(layout: layout)
     bigint.writeUInt32LE(UInt32(mantissaBytes.count))
     bigint.writeBytes(mantissaBytes)
-    var writer = CompactNoritoWriter()
+    var writer = NoritoLayoutWriter(layout: layout)
     writer.writeField(bigint.data)
-    writer.writeField(CompactNorito.encodeUInt32(numeric.scale))
+    writer.writeField(encodeUInt32(numeric.scale, layout: layout))
     return writer.data
 }
 

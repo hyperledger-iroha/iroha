@@ -1,7 +1,8 @@
 //! Bounded canonical account transport and independent publication verification for real peers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use eyre::{Result, ensure};
+use eyre::{Result, WrapErr as _, ensure};
+use futures_util::future::try_join_all;
 use iroha::{
     blocking::Client,
     crypto::{KeyPair, Signature},
@@ -211,13 +212,26 @@ pub async fn genesis_checkpoint(
         "independently constructed genesis differs from network identity"
     );
     let deadline = Instant::now() + DEADLINE;
-    let proof = timeout_at(deadline, finality_proof(http, network, 1)).await??;
-    let authenticated = verifier.verify(&proof)?;
+    // A peer can commit genesis before its Torii listener binds. Establish each
+    // endpoint with a read-only proof before the first signed mutation.
+    let urls = network.torii_urls();
+    let proofs = timeout_at(
+        deadline,
+        try_join_all(urls.iter().map(|url| finality_proof(http, url, 1))),
+    )
+    .await??;
+    let (proof, witnesses) = proofs
+        .split_first()
+        .ok_or_else(|| eyre::eyre!("publication requires a genesis finality endpoint"))?;
+    let authenticated = verifier.verify(proof)?;
     ensure!(
         authenticated.height() == 1 && authenticated.block().hash() == genesis.expected_hash(),
         "queried checkpoint changed independent signed-genesis identity"
     );
-    let checkpoint = verifier.export_checkpoint(&proof)?;
+    for witness in witnesses {
+        verifier.verify_same_decision(proof, witness)?;
+    }
+    let checkpoint = verifier.export_checkpoint(proof)?;
     ensure!(
         Instant::now() < deadline,
         "genesis checkpoint verification exceeded its deadline"
@@ -245,7 +259,11 @@ pub async fn advance_checkpoint(
     let deadline = Instant::now() + DEADLINE;
     let mut tip = None;
     for next in from.height() + 1..=height {
-        let proof = timeout_at(deadline, finality_proof(http, network, next)).await??;
+        let proof = timeout_at(
+            deadline,
+            finality_proof(http, &network.peers()[0].torii_url(), next),
+        )
+        .await??;
         ensure!(
             verifier.verify(&proof)?.height() == next,
             "finality walk substituted a height"
@@ -256,15 +274,56 @@ pub async fn advance_checkpoint(
     Ok(verifier.export_checkpoint(&tip)?)
 }
 
+/// How long a readiness poll waits when Torii's rate limit refused it: the response's
+/// `Retry-After` seconds, or one second. `None` for any other status.
+fn rate_limited(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Option<Duration> {
+    (status == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| {
+        headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(Duration::from_secs(1), Duration::from_secs)
+    })
+}
+
+#[test]
+fn readiness_rate_limit_honors_retry_after_only_on_429() {
+    use reqwest::{
+        StatusCode,
+        header::{HeaderMap, HeaderValue, RETRY_AFTER},
+    };
+
+    let limited = StatusCode::TOO_MANY_REQUESTS;
+    let mut headers = HeaderMap::new();
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(1))
+    );
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(7))
+    );
+    assert_eq!(rate_limited(StatusCode::FORBIDDEN, &headers), None);
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("invalid"));
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(1))
+    );
+}
+
 /// Read one untrusted public full finality proof, waiting until the height is served.
 async fn finality_proof(
     http: &reqwest::Client,
-    network: &Network,
+    base: &str,
     height: u64,
 ) -> Result<SumeragiFinalityProof> {
     let url = format!(
         "{}{}",
-        network.peers()[0].torii_url().trim_end_matches('/'),
+        base.trim_end_matches('/'),
         iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
             .path()
             .replace("{height}", &height.to_string())
@@ -291,6 +350,10 @@ async fn finality_proof(
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         }
+        if let Some(wait) = rate_limited(response.status(), response.headers()) {
+            tokio::time::sleep(wait).await;
+            continue;
+        }
         ensure!(
             response.status().is_success(),
             "finality endpoint rejected height {height}: {}",
@@ -306,6 +369,31 @@ async fn finality_proof(
     }
 }
 
+fn preparation_ready(status: &ReplicationOrderStatus, require_completion: bool) -> Result<bool> {
+    match status {
+        ReplicationOrderStatus::Pending => Ok(!require_completion),
+        ReplicationOrderStatus::Completed(_) => Ok(true),
+        ReplicationOrderStatus::Expired(_) | ReplicationOrderStatus::Cancelled(_) => {
+            eyre::bail!("publication order reached terminal status {status:?}")
+        }
+    }
+}
+
+#[test]
+fn preparation_distinguishes_assignment_from_completion_and_terminal_refusal() {
+    use ReplicationOrderStatus::{Cancelled, Completed, Expired, Pending};
+    for require_completion in [false, true] {
+        assert_eq!(
+            preparation_ready(&Pending, require_completion).unwrap(),
+            !require_completion
+        );
+        assert!(preparation_ready(&Completed(2), require_completion).unwrap());
+        for terminal in [Expired(2), Cancelled(2)] {
+            assert!(preparation_ready(&terminal, require_completion).is_err());
+        }
+    }
+}
+
 pub async fn preparation(
     http: &reqwest::Client,
     network: &NetworkId,
@@ -314,7 +402,17 @@ pub async fn preparation(
     digest: ManifestDigest,
     complete: bool,
 ) -> Result<SorafsPublicationPreparationV1> {
-    timeout_at(Instant::now() + DEADLINE, async {
+    // Completion includes three native provider acknowledgements and has the same 600-second
+    // bound as CLI publication. Looking up the initial assignment retains its shorter deadline.
+    let budget = if complete {
+        Duration::from_secs(600)
+    } else {
+        DEADLINE
+    };
+    let stage = if complete { "completion" } else { "assignment" };
+    let mut last_http = None;
+    let mut last_completions = None;
+    timeout_at(Instant::now() + budget, async {
         loop {
             let response = post(
                 http,
@@ -325,11 +423,16 @@ pub async fn preparation(
                 norito::to_bytes(&digest)?,
             )
             .await?;
+            last_http = Some(response.status());
             if response.status() == reqwest::StatusCode::NOT_FOUND
                 || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
                 || response.status() == reqwest::StatusCode::ACCEPTED
             {
                 tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            if let Some(wait) = rate_limited(response.status(), response.headers()) {
+                tokio::time::sleep(wait).await;
                 continue;
             }
             ensure!(
@@ -344,14 +447,22 @@ pub async fn preparation(
                     && row.pin.submitted_by == AccountId::new(publisher.public_key().clone()),
                 "preparation identity substituted"
             );
-            if complete && !matches!(row.order.status, ReplicationOrderStatus::Completed(_)) {
+            let acknowledgements = row.order.provider_completions.len();
+            if last_completions != Some(acknowledgements) {
+                eprintln!("publication {stage}: order {:?}, {acknowledgements} provider completions", row.order.status);
+                last_completions = Some(acknowledgements);
+            }
+            if !preparation_ready(&row.order.status, complete)? {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
             return Ok(row);
         }
     })
-    .await?
+    .await
+    .wrap_err_with(|| format!(
+        "publication {stage} exceeded {budget:?}; last HTTP {last_http:?}, provider completions {last_completions:?}"
+    ))?
 }
 
 pub async fn prove(
@@ -406,8 +517,15 @@ pub async fn prove(
                 norito::to_bytes(&selector)?,
             )
             .await?;
-            if response.status() == reqwest::StatusCode::ACCEPTED {
+            if matches!(
+                response.status(),
+                reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            ) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            if let Some(wait) = rate_limited(response.status(), response.headers()) {
+                tokio::time::sleep(wait).await;
                 continue;
             }
             ensure!(

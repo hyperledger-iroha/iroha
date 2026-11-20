@@ -875,6 +875,21 @@ fn reset_deletes_only_a_stopped_named_context_and_preserves_selection_failure() 
     let (store, directory, _) = fixture(&root, "local");
     let (_, other, _) = fixture(&root, "other");
     store.select("local").unwrap();
+    let tiered = directory
+        .path()
+        .join("generation/nodes/peer0/state/tiered_state");
+    let first = tiered.join("00000000000000000023/manifest");
+    let next = tiered.join("00000000000000000024/manifest");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&next).unwrap();
+    let chunk = first.join("a.json");
+    std::fs::write(&chunk, b"immutable manifest chunk").unwrap();
+    std::fs::hard_link(&chunk, next.join("a.json")).unwrap();
+    let external = other.path().join("external");
+    std::fs::hard_link(&chunk, &external).unwrap();
+    assert!(store.reset("local").is_err());
+    assert_eq!(store.context(None).unwrap().name, "local");
+    std::fs::remove_file(external).unwrap();
     store.reset("local").unwrap();
     assert!(
         !directory

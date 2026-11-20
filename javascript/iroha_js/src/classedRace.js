@@ -26,6 +26,7 @@ export function decodeClassedRaceValueV1(name, bytes) {
 export function decodeClassedRaceFrameV1(name, bytes) {
   nameOf(name);
   const frame = validateNoritoFrame(boundedBytes(bytes, CLASSED_RACE_MAX_VALUE_BYTES_V1 + 40), {
+    expectedLayout: "current",
     context: name,
     expectedTypeName: `iroha_data_model::classed_race_v1::${name}`,
     expectedPaddingLength: 0,

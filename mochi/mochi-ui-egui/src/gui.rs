@@ -544,7 +544,7 @@ struct Desktop {
     query: StateQueryKind,
     page: Option<StatePage>,
     filter: String,
-    activity: VecDeque<String>,
+    activity: VecDeque<ActivityLine>,
     blocks: Option<(
         ManagedBlockStream,
         tokio::sync::broadcast::Receiver<mochi_core::BlockStreamEvent>,
@@ -2050,8 +2050,32 @@ fn fetch_ledger(
     ))
 }
 
-fn push_activity(activity: &mut VecDeque<String>, value: String) {
-    activity.push_back(value.chars().take(4096).collect());
+#[derive(Debug)]
+struct ActivityLine {
+    text: String,
+    lowercase: std::cell::OnceCell<String>,
+}
+
+impl ActivityLine {
+    fn matches(&self, lowercase_filter: &str) -> bool {
+        lowercase_filter.is_empty()
+            || self
+                .lowercase
+                .get_or_init(|| self.text.to_lowercase())
+                .contains(lowercase_filter)
+    }
+}
+
+fn push_activity(activity: &mut VecDeque<ActivityLine>, value: String) {
+    let text = if value.len() <= 4096 {
+        value
+    } else {
+        bounded_text(&value)
+    };
+    activity.push_back(ActivityLine {
+        text,
+        lowercase: Default::default(),
+    });
     while activity.len() > 256 {
         activity.pop_front();
     }
@@ -2106,7 +2130,7 @@ fn event_activity(event: &mochi_core::EventStreamEvent) -> String {
 
 fn drain_stream<T: Clone>(
     receiver: &mut tokio::sync::broadcast::Receiver<T>,
-    activity: &mut VecDeque<String>,
+    activity: &mut VecDeque<ActivityLine>,
     summarize: impl Fn(&T) -> String,
     mut record: impl FnMut(&T),
 ) {
@@ -2879,7 +2903,7 @@ mod tests {
         assert!(notice.as_deref().unwrap().contains("Deployment applied"));
         let epoch = desktop.epoch;
         desktop.logs = "original context log observation".into();
-        desktop.activity.push_back("original context event".into());
+        push_activity(&mut desktop.activity, "original context event".into());
 
         // Use the same task owner and completion variant as refresh_selection. The context
         // must withdraw on failure while the original completed result remains inspectable.
@@ -3094,9 +3118,15 @@ mod tests {
             push_activity(&mut activity, index.to_string());
         }
         assert_eq!(activity.len(), 256);
-        assert_eq!(activity.front().unwrap(), "44");
+        assert_eq!(activity.front().unwrap().text, "44");
         push_activity(&mut activity, "界".repeat(5000));
-        assert_eq!(activity.back().unwrap().chars().count(), 4096);
+        assert_eq!(activity.back().unwrap().text.chars().count(), 4096);
+        push_activity(&mut activity, "Data · Éclair".into());
+        let entry = activity.back().unwrap();
+        assert!(entry.matches(""));
+        assert!(entry.lowercase.get().is_none());
+        assert!(entry.matches("éclair"));
+        assert!(!entry.matches("block"));
     }
 
     pub(super) fn observation_context() -> ManagedContext {
@@ -3243,7 +3273,7 @@ mod tests {
     fn automatic_withdrawal_preserves_completed_operations_and_clears_live_observations() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         desktop.logs = "stale validator observation".into();
-        desktop.activity.push_back("stale event".into());
+        push_activity(&mut desktop.activity, "stale event".into());
         desktop.peer = 3;
         desktop.reset_intent = true;
         desktop.receipt = Some("original deployment receipt".into());
@@ -3416,6 +3446,20 @@ mod tests {
     }
 
     #[test]
+    fn activity_clear_filters_restores_existing_events() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        push_activity(&mut desktop.activity, "Data · Éclair".into());
+        desktop.activity_filter = "missing".into();
+        desktop.activity_kind = ledger::ActivityKind::Block;
+        let context = egui::Context::default();
+        let mut draw = |ui: &mut egui::Ui| desktop.activity(ui);
+        click_label(&context, "Clear filters", &mut draw);
+        let output = render_frame(&context, Vec::new(), &mut draw);
+        assert!(text_position(&output, "Data · Éclair").is_some());
+        assert!(text_position(&output, "Clear filters").is_none());
+    }
+
+    #[test]
     fn every_empty_workspace_view_renders_without_starting_network_or_signer() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         let context = egui::Context::default();
@@ -3456,8 +3500,8 @@ mod tests {
             |event| recorded.push(*event),
         );
         assert_eq!(recorded.first(), Some(&8));
-        assert!(activity.front().unwrap().contains("skipped"));
-        assert_eq!(activity.back().unwrap(), "9");
+        assert!(activity.front().unwrap().text.contains("skipped"));
+        assert_eq!(activity.back().unwrap().text, "9");
     }
 
     fn drop_file(desktop: &mut Desktop, path: PathBuf) {

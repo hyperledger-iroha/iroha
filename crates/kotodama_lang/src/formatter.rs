@@ -2043,7 +2043,7 @@ impl<'printer, 'tokens, 'source> Projection<'printer, 'tokens, 'source> {
             (printer.indent.saturating_mul(INDENT.len()), 0)
         } else {
             (
-                current_line.chars().count(),
+                crate::display_width::end_column(0, current_line),
                 current_line
                     .chars()
                     .rev()
@@ -2072,7 +2072,7 @@ impl<'printer, 'tokens, 'source> Projection<'printer, 'tokens, 'source> {
     }
     fn write(&mut self, text: &str) {
         self.token_start.get_or_insert(self.column);
-        self.column = self.column.saturating_add(text.chars().count());
+        self.column = crate::display_width::end_column(self.column, text);
         self.last_char = text.chars().last().or(self.last_char);
         self.trailing_spaces = text
             .chars()

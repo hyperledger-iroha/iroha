@@ -122,7 +122,7 @@ impl ByteMerkleTree {
             ))
         };
         // The same node-then-leaf lock order protects complete snapshots.
-        let _nodes = self.nodes.lock();
+        let nodes = self.nodes.lock();
         let leaves = self.leaves.lock();
         let copied_leaves = if let Some(lease) = lease.as_deref_mut() {
             let mut copied =
@@ -135,7 +135,7 @@ impl ByteMerkleTree {
             copied.copy_from_slice(&leaves);
             MerkleLeaves::Local(copied)
         };
-        let nodes = CanonicalNodes::from_leaves(&copied_leaves, lease)?;
+        let nodes = nodes.copy_for_template(&copied_leaves, lease)?;
         Ok(Self {
             chunk: self.chunk,
             zero_hash: self.zero_hash,

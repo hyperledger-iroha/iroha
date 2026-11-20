@@ -222,8 +222,6 @@ public abstract class FeePaymentIntent : IEquatable<FeePaymentIntent>
     /// <summary>Signature-bound maximum executable gas, when applicable.</summary>
     public ulong? GasLimit { get; }
 
-    internal abstract uint PayerTag { get; }
-
     /// <summary>Constructs an authority-paid intent.</summary>
     public static FeePaymentIntent Authority(
         IEnumerable<FeeChargeLimit> chargeLimits,
@@ -307,8 +305,6 @@ public sealed class AuthorityFeePaymentIntent : FeePaymentIntent
         : base(chargeLimits, gasLimit)
     {
     }
-
-    internal override uint PayerTag => 0;
 }
 
 /// <summary>Exact sponsor-program revision fee intent.</summary>
@@ -335,8 +331,6 @@ public sealed class SponsorFeePaymentIntent : FeePaymentIntent
 
     /// <summary>Exact immutable program revision selected before signing.</summary>
     public ulong ProgramRevision { get; }
-
-    internal override uint PayerTag => 1;
 }
 
 internal sealed class FeeChargeKindJsonConverter : JsonConverter<FeeChargeKind>

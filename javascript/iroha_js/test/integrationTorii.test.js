@@ -17,8 +17,6 @@ import {
   buildRegisterAssetDefinitionAndMintTransaction,
   buildMintAssetTransaction,
   buildTransferAssetTransaction,
-  buildMintAssetInstruction,
-  buildTimeTriggerAction,
   buildPacs008Message,
   buildPacs009Message,
   field,
@@ -1576,198 +1574,6 @@ test(
       t.diagnostic(
         `attachment ${uploaded.id} still retrievable after delete; retention policy may delay cleanup`,
       );
-    }
-  },
-);
-
-test(
-  "trigger list, lookup, and query endpoints return typed payloads (optional)",
-  {
-    timeout: 60_000,
-  },
-  async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let listPage;
-    try {
-      listPage = await client.listTriggers({ limit: 5 });
-    } catch (error) {
-      if (shouldSkipTriggerEndpoints(error)) {
-        t.diagnostic(
-          `trigger list endpoint unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-
-    assertNonNegativeInteger(listPage.total, "trigger list total");
-    assert.ok(Array.isArray(listPage.items), "trigger list must expose items array");
-
-    if (listPage.items.length === 0) {
-      let emptyQuery;
-      try {
-        emptyQuery = await client.queryTriggers({ limit: 1 });
-      } catch (error) {
-        if (shouldSkipTriggerEndpoints(error)) {
-          t.diagnostic(
-            `trigger query endpoint unavailable: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          return;
-        }
-        throw error;
-      }
-      assertNonNegativeInteger(emptyQuery.total, "trigger query total");
-      assert.ok(Array.isArray(emptyQuery.items), "trigger query must expose items array");
-      t.diagnostic("trigger list returned zero entries; skipping lookup assertions");
-      return;
-    }
-
-    const example = listPage.items[0];
-    assertTriggerRecord(example, "trigger list entry");
-
-    let lookedUp;
-    try {
-      lookedUp = await client.getTrigger(example.id);
-    } catch (error) {
-      if (shouldSkipTriggerEndpoints(error)) {
-        t.diagnostic(
-          `trigger lookup endpoint unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-    if (!lookedUp) {
-      t.diagnostic(`trigger ${example.id} disappeared before lookup finished`);
-      return;
-    }
-    assertTriggerRecord(lookedUp, "trigger lookup response");
-
-    let queryPage;
-    try {
-      queryPage = await client.queryTriggers({
-        filter: field("id").eq(example.id).toJSON(),
-        limit: 1,
-      });
-    } catch (error) {
-      if (shouldSkipTriggerEndpoints(error)) {
-        t.diagnostic(
-          `trigger query endpoint unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-
-    assertNonNegativeInteger(queryPage.total, "trigger query total");
-    assert.ok(Array.isArray(queryPage.items), "trigger query must expose items array");
-    assert.ok(
-      queryPage.items.some((entry) => entry?.id === example.id),
-      "trigger query should include the filtered trigger id",
-    );
-  },
-);
-
-test(
-  "register trigger lifecycle via Torii (optional)",
-  {
-    timeout: 90_000,
-  },
-  async (t) => {
-    if (!MUTATION_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_MUTATE=1 to enable mutation coverage");
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const triggerId = randomTriggerId();
-    const namespace = "apps";
-    const assetId = composeAssetId(INTEGRATION_ASSET_DEFINITION_IDS[0], AUTHORITY_ACCOUNT_ID);
-    const action = buildTimeTriggerAction({
-      authority: AUTHORITY_ACCOUNT_ID,
-      instructions: [
-        buildMintAssetInstruction({
-          assetId,
-          quantity: "1",
-        }),
-      ],
-      startTimestampMs: Date.now() + 5_000,
-      periodMs: 60_000,
-      repeats: 1,
-      metadata: { label: "js-integration" },
-    });
-    const metadata = {
-      suite: "js-integration",
-      intent: "trigger-lifecycle",
-      timestamp: Date.now(),
-    };
-
-    let created = false;
-    try {
-      const draft = await client.registerTriggerTyped({
-        id: triggerId,
-        namespace,
-        action,
-        metadata,
-      });
-      created = true;
-      assert.ok(draft);
-      assert.equal(draft.trigger_id, triggerId);
-      assert.ok(
-        Array.isArray(draft.tx_instructions),
-        "trigger registration should surface Torii tx instructions",
-      );
-
-      const record = await client.getTrigger(triggerId);
-      assert.ok(record, "trigger lookup should return a payload for the newly registered id");
-      assertTriggerRecord(record, "registered trigger lookup");
-      assert.equal(record.id, triggerId);
-      assert.equal(record.metadata.intent, metadata.intent);
-
-      const page = await client.queryTriggers({
-        filter: field("id").eq(triggerId).toJSON(),
-        limit: 1,
-      });
-      assertNonNegativeInteger(page.total, "trigger query total after registration");
-      assert.ok(Array.isArray(page.items), "trigger query must expose items array");
-      assert.ok(
-        page.items.some((entry) => entry?.id === triggerId),
-        "trigger query should return the newly registered trigger",
-      );
-    } catch (error) {
-      if (shouldSkipTriggerEndpoints(error)) {
-        t.diagnostic(
-          `trigger mutation endpoints unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    } finally {
-      if (created) {
-        try {
-          await client.deleteTrigger(triggerId);
-        } catch (cleanupError) {
-          const message =
-            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-          t.diagnostic(`failed to delete trigger ${triggerId} during cleanup: ${message}`);
-        }
-      }
     }
   },
 );
@@ -4253,11 +4059,6 @@ function composeAssetId(assetDefinitionId, accountId, dataspaceId = null) {
   return dataspaceId === null ? base : `${base}#dataspace:${dataspaceId}`;
 }
 
-function randomTriggerId(namespace = "apps") {
-  const suffix = randomIdentifier("trigger");
-  return `${namespace}::${suffix}`;
-}
-
 function randomIdentifier(prefix) {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -4845,18 +4646,6 @@ function isAttachmentNotFoundError(error) {
   return error instanceof ToriiHttpError && (error.status === 404 || error.status === 410);
 }
 
-function shouldSkipTriggerEndpoints(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    isUnexpectedNotFoundError(error) ||
-    (/trigger/i.test(message) &&
-      (/disabled/i.test(message) || /unexpected status 503/i.test(message)))
-  );
-}
-
 function shouldSkipGovernanceBallotEndpoints(error) {
   if (error instanceof ToriiHttpError) {
     return error.status === 404 || error.status === 501 || error.status === 503;
@@ -5175,22 +4964,6 @@ function assertAttachmentMetadata(entry, label) {
   assertNonNegativeInteger(entry.createdMs, `${label}.createdMs`);
   if (entry.tenant !== undefined && entry.tenant !== null) {
     assert.equal(typeof entry.tenant, "string", `${label}.tenant must be a string when present`);
-  }
-}
-
-function assertTriggerRecord(record, label) {
-  assert.ok(record && typeof record === "object", `${label} must be an object`);
-  assert.equal(typeof record.id, "string", `${label}.id must be a string`);
-  assert.notEqual(record.id.length, 0, `${label}.id must not be empty`);
-  assert.ok(
-    record.action && typeof record.action === "object" && !Array.isArray(record.action),
-    `${label}.action must be an object`,
-  );
-  if (record.metadata !== undefined && record.metadata !== null) {
-    assert.ok(
-      typeof record.metadata === "object" && !Array.isArray(record.metadata),
-      `${label}.metadata must be an object when present`,
-    );
   }
 }
 

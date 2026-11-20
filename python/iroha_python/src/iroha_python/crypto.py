@@ -157,6 +157,12 @@ __all__ = [
     "PrivacyExact12CapabilityManifestV1",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
+    "decode_transaction_payload_with_layout",
+    "encode_transaction_payload_with_layout",
+    "decode_signed_transaction_with_layout",
+    "encode_signed_transaction_with_layout",
+    "transaction_payload_hash_with_layout",
+    "sign_transaction_payload_with_layout",
     "ConfidentialKeyset",
     "DomainId",
     "AccountId",
@@ -584,6 +590,12 @@ else:
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned
+decode_transaction_payload_with_layout = _crypto.decode_transaction_payload_with_layout
+encode_transaction_payload_with_layout = _crypto.encode_transaction_payload_with_layout
+decode_signed_transaction_with_layout = _crypto.decode_signed_transaction_with_layout
+encode_signed_transaction_with_layout = _crypto.encode_signed_transaction_with_layout
+transaction_payload_hash_with_layout = _crypto.transaction_payload_hash_with_layout
+sign_transaction_payload_with_layout = _crypto.sign_transaction_payload_with_layout
 DomainId = _crypto.DomainId
 AccountId = _crypto.AccountId
 AssetDefinitionId = _crypto.AssetDefinitionId

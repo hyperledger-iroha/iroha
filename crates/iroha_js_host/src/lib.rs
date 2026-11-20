@@ -13,8 +13,13 @@
 mod authenticated_block_proofs;
 mod privacy_x509_transaction;
 mod transaction_attachment_context;
+mod transaction_codec;
 pub use transaction_attachment_context::{
     JsTransactionAttachmentContextV1, inspect_transaction_attachment_context_v1,
+};
+use transaction_codec::Options as TransactionCodecOptions;
+pub use transaction_codec::{
+    encode_signed_transaction_json, encode_transaction_payload_json, sign_transaction_payload,
 };
 mod kaigi_authorization_v1;
 mod kaigi_proof_v1;
@@ -1352,32 +1357,39 @@ pub fn sm2_verify(
 pub fn norito_encode_instruction(
     json_payload: String,
     network_prefix: f64,
+    layout: Option<String>,
 ) -> napi::Result<Buffer> {
+    let selected_layout = transaction_codec::layout(layout.as_deref())?;
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    iroha_js_codec::encode_instruction_frame(&json_payload, prefix)
+    iroha_js_codec::encode_instruction_frame_with_layout(&json_payload, prefix, selected_layout)
         .map(Buffer::from)
         .map_err(codec_to_napi)
 }
-/// Encode strict instruction JSON as a canonical compact transaction archive.
+/// Encode strict instruction JSON as a bare archive in the explicitly selected layout.
 #[napi]
 pub fn norito_encode_instruction_box_archive(
     json_payload: String,
     network_prefix: f64,
+    layout: Option<String>,
 ) -> napi::Result<Buffer> {
+    let selected_layout = transaction_codec::layout(layout.as_deref())?;
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    iroha_js_codec::encode_instruction_archive(&json_payload, prefix)
+    iroha_js_codec::encode_instruction_archive_with_layout(&json_payload, prefix, selected_layout)
         .map(Buffer::from)
         .map_err(codec_to_napi)
 }
 
-/// Decode one exact canonical compact transaction instruction archive into JSON.
+/// Decode one exact bare instruction archive using the explicitly selected layout.
 #[napi]
 pub fn norito_decode_instruction_box_archive(
     bytes: Uint8Array,
     network_prefix: f64,
+    layout: Option<String>,
 ) -> napi::Result<String> {
+    let selected_layout = transaction_codec::layout(layout.as_deref())?;
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    iroha_js_codec::decode_instruction_archive(bytes.as_ref(), prefix).map_err(codec_to_napi)
+    iroha_js_codec::decode_instruction_archive_with_layout(bytes.as_ref(), prefix, selected_layout)
+        .map_err(codec_to_napi)
 }
 /// The exact first-release subscription program: one 8-bit `SCALL` and `HALT` under the frozen
 /// baseline header of the interface profile, declaring `max_cycles` (Torii's program).
@@ -1571,9 +1583,15 @@ pub fn inspect_subscription_trigger_action(
 /// Decode canonical Norito bytes for an instruction back into JSON form.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned typed arrays for `#[napi]` bindings
-pub fn norito_decode_instruction(bytes: Uint8Array, network_prefix: f64) -> napi::Result<String> {
+pub fn norito_decode_instruction(
+    bytes: Uint8Array,
+    network_prefix: f64,
+    layout: Option<String>,
+) -> napi::Result<String> {
+    let selected_layout = transaction_codec::layout(layout.as_deref())?;
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    iroha_js_codec::decode_instruction_frame(bytes.as_ref(), prefix).map_err(codec_to_napi)
+    iroha_js_codec::decode_instruction_frame_with_layout(bytes.as_ref(), prefix, selected_layout)
+        .map_err(codec_to_napi)
 }
 /// Compute the canonical native fingerprint for one validation-fee policy proposal.
 #[napi]
@@ -6272,6 +6290,7 @@ fn assemble_executable_transaction(
     nonce: Option<u32>,
     secret: &[u8],
     algorithm: Option<String>,
+    codec_options: TransactionCodecOptions,
 ) -> napi::Result<JsSignedTransaction> {
     let builder = configure_transaction_builder(
         TransactionBuilder::new(network_id, authority, fee_payment).with_executable(executable),
@@ -6283,13 +6302,8 @@ fn assemble_executable_transaction(
     )?;
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
-    let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
-    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
-    let hash = Buffer::from(signed.hash().as_ref().to_vec());
-    Ok(JsSignedTransaction {
-        signed_transaction: Buffer::from(signed_bytes),
-        hash,
-    })
+    let signed = transaction_codec::sign(builder, &private_key, codec_options.layout)?;
+    transaction_codec::signed_result(&signed, codec_options)
 }
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
@@ -6303,6 +6317,7 @@ fn assemble_transaction(
     nonce: Option<u32>,
     secret: &[u8],
     algorithm: Option<String>,
+    codec_options: TransactionCodecOptions,
 ) -> napi::Result<JsSignedTransaction> {
     if instructions.is_empty() {
         return Err(napi::Error::new(
@@ -6322,6 +6337,7 @@ fn assemble_transaction(
         nonce,
         secret,
         algorithm,
+        codec_options,
     )
 }
 fn checked_batch_executable(
@@ -6343,21 +6359,33 @@ fn checked_batch_executable(
     }
     Ok(executable)
 }
-/// Compute the canonical pipeline hash for an exact `VersionedSignedTransaction` V1 wire.
+/// Compute the external intent hash for an explicitly selected signed archive.
+///
+/// The default is current version-1 wire. Dense archives have no governed submission mapping.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
-    let hash = tx.hash();
+pub fn hash_signed_transaction(
+    bytes: Uint8Array,
+    layout: Option<String>,
+    format: Option<String>,
+) -> napi::Result<Buffer> {
+    let options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
+    let tx = transaction_codec::decode_signed(bytes.as_ref(), options)?;
+    let hash = transaction_codec::signed_hash(&tx, options.layout)?;
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
 /// Compute the detached-signature preimage used by Torii for a signed
 /// transaction scaffold: `HashOf::new(tx.payload())`.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
-    let hash = iroha_crypto::HashOf::new(tx.payload());
+pub fn hash_signed_transaction_payload(
+    bytes: Uint8Array,
+    layout: Option<String>,
+    format: Option<String>,
+) -> napi::Result<Buffer> {
+    let options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
+    let tx = transaction_codec::decode_signed(bytes.as_ref(), options)?;
+    let hash = transaction_codec::payload_hash(tx.payload(), options.layout)?;
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
 /// Compute the canonical identity of an authorized instruction batch. Torii
@@ -6373,16 +6401,21 @@ pub fn hash_instruction_batch(
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-/// Decode an exact canonical `VersionedSignedTransaction` V1 wire into JSON.
+/// Decode an explicitly selected signed archive into model JSON.
+///
+/// The default is current version-1 wire; bare and framed layouts require explicit options.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn decode_signed_transaction_json(
     bytes: Uint8Array,
     network_prefix: f64,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<String> {
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
     let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
+    let options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
+    let tx = transaction_codec::decode_signed(bytes.as_ref(), options)?;
     json::to_json(&tx).map_err(norito_to_napi)
 }
 /// Encode one JSON contract-call payload with the exact Kotodama entrypoint
@@ -6430,7 +6463,7 @@ pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<B
     let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-/// Re-sign an exact canonical `VersionedSignedTransaction` V1 wire with the provided Ed25519 private key
+/// Re-sign an explicitly selected signed archive with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 ///
 /// The caller must provide the exact expected genesis-derived network identity;
@@ -6441,9 +6474,12 @@ pub fn sign_transaction(
     network_id: Uint8Array,
     bytes: Uint8Array,
     secret: Uint8Array,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<Buffer> {
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
+    let options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
+    let tx = transaction_codec::decode_signed(bytes.as_ref(), options)?;
     require_expected_transaction_network_id(
         tx.network_id(),
         &expected_network_id,
@@ -6452,9 +6488,9 @@ pub fn sign_transaction(
     let builder = TransactionBuilder::from_payload(tx.payload().clone()).map_err(norito_to_napi)?;
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
-    let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
-    Ok(Buffer::from(encode_canonical_signed_transaction_v1(
-        &signed,
+    let signed = transaction_codec::sign(builder, &private_key, options.layout)?;
+    Ok(Buffer::from(transaction_codec::encode_signed(
+        &signed, options,
     )?))
 }
 fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCatalogV1> {
@@ -6979,7 +7015,9 @@ pub fn build_transfer_asset_payload(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    layout: Option<String>,
 ) -> napi::Result<JsTransactionPayload> {
+    let codec_options = TransactionCodecOptions::payload(layout.as_deref(), None)?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     if authority.trim() != authority || destination_account_id.trim() != destination_account_id {
         return Err(napi::Error::new(
@@ -7071,7 +7109,7 @@ pub fn build_transfer_asset_payload(
         ttl_ms,
         nonce,
     )?;
-    let payload_bytes = builder.encode_payload();
+    let payload_bytes = transaction_codec::encode_payload(builder.payload(), codec_options)?;
     if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7079,7 +7117,9 @@ pub fn build_transfer_asset_payload(
         ));
     }
     Ok(JsTransactionPayload {
-        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_hash: Buffer::from(
+            transaction_codec::payload_hash(builder.payload(), codec_options.layout)?.to_vec(),
+        ),
         payload_bytes: Buffer::from(payload_bytes),
     })
 }
@@ -7109,7 +7149,11 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
 #[allow(clippy::needless_pass_by_value)]
 pub fn finalize_signed_transaction(
     input: JsExternalTransactionSignature,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
+    let payload_options = TransactionCodecOptions::payload(layout.as_deref(), None)?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&input.authority)?;
     let expected_authority = parse_account_id(&input.authority, "asserted authority account id")?;
     let expected_network_id = parse_transaction_network_id_bytes(input.network_id.as_ref())?;
@@ -7121,8 +7165,8 @@ pub fn finalize_signed_transaction(
             "payloadBytes must contain 1..=1048576 bytes",
         ));
     }
-    let builder =
-        TransactionBuilder::decode_payload(input.payload_bytes.as_ref()).map_err(|err| {
+    let builder = transaction_codec::decode_payload(input.payload_bytes.as_ref(), payload_options)
+        .map_err(|err| {
             napi::Error::new(
                 napi::Status::InvalidArg,
                 format!("invalid canonical transaction payload: {err}"),
@@ -7134,7 +7178,7 @@ pub fn finalize_signed_transaction(
         "JavaScript external transaction finalizer",
     )?;
 
-    let payload_hash = builder.payload_hash_bytes();
+    let payload_hash = transaction_codec::payload_hash(builder.payload(), codec_options.layout)?;
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
         let decoded = hex::decode(normalized).map_err(|_| {
@@ -7167,12 +7211,11 @@ pub fn finalize_signed_transaction(
             "asserted authority does not match payloadBytes",
         ));
     }
-    tx.verify_signature().map_err(norito_to_napi)?;
-    let signed_transaction = encode_canonical_signed_transaction_v1(&tx)?;
-    Ok(JsSignedTransaction {
-        signed_transaction: Buffer::from(signed_transaction),
-        hash: Buffer::from(tx.hash().as_ref().to_vec()),
-    })
+    tx.signature()
+        .payload()
+        .verify(&public_key, &payload_hash)
+        .map_err(norito_to_napi)?;
+    transaction_codec::signed_result(&tx, codec_options)
 }
 /// Build and sign a single-instruction `RegisterDomain` transaction.
 #[napi]
@@ -7188,7 +7231,10 @@ pub fn build_register_domain_transaction(
     nonce: Option<u32>,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7213,6 +7259,7 @@ pub fn build_register_domain_transaction(
         nonce,
         secret.as_ref(),
         private_key_algorithm,
+        codec_options,
     )
 }
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
@@ -7227,6 +7274,7 @@ fn build_transaction_from_instructions_json(
     nonce: Option<u32>,
     secret: &[u8],
     private_key_algorithm: Option<String>,
+    codec_options: TransactionCodecOptions,
 ) -> napi::Result<JsSignedTransaction> {
     let instructions = parse_instruction_payloads(instructions_json)?;
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
@@ -7242,6 +7290,7 @@ fn build_transaction_from_instructions_json(
         nonce,
         secret,
         private_key_algorithm,
+        codec_options,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -7254,6 +7303,7 @@ fn build_transaction_payload_from_instructions_json(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    codec_options: TransactionCodecOptions,
 ) -> napi::Result<JsTransactionPayloadDraft> {
     let instructions = parse_instruction_payloads(instructions_json)?;
     if instructions.is_empty() {
@@ -7272,7 +7322,7 @@ fn build_transaction_payload_from_instructions_json(
         ttl_ms,
         nonce,
     )?;
-    let payload_bytes = builder.encode_payload();
+    let payload_bytes = transaction_codec::encode_payload(builder.payload(), codec_options)?;
     if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7283,7 +7333,9 @@ fn build_transaction_payload_from_instructions_json(
     Ok(JsTransactionPayloadDraft {
         payload_json,
         payload_bytes: Buffer::from(payload_bytes),
-        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_hash: Buffer::from(
+            transaction_codec::payload_hash(builder.payload(), codec_options.layout)?.to_vec(),
+        ),
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -7296,6 +7348,7 @@ fn build_transaction_payload_from_batch_json(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    codec_options: TransactionCodecOptions,
 ) -> napi::Result<JsTransactionPayloadDraft> {
     let entries = parse_executable_batch_payloads(entries_json)?;
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
@@ -7309,7 +7362,7 @@ fn build_transaction_payload_from_batch_json(
         ttl_ms,
         nonce,
     )?;
-    let payload_bytes = builder.encode_payload();
+    let payload_bytes = transaction_codec::encode_payload(builder.payload(), codec_options)?;
     if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7320,7 +7373,9 @@ fn build_transaction_payload_from_batch_json(
     Ok(JsTransactionPayloadDraft {
         payload_json,
         payload_bytes: Buffer::from(payload_bytes),
-        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_hash: Buffer::from(
+            transaction_codec::payload_hash(builder.payload(), codec_options.layout)?.to_vec(),
+        ),
     })
 }
 /// Build, but do not sign, the exact arbitrary-instruction payload sent to fee quoting.
@@ -7335,7 +7390,9 @@ pub fn build_transaction_payload(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    layout: Option<String>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
+    let codec_options = TransactionCodecOptions::payload(layout.as_deref(), None)?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7348,6 +7405,7 @@ pub fn build_transaction_payload(
         creation_time_ms,
         ttl_ms,
         nonce,
+        codec_options,
     )
 }
 /// Build, but do not sign, an exact ordered mixed executable-batch payload.
@@ -7362,7 +7420,9 @@ pub fn build_executable_batch_transaction_payload(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    layout: Option<String>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
+    let codec_options = TransactionCodecOptions::payload(layout.as_deref(), None)?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7375,6 +7435,7 @@ pub fn build_executable_batch_transaction_payload(
         creation_time_ms,
         ttl_ms,
         nonce,
+        codec_options,
     )
 }
 fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
@@ -7411,7 +7472,10 @@ pub fn sign_quoted_transaction_payload(
     quoted_fee_payment_json: String,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let _chain_guard = scoped_chain_discriminant_for_transaction_payload(&payload_json)?;
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
@@ -7436,18 +7500,14 @@ pub fn sign_quoted_transaction_payload(
     let builder = TransactionBuilder::from_payload(payload).map_err(norito_to_napi)?;
     let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
-    let signed = sign_js_transaction(builder, &private_key, "quoted JavaScript payload")?;
-    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
-    Ok(JsSignedTransaction {
-        signed_transaction: Buffer::from(signed_bytes),
-        hash: Buffer::from(signed.hash().as_ref().to_vec()),
-    })
+    let signed = transaction_codec::sign(builder, &private_key, codec_options.layout)?;
+    transaction_codec::signed_result(&signed, codec_options)
 }
 /// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
 /// The payload must bind the caller's exact expected `NetworkId` and cannot use the genesis domain.
 /// Its required authority selects the network prefix for all account literals.
 #[napi]
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // explicit N-API input and codec options
 pub fn sign_quoted_ivm_proved_transaction_payload(
     network_id: Uint8Array,
     payload_json: String,
@@ -7455,7 +7515,10 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
     quoted_fee_payment_json: String,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let _chain_guard = scoped_chain_discriminant_for_transaction_payload(&payload_json)?;
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
@@ -7495,16 +7558,8 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
         .map_err(norito_to_napi)?;
     let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
-    let signed = sign_js_transaction(
-        builder,
-        &private_key,
-        "quoted proved-IVM JavaScript payload",
-    )?;
-    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
-    Ok(JsSignedTransaction {
-        signed_transaction: Buffer::from(signed_bytes),
-        hash: Buffer::from(signed.hash().as_ref().to_vec()),
-    })
+    let signed = transaction_codec::sign(builder, &private_key, codec_options.layout)?;
+    transaction_codec::signed_result(&signed, codec_options)
 }
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
@@ -7520,7 +7575,10 @@ pub fn build_transaction(
     nonce: Option<u32>,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7535,6 +7593,7 @@ pub fn build_transaction(
         nonce,
         secret.as_ref(),
         private_key_algorithm,
+        codec_options,
     )
 }
 /// Build and sign a transaction from ordered instruction and contract-call entries.
@@ -7551,7 +7610,10 @@ pub fn build_executable_batch_transaction(
     nonce: Option<u32>,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7571,6 +7633,7 @@ pub fn build_executable_batch_transaction(
         nonce,
         secret.as_ref(),
         private_key_algorithm,
+        codec_options,
     )
 }
 /// Build, but do not sign, an `Executable::IvmProved` payload and its proof attachment.
@@ -7589,7 +7652,9 @@ pub fn build_ivm_proved_transaction_payload(
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
+    layout: Option<String>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
+    let codec_options = TransactionCodecOptions::payload(layout.as_deref(), None)?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7616,7 +7681,7 @@ pub fn build_ivm_proved_transaction_payload(
         ttl_ms,
         nonce,
     )?;
-    let payload_bytes = builder.encode_payload();
+    let payload_bytes = transaction_codec::encode_payload(builder.payload(), codec_options)?;
     if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7627,7 +7692,9 @@ pub fn build_ivm_proved_transaction_payload(
     Ok(JsTransactionPayloadDraft {
         payload_json,
         payload_bytes: Buffer::from(payload_bytes),
-        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_hash: Buffer::from(
+            transaction_codec::payload_hash(builder.payload(), codec_options.layout)?.to_vec(),
+        ),
     })
 }
 /// Build and sign a transaction carrying an `Executable::IvmProved` payload and its proof attachment.
@@ -7645,7 +7712,10 @@ pub fn build_ivm_proved_transaction(
     nonce: Option<u32>,
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let codec_options = TransactionCodecOptions::signed(layout.as_deref(), format.as_deref())?;
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
@@ -7675,6 +7745,7 @@ pub fn build_ivm_proved_transaction(
         nonce,
         secret.as_ref(),
         private_key_algorithm,
+        codec_options,
     )
 }
 /// Build a Norito-encoded trigger action that executes on a time schedule.
@@ -10442,6 +10513,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             let native = norito_encode_instruction(
                 json::to_json(&value).unwrap(),
                 f64::from(iroha_data_model::account::address::chain_discriminant()),
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -12681,6 +12753,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(1_700_000_000_000),
             Some(60_000),
             Some(7),
+            None,
         )
         .expect("unsigned transaction draft");
         let mut expected: TransactionPayload = {
@@ -12707,6 +12780,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             quoted_intent_json.clone(),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .expect("sign quoted payload");
         assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
@@ -12723,6 +12798,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             quoted_intent_json,
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .err()
         .expect("quoted signer must reject a foreign NetworkId");
@@ -12737,6 +12814,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             authority_fee_payment_json(),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .err()
         .expect("quoted signer must reject the genesis domain");
@@ -12747,6 +12826,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             authority_fee_payment_json_with_gas(1),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .err()
         .expect("quote must not substitute the signed gas bound");
@@ -12769,6 +12850,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             },
             Uint8Array::from(secret),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .err()
         .expect("quote must not substitute the selected payer");
@@ -12811,6 +12894,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(1_700_000_000_000),
             Some(5_000),
             Some(42),
+            None,
         )
         .expect("build external transfer payload");
         assert!(!built.payload_bytes.is_empty());
@@ -12830,14 +12914,18 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             .public_key()
             .try_to_bytes()
             .expect("raw Ed25519 public key");
-        let finalized = finalize_signed_transaction(JsExternalTransactionSignature {
-            network_id: Buffer::from(network_id.as_bytes().to_vec()),
-            payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
-            payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
-            signature: Buffer::from(signature.payload().to_vec()),
-            public_key: Buffer::from(public_key_bytes.to_vec()),
-            authority: authority_i105,
-        })
+        let finalized = finalize_signed_transaction(
+            JsExternalTransactionSignature {
+                network_id: Buffer::from(network_id.as_bytes().to_vec()),
+                payload_bytes: Buffer::from(built.payload_bytes.as_ref().to_vec()),
+                payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
+                signature: Buffer::from(signature.payload().to_vec()),
+                public_key: Buffer::from(public_key_bytes.to_vec()),
+                authority: authority_i105,
+            },
+            None,
+            None,
+        )
         .expect("finalize externally signed transaction");
         assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let transaction =
@@ -12891,6 +12979,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 Some(1),
                 None,
                 None,
+                None
             )
             .is_err()
         );
@@ -12913,6 +13002,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                     Some(1),
                     None,
                     None,
+                    None
                 )
                 .is_err(),
                 "external transfer must reject invalid quantity spelling {invalid_quantity:?}",
@@ -12930,6 +13020,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 Some(1),
                 None,
                 None,
+                None
             )
             .is_err()
         );
@@ -12945,6 +13036,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 Some(1),
                 None,
                 None,
+                None
             )
             .is_err()
         );
@@ -12957,6 +13049,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             authority_fee_payment_json(),
             None,
             Some(1),
+            None,
             None,
             None,
         )
@@ -13003,7 +13096,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         retired.payload_bytes = Buffer::from(retired_bytes);
         retired.payload_hash_hex = Some(hex::encode(retired_hash.as_ref()));
         retired.signature = Buffer::from(retired_signature.payload().to_vec());
-        let error = finalize_signed_transaction(retired)
+        let error = finalize_signed_transaction(retired, None, None)
             .err()
             .expect("retired transaction layout must reject");
         assert!(
@@ -13013,19 +13106,19 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         );
         let mut missing_authority = valid_input();
         missing_authority.authority.clear();
-        assert!(finalize_signed_transaction(missing_authority).is_err());
+        assert!(finalize_signed_transaction(missing_authority, None, None).is_err());
         let mut different_authority = valid_input();
         different_authority.authority = other.to_i105_for_discriminant(0x02F1).unwrap();
-        assert!(finalize_signed_transaction(different_authority).is_err());
+        assert!(finalize_signed_transaction(different_authority, None, None).is_err());
         let mut mismatched_hash = valid_input();
         mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
-        assert!(finalize_signed_transaction(mismatched_hash).is_err());
+        assert!(finalize_signed_transaction(mismatched_hash, None, None).is_err());
         let mut wrong_public_key = valid_input();
         wrong_public_key.public_key = Buffer::from(other_public_key_bytes.to_vec());
-        assert!(finalize_signed_transaction(wrong_public_key).is_err());
+        assert!(finalize_signed_transaction(wrong_public_key, None, None).is_err());
         let mut bad_signature = valid_input();
         bad_signature.signature[0] ^= 0x80;
-        assert!(finalize_signed_transaction(bad_signature).is_err());
+        assert!(finalize_signed_transaction(bad_signature, None, None).is_err());
         let mut overlong_payload = valid_input();
         let canonical = overlong_payload.payload_bytes.as_ref();
         assert!(
@@ -13037,14 +13130,14 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         overlong.extend_from_slice(&canonical[1..]);
         overlong_payload.payload_bytes = Buffer::from(overlong);
         overlong_payload.payload_hash_hex = None;
-        assert!(finalize_signed_transaction(overlong_payload).is_err());
+        assert!(finalize_signed_transaction(overlong_payload, None, None).is_err());
         let mut foreign_network = valid_input();
         foreign_network.network_id = Buffer::from(
             test_network_id(b"foreign-browser-network")
                 .as_bytes()
                 .to_vec(),
         );
-        let error = finalize_signed_transaction(foreign_network)
+        let error = finalize_signed_transaction(foreign_network, None, None)
             .err()
             .expect("external finalizer must reject a foreign NetworkId");
         assert!(error.reason.contains("does not match"));
@@ -13056,14 +13149,18 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let genesis_signature =
             Signature::try_new(authority_key.private_key(), genesis_payload_hash.as_slice())
                 .expect("genesis payload signature");
-        let result = finalize_signed_transaction(JsExternalTransactionSignature {
-            network_id: Buffer::from(network_id.as_bytes().to_vec()),
-            payload_bytes: Buffer::from(genesis_builder.encode_payload()),
-            payload_hash_hex: Some(hex::encode(genesis_payload_hash)),
-            signature: Buffer::from(genesis_signature.payload().to_vec()),
-            public_key: Buffer::from(public_key_bytes.to_vec()),
-            authority: authority_i105.clone(),
-        });
+        let result = finalize_signed_transaction(
+            JsExternalTransactionSignature {
+                network_id: Buffer::from(network_id.as_bytes().to_vec()),
+                payload_bytes: Buffer::from(genesis_builder.encode_payload()),
+                payload_hash_hex: Some(hex::encode(genesis_payload_hash)),
+                signature: Buffer::from(genesis_signature.payload().to_vec()),
+                public_key: Buffer::from(public_key_bytes.to_vec()),
+                authority: authority_i105.clone(),
+            },
+            None,
+            None,
+        );
         let error = result.err().expect("genesis domain must fail");
         assert!(
             error.reason.contains(
@@ -13072,7 +13169,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             "ordinary payload decoding must reject the genesis domain: {}",
             error.reason
         );
-        assert!(finalize_signed_transaction(valid_input()).is_ok());
+        assert!(finalize_signed_transaction(valid_input(), None, None).is_ok());
     }
     #[test]
     fn signed_transaction_codec_accepts_only_exact_canonical_v1_bytes() {
@@ -13145,7 +13242,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let instruction: InstructionBox =
             Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
                 .into();
-        let tx = sign_js_transaction(
+        let tx = transaction_codec::sign(
             TransactionBuilder::new(
                 network_id,
                 authority.clone(),
@@ -13153,7 +13250,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             )
             .with_instructions([instruction]),
             keypair.private_key(),
-            "test",
+            norito::core::WireLayout::Compact,
         )
         .expect("checked signing should succeed");
         assert_eq!(tx.authority(), &authority);
@@ -13188,6 +13285,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                     .expect("canonical original transaction"),
             ),
             Uint8Array::from(secret),
+            None,
+            None,
         )
         .expect("re-sign transaction");
         let decoded = decode_canonical_signed_transaction_v1(resigned.as_ref())
@@ -13221,6 +13320,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                     .expect("canonical foreign transaction"),
             ),
             Uint8Array::from(secret.clone()),
+            None,
+            None,
         )
         .err()
         .expect("JavaScript host must reject a foreign NetworkId");
@@ -13233,6 +13334,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                     .expect("canonical genesis transaction"),
             ),
             Uint8Array::from(secret),
+            None,
+            None,
         )
         .err()
         .expect("JavaScript host must reject the genesis transaction domain");
@@ -13449,7 +13552,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         .sign(keypair.private_key());
         let bytes = encode_canonical_signed_transaction_v1(&transaction)
             .expect("encode canonical signed transaction V1");
-        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes), 369.0)
+        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes), 369.0, None, None)
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
         let expected_code_hash_literal =
@@ -13493,6 +13596,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(42),
             &secret_bytes,
             None,
+            TransactionCodecOptions::signed(None, None).unwrap(),
         )
         .expect("transaction built");
         let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
@@ -13554,6 +13658,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(42),
             Uint8Array::from(secret),
             Some("ed25519".to_owned()),
+            None,
+            None,
         )
         .expect("mixed batch transaction");
         let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
@@ -13626,6 +13732,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(1_700_000_000_000),
             Some(5_000),
             Some(42),
+            None,
         )
         .expect("unsigned transaction built");
         let draft_payload: TransactionPayload = {
@@ -13661,6 +13768,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
+            None,
+            None,
         )
         .err()
         .expect("proved-IVM signer must reject a foreign NetworkId");
@@ -13674,6 +13783,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
+            None,
+            None,
         )
         .err()
         .expect("proved-IVM signer must reject the genesis domain");
@@ -13684,6 +13795,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
+            None,
+            None,
             None,
         )
         .expect("quoted transaction signed");
@@ -13717,6 +13830,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             Some(5_000),
             Some(42),
             Uint8Array::from(secret_bytes.to_vec()),
+            None,
+            None,
             None,
         )
         .expect("transaction built");
@@ -13864,6 +13979,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             None,
             &secret_bytes,
             None,
+            TransactionCodecOptions::signed(None, None).unwrap(),
         );
         assert!(result.is_err());
     }

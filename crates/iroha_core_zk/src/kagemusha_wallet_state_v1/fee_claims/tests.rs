@@ -2,7 +2,7 @@
 use super::*;
 use iroha_data_model::sumeragi_finality::{
     WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
-    test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
+    native_world_schema_family_v1, test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
 };
 
 fn retained_request_fixture() -> KagemushaWalletRequestV1 {
@@ -90,7 +90,7 @@ fn exact_finalized_payout_binds_native_scope_and_row_and_survives_growth() {
     let world = snapshot.authenticate(&block).unwrap();
     let evidence = FinalizedPayoutEvidence {
         block: &block,
-        world: &world,
+        state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World { world: &world },
         payout: payout(),
     };
     assert!(verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &evidence).is_ok());
@@ -99,7 +99,7 @@ fn exact_finalized_payout_binds_native_scope_and_row_and_survives_growth() {
     assert!(verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &evidence).is_ok());
     let wrong_block = FinalizedPayoutEvidence {
         block: &later,
-        world: &world,
+        state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World { world: &world },
         payout: payout(),
     };
     assert!(verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &wrong_block).is_err());
@@ -122,7 +122,9 @@ fn exact_finalized_payout_binds_native_scope_and_row_and_survives_growth() {
         }
         let evidence = FinalizedPayoutEvidence {
             block: &block,
-            world: &world,
+            state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World {
+                world: &world,
+            },
             payout: changed,
         };
         assert!(
@@ -143,7 +145,7 @@ fn acknowledgement_retries_reverify_and_never_delete_before_durable_payout() {
     let world = snapshot.authenticate(&block).unwrap();
     let evidence = FinalizedPayoutEvidence {
         block: &block,
-        world: &world,
+        state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World { world: &world },
         payout: payout(),
     };
     for failure in 0..3 {
@@ -195,7 +197,9 @@ fn acknowledgement_retries_reverify_and_never_delete_before_durable_payout() {
         foreign.transaction[0] ^= 1;
         let invalid = FinalizedPayoutEvidence {
             block: &block,
-            world: &world,
+            state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World {
+                world: &world,
+            },
             payout: foreign,
         };
         assert!(wallet.acknowledge_fee_payout([2; 32], &invalid).is_err());
@@ -476,7 +480,9 @@ fn finalized_fee_payout_requires_a_qualified_world_schema_at_its_own_cut() {
         let world = snapshot.authenticate(&block).unwrap();
         let evidence = FinalizedPayoutEvidence {
             block: &block,
-            world: &world,
+            state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World {
+                world: &world,
+            },
             payout: payout(),
         };
         let result = verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &evidence);

@@ -42,8 +42,68 @@ object NoritoCodec {
         adapter: TypeAdapter<T>,
         flags: Int,
         compression: CompressionConfig,
+    ): ByteArray =
+        // The header constructor validates `flags`, so only a minor-0 flag byte frames a payload.
+        frame(value, schemaPath, adapter, flags, flags, NoritoHeader.MINOR_VERSION, compression)
+
+    /**
+     * Encodes a frame in an explicit layout (`norito.md`, "Dense layout (header minor 1)").
+     *
+     * [WireLayout.COMPACT] produces exactly the bytes of the default [encode].
+     * [WireLayout.DENSE] produces a minor-1 frame with flags `0x00`; the adapter must write
+     * counts, enum tags and byte arrays through the layout-aware helpers ([NoritoAdapters],
+     * [NoritoEncoder.writeCount], [NoritoEncoder.writeEnumTag]).
+     */
+    @JvmStatic
+    fun <T> encode(
+        value: T,
+        schemaPath: String,
+        adapter: TypeAdapter<T>,
+        layout: WireLayout,
+    ): ByteArray = encode(value, schemaPath, adapter, layout, CompressionConfig.none())
+
+    /** [encode] in an explicit layout with a compressed payload. */
+    @JvmStatic
+    fun <T> encode(
+        value: T,
+        schemaPath: String,
+        adapter: TypeAdapter<T>,
+        layout: WireLayout,
+        compression: CompressionConfig,
+    ): ByteArray =
+        frame(value, schemaPath, adapter, layout.code, layout.headerFlags, layout.minor, compression)
+
+    /**
+     * Encodes the bare (headerless) payload of `value` in an explicit layout.
+     *
+     * The owner of a headerless payload names its layout; [WireLayout.COMPACT] produces
+     * exactly the payload of the default [encodeAdaptive].
+     */
+    @JvmStatic
+    fun <T> encodeBare(value: T, adapter: TypeAdapter<T>, layout: WireLayout): ByteArray {
+        val encoder = NoritoEncoder(layout)
+        adapter.encode(encoder, value)
+        return encoder.toByteArray()
+    }
+
+    /**
+     * Decodes a bare (headerless) payload in the layout its owner names. The whole payload
+     * must be consumed; bytes of another layout are refused rather than reinterpreted.
+     */
+    @JvmStatic
+    fun <T> decodeBare(payload: ByteArray, adapter: TypeAdapter<T>, layout: WireLayout): T =
+        decodePayload(payload, adapter, layout.code)
+
+    private fun <T> frame(
+        value: T,
+        schemaPath: String,
+        adapter: TypeAdapter<T>,
+        layoutCode: Int,
+        headerFlags: Int,
+        minor: Int,
+        compression: CompressionConfig,
     ): ByteArray {
-        val encoder = NoritoEncoder(flags)
+        val encoder = NoritoEncoder(layoutCode)
         adapter.encode(encoder, value)
         val payload = encoder.toByteArray()
         val payloadBytes: ByteArray
@@ -59,7 +119,7 @@ object NoritoCodec {
         }
         val checksum = CRC64.compute(payload)
         val schemaHash = SchemaHash.hash16(schemaPath)
-        val header = NoritoHeader(schemaHash, payload.size, checksum, flags, compressionTag)
+        val header = NoritoHeader(schemaHash, payload.size, checksum, headerFlags, compressionTag, minor)
         val headerBytes = header.encode()
         val out = ByteArray(headerBytes.size + payloadBytes.size)
         System.arraycopy(headerBytes, 0, out, 0, headerBytes.size)
@@ -141,12 +201,46 @@ object NoritoCodec {
         return ArchiveView(payload, header.flags)
     }
 
+    /**
+     * Decodes a frame in the current layout (minor `0`, with or without `COMPACT_LEN`).
+     *
+     * A dense frame (minor `1`) is refused here: a reader accepts it only by naming
+     * [WireLayout.DENSE] in the overload below.
+     */
     @JvmStatic
     fun <T> decode(data: ByteArray, adapter: TypeAdapter<T>, schemaPath: String?): T {
         val expectedHash = schemaPath?.let { SchemaHash.hash16(it) }
         val result = NoritoHeader.decode(data, expectedHash)
         val header = result.header
-        val payload = result.payload
+        return decodePayload(checkedPayload(header, result.payload), adapter, header.flags)
+    }
+
+    /**
+     * Decodes a frame that must declare exactly `layout` in its header.
+     *
+     * The header's minor version and flag byte select the layout; nothing is inferred from the
+     * payload. A frame of another layout is refused, so a dense frame is never read as the
+     * current layout or the reverse. The adapter must read counts, enum tags and byte arrays
+     * through the layout-aware helpers.
+     */
+    @JvmStatic
+    fun <T> decode(
+        data: ByteArray,
+        adapter: TypeAdapter<T>,
+        schemaPath: String?,
+        layout: WireLayout,
+    ): T {
+        val expectedHash = schemaPath?.let { SchemaHash.hash16(it) }
+        val result = NoritoHeader.decodeDeclared(data, expectedHash)
+        val header = result.header
+        require(header.layout == layout) {
+            "Norito frame declares the ${header.layout} layout; expected $layout"
+        }
+        return decodePayload(checkedPayload(header, result.payload), adapter, layout.code)
+    }
+
+    /** The frame's checksummed logical payload, decompressed when the header says so. */
+    private fun checkedPayload(header: NoritoHeader, payload: ByteArray): ByteArray {
         val decodedPayload = when (header.compression) {
             NoritoHeader.COMPRESSION_ZSTD ->
                 NoritoCompression.decompressZstd(payload, header.payloadLength)
@@ -156,9 +250,14 @@ object NoritoCodec {
             )
         }
         header.validateChecksum(decodedPayload)
-        RootGuard(decodedPayload, header.flags).use { guard ->
+        return decodedPayload
+    }
+
+    /** Decodes exactly `payload` under one layout code; trailing bytes are refused. */
+    private fun <T> decodePayload(payload: ByteArray, adapter: TypeAdapter<T>, layoutCode: Int): T {
+        RootGuard(payload, layoutCode).use { guard ->
             guard.keepAlive()
-            val decoder = NoritoDecoder(decodedPayload, header.flags)
+            val decoder = NoritoDecoder(payload, layoutCode)
             val value = adapter.decode(decoder)
             require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
             return value

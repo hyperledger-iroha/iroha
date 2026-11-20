@@ -1736,11 +1736,9 @@ impl IVM {
     }
     /// Load an already validated and prepared contract without reparsing it.
     ///
-    /// The immutable artifact, metadata, literal index, decoded stream, and
-    /// prepared operations share their original owner when it is this VM's pool.
-    /// A funded VM copies diagnostic or foreign-pool instruction and literal indexes
-    /// into its own admitted storage before installation. Code bytes are installed into
-    /// this VM's memory image.
+    /// The VM shares the prepared operations and literal index when they belong to
+    /// its allocation pool. A funded VM copies diagnostic or foreign-pool data
+    /// into its own admitted storage before installing the code bytes in VM memory.
     pub fn load_prepared(&mut self, contract: &PreparedContract) -> Result<(), VMError> {
         self.load_prepared_with_koto_test_capability(contract, false)
     }
@@ -1774,29 +1772,19 @@ impl IVM {
             Some(budget) => contract.literal_table().for_budget(budget)?,
             None => contract.literal_table().clone(),
         };
-        let (decoded, prepared) = if let Some(budget) = self.memory.allocation_budget()
-            && (!contract.decoded().belongs_to(budget)
-                || !contract.prepared_program().belongs_to(budget))
-        {
-            // A code-only cache or another State cannot lend this VM execution
-            // credit. Rebuild only instruction arrays from the admitted image.
-            let code = &contract.artifact()[contract.code_offset()..];
-            let decoded =
-                crate::ivm_cache::IvmCache::decode_stream_with_memory_budget(code, budget)?;
-            let prepared = prepare_instruction_stream(
-                code,
-                decoded.as_ref(),
-                contract.instruction_entry_pc(),
-                literal_table.entries(),
-                Some(budget),
-                contract.profile_id().engine(),
-            )?;
-            (decoded, prepared)
-        } else {
-            (
-                contract.decoded().clone(),
-                contract.prepared_program().clone(),
-            )
+        let prepared = contract.prepared_program();
+        let prepared = match self.memory.allocation_budget() {
+            Some(budget) if !prepared.belongs_to(budget) => PreparedProgram {
+                // The admitted, profile-priced operations are immutable. A foreign
+                // VM must fund its own copy, including the shared control block.
+                ops: crate::cache_memory::SharedAllocation::try_copy_from_slice_with_memory_budget(
+                    &prepared.ops,
+                    budget,
+                )?,
+                first_pc: prepared.first_pc,
+                end_pc: prepared.end_pc,
+            },
+            _ => prepared.clone(),
         };
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
@@ -1806,7 +1794,7 @@ impl IVM {
             contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table,
-            predecoded: Some(decoded),
+            predecoded: None,
             prepared: Some(prepared),
             code_hash: contract.code_hash().into(),
             entry_pc: contract.instruction_entry_pc(),

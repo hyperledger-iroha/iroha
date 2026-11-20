@@ -157,7 +157,18 @@ export type BrowserTransactionSignature =
   | BrowserTransactionBytes
   | BrowserTransactionSignatureObject;
 
+/** Bare payloads require an explicit layout; omission preserves current compact bytes. */
+export interface BrowserNoritoLayoutOptions {
+  layout?: "current" | "dense";
+}
+
+/** Dense has no governed versioned submission mapping and is available only as an offline bare archive. */
+export type BrowserSignedTransactionLayoutOptions =
+  | { layout?: "current"; format?: "versioned" | "bare" }
+  | { layout: "dense"; format: "bare" };
+
 export interface BrowserFinalizedSignedTransaction {
+  /** Versioned current wire by default, or an offline bare archive when explicitly requested. */
   signedTransaction: Uint8Array;
   hash: Uint8Array;
   hashHex: string;
@@ -167,7 +178,10 @@ export class BrowserTransactionCodecError extends TypeError {
   readonly code: string;
 }
 
-export function buildBrowserTransferPayload(input: BrowserTransferInput): Uint8Array;
+export function buildBrowserTransferPayload(
+  input: BrowserTransferInput,
+  options?: BrowserNoritoLayoutOptions,
+): Uint8Array;
 
 export function buildBrowserInstructionTransactionPayload(
   input: BrowserInstructionTransactionInput,
@@ -198,11 +212,13 @@ export function buildBrowserExecutableBatchPayload(
 export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
   networkPrefix: number,
+  options?: BrowserNoritoLayoutOptions,
 ): string;
 
 export function validateBrowserTransferSignable(
   signable: BrowserTransactionSignable,
   constraints?: BrowserTransactionSignableConstraints,
+  options?: BrowserNoritoLayoutOptions,
 ): Readonly<ValidatedBrowserTransactionSignable>;
 
 export function validateBrowserInstructionTransactionSignable(
@@ -219,6 +235,7 @@ export function finalizeBrowserSignedTransaction(
   signable: BrowserTransactionSignable,
   signature: BrowserTransactionSignature,
   signingPublicKey: BrowserTransactionBytes | string,
+  options?: BrowserSignedTransactionLayoutOptions,
 ): BrowserFinalizedSignedTransaction;
 
 export function finalizeBrowserInstructionTransaction(
@@ -236,6 +253,7 @@ export function finalizeBrowserExecutableBatchTransaction(
 export function browserSignedTransactionHashHex(
   signedTransaction: BrowserTransactionBytes,
   networkPrefix: number,
+  options?: BrowserSignedTransactionLayoutOptions,
 ): string;
 
 export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly<{

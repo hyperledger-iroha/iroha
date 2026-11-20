@@ -8802,14 +8802,22 @@ mod tests {
             .with_label_values(&[manifest_label.as_str(), "slow"])
             .get();
         let handle = test_logger();
-        let mut receiver = match handle.subscribe_on_telemetry(Channel::Regular).await {
-            Ok(receiver) => receiver,
-            Err(err) => {
+        // The shared test logger's actor runs on whichever test runtime first created it; bound
+        // the subscription so an unpolled actor fails this test instead of hanging the suite.
+        let mut receiver = match tokio::time::timeout(
+            Duration::from_secs(30),
+            handle.subscribe_on_telemetry(Channel::Regular),
+        )
+        .await
+        {
+            Ok(Ok(receiver)) => receiver,
+            Ok(Err(err)) => {
                 eprintln!(
                     "skipping stall telemetry assertion (telemetry channel unavailable): {err}"
                 );
                 return;
             }
+            Err(_) => panic!("telemetry subscription did not answer within 30s"),
         };
         let payload_arc = Arc::new(payload);
         let fetcher = {
@@ -8826,10 +8834,13 @@ mod tests {
                 }
             }
         };
-        let session = orchestrator
-            .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
-            .await
-            .expect("fetch outcome");
+        let session = tokio::time::timeout(
+            Duration::from_secs(120),
+            orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher),
+        )
+        .await
+        .expect("slow-provider fetch completes within 120s")
+        .expect("fetch outcome");
         assert_eq!(session.outcome.chunks.len(), plan.chunks.len());
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
         let stalls_after = metrics

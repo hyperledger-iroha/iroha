@@ -42,7 +42,7 @@ internal class KagemushaWalletSetupInputV1(
             44 -> intArrayOf(10_034, 0, 0)
             21, 22 -> intArrayOf(21_092, 0, 0)
             23 -> intArrayOf(36 * 1024 * 1024, 0, 0)
-            25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
+            25 -> intArrayOf(32 * 1024 * 1024, 1024, 16 * 1024 * 1024)
             26 -> intArrayOf(21_092, 16_384, 0)
             45 -> intArrayOf(16_384, 0, 0)
             29, 37, 46 -> intArrayOf(65_536, 0, 0)
@@ -74,6 +74,7 @@ internal class KagemushaWalletSetupInputV1(
         require(selector !in listOf(42, 44, 56) || a.isNotEmpty()) { "bound Credited original" }
         require((selector !in 8..14 && selector !in 16..17 && selector !in 21..23) || a.isNotEmpty()) { "Credited original" }
         require(selector !in listOf(5, 25, 26, 33, 34, 36) || (a.isNotEmpty() && b.isNotEmpty())) { "paired setup originals" }
+        require(selector != 25 || c.isNotEmpty()) { "selected State schema original" }
         require(selector != 34 || c.isNotEmpty()) { "ledger finality original" }
     }
     fun identity(): ByteArray = id.copyOf()

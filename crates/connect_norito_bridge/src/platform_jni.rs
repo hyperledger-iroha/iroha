@@ -35,6 +35,7 @@ mod fi_checkpoint_selection;
 mod fi_context_assertion;
 mod fi_context_continuation;
 mod gpu;
+mod instruction_layout;
 mod kagemusha_spartan;
 mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;

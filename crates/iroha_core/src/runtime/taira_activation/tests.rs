@@ -358,7 +358,8 @@ fn schedule(
 ) -> Result<(), InstructionExecutionError> {
     let id = validate(fixture, &certificate).expect("valid boundary");
     with_transaction(fixture, |tx| {
-        tx.taira_activation_entrypoint = Some(id);
+        tx.taira_activation_entrypoint =
+            Some(crate::runtime::taira_activation::AdmittedSchedule::TimeIronwood(id));
         (ScheduleTairaTimeIronwoodV1 { certificate }).execute(&account(6), tx)
     })
 }

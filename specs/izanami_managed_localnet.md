@@ -63,12 +63,12 @@ Non-goals:
 | # | Fact | Source |
 | - | --- | --- |
 | C1 | Validators 0–2 host providers 0–2 inside the same `iroha3d` process; validator 0 also hosts the publication service. Validator 3 hosts no provider. | `generated_service_runtime.rs:90-125`, `runtime/owned.rs:278-302` |
-| C2 | The generated client context targets validator 0's Torii. Deploy, call, view and the build registry use it, and deploys confirm through that one endpoint. | `crates/iroha_deploy/src/localnet/config.rs:687`, `crates/iroha_contract_deploy/src/lib.rs:1085`, `crates/iroha_contract_deploy/src/call.rs:1240` |
+| C2 | The generated client context targets validator 0's Torii. Deploy, call, view and the build registry use it, and deploys confirm through that one endpoint. | `crates/iroha_deploy/src/localnet/config.rs` (`render_client_config`), `crates/iroha_contract_deploy/src/lib.rs:1085`, `crates/iroha_contract_deploy/src/call.rs:1240` |
 | C3 | `PeerProcesses::gateway` requires four children; start and stop act on the whole committee. On Windows every stop is `kill`. | `runtime/owned.rs:283`, `runtime/owned.rs:218-275`, `runtime/owned.rs:354-408`, `runtime/owned.rs:375-376` |
 | C4 | A service observation lasts `DISCOVERY_FRESHNESS` = 30 s and an expired one stops the network. Discovery reads fall back across peers, but each provider's gateway must be a running child. | `build_registry.rs:24`, `runtime.rs:203-214`, `runtime.rs:427-449`, `native_operation.rs:560-578` |
 | C5 | Custody renewal starts at the enrollment midpoint, withdraws Ready and may restart all four validators. Enrollment validity is at most one day. | `runtime.rs:479-541`, `runtime/renewal.rs:26-70`, `service_policies.rs:216` |
 | C6 | The first launch of each validator passes `--sumeragi-assert-fresh-key` and records `peer{i}.launch` = `1` before exec. Later launches never assert fresh keys. | `runtime.rs:611-658` |
-| C7 | `storage/peer{i}` holds Kura and its snapshot directory. `state/peer{i}` holds `sumeragi-records`, `sumeragi-installation.log`, provider archives and caches. Provider archives require State height = Kura height, and a height-zero start requires an empty archive namespace. | `crates/iroha_deploy/src/localnet/config.rs:53-66`, `crates/iroha_deploy/src/localnet/config.rs:330-375`, `crates/irohad/src/sorafs_reputation_finalized_query.rs:880-893`, `crates/irohad/src/sorafs_provider_ingest_finalized_query.rs:270-283` |
+| C7 | `nodes/peer{i}` is validator `i`'s `data_dir`: its keys are the fixed files of `nodes/peer{i}/secrets/` and all its state derives under `nodes/peer{i}/state/`. There `kura` is Kura and `snapshot` its snapshot directory, and `kura-sumeragi-records` and `kura-sumeragi-installation.log` (siblings of the Kura store) are the safety records and the key installation log; provider archives and caches live in the same `state/` directory. Provider archives require State height = Kura height, and a height-zero start requires an empty archive namespace. | `crates/iroha_deploy/src/localnet/config.rs` (`peer_data_dir`, `records_dir_in_data_dir`), `crates/iroha_config/src/parameters/defaults.rs` (`data_dir::STATE_PATHS`), `crates/irohad/src/sorafs_reputation_finalized_query.rs:880-893`, `crates/irohad/src/sorafs_provider_ingest_finalized_query.rs:270-283` |
 | C8 | Readiness already reads each peer separately through `status(peer)` and `wait_applied(peer, hash)`. | `runtime/readiness.rs:161-173`, `runtime/readiness.rs:401-415` |
 | C9 | Mochi shows a validator count only, because the status carries no per-validator data. Its `ready()` gate and stream connection require `Ready`. | `mochi/mochi-ui-egui/src/gui/widgets.rs:216-217`, `mochi/mochi-ui-egui/src/gui.rs:878`, `mochi/mochi-ui-egui/src/gui.rs:1330` |
 
@@ -331,13 +331,15 @@ has a 120 s bound. When that elapses the slot stays `catching_up` with a closed
 ### 6.4 Wipe-and-resync (validator 3 only)
 
 1. Stop validator 3 (graceful, then kill after the grace period).
-2. Remove `storage/peer3`, which holds Kura and its snapshot directory, plus every
+2. Remove `nodes/peer3/state/kura` and `nodes/peer3/state/snapshot` (Kura and its snapshot
+   directory), plus every
    State-derived cache whose startup check binds it to the Kura height. The list comes
    from a wipe manifest built from validator 3's generated configuration. Each store is
    classified as *derived: remove*, *durable: keep* or *unknown: refuse*, and a test
    pins the classification.
-3. Never remove `state/peer3/sumeragi-records`, `state/peer3/sumeragi-installation.log`,
-   keys, the configuration, `peer3.launch` or logs.
+3. Never remove `nodes/peer3/state/kura-sumeragi-records`,
+   `nodes/peer3/state/kura-sumeragi-installation.log`, the keys in `nodes/peer3/secrets/`,
+   the configuration, `peer3.launch` or logs.
 4. Start without asserting fresh keys, then run the rejoin proof from height zero.
 
 The wipe is refused if the manifest finds a nonempty store it cannot classify.
@@ -545,8 +547,9 @@ Musubi and `iroha_contract_deploy`.
   flight there count as `in_flight_at_outage`.
 - **Confirmation.** Izanami polls the global transaction status until it reads
   `Applied` from state (`src/chaos.rs:6621-6773`) and records no per-transaction
-  confirmation latency; its submit latency includes retries
-  (`src/chaos.rs:6879-6884`). The engine instead
+  confirmation latency. Its submit latency includes retries. Progress reports
+  compute exact nearest-rank p50, p95 and p99 using cumulative counts for each
+  observed millisecond value. The managed engine
   matches hashes on the canonical block and event stream, as Mochi does, which gives a
   latency per transaction. Transactions not seen before their timeout fall back to one
   status read.

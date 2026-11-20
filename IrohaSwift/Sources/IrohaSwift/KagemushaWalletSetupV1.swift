@@ -83,7 +83,7 @@ struct KagemushaWalletSetupInputV1 {
     case 53: limits = [256 * 1024, 0, 0]
     case 21, 22: limits = [21_092, 0, 0]
     case 23: limits = [36 * 1024 * 1024, 0, 0]
-    case 25: limits = [32 * 1024 * 1024, 1024, 0]
+    case 25: limits = [32 * 1024 * 1024, 1024, 16 * 1024 * 1024]
     case 26: limits = [21_092, 16_384, 0]
     case 45: limits = [16_384, 0, 0]
     case 29, 37, 46: limits = [65_536, 0, 0]
@@ -103,7 +103,7 @@ struct KagemushaWalletSetupInputV1 {
       ![33, 34, 36, 37, 42, 44, 46, 55, 56].contains(selector) || !first.isEmpty,
       selector != 2 || second.isEmpty == third.isEmpty, selector != 39 || first.isEmpty == second.isEmpty,
       (!(8...10).contains(selector) && !(12...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25, 26, 33, 34, 36, 40].contains(selector) || (!first.isEmpty && !second.isEmpty),
-      selector != 34 || !third.isEmpty
+      ![25, 34].contains(selector) || !third.isEmpty
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.selector = selector; self.identity = kagemushaWalletSetupCopyV1(identity)
     self.amount = amount; self.token = token

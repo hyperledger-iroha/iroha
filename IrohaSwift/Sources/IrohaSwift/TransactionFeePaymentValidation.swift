@@ -1,38 +1,52 @@
 import Foundation
 
-/// Structural checks for the compact `FeePaymentIntent` and metadata fields of a
+/// Structural checks for the `FeePaymentIntent` and metadata fields of a
 /// canonical `TransactionPayload`.
+///
+/// Every check reads the payload in one named layout: `.compact`, the layout of
+/// the current transaction wire, unless the caller names another. The layout is
+/// never inferred from the bytes.
 enum TransactionFeePaymentValidation {
-    /// Validates the canonical compact `FeePaymentIntent` shared by transaction payloads.
-    static func requireCanonicalTransactionFeePayment(_ payload: Data) throws {
-        var intent = ToriiVerifyingKeyCompactReader(payload)
-        let payer = try intent.takeUInt32("fee_payment.payer")
+    /// Validates the canonical `FeePaymentIntent` shared by transaction payloads.
+    static func requireCanonicalTransactionFeePayment(
+        _ payload: Data,
+        layout: NoritoWireLayout = .compact
+    ) throws {
+        var intent = ToriiVerifyingKeyCompactReader(payload, layout: layout)
+        let payer = try intent.takeEnumTag("fee_payment.payer")
         var value = ToriiVerifyingKeyCompactReader(
-            try intent.takeField("fee_payment.value")
+            try intent.takeField("fee_payment.value"),
+            layout: layout
         )
         switch payer {
         case 0:
             try requireCanonicalChargeLimits(
-                try value.takeField("fee_payment.charge_limits")
+                try value.takeField("fee_payment.charge_limits"),
+                layout: layout
             )
             _ = try requireCanonicalPositiveUInt64Option(
                 try value.takeField("fee_payment.gas_limit"),
-                field: "fee_payment.gas_limit"
+                field: "fee_payment.gas_limit",
+                layout: layout
             )
         case 1:
             try requireCanonicalSponsorProgram(
-                try value.takeField("fee_payment.program_id")
+                try value.takeField("fee_payment.program_id"),
+                layout: layout
             )
             _ = try requireCanonicalPositiveUInt64(
                 try value.takeField("fee_payment.program_revision"),
-                field: "fee_payment.program_revision"
+                field: "fee_payment.program_revision",
+                layout: layout
             )
             try requireCanonicalChargeLimits(
-                try value.takeField("fee_payment.charge_limits")
+                try value.takeField("fee_payment.charge_limits"),
+                layout: layout
             )
             _ = try requireCanonicalPositiveUInt64Option(
                 try value.takeField("fee_payment.gas_limit"),
-                field: "fee_payment.gas_limit"
+                field: "fee_payment.gas_limit",
+                layout: layout
             )
         default:
             throw invalid("fee_payment contains an unknown payer variant")
@@ -42,42 +56,53 @@ enum TransactionFeePaymentValidation {
         }
     }
 
-    /// Requires the exact empty compact metadata encoding used when a request has no metadata.
-    static func requireEmptyTransactionMetadata(_ payload: Data) throws {
-        var metadata = ToriiVerifyingKeyCompactReader(payload)
-        guard try metadata.takeUInt64("metadata.count") == 0,
+    /// Requires the exact empty metadata encoding used when a request has no metadata.
+    static func requireEmptyTransactionMetadata(
+        _ payload: Data,
+        layout: NoritoWireLayout = .compact
+    ) throws {
+        var metadata = ToriiVerifyingKeyCompactReader(payload, layout: layout)
+        guard try metadata.takeCount("metadata.count") == 0,
               metadata.isFinished else {
             throw invalid("transaction metadata must use the exact empty encoding")
         }
     }
 
-    private static func requireCanonicalChargeLimits(_ payload: Data) throws {
-        var limits = ToriiVerifyingKeyCompactReader(payload)
+    private static func requireCanonicalChargeLimits(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var limits = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         // Norito's compact-length flag applies to enclosing fields and
         // elements, while sequence counts remain fixed-width little-endian.
-        let count = try limits.takeUInt64("fee_payment.charge_limits.count")
+        // The dense layout writes the count as a varint.
+        let count = try limits.takeCount("fee_payment.charge_limits.count")
         guard count <= UInt64(FeeChargeKind.allCases.count) else {
             throw invalid("fee_payment.charge_limits contains duplicate or unknown charge kinds")
         }
         var previousKind: UInt32?
         for _ in 0..<count {
             var limit = ToriiVerifyingKeyCompactReader(
-                try limits.takeField("fee_payment.charge_limits.item")
+                try limits.takeField("fee_payment.charge_limits.item"),
+                layout: layout
             )
             var kind = ToriiVerifyingKeyCompactReader(
-                try limit.takeField("fee_payment.charge_limits.kind")
+                try limit.takeField("fee_payment.charge_limits.kind"),
+                layout: layout
             )
-            let rawKind = try kind.takeUInt32("fee_payment.charge_limits.kind")
+            let rawKind = try kind.takeEnumTag("fee_payment.charge_limits.kind")
             guard kind.isFinished, FeeChargeKind(rawValue: rawKind) != nil,
                   previousKind.map({ $0 < rawKind }) ?? true else {
                 throw invalid("fee_payment.charge_limits must use unique canonical charge-kind order")
             }
             previousKind = rawKind
             try requireCanonicalAssetDefinition(
-                try limit.takeField("fee_payment.charge_limits.asset_definition_id")
+                try limit.takeField("fee_payment.charge_limits.asset_definition_id"),
+                layout: layout
             )
             try requireCanonicalPositiveQuantity(
-                try limit.takeField("fee_payment.charge_limits.max_amount")
+                try limit.takeField("fee_payment.charge_limits.max_amount"),
+                layout: layout
             )
             guard limit.isFinished else {
                 throw invalid("fee_payment.charge_limits item contains trailing bytes")
@@ -88,26 +113,32 @@ enum TransactionFeePaymentValidation {
         }
     }
 
-    private static func requireCanonicalAssetDefinition(_ payload: Data) throws {
-        var asset = ToriiVerifyingKeyCompactReader(payload)
-        var bytes = Data()
-        bytes.reserveCapacity(16)
-        for _ in 0..<16 {
-            guard try asset.takeLength("fee_payment.asset_definition_id.byte") == 1 else {
-                throw invalid("fee_payment asset definition must use the exact 16-byte encoding")
-            }
-            bytes.append(try asset.takeUInt8("fee_payment.asset_definition_id.byte"))
+    private static func requireCanonicalAssetDefinition(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var asset = ToriiVerifyingKeyCompactReader(payload, layout: layout)
+        let bytes: Data
+        do {
+            bytes = try asset.takeByteElements(16, field: "fee_payment.asset_definition_id.byte")
+        } catch {
+            throw invalid("fee_payment asset definition must use the exact 16-byte encoding")
         }
         guard asset.isFinished, AssetDefinitionAddress.encode(uuidBytes: bytes) != nil else {
             throw invalid("fee_payment asset definition must use the exact 16-byte encoding")
         }
     }
 
-    private static func requireCanonicalPositiveQuantity(_ payload: Data) throws {
-        var quantity = ToriiVerifyingKeyCompactReader(payload)
+    private static func requireCanonicalPositiveQuantity(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var quantity = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         var mantissa = ToriiVerifyingKeyCompactReader(
-            try quantity.takeField("fee_payment.max_amount.mantissa")
+            try quantity.takeField("fee_payment.max_amount.mantissa"),
+            layout: layout
         )
+        // The `BigInt` byte count is a fixed `u32` in every layout (`norito.md`).
         let byteCount = try mantissa.takeUInt32("fee_payment.max_amount.mantissa.count")
         guard byteCount > 0, byteCount <= UInt32(CanonicalNorito.maxBigIntBytes) else {
             throw invalid("fee_payment maximum must fit the canonical numeric bound")
@@ -124,7 +155,8 @@ enum TransactionFeePaymentValidation {
             throw invalid("fee_payment maximum must be a positive canonical quantity")
         }
         var scale = ToriiVerifyingKeyCompactReader(
-            try quantity.takeField("fee_payment.max_amount.scale")
+            try quantity.takeField("fee_payment.max_amount.scale"),
+            layout: layout
         )
         guard try scale.takeUInt32("fee_payment.max_amount.scale") <= CanonicalNorito.maxNumericScale,
               scale.isFinished,
@@ -133,13 +165,18 @@ enum TransactionFeePaymentValidation {
         }
     }
 
-    private static func requireCanonicalSponsorProgram(_ payload: Data) throws {
-        var program = ToriiVerifyingKeyCompactReader(payload)
+    private static func requireCanonicalSponsorProgram(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var program = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         try requireCanonicalAccountController(
-            try program.takeField("fee_payment.program_id.sponsor")
+            try program.takeField("fee_payment.program_id.sponsor"),
+            layout: layout
         )
         var name = ToriiVerifyingKeyCompactReader(
-            try program.takeField("fee_payment.program_id.name")
+            try program.takeField("fee_payment.program_id.name"),
+            layout: layout
         )
         let byteCount = try name.takeLength("fee_payment.program_id.name.length")
         guard byteCount > 0, byteCount <= UInt64(Int.max) else {
@@ -157,36 +194,43 @@ enum TransactionFeePaymentValidation {
         }
     }
 
-    private static func requireCanonicalAccountController(_ payload: Data) throws {
-        var controller = ToriiVerifyingKeyCompactReader(payload)
-        let tag = try controller.takeUInt32("fee_payment.program_id.sponsor.controller")
+    private static func requireCanonicalAccountController(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var controller = ToriiVerifyingKeyCompactReader(payload, layout: layout)
+        let tag = try controller.takeEnumTag("fee_payment.program_id.sponsor.controller")
         let body = try controller.takeField("fee_payment.program_id.sponsor.value")
         guard controller.isFinished else {
             throw invalid("fee_payment sponsor account contains trailing bytes")
         }
         switch tag {
         case 0:
-            try requireCanonicalPublicKey(body)
+            try requireCanonicalPublicKey(body, layout: layout)
         case 1:
-            try requireCanonicalMultisigPolicy(body)
+            try requireCanonicalMultisigPolicy(body, layout: layout)
         default:
             throw invalid("fee_payment sponsor account controller is unknown")
         }
     }
 
-    private static func requireCanonicalPublicKey(_ payload: Data) throws {
-        var key = ToriiVerifyingKeyCompactReader(payload)
-        let count = try key.takeUInt64("fee_payment.program_id.sponsor.public_key.count")
+    private static func requireCanonicalPublicKey(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var key = ToriiVerifyingKeyCompactReader(payload, layout: layout)
+        let count = try key.takeCount("fee_payment.program_id.sponsor.public_key.count")
         guard count > 1, count <= 8_193 else {
             throw invalid("fee_payment sponsor public key length is invalid")
         }
-        var bytes = Data()
-        bytes.reserveCapacity(Int(count))
-        for _ in 0..<count {
-            guard try key.takeLength("fee_payment.program_id.sponsor.public_key.byte") == 1 else {
-                throw invalid("fee_payment sponsor public key is not canonical")
-            }
-            bytes.append(try key.takeUInt8("fee_payment.program_id.sponsor.public_key.byte"))
+        let bytes: Data
+        do {
+            bytes = try key.takeByteElements(
+                Int(count),
+                field: "fee_payment.program_id.sponsor.public_key.byte"
+            )
+        } catch {
+            throw invalid("fee_payment sponsor public key is not canonical")
         }
         guard key.isFinished,
               let algorithmByte = bytes.first,
@@ -199,17 +243,22 @@ enum TransactionFeePaymentValidation {
         }
     }
 
-    private static func requireCanonicalMultisigPolicy(_ payload: Data) throws {
-        var policy = ToriiVerifyingKeyCompactReader(payload)
+    private static func requireCanonicalMultisigPolicy(
+        _ payload: Data,
+        layout: NoritoWireLayout
+    ) throws {
+        var policy = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         var version = ToriiVerifyingKeyCompactReader(
-            try policy.takeField("fee_payment.program_id.sponsor.multisig.version")
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.version"),
+            layout: layout
         )
         guard try version.takeUInt8("fee_payment.program_id.sponsor.multisig.version") == 1,
               version.isFinished else {
             throw invalid("fee_payment sponsor multisig version is invalid")
         }
         var threshold = ToriiVerifyingKeyCompactReader(
-            try policy.takeField("fee_payment.program_id.sponsor.multisig.threshold")
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.threshold"),
+            layout: layout
         )
         let requiredWeight = try threshold.takeUInt16(
             "fee_payment.program_id.sponsor.multisig.threshold"
@@ -218,9 +267,10 @@ enum TransactionFeePaymentValidation {
             throw invalid("fee_payment sponsor multisig threshold is invalid")
         }
         var members = ToriiVerifyingKeyCompactReader(
-            try policy.takeField("fee_payment.program_id.sponsor.multisig.members")
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.members"),
+            layout: layout
         )
-        let memberCount = try members.takeUInt64(
+        let memberCount = try members.takeCount(
             "fee_payment.program_id.sponsor.multisig.members.count"
         )
         guard memberCount > 0, memberCount <= 1_024 else {
@@ -229,13 +279,16 @@ enum TransactionFeePaymentValidation {
         var totalWeight: UInt64 = 0
         for _ in 0..<memberCount {
             var member = ToriiVerifyingKeyCompactReader(
-                try members.takeField("fee_payment.program_id.sponsor.multisig.member")
+                try members.takeField("fee_payment.program_id.sponsor.multisig.member"),
+                layout: layout
             )
             try requireCanonicalPublicKey(
-                try member.takeField("fee_payment.program_id.sponsor.multisig.member.public_key")
+                try member.takeField("fee_payment.program_id.sponsor.multisig.member.public_key"),
+                layout: layout
             )
             var weight = ToriiVerifyingKeyCompactReader(
-                try member.takeField("fee_payment.program_id.sponsor.multisig.member.weight")
+                try member.takeField("fee_payment.program_id.sponsor.multisig.member.weight"),
+                layout: layout
             )
             let value = try weight.takeUInt16(
                 "fee_payment.program_id.sponsor.multisig.member.weight"
@@ -254,9 +307,10 @@ enum TransactionFeePaymentValidation {
 
     private static func requireCanonicalPositiveUInt64(
         _ payload: Data,
-        field: String
+        field: String,
+        layout: NoritoWireLayout
     ) throws -> UInt64 {
-        var value = ToriiVerifyingKeyCompactReader(payload)
+        var value = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         let exact = try value.takeUInt64(field)
         guard exact > 0, value.isFinished else {
             throw invalid("\(field) must be a positive canonical UInt64")
@@ -266,9 +320,10 @@ enum TransactionFeePaymentValidation {
 
     private static func requireCanonicalPositiveUInt64Option(
         _ payload: Data,
-        field: String
+        field: String,
+        layout: NoritoWireLayout
     ) throws -> UInt64? {
-        var option = ToriiVerifyingKeyCompactReader(payload)
+        var option = ToriiVerifyingKeyCompactReader(payload, layout: layout)
         switch try option.takeUInt8(field) {
         case 0:
             guard option.isFinished else {
@@ -278,7 +333,8 @@ enum TransactionFeePaymentValidation {
         case 1:
             let exact = try requireCanonicalPositiveUInt64(
                 try option.takeField(field),
-                field: field
+                field: field,
+                layout: layout
             )
             guard option.isFinished else {
                 throw invalid("\(field) Some encoding contains trailing bytes")

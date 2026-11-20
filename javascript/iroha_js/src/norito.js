@@ -12,6 +12,7 @@ import {
   TEXT_MUST_BE_A,
   TEXT_MUST_NOT_CONTAIN,
   COMPACT_LEN_FLAG,
+  normalizeNativeCodecOptions,
   BufferReader,
   cloneJson,
   normalizeInstructionJsonValue,
@@ -601,7 +602,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
   }
 }
 
-function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
+function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime, layout = "current") {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   const exactJson = exactFinalizeElectionTallyJson(normalized)
@@ -609,7 +610,7 @@ function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
     ?? exactRegisterDataspaceAssetDefinitionJson(normalized);
   if (exactJson !== null) {
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-    return toBuffer(native.noritoEncodeInstruction(exactJson, networkPrefix));
+    return toBuffer(native.noritoEncodeInstruction(exactJson, networkPrefix, layout));
   }
   const retail = isRetailInstructionObject(normalized);
   if (!retail) validateInstructionObjectNumbers(normalized);
@@ -617,7 +618,7 @@ function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
   const json = retail
     ? stringifyStrictLosslessIntegerJson(normalized, "retail instruction")
     : JSON.stringify(normalized);
-  return toBuffer(native.noritoEncodeInstruction(json, networkPrefix));
+  return toBuffer(native.noritoEncodeInstruction(json, networkPrefix, layout));
 }
 
 /** Serialize one canonical direct public ballot without rounding its u64 duration. */
@@ -686,10 +687,11 @@ export function exactFinalizeElectionTallyJson(normalized) {
  * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {Buffer}
  */
-function encodeInstruction(instruction, networkPrefix, nativeRuntime) {
+function encodeInstruction(instruction, networkPrefix, nativeRuntime, options = {}) {
+  const { layout } = normalizeNativeCodecOptions(options);
   requireNetworkPrefix(networkPrefix);
   if (isBinaryLike(instruction)) {
-    return canonicalInstructionFrame(instruction, networkPrefix, nativeRuntime);
+    return canonicalInstructionFrame(instruction, networkPrefix, nativeRuntime, layout);
   }
   if (typeof instruction === JS_TYPE_STRING) {
     const trimmed = instruction.trim();
@@ -711,7 +713,7 @@ function encodeInstruction(instruction, networkPrefix, nativeRuntime) {
       } else {
         frame = decodeExactStandardBase64(instruction, "instruction frame");
       }
-      return canonicalInstructionFrame(frame, networkPrefix, nativeRuntime);
+      return canonicalInstructionFrame(frame, networkPrefix, nativeRuntime, layout);
     }
     const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
       ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
@@ -721,26 +723,26 @@ function encodeInstruction(instruction, networkPrefix, nativeRuntime) {
     rejectRetiredGenericZkInstruction(exactParsed);
     validateGovernanceInstructionBoundary(exactParsed);
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-    return toBuffer(native.noritoEncodeInstruction(instruction, networkPrefix));
+    return toBuffer(native.noritoEncodeInstruction(instruction, networkPrefix, layout));
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  return encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime);
+  return encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime, layout);
 }
 
-function canonicalInstructionFrame(bytes, networkPrefix, nativeRuntime) {
+function canonicalInstructionFrame(bytes, networkPrefix, nativeRuntime, layout) {
   const frame = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = native.noritoDecodeInstruction(frame, networkPrefix);
+  const json = native.noritoDecodeInstruction(frame, networkPrefix, layout);
   const encoder = resolveNative("noritoEncodeInstruction", nativeRuntime);
-  const canonical = toBuffer(encoder.noritoEncodeInstruction(json, networkPrefix));
+  const canonical = toBuffer(encoder.noritoEncodeInstruction(json, networkPrefix, layout));
   if (!frame.equals(canonical)) {
     rejectError("instruction frame is not canonical Norito");
   }
   return canonical;
 }
 
-export function noritoEncodeInstruction(instruction, networkPrefix) {
-  return encodeInstruction(instruction, networkPrefix, defaultNativeRuntime);
+export function noritoEncodeInstruction(instruction, networkPrefix, options = {}) {
+  return encodeInstruction(instruction, networkPrefix, defaultNativeRuntime, options);
 }
 
 /**
@@ -1147,6 +1149,7 @@ export function decodeRetailFeeAssessmentMarkerMessage(message) {
     rejectType("retail fee assessment marker exceeds size bound");
   }
   const frame = validateNoritoFrame(bytes, {
+    expectedLayout: "current",
     context: "retail fee assessment marker",
     expectedSchemaHash: RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH,
   });
@@ -1182,26 +1185,25 @@ function encodeMultisigInstructions(instructions, networkPrefix, nativeRuntime) 
 }
 
 /**
- * Encode one canonical `InstructionBox` archive for inclusion in a compact
- * transaction payload. The public instruction frame is decoded and rebuilt so
+ * Encode one canonical `InstructionBox` archive in the selected transaction layout. The public instruction frame is decoded and rebuilt so
  * both its outer schema and its inner instruction schema are verified before
  * the archive crosses the signing boundary.
  */
-function encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime) {
-  const frame = encodeInstruction(instruction, networkPrefix, nativeRuntime);
+function encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime, options = {}) {
+  const { layout } = normalizeNativeCodecOptions(options);
+  const frame = encodeInstruction(instruction, networkPrefix, nativeRuntime, { layout });
   const decoder = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = decoder.noritoDecodeInstruction(frame, networkPrefix);
+  const json = decoder.noritoDecodeInstruction(frame, networkPrefix, layout);
   const encoder = resolveNative("noritoEncodeInstructionBoxArchive", nativeRuntime);
-  return toBuffer(encoder.noritoEncodeInstructionBoxArchive(json, networkPrefix));
+  return toBuffer(encoder.noritoEncodeInstructionBoxArchive(json, networkPrefix, layout));
 }
 
-export function noritoEncodeInstructionBoxArchive(instruction, networkPrefix) {
-  return encodeInstructionBoxArchive(instruction, networkPrefix, defaultNativeRuntime);
+export function noritoEncodeInstructionBoxArchive(instruction, networkPrefix, options = {}) {
+  return encodeInstructionBoxArchive(instruction, networkPrefix, defaultNativeRuntime, options);
 }
 
 /**
- * Decode one exact canonical `InstructionBox` archive embedded in a compact
- * transaction payload.
+ * Decode one exact canonical `InstructionBox` archive in the selected transaction layout.
  *
  * Unlike {@link noritoDecodeInstruction}, this accepts the bare archive used
  * inside `TransactionPayload::instructions`, not a framed public instruction.
@@ -1213,14 +1215,15 @@ export function noritoEncodeInstructionBoxArchive(instruction, networkPrefix) {
  * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {unknown}
  */
-export function noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
-  return decodeInstructionBoxArchive(bytes, networkPrefix, defaultNativeRuntime);
+export function noritoDecodeInstructionBoxArchive(bytes, networkPrefix, options = {}) {
+  return decodeInstructionBoxArchive(bytes, networkPrefix, defaultNativeRuntime, options);
 }
 
-function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
+function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime, options = {}) {
+  const { layout } = normalizeNativeCodecOptions(options);
   requireNetworkPrefix(networkPrefix);
   const native = resolveNative("noritoDecodeInstructionBoxArchive", nativeRuntime);
-  const json = native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix);
+  const json = native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix, layout);
   const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
   const directDataspace = json.startsWith(REGISTER_DATASPACE_ASSET_DEFINITION_JSON_PREFIX);
   const decoded = directDataspace
@@ -1249,10 +1252,11 @@ function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
  * @returns {string | unknown}
  */
 function decodeInstruction(bytes, networkPrefix, options, nativeRuntime) {
+  options = normalizeNativeCodecOptions(options, { parseJson: true });
   requireNetworkPrefix(networkPrefix);
   const buffer = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = native.noritoDecodeInstruction(buffer, networkPrefix);
+  const json = native.noritoDecodeInstruction(buffer, networkPrefix, options.layout);
   const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
   const directDataspace = json.startsWith(REGISTER_DATASPACE_ASSET_DEFINITION_JSON_PREFIX);
   const decoded = directDataspace
@@ -1349,12 +1353,12 @@ export function _createNoritoInstructionApi(nativeRuntime) {
       inspectTriggerAction(encodedAction, networkPrefix, nativeRuntime),
     noritoDecodeInstruction: (bytes, networkPrefix, options = {}) =>
       decodeInstruction(bytes, networkPrefix, options, nativeRuntime),
-    noritoDecodeInstructionBoxArchive: (bytes, networkPrefix) =>
-      decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime),
-    noritoEncodeInstruction: (instruction, networkPrefix) =>
-      encodeInstruction(instruction, networkPrefix, nativeRuntime),
-    noritoEncodeInstructionBoxArchive: (instruction, networkPrefix) =>
-      encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime),
+    noritoDecodeInstructionBoxArchive: (bytes, networkPrefix, options = {}) =>
+      decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime, options),
+    noritoEncodeInstruction: (instruction, networkPrefix, options = {}) =>
+      encodeInstruction(instruction, networkPrefix, nativeRuntime, options),
+    noritoEncodeInstructionBoxArchive: (instruction, networkPrefix, options = {}) =>
+      encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime, options),
   });
 }
 
@@ -1498,6 +1502,7 @@ function decodeFastpqTranscriptMap(payload, context) {
  */
 export function noritoDecodeBlockProofs(bytes) {
   const frame = validateNoritoFrame(bytes, {
+    expectedLayout: "current",
     context: "BlockProofs",
     expectedTypeName: BLOCK_PROOFS_TYPE_NAME,
     requireNonEmptyPayload: true,

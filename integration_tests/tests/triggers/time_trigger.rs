@@ -684,28 +684,35 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         .await?;
         // Authenticate persisted callback outcomes so a failed NFT instruction
         // cannot masquerade as a slow successful schedule until the poll expires.
+        // The completion history is a collection: follow every continuation, since a
+        // bounded page may be short or empty and still carry a `next_cursor`.
         let completions = run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
-                client.client().get_trigger_completions(
-                    Some("mint_nft_for_all"),
-                    None,
-                    None,
-                    Some(target_height),
-                    None,
-                    Some(16),
-                    Some(64),
-                )
+                use iroha::collections::{ListQuery, field};
+                let mut rows = Vec::new();
+                let mut request = Some(
+                    ListQuery::new()
+                        .filter(
+                            field("trigger_id").eq("mint_nft_for_all")
+                                & field("block_height").gte(target_height),
+                        )
+                        .limit(16),
+                );
+                while let Some(query) = request.take() {
+                    let page = client.client().get_trigger_completions(&query)?;
+                    request = query.next_page(&page);
+                    rows.extend(page.items);
+                }
+                Ok::<_, eyre::Report>(rows)
             }
         })
         .await??;
         eyre::ensure!(
             completions
-                .completions
                 .iter()
-                .all(|record| record.completion.outcome == "Success"),
-            "time-trigger NFT callback failed: {:?}",
-            completions.completions
+                .all(|row| row["outcome"].as_str() == Some("Success")),
+            "time-trigger NFT callback failed: {completions:?}"
         );
         let poll_delay = std::cmp::max(
             Duration::from_millis(200),

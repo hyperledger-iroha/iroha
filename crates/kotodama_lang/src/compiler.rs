@@ -9003,6 +9003,23 @@ impl Compiler {
         let (bytes, manifest, _report) = self.compile_source_with_manifest_and_report(src)?;
         Ok((bytes, manifest))
     }
+    /// A lifecycle contract owns its privileged entrypoints in its deployed CNTR image.
+    /// Validate and lower the complete source before selecting the test roots, so state
+    /// initialization, trigger targets and references to private helpers are checked intact.
+    pub(crate) fn compile_lifecycle_test_harness(
+        &self,
+        program: TypedProgram,
+        source_name: &str,
+    ) -> Result<crate::session::CompileOutput, DiagnosticBundle> {
+        let mut lowered = self.lower_typed_program(program, Some(source_name))?;
+        lowered.typed.items.retain(|item| {
+            let TypedItem::Function(function) = item;
+            function.modifiers.kind == FunctionKind::Private
+        });
+        lowered.typed.triggers.clear();
+        lowered.executable_roots = executable_ir_roots(&lowered.typed, true);
+        self.compile_lowered_program(lowered, Some(source_name))
+    }
     /// Compile already linked typed HIR with native phase-aware diagnostics.
     pub(crate) fn compile_typed_program_with_manifest_and_report_diagnostics(
         &self,
@@ -9010,6 +9027,14 @@ impl Compiler {
         source_name: Option<&str>,
     ) -> Result<crate::session::CompileOutput, DiagnosticBundle> {
         let lowered = self.lower_typed_program(program, source_name)?;
+        self.compile_lowered_program(lowered, source_name)
+    }
+
+    fn compile_lowered_program(
+        &self,
+        lowered: LoweredCompilation,
+        source_name: Option<&str>,
+    ) -> Result<crate::session::CompileOutput, DiagnosticBundle> {
         let ssa = self.construct_ssa_program(lowered)?;
         let optimized = self.optimize_ssa_program(ssa)?;
         let codegen = self.destroy_ssa_program(optimized)?;

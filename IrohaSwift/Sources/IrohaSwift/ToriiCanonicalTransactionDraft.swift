@@ -17,12 +17,26 @@ struct ToriiCanonicalTransactionDraft {
     let feePayment: Data
     let metadataWire: Data
     let metadata: [String: ToriiJSONValue]
+    /// Layout of the payload and of its `authority`, `executable`,
+    /// `feePayment` and `metadataWire` bytes. Draft routes and the versioned
+    /// signed wire use `.compact`.
+    let layout: NoritoWireLayout
   }
 
   struct SignedTransactionV1 {
     let wire: Data
     let transactionPayload: Data
     let payload: Payload
+    let signerPublicKey: Data
+  }
+
+  /// One bare `SignedTransaction` inspected in a named layout.
+  struct InspectedSignedTransaction {
+    /// The exact bare signed transaction bytes.
+    let signedTransaction: Data
+    let transactionPayload: Data
+    let payload: Payload
+    let signature: Data
     let signerPublicKey: Data
   }
 
@@ -188,10 +202,43 @@ struct ToriiCanonicalTransactionDraft {
       throw ToriiClientError.invalidPayload(
         "\(context) must use signed-transaction wire version 1.")
     }
-    var reader = CanonicalNoritoReader(data: Data(bytes.dropFirst()))
-    let signatureWrapper = try reader.readCompactField()
-    let transactionPayload = try reader.readCompactField()
-    let attachments = try reader.readCompactField()
+    // Wire version 1 names the compact layout.
+    // TODO(dense-activation): no signed-transaction wire version selects the
+    // dense layout yet (`norito.md`, "Dense layout").
+    let inspected = try inspectSignedTransaction(
+      Data(bytes.dropFirst()),
+      layout: .compact,
+      context: context
+    )
+    return SignedTransactionV1(
+      wire: bytes,
+      transactionPayload: inspected.transactionPayload,
+      payload: inspected.payload,
+      signerPublicKey: inspected.signerPublicKey
+    )
+  }
+
+  /// Inspect one bare `SignedTransaction` in the layout its owner names.
+  ///
+  /// The bytes must be the exact canonical encoding of one Ed25519 signature,
+  /// one payload and no attachments in `layout`, and the signature must verify
+  /// over the Iroha hash of the payload bytes of that layout. A transaction of
+  /// another layout is refused: nothing here infers or retries a layout.
+  static func inspectSignedTransaction(
+    _ signedTransaction: Data,
+    layout: NoritoWireLayout,
+    context: String
+  ) throws -> InspectedSignedTransaction {
+    guard !signedTransaction.isEmpty,
+      signedTransaction.count <= maximumTransactionPayloadBytes + 16 * 1024
+    else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) must be one bounded non-empty signed transaction.")
+    }
+    var reader = CanonicalNoritoReader(data: signedTransaction)
+    let signatureWrapper = try reader.readField(layout: layout)
+    let transactionPayload = try reader.readField(layout: layout)
+    let attachments = try reader.readField(layout: layout)
     guard reader.remaining() == 0,
       attachments == Data([0]),
       !signatureWrapper.isEmpty,
@@ -204,16 +251,19 @@ struct ToriiCanonicalTransactionDraft {
     }
     let signature = try decodeEd25519Signature(
       signatureWrapper,
-      context: "\(context).signature"
+      context: "\(context).signature",
+      layout: layout
     )
     let payload = try parsePayload(
       transactionPayload,
 
-      context: context
+      context: context,
+      layout: layout
     )
     let signerPublicKey = try decodeEd25519Authority(
       payload.authority,
-      context: "\(context).authority"
+      context: "\(context).authority",
+      layout: layout
     )
     guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: signerPublicKey),
       key.isValidSignature(signature, for: IrohaHash.hash(transactionPayload))
@@ -223,23 +273,36 @@ struct ToriiCanonicalTransactionDraft {
       )
     }
 
-    var canonicalSigned = CompactNoritoWriter()
+    var canonicalSigned = NoritoLayoutWriter(layout: layout)
     canonicalSigned.writeField(signatureWrapper)
     canonicalSigned.writeField(transactionPayload)
     canonicalSigned.writeField(Data([0]))
-    var canonicalWire = Data([1])
-    canonicalWire.append(canonicalSigned.data)
-    guard canonicalWire == bytes else {
+    guard canonicalSigned.data == signedTransaction else {
       throw ToriiClientError.invalidPayload(
         "\(context) is not one canonical fixed-V1 signed transaction."
       )
     }
-    return SignedTransactionV1(
-      wire: bytes,
+    return InspectedSignedTransaction(
+      signedTransaction: signedTransaction,
       transactionPayload: transactionPayload,
       payload: payload,
+      signature: signature,
       signerPublicKey: signerPublicKey
     )
+  }
+
+  /// Inspect one bare `TransactionPayload` in the layout its owner names.
+  static func inspectTransactionPayload(
+    _ bytes: Data,
+    layout: NoritoWireLayout,
+    context: String
+  ) throws -> Payload {
+    guard !bytes.isEmpty, bytes.count <= maximumTransactionPayloadBytes else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) must be a bounded non-empty canonical TransactionPayload."
+      )
+    }
+    return try parsePayload(bytes, context: context, layout: layout)
   }
 
   /// Requires the exact fixed-V1 `Executable::Instructions` layout and at least one instruction.
@@ -314,9 +377,10 @@ struct ToriiCanonicalTransactionDraft {
   private static func parsePayload(
     _ bytes: Data,
 
-    context: String
+    context: String,
+    layout: NoritoWireLayout = .compact
   ) throws -> Payload {
-    var transaction = ToriiVerifyingKeyCompactReader(bytes)
+    var transaction = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
     let domain = try transaction.takeField("\(context).domain")
     let authority = try transaction.takeField("\(context).authority")
     let creation = try transaction.takeField("\(context).creation_time_ms")
@@ -343,7 +407,10 @@ struct ToriiCanonicalTransactionDraft {
       throw ToriiClientError.invalidPayload("\(context) creation_time_ms must be positive.")
     }
     do {
-      try TransactionFeePaymentValidation.requireCanonicalTransactionFeePayment(feePayment)
+      try TransactionFeePaymentValidation.requireCanonicalTransactionFeePayment(
+        feePayment,
+        layout: layout
+      )
     } catch {
       throw ToriiClientError.invalidPayload("\(context) fee_payment is not canonical.")
     }
@@ -351,17 +418,20 @@ struct ToriiCanonicalTransactionDraft {
       throw ToriiClientError.invalidPayload(
         "\(context) attachments must use the exact None encoding.")
     }
-    guard AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(authority) else {
+    guard AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+      authority,
+      layout: layout
+    ) else {
       throw ToriiClientError.invalidPayload(
         "\(context) authority is not one canonical AccountId controller."
       )
     }
-    let networkId = try decodeNetworkDomain(domain, context: context)
-    let metadataValue = try decodeMetadata(metadata, context: context)
-    var canonicalDomain = CompactNoritoWriter()
-    canonicalDomain.writeUInt32LE(0)
+    let networkId = try decodeNetworkDomain(domain, context: context, layout: layout)
+    let metadataValue = try decodeMetadata(metadata, context: context, layout: layout)
+    var canonicalDomain = NoritoLayoutWriter(layout: layout)
+    canonicalDomain.writeEnumTag(0)
     canonicalDomain.writeField(networkId.bytes)
-    var canonicalPayload = CompactNoritoWriter()
+    var canonicalPayload = NoritoLayoutWriter(layout: layout)
     for field in [
       canonicalDomain.data,
       authority,
@@ -389,24 +459,28 @@ struct ToriiCanonicalTransactionDraft {
       timeToLiveMs: try decodeNonzeroOption(
         timeToLive,
         as: UInt64.self,
-        field: "\(context).time_to_live_ms"
+        field: "\(context).time_to_live_ms",
+        layout: layout
       ),
       nonce: try decodeNonzeroOption(
         nonce,
         as: UInt32.self,
-        field: "\(context).nonce"
+        field: "\(context).nonce",
+        layout: layout
       ),
       feePayment: feePayment,
       metadataWire: metadata,
-      metadata: metadataValue
+      metadata: metadataValue,
+      layout: layout
     )
   }
 
   private static func decodeEd25519Signature(
     _ bytes: Data,
-    context: String
+    context: String,
+    layout: NoritoWireLayout
   ) throws -> Data {
-    var wrapper = ToriiVerifyingKeyCompactReader(bytes)
+    var wrapper = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
     let encoded = try wrapper.takeField("\(context).payload")
     guard wrapper.isFinished else {
       throw ToriiClientError.invalidPayload("\(context) contains trailing fields.")
@@ -414,10 +488,11 @@ struct ToriiCanonicalTransactionDraft {
     let signature = try decodeConstVec(
       encoded,
       exactCount: Ed25519SignatureAdmission.signatureLength,
-      context: context
+      context: context,
+      layout: layout
     )
-    var canonicalWrapper = CompactNoritoWriter()
-    canonicalWrapper.writeField(CompactNorito.encodeConstVec(signature))
+    var canonicalWrapper = NoritoLayoutWriter(layout: layout)
+    canonicalWrapper.writeField(NoritoLayoutCodec.encodeConstVec(signature, layout: layout))
     guard canonicalWrapper.data == bytes,
       Ed25519SignatureAdmission.isValidSignature(signature)
     else {
@@ -430,10 +505,11 @@ struct ToriiCanonicalTransactionDraft {
 
   static func decodeEd25519Authority(
     _ bytes: Data,
-    context: String
+    context: String,
+    layout: NoritoWireLayout = .compact
   ) throws -> Data {
-    var authority = ToriiVerifyingKeyCompactReader(bytes)
-    guard try authority.takeUInt32("\(context).kind") == 0 else {
+    var authority = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
+    guard try authority.takeEnumTag("\(context).kind") == 0 else {
       throw ToriiClientError.invalidPayload("\(context) must be one single-key authority.")
     }
     let encodedController = try authority.takeField("\(context).controller")
@@ -443,7 +519,8 @@ struct ToriiCanonicalTransactionDraft {
     let controller = try decodeConstVec(
       encodedController,
       exactCount: 1 + Ed25519PublicKeyAdmission.publicKeyLength,
-      context: "\(context).controller"
+      context: "\(context).controller",
+      layout: layout
     )
     guard controller.first == SigningAlgorithm.ed25519.noritoDiscriminant else {
       throw ToriiClientError.invalidPayload("\(context) must use Ed25519.")
@@ -458,27 +535,20 @@ struct ToriiCanonicalTransactionDraft {
   private static func decodeConstVec(
     _ bytes: Data,
     exactCount: Int,
-    context: String
+    context: String,
+    layout: NoritoWireLayout
   ) throws -> Data {
-    var value = ToriiVerifyingKeyCompactReader(bytes)
-    let count = try value.takeUInt64("\(context).count")
+    var value = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
+    let count = try value.takeCount("\(context).count")
     guard count == UInt64(exactCount) else {
       throw ToriiClientError.invalidPayload(
         "\(context) must contain exactly \(exactCount) bytes."
       )
     }
-    var decoded = Data()
-    decoded.reserveCapacity(exactCount)
-    for index in 0..<exactCount {
-      let byte = try value.takeField("\(context)[\(index)]")
-      guard byte.count == 1, let element = byte.first else {
-        throw ToriiClientError.invalidPayload(
-          "\(context) byte fields must each contain exactly one byte."
-        )
-      }
-      decoded.append(element)
-    }
-    guard value.isFinished, CompactNorito.encodeConstVec(decoded) == bytes else {
+    let decoded = try value.takeByteElements(exactCount, field: context)
+    guard value.isFinished,
+      NoritoLayoutCodec.encodeConstVec(decoded, layout: layout) == bytes
+    else {
       throw ToriiClientError.invalidPayload("\(context) is not canonical.")
     }
     return decoded
@@ -506,9 +576,13 @@ struct ToriiCanonicalTransactionDraft {
     return writer.data
   }
 
-  private static func decodeNetworkDomain(_ bytes: Data, context: String) throws -> NetworkId {
-    var domain = ToriiVerifyingKeyCompactReader(bytes)
-    guard try domain.takeUInt32("\(context).domain.kind") == 0 else {
+  private static func decodeNetworkDomain(
+    _ bytes: Data,
+    context: String,
+    layout: NoritoWireLayout
+  ) throws -> NetworkId {
+    var domain = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
+    guard try domain.takeEnumTag("\(context).domain.kind") == 0 else {
       throw ToriiClientError.invalidPayload(
         "\(context) transaction domain must use TransactionDomain::Network."
       )
@@ -528,8 +602,12 @@ struct ToriiCanonicalTransactionDraft {
     }
   }
 
-  static func decodeString(_ bytes: Data, field: String) throws -> String {
-    var value = ToriiVerifyingKeyCompactReader(bytes)
+  static func decodeString(
+    _ bytes: Data,
+    field: String,
+    layout: NoritoWireLayout = .compact
+  ) throws -> String {
+    var value = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
     let length = try value.takeLength("\(field).length")
     guard length <= UInt64(Int.max) else {
       throw ToriiClientError.invalidPayload("\(field) exceeds the runtime bound.")
@@ -547,9 +625,10 @@ struct ToriiCanonicalTransactionDraft {
   private static func decodeNonzeroOption<T: FixedWidthInteger>(
     _ bytes: Data,
     as: T.Type,
-    field: String
+    field: String,
+    layout: NoritoWireLayout
   ) throws -> T? {
-    var option = ToriiVerifyingKeyCompactReader(bytes)
+    var option = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
     switch try option.takeUInt8("\(field).tag") {
     case 0:
       guard option.isFinished else {
@@ -573,10 +652,11 @@ struct ToriiCanonicalTransactionDraft {
 
   private static func decodeMetadata(
     _ bytes: Data,
-    context: String
+    context: String,
+    layout: NoritoWireLayout
   ) throws -> [String: ToriiJSONValue] {
-    var metadata = ToriiVerifyingKeyCompactReader(bytes)
-    let count = try metadata.takeUInt64("\(context).metadata.count")
+    var metadata = ToriiVerifyingKeyCompactReader(bytes, layout: layout)
+    let count = try metadata.takeCount("\(context).metadata.count")
     guard count <= UInt64(maximumMetadataEntries) else {
       throw ToriiClientError.invalidPayload("\(context) metadata exceeds the entry bound.")
     }
@@ -584,11 +664,13 @@ struct ToriiCanonicalTransactionDraft {
     var previousKeyBytes: Data?
     for index in 0..<count {
       var entry = ToriiVerifyingKeyCompactReader(
-        try metadata.takeField("\(context).metadata[\(index)]")
+        try metadata.takeField("\(context).metadata[\(index)]"),
+        layout: layout
       )
       let key = try decodeString(
         try entry.takeField("\(context).metadata[\(index)].key"),
-        field: "\(context).metadata[\(index)].key"
+        field: "\(context).metadata[\(index)].key",
+        layout: layout
       )
       let keyBytes = Data(key.utf8)
       guard !key.isEmpty,
@@ -607,11 +689,13 @@ struct ToriiCanonicalTransactionDraft {
       }
       previousKeyBytes = keyBytes
       var json = ToriiVerifyingKeyCompactReader(
-        try entry.takeField("\(context).metadata[\(index)].json")
+        try entry.takeField("\(context).metadata[\(index)].json"),
+        layout: layout
       )
       let jsonText = try decodeString(
         try json.takeField("\(context).metadata[\(index)].json.value"),
-        field: "\(context).metadata[\(index)].json.value"
+        field: "\(context).metadata[\(index)].json.value",
+        layout: layout
       )
       guard json.isFinished,
         entry.isFinished,

@@ -21,7 +21,28 @@ impl<'a> ValidatedInstructions<'a> {
         for index in 0..code.len().div_ceil(4) {
             crate::decoder::decode_slice(code, (index as u64) * 4)?;
         }
-        Ok(Self { code })
+        Ok(Self::from_admitted(code))
+    }
+
+    /// Borrow the executable region of a contract already admitted and prepared under its profile.
+    pub(crate) fn from_admitted(code: &'a [u8]) -> Self {
+        debug_assert!(code.len().is_multiple_of(4));
+        Self { code }
+    }
+
+    /// Return the word index of an aligned executable-relative PC inside the stream.
+    pub(crate) fn index_of(self, pc: u64) -> Option<usize> {
+        let offset = usize::try_from(pc).ok()?;
+        (offset < self.code.len() && offset.is_multiple_of(4)).then_some(offset / 4)
+    }
+
+    /// Read one admitted word by index.
+    pub(crate) fn get(self, index: usize) -> Option<DecodedOp> {
+        let bytes = self.code.as_chunks::<4>().0.get(index)?;
+        Some(DecodedOp {
+            pc: index as u64 * 4,
+            inst: u32::from_le_bytes(*bytes),
+        })
     }
 
     /// Number of complete admitted words.
@@ -37,7 +58,7 @@ impl<'a> ValidatedInstructions<'a> {
     }
 
     /// Read the immutable admitted words in executable-relative address order.
-    pub fn iter(self) -> impl ExactSizeIterator<Item = DecodedOp> + 'a {
+    pub fn iter(self) -> impl ExactSizeIterator<Item = DecodedOp> + Clone + 'a {
         self.code
             .as_chunks::<4>()
             .0
@@ -53,7 +74,22 @@ impl<'a> ValidatedInstructions<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::VmTrap;
+
+    #[test]
+    fn prepared_random_access_agrees_with_iteration_and_refuses_non_boundaries() {
+        let words = [0x11223344_u32, 0x88776655];
+        let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        let stream = ValidatedInstructions::from_admitted(&bytes);
+        for (index, op) in stream.iter().enumerate() {
+            assert_eq!(stream.index_of(op.pc), Some(index));
+            assert_eq!(stream.get(index), Some(op));
+        }
+        for pc in [1, 7, 8, u64::MAX] {
+            assert_eq!(stream.index_of(pc), None);
+        }
+        assert_eq!(stream.get(2), None);
+        assert_eq!(stream.get(usize::MAX), None);
+    }
 
     #[test]
     fn borrowed_scan_matches_decoded_storage_and_all_boundary_failures() {

@@ -210,6 +210,7 @@ pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
             SubmitPrivacyIronwoodProofV1,
         },
         taira_activation::ScheduleTairaTimeIronwoodV1,
+        taira_read_scope::ScheduleTairaReadScopeV1,
     };
     !matches!(
         wire_id,
@@ -217,6 +218,7 @@ pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
             | SubmitPrivacyIronwoodProofV1::WIRE_ID
             | SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID
             | ScheduleTairaTimeIronwoodV1::WIRE_ID
+            | ScheduleTairaReadScopeV1::WIRE_ID
     )
 }
 
@@ -885,6 +887,7 @@ impl ReleaseCatalog {
         ))?;
         catalog.publish(super::keyed_state::descriptor())?;
         catalog.publish(super::state_row_permission::descriptor())?;
+        catalog.publish(super::state_scope_permission::descriptor())?;
         catalog.publish(super::content_publish_permission::descriptor())?;
         catalog.compile_deferred_consent()?;
         catalog.compile_runtime_lifecycle_after_deferred()?;

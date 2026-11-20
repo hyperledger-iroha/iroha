@@ -287,9 +287,9 @@ impl Desktop {
             let filter = self.activity_filter.to_lowercase();
             let mut shown = 0;
             for entry in self.activity.iter().rev() {
-                let kind = activity_kind(entry);
+                let kind = activity_kind(&entry.text);
                 if (self.activity_kind != ActivityKind::All && kind != self.activity_kind)
-                    || (!filter.is_empty() && !entry.to_lowercase().contains(&filter))
+                    || !entry.matches(&filter)
                 {
                     continue;
                 }
@@ -305,8 +305,10 @@ impl Desktop {
                 ui.horizontal_top(|ui| {
                     ui.add_sized([72.0, 20.0], |ui: &mut Ui| widgets::pill(ui, label, fg, bg));
                     ui.add(
-                        egui::Label::new(RichText::new(entry).monospace().color(palette.text))
-                            .wrap(),
+                        egui::Label::new(
+                            RichText::new(&entry.text).monospace().color(palette.text),
+                        )
+                        .wrap(),
                     );
                 });
                 shown += 1;
@@ -314,7 +316,18 @@ impl Desktop {
                     break;
                 }
             }
-            if shown == 0 {
+            if shown == 0 && !self.activity.is_empty() {
+                widgets::empty_state(
+                    ui,
+                    icon::ACTIVITY,
+                    "No matching activity",
+                    "Clear the text and category filters to see all activity.",
+                );
+                if ui.button("Clear filters").clicked() {
+                    self.activity_filter.clear();
+                    self.activity_kind = ActivityKind::All;
+                }
+            } else if shown == 0 {
                 widgets::empty_state(
                     ui,
                     icon::ACTIVITY,

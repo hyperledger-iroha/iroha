@@ -1748,9 +1748,12 @@ fn independent_custody_state_decodes_authenticated_absence_on_the_selected_globa
     let (result, _) = capture_request(response, |transport| {
         let client = client.with_test_http_transport(transport);
         mark_data_model_compatible(&client);
-        client.get_stream_token_custody_state(provider, &owner, &binding, schema, &verified)
+        client.get_stream_token_custody_state_with_proof(
+            provider, &owner, &binding, schema, &verified,
+        )
     });
-    let state = result.unwrap();
+    let (state, frame) = result.unwrap();
+    assert_eq!(frame, norito::encode_canonical(&proof).unwrap());
     assert!(state.current().is_none());
     assert_eq!(state.owner(), &owner);
     assert_eq!(state.context_id(), verified.context_id());

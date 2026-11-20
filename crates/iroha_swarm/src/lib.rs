@@ -6,6 +6,14 @@ mod path;
 mod peer;
 mod schema;
 pub use crate::peer::PeerOverride;
+/// Node data directory of a prepared validator inside its container: the `data_dir` its
+/// container-rendered configuration names.
+pub const CONTAINER_DATA_DIR: &str = "/var/lib/iroha";
+/// Directory of the fixed owner-only secret files inside a validator container
+/// (`<data_dir>/secrets`). Keys are mounted there as files and never rendered inline.
+pub const CONTAINER_SECRETS_DIR: &str = "/var/lib/iroha/secrets";
+/// Name of the secrets directory in the fixed `data_dir` layout.
+const DATA_DIR_SECRETS: &str = "secrets";
 const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const BASE_PORT_P2P: u16 = 1337;
 const BASE_PORT_API: u16 = 8080;
@@ -94,6 +102,23 @@ pub enum Error {
         index: usize,
         /// Duplicated secret target.
         target: String,
+    },
+    /// Prepared validator {index} safety-record directory `{path}` must be a normalized portable path below the container data directory and outside its secrets.
+    InvalidPreparedRecordsDir {
+        /// Zero-based validator index.
+        index: usize,
+        /// Invalid container path.
+        path: String,
+    },
+    /// Prepared validator {index} shares its node data directory with another validator.
+    DuplicatePreparedDataDir {
+        /// Zero-based validator index.
+        index: usize,
+    },
+    /// Prepared validator {index} mounts its node data directory and must not also mount separate secret files.
+    PreparedDataDirWithSecretFiles {
+        /// Zero-based validator index.
+        index: usize,
     },
     /// Peer {index} must use distinct non-zero `P2P/API` ports, got {p2p_port}/{api_port}.
     InvalidPeerPorts {
@@ -192,6 +217,18 @@ impl std::fmt::Display for Error {
                 formatter,
                 "Prepared validator {index} repeats secret target `{target}`."
             ),
+            Self::InvalidPreparedRecordsDir { index, path } => write!(
+                formatter,
+                "Prepared validator {index} safety-record directory `{path}` must be a normalized portable path below the container data directory and outside its secrets."
+            ),
+            Self::DuplicatePreparedDataDir { index } => write!(
+                formatter,
+                "Prepared validator {index} shares its node data directory with another validator."
+            ),
+            Self::PreparedDataDirWithSecretFiles { index } => write!(
+                formatter,
+                "Prepared validator {index} mounts its node data directory and must not also mount separate secret files."
+            ),
             Self::InvalidPeerPorts {
                 index,
                 p2p_port,
@@ -251,7 +288,8 @@ pub struct PreparedValidator {
     /// Container-safe effective TOML preserving the admitted consensus policy.
     ///
     /// The file is mounted as a Compose secret and therefore does not expose
-    /// validator or streaming private keys in the generated YAML.
+    /// validator or streaming private keys in the generated YAML. A `data_dir`
+    /// configuration ([`Self::data_dir`]) holds no private key at all.
     pub runtime_config_path: std::path::PathBuf,
     /// BLAKE3 digest of the exact projected TOML bytes.
     ///
@@ -262,6 +300,31 @@ pub struct PreparedValidator {
     pub runtime_files: Vec<PreparedRuntimeFile>,
     /// File-backed private runtime inputs that must not appear in Compose YAML.
     pub secret_files: Vec<PreparedSecretFile>,
+    /// Node data directory of a validator whose configuration uses `data_dir`.
+    ///
+    /// The container mounts it instead of a named `/storage` volume. `None` for a flat
+    /// configuration, whose durable paths are projected below `/storage`.
+    pub data_dir: Option<PreparedDataDir>,
+}
+/// A validator's node data directory, mounted into its container at [`CONTAINER_DATA_DIR`].
+///
+/// The host directory is bound read-write, because the validator keeps its state (including its
+/// consensus safety records) in `state/`, and its `secrets/` directory is bound again read-only
+/// at [`CONTAINER_SECRETS_DIR`]. Keys therefore reach the node as the fixed owner-only files of
+/// the `data_dir` layout; nothing is copied, and neither the configuration nor the Compose YAML
+/// holds key bytes. The files keep their host ownership and mode, so the container daemon UID
+/// must own them.
+#[derive(Debug)]
+pub struct PreparedDataDir {
+    /// Host node data directory holding `secrets/` and `state/`.
+    pub source_path: std::path::PathBuf,
+    /// The validator's safety-record directory inside the container, below
+    /// [`CONTAINER_DATA_DIR`] and outside [`CONTAINER_SECRETS_DIR`].
+    ///
+    /// The launcher passes `--sumeragi-assert-fresh-key` exactly while this directory does not
+    /// exist, as the generated localnet `start.sh` does: on the first start of a fresh network
+    /// and never once the validator has safety records.
+    pub records_dir: String,
 }
 /// One byte-exact runtime file materialized through a Compose config.
 #[derive(Debug)]
@@ -333,6 +396,14 @@ struct PreparedRuntimeConfig {
     files: Vec<PreparedRuntimeSource>,
     secrets: Vec<PreparedSecretSource>,
     requires_sora_profile: bool,
+    data_dir: Option<PreparedDataDirSource>,
+}
+/// Bind sources of one validator's node data directory, relative to the Compose file.
+#[derive(Debug)]
+struct PreparedDataDirSource {
+    source: path::RelativePath,
+    secrets: path::RelativePath,
+    records_dir: String,
 }
 #[derive(Debug)]
 struct PreparedRuntimeSource {
@@ -377,6 +448,28 @@ impl PeerSettings {
             && name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    }
+    /// A safety-record directory the launcher may test in its shell command: a normalized
+    /// path of portable segments below the container data directory and outside its secrets.
+    fn is_valid_records_dir(path: &str) -> bool {
+        let Some(relative) = path
+            .strip_prefix(CONTAINER_DATA_DIR)
+            .and_then(|rest| rest.strip_prefix('/'))
+        else {
+            return false;
+        };
+        relative
+            .split('/')
+            .next()
+            .is_some_and(|first| first != DATA_DIR_SECRETS)
+            && relative.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment != "."
+                    && segment != ".."
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+            })
     }
     fn validate_committee_size(count: u16) -> Result<(), Error> {
         if !iroha_model_base::topology::is_valid_committee_size(usize::from(count)) {
@@ -538,6 +631,7 @@ impl PeerSettings {
                 .map(|(index, validator)| (index, validator.p2p_port, validator.api_port)),
         )?;
         let mut transport_public_keys = std::collections::BTreeSet::new();
+        let mut data_dirs = std::collections::BTreeSet::new();
         for (index, validator) in validators.into_iter().enumerate() {
             iroha_crypto::bls_normal_pop_verify(validator.key_pair.public_key(), &validator.pop)
                 .map_err(|error| Error::InvalidPreparedValidatorPop {
@@ -617,6 +711,32 @@ impl PeerSettings {
                         .relative_to(target_dir)?,
                 });
             }
+            let data_dir = validator
+                .data_dir
+                .map(|data_dir| {
+                    // The fixed secret files live in the mounted directory itself.
+                    if !secret_files.is_empty() {
+                        return Err(Error::PreparedDataDirWithSecretFiles { index });
+                    }
+                    if !Self::is_valid_records_dir(&data_dir.records_dir) {
+                        return Err(Error::InvalidPreparedRecordsDir {
+                            index,
+                            path: data_dir.records_dir,
+                        });
+                    }
+                    let source = path::AbsolutePath::new(&data_dir.source_path)?;
+                    let source_path: &std::path::Path = source.as_ref();
+                    if !data_dirs.insert(source_path.to_path_buf()) {
+                        return Err(Error::DuplicatePreparedDataDir { index });
+                    }
+                    let secrets = path::AbsolutePath::new(&source_path.join(DATA_DIR_SECRETS))?;
+                    Ok(PreparedDataDirSource {
+                        source: source.relative_to(target_dir)?,
+                        secrets: secrets.relative_to(target_dir)?,
+                        records_dir: data_dir.records_dir,
+                    })
+                })
+                .transpose()?;
             let runtime = PreparedRuntimeConfig {
                 compose_name_prefix,
                 source,
@@ -624,6 +744,7 @@ impl PeerSettings {
                 files: runtime_files,
                 secrets: secret_files,
                 requires_sora_profile: validator.requires_sora_profile,
+                data_dir,
             };
             let (public_key, private_key) = validator.key_pair.into_parts();
             drop(private_key);
@@ -782,8 +903,8 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
-        PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
-        Swarm, base64_standard,
+        CONTAINER_DATA_DIR, CONTAINER_SECRETS_DIR, PreparedDataDir, PreparedGenesisArtifacts,
+        PreparedRuntimeFile, PreparedSecretFile, PreparedValidator, Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
     const IMAGE: &str = "hyperledger/iroha:dev";
@@ -1025,6 +1146,7 @@ mod tests {
             runtime_config_blake3: [u8::try_from(index).expect("test index fits u8"); 32],
             runtime_files: Vec::new(),
             secret_files: Vec::new(),
+            data_dir: None,
         }
     }
     #[test]
@@ -1908,6 +2030,11 @@ mod tests {
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
         assert!(!output.contains("iroha_kagemusha_load"));
         assert_eq!(output.matches("create_host_path: false").count(), 0);
+        // Flat configurations keep a named `/storage` volume and never assert fresh keys.
+        assert_eq!(output.matches("target: /storage").count(), 4);
+        assert!(output.contains("\nvolumes:\n"));
+        assert!(!output.contains(CONTAINER_DATA_DIR));
+        assert!(!output.contains("--sumeragi-assert-fresh-key"));
         assert_eq!(output.matches("require_private_file").count(), 8);
         assert_eq!(output.matches("target: /run/secrets/iroha_peer").count(), 4);
         assert!(output.contains("../bundle/peer0.faucet.key"));
@@ -1944,5 +2071,215 @@ mod tests {
             1,
             "equal public runtime bytes must be interned once"
         );
+    }
+    const RECORDS_DIR: &str = "/var/lib/iroha/state/kura-sumeragi-records";
+    fn data_dir_validators(bundle: &std::path::Path) -> Vec<PreparedValidator> {
+        (0_u16..4)
+            .map(|index| {
+                let mut validator = prepared_validator(index);
+                validator.runtime_config_path = bundle.join(format!("peer{index}.runtime.toml"));
+                validator.data_dir = Some(PreparedDataDir {
+                    source_path: bundle.join("nodes").join(format!("peer{index}")),
+                    records_dir: RECORDS_DIR.to_owned(),
+                });
+                validator
+            })
+            .collect()
+    }
+    fn render_prepared(
+        validators: Vec<PreparedValidator>,
+        bundle: &std::path::Path,
+        deployment: &std::path::Path,
+    ) -> Result<String, crate::Error> {
+        let swarm = Swarm::from_prepared(
+            peer::chain(),
+            validators,
+            PreparedGenesisArtifacts {
+                signed_block: &bundle.join("genesis.signed.nrt"),
+                public_key: &bundle.join("genesis.public_key"),
+                expected_hash: &bundle.join("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            &deployment.join("docker-compose.yml"),
+        )?;
+        let mut output = Vec::new();
+        swarm
+            .build()
+            .write(&mut output, None)
+            .expect("render prepared swarm");
+        Ok(String::from_utf8(output).expect("Compose output is UTF-8"))
+    }
+    #[test]
+    fn container_data_dir_follows_the_node_data_dir_layout() {
+        assert_eq!(
+            CONTAINER_SECRETS_DIR,
+            format!(
+                "{CONTAINER_DATA_DIR}/{}",
+                iroha_config::parameters::defaults::data_dir::SECRETS_DIR
+            )
+        );
+        assert_eq!(
+            crate::DATA_DIR_SECRETS,
+            iroha_config::parameters::defaults::data_dir::SECRETS_DIR
+        );
+        assert!(
+            RECORDS_DIR.starts_with(&format!(
+                "{CONTAINER_DATA_DIR}/{}/",
+                iroha_config::parameters::defaults::data_dir::STATE_DIR
+            )),
+            "safety records live in the node state directory"
+        );
+    }
+    #[test]
+    fn prepared_mode_mounts_each_node_data_dir_with_its_secrets_as_read_only_files() {
+        let temp = TempDir::new("prepared_data_dir");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        let key_bytes = "private-key-material-that-must-not-enter-compose";
+        for index in 0..4 {
+            let secrets = bundle.join(format!("nodes/peer{index}/secrets"));
+            std::fs::create_dir_all(&secrets).expect("create node secrets fixture");
+            std::fs::write(secrets.join("validator.key"), key_bytes).expect("write key fixture");
+        }
+        let output = render_prepared(data_dir_validators(&bundle), &bundle, &deployment)
+            .expect("build prepared data_dir swarm");
+        let lines = output.lines().map(str::trim).collect::<Vec<_>>();
+        let count = |line: &str| lines.iter().filter(|candidate| **candidate == line).count();
+        for index in 0..4 {
+            assert_eq!(
+                count(&format!("source: ../bundle/nodes/peer{index}")),
+                1,
+                "validator {index} mounts exactly its own node data directory: {output}"
+            );
+            assert_eq!(
+                count(&format!("source: ../bundle/nodes/peer{index}/secrets")),
+                1,
+                "validator {index} mounts exactly its own secrets: {output}"
+            );
+        }
+        assert_eq!(count(&format!("target: {CONTAINER_DATA_DIR}")), 4);
+        assert_eq!(count(&format!("target: {CONTAINER_SECRETS_DIR}")), 4);
+        // Missing sources are never created, and only the signed genesis and the secrets are
+        // read-only: the data directory itself stays writable for the validator's state.
+        assert_eq!(count("create_host_path: false"), 8);
+        assert_eq!(count("read_only: true"), 8);
+        // The node data directory replaces the named storage volume.
+        assert!(!output.contains("target: /storage"));
+        for index in 0..4 {
+            assert!(!output.contains(&format!("irohad{index}_data")));
+        }
+        assert!(
+            !output.lines().any(|line| line == "volumes:"),
+            "no named volume is declared: {output}"
+        );
+        // Keys are files of the mounted directory: never Compose secrets, YAML or environment.
+        assert!(!output.contains(key_bytes));
+        assert!(!output.contains("environment:"));
+        assert!(!output.contains("PRIVATE_KEY"));
+        assert!(!output.contains("_runtime_secret_"));
+        assert_eq!(count("target: /config/peer.toml"), 4);
+        assert_eq!(
+            output
+                .matches("require_private_file /config/peer.toml")
+                .count(),
+            4
+        );
+        // The launcher mirrors the generated `start.sh`.
+        assert_eq!(
+            output
+                .matches(&format!(
+                    "umask 077 && cd {CONTAINER_DATA_DIR} && FRESH_KEY= && \
+                     if [ ! -d {RECORDS_DIR} ]; then FRESH_KEY=--sumeragi-assert-fresh-key; fi && \
+                     exec env -i "
+                ))
+                .count(),
+            4,
+            "{output}"
+        );
+        assert_eq!(output.matches(" $$FRESH_KEY").count(), 4);
+        assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
+        assert_eq!(output.matches("--config-blake3 ").count(), 4);
+    }
+    #[test]
+    fn prepared_mode_keeps_a_storage_volume_only_for_validators_without_a_data_dir() {
+        let temp = TempDir::new("prepared_mixed_data_dir");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        let mut validators = data_dir_validators(&bundle);
+        validators[3].data_dir = None;
+        let output =
+            render_prepared(validators, &bundle, &deployment).expect("build mixed prepared swarm");
+        assert_eq!(output.matches("target: /storage").count(), 1);
+        assert!(
+            output.contains("\nvolumes:\n  irohad3_data: {}\n"),
+            "{output}"
+        );
+        assert!(!output.contains("irohad0_data"));
+        assert_eq!(output.matches("--sumeragi-assert-fresh-key").count(), 3);
+        assert_eq!(
+            output
+                .matches(&format!("target: {CONTAINER_SECRETS_DIR}"))
+                .count(),
+            3
+        );
+    }
+    #[test]
+    fn prepared_mode_rejects_unsafe_node_data_dir_inputs() {
+        let temp = TempDir::new("prepared_data_dir_rejections");
+        let bundle = temp.path().join("bundle");
+        let deployment = temp.path().join("deployment");
+        std::fs::create_dir_all(&deployment).expect("create deployment directory");
+        for records_dir in [
+            "",
+            "state/kura-sumeragi-records",
+            "/var/lib/iroha",
+            "/var/lib/iroha/",
+            "/var/lib/irohax/state/records",
+            "/var/lib/iroha/secrets/records",
+            "/var/lib/iroha/state/../secrets",
+            "/var/lib/iroha/state//records",
+            "/var/lib/iroha/state/records ]; then rm -rf /; fi; [ -d /",
+            "/var/lib/iroha/state/$HOME",
+            "/storage/kura-sumeragi-records",
+        ] {
+            let mut validators = data_dir_validators(&bundle);
+            validators[1]
+                .data_dir
+                .as_mut()
+                .expect("data_dir fixture")
+                .records_dir = records_dir.to_owned();
+            assert!(
+                matches!(
+                    render_prepared(validators, &bundle, &deployment),
+                    Err(crate::Error::InvalidPreparedRecordsDir { index: 1, ref path })
+                        if path == records_dir
+                ),
+                "safety-record directory {records_dir:?} must be refused"
+            );
+        }
+        let mut shared = data_dir_validators(&bundle);
+        shared[2]
+            .data_dir
+            .as_mut()
+            .expect("data_dir fixture")
+            .source_path = bundle.join("nodes/peer0");
+        assert!(matches!(
+            render_prepared(shared, &bundle, &deployment),
+            Err(crate::Error::DuplicatePreparedDataDir { index: 2 })
+        ));
+        let mut with_secret = data_dir_validators(&bundle);
+        with_secret[0].secret_files.push(PreparedSecretFile {
+            target: "/run/secrets/iroha_peer0_faucet_private_key".to_owned(),
+            source_path: bundle.join("peer0.faucet.key"),
+        });
+        assert!(matches!(
+            render_prepared(with_secret, &bundle, &deployment),
+            Err(crate::Error::PreparedDataDirWithSecretFiles { index: 0 })
+        ));
     }
 }

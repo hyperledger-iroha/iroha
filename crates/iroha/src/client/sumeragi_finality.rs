@@ -199,6 +199,34 @@ impl Client {
     ) -> Result<
         iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
     > {
+        self.get_stream_token_custody_state_with_proof(
+            provider,
+            expected_owner,
+            expected_binding,
+            native_schema,
+            block,
+        )
+        .map(|(current, _)| current)
+    }
+
+    /// Read and verify current custody, returning the exact canonical response frame as well.
+    /// A consumer retaining an original execution cut can reverify this frame against its
+    /// independently authenticated checkpoint after the network advances.
+    ///
+    /// # Errors
+    /// Returns the same scope, deadline, response and proof errors as
+    /// [`Self::get_stream_token_custody_state`].
+    pub fn get_stream_token_custody_state_with_proof(
+        &self,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        expected_owner: &iroha_data_model::account::AccountId,
+        expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<(
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
+        Vec<u8>,
+    )> {
         use iroha_data_model::sorafs::stream_token_custody::proof::{
             MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1, StreamTokenCustodyProofV1,
         };
@@ -243,11 +271,11 @@ impl Client {
             provider,
             expected_owner,
             expected_binding,
-            native_schema.select_schema(proof.world.schema_hash)?,
+            native_schema,
             block,
         )?;
         self.ensure_activation_evidence_deadline()?;
-        Ok(verified)
+        Ok((verified, response.into_body()))
     }
 
     fn read_provider_discovery_frame(

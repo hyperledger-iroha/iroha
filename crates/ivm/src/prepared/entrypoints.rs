@@ -7,7 +7,7 @@ use crate::{
     cache_memory::OwnedAllocation,
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
-    ivm_cache::DecodedOp,
+    ivm_cache::ValidatedInstructions,
     metadata::EmbeddedEntrypointDescriptor,
 };
 use iroha_allocation::{AllocationBudget, ChargedBufferError, PrepaidBufferError};
@@ -72,7 +72,7 @@ pub(super) struct Entrypoints(Fixed<EntrypointIndex>);
 impl Entrypoints {
     pub(super) fn prepare(
         descriptors: &[EmbeddedEntrypointDescriptor],
-        decoded: &[DecodedOp],
+        instructions: ValidatedInstructions<'_>,
         graph: &PreparedControlFlow,
         instruction_entry_pc: u64,
         budget: Option<&AllocationBudget>,
@@ -83,7 +83,7 @@ impl Entrypoints {
             if descriptors.is_empty() {
                 0
             } else {
-                decoded.len()
+                instructions.len()
             },
             budget,
         )?;
@@ -94,7 +94,7 @@ impl Entrypoints {
                     .checked_add(descriptor.entry_pc)
                     .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                 requires_private_inputs: scratch.reaches_private_input(
-                    decoded,
+                    instructions,
                     graph,
                     descriptor.entry_pc,
                     engine,
@@ -148,16 +148,16 @@ impl Reachability {
     }
     fn reaches_private_input(
         &mut self,
-        decoded: &[DecodedOp],
+        instructions: ValidatedInstructions<'_>,
         graph: &PreparedControlFlow,
         entry_pc: u64,
         engine: crate::IvmEngine,
     ) -> Result<bool, VMError> {
         let slots = self.0.values_mut();
         slots.fill(Visit::default());
-        let entry = decoded
-            .binary_search_by_key(&entry_pc, |op| op.pc)
-            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+        let entry = instructions
+            .index_of(entry_pc)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         slots
             .get_mut(entry)
             .ok_or(VMError::Trap(VmTrap::DecodeError))?
@@ -167,7 +167,7 @@ impl Reachability {
         while head < tail {
             let index = slots[head].queued_index;
             head += 1;
-            let op = decoded
+            let op = instructions
                 .get(index)
                 .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             let syscall = engine.syscall_number(op.inst);
@@ -179,9 +179,9 @@ impl Reachability {
                 .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 .successors()
             {
-                let next = decoded
-                    .binary_search_by_key(pc, |op| op.pc)
-                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                let next = instructions
+                    .index_of(*pc)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if !slots[next].discovered {
                     // Mark on enqueue: every instruction enters the queue once,
                     // even for loops, shared joins and duplicate successors.

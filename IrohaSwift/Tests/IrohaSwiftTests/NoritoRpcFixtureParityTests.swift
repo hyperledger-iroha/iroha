@@ -578,8 +578,8 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         let expectedAuthority = try expectedAuthorityLiteral(from: fixture.entry.authority)
         XCTAssertEqual(
             nativeSignedTransactionDecodeStatus(signedBytes),
-            -2,
-            "ABI-33 must reject the unversioned bare signed transaction fixture: \(name)"
+            -518,
+            "ABI-33 must reject the unversioned bare signed transaction fixture as not one canonical archive (CONNECT_NORITO_ERR_TRANSACTION_ARCHIVE): \(name)"
         )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)
@@ -1465,9 +1465,12 @@ private func nativeSignedTransactionDecodeStatus(_ data: Data) -> Int32 {
     var jsonPointer: UnsafeMutablePointer<UInt8>?
     var jsonLength: UInt = 0
     let status = data.withUnsafeBytes { buffer in
-        connect_norito_decode_signed_transaction_json(
+        // The current layout's governed versioned submission wire, selected explicitly.
+        connect_norito_decode_signed_transaction_json_v1(
             buffer.bindMemory(to: UInt8.self).baseAddress,
             UInt(data.count),
+            UInt8(CONNECT_NORITO_LAYOUT_CURRENT),
+            UInt8(CONNECT_NORITO_TX_FORMAT_VERSIONED),
             &jsonPointer,
             &jsonLength
         )

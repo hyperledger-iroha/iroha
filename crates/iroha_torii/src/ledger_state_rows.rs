@@ -1,6 +1,10 @@
 //! Exact table/key lookups at the current certified Global State root.
 use crate::*;
 use iroha_allocation::AllocationBudget;
+use iroha_core::{
+    runtime::{state_row_permission, state_scope_permission},
+    state::{StorageReadOnly as _, WorldReadOnly as _, WorldView},
+};
 use iroha_data_model::{
     account::AccountId,
     sumeragi::finality::{
@@ -10,7 +14,7 @@ use iroha_data_model::{
         MAX_STATE_PROOF_KEY_BYTES_V1, MAX_STATE_PROOF_ROWS_V1, MAX_STATE_ROWS_FRAME_BYTES_V1,
     },
 };
-use iroha_executor_data_model::permission::query::CanReadStateRow;
+use iroha_executor_data_model::permission::query::{CanReadStateRow, CanReadStateScope};
 
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const ROUTE: &str = iroha_torii_shared::route_catalog::core::LEDGER_STATE_ROWS_POST.path();
@@ -74,38 +78,136 @@ fn selectors(body: &[u8]) -> Result<Vec<CanReadStateRow>, Error> {
     Ok(selection.rows)
 }
 
-fn require_permission(
+fn forbidden() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+        "Current read authority for every selected State row is required".into(),
+    ))
+}
+
+fn with_reader<T>(
     app: &SharedAppState,
     account: &AccountId,
-    grants: &[Permission],
-) -> Result<(), Error> {
+    check: impl FnOnce(&WorldView<'_>, bool) -> Result<T, Error>,
+) -> Result<T, Error> {
     let owner = crate::history_producer::HistoryProducerOwner::authentication_read(app)?;
-    let forbidden = || {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-            "Current read authority for every selected State row is required".into(),
-        ))
-    };
     owner.scope(|| {
         app.state
             .try_with_authorization_view(owner.allocation_context(), |view| {
-                use iroha_core::state::{StorageReadOnly as _, WorldReadOnly as _};
                 let world = view.world();
                 if world.accounts().get(account).is_none() {
                     return Err(forbidden());
                 }
-                if !crate::stream_control::can_read_all(world, account)? {
-                    if !iroha_core::runtime::state_row_permission::active(world.runtime_selection())
-                        || !grants
-                            .iter()
-                            .all(|p| world.account_contains_inherent_permission(account, p))
-                    {
-                        return Err(forbidden());
-                    }
-                }
-                Ok(())
+                check(world, crate::stream_control::can_read_all(world, account)?)
             })
             .map_err(crate::app_auth::authorization_view_error)?
     })
+}
+
+enum ReadAuthority {
+    Ledger,
+    Rows(Vec<Permission>),
+}
+
+impl ReadAuthority {
+    fn select(
+        world: &WorldView<'_>,
+        reader: &AccountId,
+        global: bool,
+        keys: &[(String, Vec<u8>)],
+        exact: Vec<Permission>,
+    ) -> Result<Self, Error> {
+        if global {
+            return Ok(Self::Ledger);
+        }
+        if keys.len() != exact.len() {
+            return Err(forbidden());
+        }
+        let exact_active = state_row_permission::active(world.runtime_selection());
+        keys.iter()
+            .zip(exact)
+            .map(|((table, key), permission)| {
+                if exact_active && world.account_contains_inherent_permission(reader, &permission) {
+                    return Ok(permission);
+                }
+                state_scope_permission::read_grant(world, reader, table, key)
+                    .cloned()
+                    .ok_or_else(forbidden)
+            })
+            .collect::<Result<_, _>>()
+            .map(Self::Rows)
+    }
+
+    fn check_certified(
+        &self,
+        proof: &iroha_data_model::sumeragi_finality::KeyedStateRowsV1,
+        budget: &AllocationBudget,
+    ) -> Result<(), Error> {
+        let Self::Rows(grants) = self else {
+            return Ok(());
+        };
+        if grants.len() != proof.rows.len() {
+            return Err(forbidden());
+        }
+        for (grant, row) in grants.iter().zip(&proof.rows) {
+            if grant.name() != state_scope_permission::NAME {
+                continue;
+            }
+            let mut row_bytes = row.position.key.len();
+            if matches!(
+                row.position.table.as_str(),
+                "world.asset_escrows" | "world.identifier_claims"
+            ) {
+                row_bytes = row_bytes.saturating_add(row.value.as_ref().map_or(0, Vec::len));
+            }
+            let grant_bytes = grant.payload().as_ref().len();
+            let scratch_bytes = norito::canonical_decode_limits(row_bytes)
+                .max_total_allocated_bytes()
+                .saturating_add(
+                    norito::canonical_decode_limits(grant_bytes).max_total_allocated_bytes(),
+                );
+            let _scratch = budget
+                .try_reserve_bytes(scratch_bytes)
+                .map_err(|_| crate::native_projection_response::capacity())?;
+            let scope = CanReadStateScope::try_from(grant).map_err(|_| forbidden())?;
+            if !state_scope_permission::admits_certified_value(
+                &scope,
+                &row.position.table,
+                &row.position.key,
+                row.value.as_deref(),
+            ) {
+                return Err(forbidden());
+            }
+        }
+        Ok(())
+    }
+
+    fn recheck(
+        &self,
+        world: &WorldView<'_>,
+        reader: &AccountId,
+        global: bool,
+    ) -> Result<(), Error> {
+        if global {
+            return Ok(());
+        }
+        let Self::Rows(grants) = self else {
+            return Err(forbidden());
+        };
+        let selection = world.runtime_selection();
+        let exact = state_row_permission::active(selection);
+        let scoped = state_scope_permission::active(selection);
+        if grants.iter().all(|grant| {
+            (if grant.name() == state_scope_permission::NAME {
+                scoped
+            } else {
+                exact
+            }) && world.account_contains_inherent_permission(reader, grant)
+        }) {
+            Ok(())
+        } else {
+            Err(forbidden())
+        }
+    }
 }
 
 /// Serve a signed batch of exact row reads from one certified Global execution.
@@ -172,11 +274,13 @@ pub async fn handler(
         .map_err(|_| capacity())?;
 
     // The HTTP future retains the selected permissions through its final revocation check.
-    let _selection_charge = budget
-        .try_reserve_bytes(
-            4 * body.len() + MAX_STATE_PROOF_ROWS_V1 * std::mem::size_of::<CanReadStateRow>(),
-        )
-        .map_err(|_| capacity())?;
+    let selection_charge = std::sync::Arc::new(
+        budget
+            .try_reserve_bytes(
+                4 * body.len() + MAX_STATE_PROOF_ROWS_V1 * std::mem::size_of::<CanReadStateRow>(),
+            )
+            .map_err(|_| capacity())?,
+    );
     let selectors = selectors(&body)?;
     drop(body);
     drop(body_charge);
@@ -184,7 +288,6 @@ pub async fn handler(
         .iter()
         .map(crate::torii_permission_target)
         .collect::<Result<_, _>>()?;
-    require_permission(&app, &verified.account, &grants)?;
     // A detached blocking worker keeps its lookup keys funded even if the caller disconnects.
     let key_bytes = selectors
         .iter()
@@ -203,6 +306,11 @@ pub async fn handler(
                 .map_err(|_| conversion_error("invalid State key".into()))
         })
         .collect::<Result<_, _>>()?;
+    let authority = std::sync::Arc::new(with_reader(&app, &verified.account, |world, global| {
+        ReadAuthority::select(world, &verified.account, global, &keys, grants)
+    })?);
+    let source_authority = authority.clone();
+    let source_selection_charge = selection_charge.clone();
     let state = app.state.clone();
     let maximum = app
         .torii_proxy_max_response_bytes
@@ -210,6 +318,7 @@ pub async fn handler(
     let response =
         routing::run_admitted_blocking(admission, "State row proof worker failed", move || {
             let _keys_charge = key_charge;
+            let _selection_charge = source_selection_charge;
             let unit = bytes / 8;
             let limits = NativeFinalityLimits {
                 block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
@@ -237,6 +346,7 @@ pub async fn handler(
             let proof = state
                 .keyed_state_rows(&tip, &keys, &budget)
                 .map_err(|_| unavailable())?;
+            source_authority.check_certified(&proof, &budget)?;
             let mut body =
                 crate::native_projection_response::encode(&*proof, format, maximum, &budget)?;
             body.memory = Some(memory);
@@ -251,7 +361,9 @@ pub async fn handler(
             Ok(response)
         })
         .await?;
-    require_permission(&app, &verified.account, &grants)?;
+    with_reader(&app, &verified.account, |world, global| {
+        authority.recheck(world, &verified.account, global)
+    })?;
     let mut response = proof_response_with_exact_egress_bounded(
         app.as_ref(),
         &headers,
@@ -262,7 +374,9 @@ pub async fn handler(
         maximum,
     )
     .await?;
-    require_permission(&app, &verified.account, &grants)?;
+    with_reader(&app, &verified.account, |world, global| {
+        authority.recheck(world, &verified.account, global)
+    })?;
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-store"),
@@ -273,6 +387,50 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_grants_authorize_the_whole_batch_and_revocation_stops_egress() {
+        use iroha_core::state::World;
+        use iroha_data_model::{Account, Registrable};
+        use iroha_test_samples::ALICE_ID;
+        let reader = &*ALICE_ID;
+        let mut world = World::with([], [Account::new(reader.clone()).build(reader)], []);
+        iroha_core::runtime::keyed_state::install_for_test(&mut world);
+        let keys = vec![
+            ("world.parameters".into(), vec![]),
+            ("world.runtime_selection".into(), vec![]),
+        ];
+        let grants: Vec<Permission> = keys
+            .iter()
+            .map(|(table, _)| {
+                CanReadStateRow {
+                    table: String::clone(table),
+                    key_hex: String::new(),
+                }
+                .into()
+            })
+            .collect();
+        assert!(ReadAuthority::select(&world.view(), reader, false, &keys, vec![]).is_err());
+        let original =
+            ReadAuthority::select(&world.view(), reader, true, &keys, grants.clone()).unwrap();
+        assert!(original.recheck(&world.view(), reader, false).is_err());
+        world
+            .account_permissions_mut_for_testing()
+            .insert(reader.clone(), [grants[0].clone()].into());
+        assert!(
+            ReadAuthority::select(&world.view(), reader, false, &keys, grants.clone()).is_err()
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(reader.clone(), grants.iter().cloned().collect());
+        let allowed =
+            ReadAuthority::select(&world.view(), reader, false, &keys, grants.clone()).unwrap();
+        assert!(allowed.recheck(&world.view(), reader, false).is_ok());
+        world
+            .account_permissions_mut_for_testing()
+            .insert(reader.clone(), [grants[1].clone()].into());
+        assert!(allowed.recheck(&world.view(), reader, false).is_err());
+    }
 
     #[test]
     fn request_admits_only_bounded_ordered_unique_exact_keys() {
@@ -336,6 +494,21 @@ mod tests {
             .map(crate::torii_permission_target)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
+        let keys: Vec<_> = selectors
+            .iter()
+            .map(|row| (row.table.clone(), hex::decode(&row.key_hex).unwrap()))
+            .collect();
+        let select = |account: &AccountId, count: usize| {
+            with_reader(&app, account, |world, global| {
+                ReadAuthority::select(
+                    world,
+                    account,
+                    global,
+                    &keys[..count],
+                    grants[..count].to_vec(),
+                )
+            })
+        };
         let mut change = |permission: Permission, grant: bool| {
             let instruction = if grant {
                 Grant::account_permission(permission, owner.clone()).into()
@@ -351,19 +524,19 @@ mod tests {
             let tx = chain.sign(&iroha_test_samples::ALICE_KEYPAIR, [instruction], now);
             assert_eq!(chain.commit(vec![tx]), vec![true]);
         };
-        assert!(require_permission(&app, &owner, &grants).is_err());
+        assert!(select(&owner, grants.len()).is_err());
         change(
             iroha_executor_data_model::permission::query::CanReadCertifiedOriginals.into(),
             true,
         );
-        assert!(require_permission(&app, &owner, &grants).is_err());
+        assert!(select(&owner, grants.len()).is_err());
         change(grants[0].clone(), true);
-        assert!(require_permission(&app, &owner, &grants[..1]).is_ok());
-        assert!(require_permission(&app, &owner, &grants).is_err());
+        assert!(select(&owner, 1).is_ok());
+        assert!(select(&owner, grants.len()).is_err());
         change(grants[1].clone(), true);
-        assert!(require_permission(&app, &owner, &grants).is_ok());
+        assert!(select(&owner, grants.len()).is_ok());
         change(grants[1].clone(), false);
-        assert!(require_permission(&app, &owner, &grants).is_err());
-        assert!(require_permission(&app, &issuer, &grants).is_ok());
+        assert!(select(&owner, grants.len()).is_err());
+        assert!(select(&issuer, grants.len()).is_ok());
     }
 }

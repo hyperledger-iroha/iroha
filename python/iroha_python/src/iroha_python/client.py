@@ -37,6 +37,7 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    overload,
 )
 from urllib.parse import quote, urlencode, urlparse, urlunparse
 
@@ -175,8 +176,13 @@ from iroha_torii_client.governance_proposals import (
 )
 from iroha_torii_client.list_query import (
     F,
+    Field,
     Filter,
+    FilterError,
     FilterLike,
+    ListQuery,
+    ListQueryError,
+    Page,
     filter_text,
 )
 from iroha_torii_client.native_sumeragi import (
@@ -9355,257 +9361,141 @@ class SpaceDirectoryManifestRecord:
         )
 
 
-@dataclass(frozen=True)
-class TriggerRecord:
-    """Trigger definition returned by trigger listing/query endpoints."""
-
-    id: str
-    action: Dict[str, Any]
-    metadata: Dict[str, Any]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("trigger record must be an object")
-        trigger_id = payload.get("id")
-        if not isinstance(trigger_id, str):
-            raise TypeError("trigger record missing string `id` field")
-        action_payload = payload.get("action", {})
-        if not isinstance(action_payload, Mapping):
-            raise TypeError("trigger record `action` must be an object")
-        metadata_payload = payload.get("metadata", {})
-        if metadata_payload is None:
-            metadata: Dict[str, Any] = {}
-        elif isinstance(metadata_payload, Mapping):
-            metadata = dict(metadata_payload)
-        else:
-            raise TypeError("trigger record `metadata` must be an object when present")
-        return cls(
-            id=trigger_id,
-            action=dict(action_payload),
-            metadata=metadata,
-            raw=dict(payload),
-        )
-
-
-@dataclass(frozen=True)
-class TriggerListPage:
-    """Paginated trigger listing."""
-
-    items: List[TriggerRecord]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("trigger list payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("trigger list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("trigger list `total` must be numeric") from exc
-        items = [TriggerRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
-
-
-@dataclass(frozen=True)
-class TriggerMutationResponse:
-    """Governance draft emitted when triggers are registered or deleted."""
-
-    ok: bool
-    tx_instructions: List[RuntimeInstruction]
-    trigger_id: Optional[str]
-    proposal_id: Optional[str]
-    accepted: Optional[bool]
-    message: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerMutationResponse":
-        if not isinstance(payload, Mapping):
-            raise TypeError("trigger mutation response must be an object")
-        ok_value = payload.get("ok")
-        if not isinstance(ok_value, bool):
-            raise TypeError("trigger mutation response missing boolean `ok` field")
-        trigger_id_field = payload.get("trigger_id")
-        if trigger_id_field is None:
-            trigger_id: Optional[str] = None
-        else:
-            trigger_id = _require_non_empty_string(
-                trigger_id_field, "trigger mutation response `trigger_id`"
-            )
-        proposal_field = payload.get("proposal_id")
-        if proposal_field is None:
-            proposal_id: Optional[str] = None
-        else:
-            proposal_id = _require_non_empty_string(
-                proposal_field, "trigger mutation response `proposal_id`"
-            )
-        instructions_payload = payload.get("tx_instructions")
-        if instructions_payload is None:
-            instructions_payload = []
-        if not isinstance(instructions_payload, list):
-            raise TypeError("trigger mutation response `tx_instructions` must be a list")
-        instructions = [RuntimeInstruction.from_payload(entry) for entry in instructions_payload]
-        accepted_field = payload.get("accepted")
-        accepted = None
-        if accepted_field is not None:
-            if not isinstance(accepted_field, bool):
-                raise TypeError("trigger mutation response `accepted` must be boolean when present")
-            accepted = accepted_field
-        message_field = payload.get("message")
-        if message_field is None:
-            message_field = payload.get("error")
-        if message_field is None:
-            message_field = payload.get("reason")
-        message = None
-        if message_field is not None:
-            message = str(message_field).strip()
-            if not message:
-                message = None
-        return cls(
-            ok=ok_value,
-            tx_instructions=instructions,
-            trigger_id=trigger_id,
-            proposal_id=proposal_id,
-            accepted=accepted,
-            message=message,
-        )
-
-
-@dataclass(frozen=True)
-class TriggerCompletionSummary:
-    """One trigger execution step attached to a transaction receipt or history row."""
-
-    trigger_id: str
-    trigger_execution_hash: str
-    step_index: int
-    outcome: str
-    message: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerCompletionSummary":
-        if not isinstance(payload, Mapping):
-            raise TypeError("trigger completion summary must be an object")
-        trigger_id = _require_non_empty_string(
-            payload.get("trigger_id"),
-            "trigger completion `trigger_id`",
-        )
-        execution_hash = _require_non_empty_string(
-            payload.get("trigger_execution_hash"),
-            "trigger completion `trigger_execution_hash`",
-        )
-        step_index = payload.get("step_index")
-        if (
-            isinstance(step_index, bool)
-            or not isinstance(step_index, int)
-            or not 0 <= step_index <= 0xFFFFFFFF
-        ):
-            raise TypeError("trigger completion `step_index` must be a u32")
-        outcome = payload.get("outcome")
-        if outcome not in {"Success", "Failure"}:
-            raise TypeError("trigger completion `outcome` must be Success or Failure")
-        message = payload.get("message")
-        if message is not None and not isinstance(message, str):
-            raise TypeError("trigger completion `message` must be a string when present")
-        return cls(
-            trigger_id=trigger_id,
-            trigger_execution_hash=execution_hash,
-            step_index=step_index,
-            outcome=outcome,
-            message=message,
-        )
+_TRIGGER_COMPLETION_OUTCOMES = ("Success", "Failure")
 
 
 @dataclass(frozen=True)
 class TriggerCompletionRecord:
-    """Persisted or reconstructed trigger completion evidence."""
+    """One row of the trigger completion history (``GET /v1/triggers/completed``).
+
+    A row is one completion record of a committed Network, Pipeline or Time
+    execution output. ``block_height``, ``output_index`` (the output's position
+    in its block) and ``completion_index`` (the completion's position in that
+    output) locate it; the history is read newest first by those coordinates.
+    ``entrypoint_index`` is the Network input's position in the block and
+    ``None`` for Pipeline and Time outputs. ``trigger_execution_hash`` is the
+    output's execution call hash, ``step_index`` the callback's invocation
+    ordinal within that root call, ``outcome`` is ``Success`` or ``Failure``
+    and ``message`` the failure reason (``None`` for ``Success``). ``raw``
+    keeps the row exactly as Torii sent it, including fields this SDK does not
+    know.
+    """
 
     block_height: int
+    output_index: int
+    completion_index: int
+    trigger_id: str
+    trigger_execution_hash: str
     entrypoint_index: Optional[int]
-    completion: TriggerCompletionSummary
-    source: str
+    step_index: int
+    outcome: str
+    message: Optional[str]
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerCompletionRecord":
+        """Decode one complete row; a projected (``select``) row stays a JSON object."""
+
         if not isinstance(payload, Mapping):
-            raise TypeError("trigger completion record must be an object")
-        block_height = payload.get("block_height")
-        if (
-            isinstance(block_height, bool)
-            or not isinstance(block_height, int)
-            or not 0 <= block_height <= 0xFFFFFFFFFFFFFFFF
-        ):
-            raise TypeError("trigger completion record `block_height` must be a u64")
-        entrypoint_index = payload.get("entrypoint_index")
-        if entrypoint_index is not None and (
-            isinstance(entrypoint_index, bool)
-            or not isinstance(entrypoint_index, int)
-            or not 0 <= entrypoint_index <= 0xFFFFFFFFFFFFFFFF
-        ):
-            raise TypeError(
-                "trigger completion record `entrypoint_index` must be a u64 when present"
-            )
-        completion = TriggerCompletionSummary.from_payload(
-            payload.get("completion")  # type: ignore[arg-type]
+            raise TypeError("trigger completion row must be an object")
+        context = "trigger completion row"
+        missing = sorted(
+            {
+                "block_height",
+                "output_index",
+                "completion_index",
+                "trigger_id",
+                "trigger_execution_hash",
+                "entrypoint_index",
+                "step_index",
+                "outcome",
+                "message",
+            }
+            - set(payload)
         )
-        source = _require_non_empty_string(
-            payload.get("source"),
-            "trigger completion record `source`",
-        )
-        if source != "execution_output":
-            raise TypeError("trigger completion record `source` must be execution_output")
+        if missing:
+            raise TypeError(f"{context} is missing required `{missing[0]}` field")
+        entrypoint_index = payload["entrypoint_index"]
+        outcome = payload["outcome"]
+        if outcome not in _TRIGGER_COMPLETION_OUTCOMES:
+            raise ValueError(f"{context} `outcome` must be Success or Failure")
+        message = payload["message"]
+        if message is not None and not isinstance(message, str):
+            raise TypeError(f"{context} `message` must be a string or null")
         return cls(
-            block_height=block_height,
-            entrypoint_index=entrypoint_index,
-            completion=completion,
-            source=source,
-        )
-
-
-@dataclass(frozen=True)
-class TriggerCompletionList:
-    """Typed response from `/v1/triggers/completed`."""
-
-    latest_height: int
-    from_height: int
-    to_height: int
-    scanned_blocks: int
-    limit: int
-    completions: Tuple[TriggerCompletionRecord, ...]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerCompletionList":
-        if not isinstance(payload, Mapping):
-            raise TypeError("trigger completion list must be an object")
-
-        def uint(name: str) -> int:
-            value = payload.get(name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 0 <= value <= 0xFFFFFFFFFFFFFFFF
-            ):
-                raise TypeError(f"trigger completion list `{name}` must be a u64")
-            return value
-
-        raw_completions = payload.get("completions")
-        if not isinstance(raw_completions, list):
-            raise TypeError("trigger completion list `completions` must be a list")
-        return cls(
-            latest_height=uint("latest_height"),
-            from_height=uint("from_height"),
-            to_height=uint("to_height"),
-            scanned_blocks=uint("scanned_blocks"),
-            limit=uint("limit"),
-            completions=tuple(
-                TriggerCompletionRecord.from_payload(item) for item in raw_completions
+            block_height=_require_u64(payload["block_height"], f"{context} `block_height`"),
+            output_index=_require_u64(payload["output_index"], f"{context} `output_index`"),
+            completion_index=_require_u64(
+                payload["completion_index"], f"{context} `completion_index`"
             ),
+            trigger_id=_require_exact_non_empty_string(
+                payload["trigger_id"], f"{context} `trigger_id`"
+            ),
+            trigger_execution_hash=_require_exact_non_empty_string(
+                payload["trigger_execution_hash"], f"{context} `trigger_execution_hash`"
+            ),
+            entrypoint_index=(
+                None
+                if entrypoint_index is None
+                else _require_u64(entrypoint_index, f"{context} `entrypoint_index`")
+            ),
+            step_index=_require_u64(payload["step_index"], f"{context} `step_index`"),
+            outcome=outcome,
+            message=message,
+            raw=dict(payload),
         )
+
+
+def _trigger_completions_filter(
+    filter: Optional[FilterLike],
+    *,
+    trigger_id: Optional[str],
+    outcome: Optional[str],
+    from_height: Optional[int],
+    to_height: Optional[int],
+) -> Optional[FilterLike]:
+    """Join the trigger completion shorthands to ``filter`` as conjuncts.
+
+    ``trigger_id``, ``outcome``, ``from_height`` and ``to_height`` select
+    ``trigger_id = …``, ``outcome = …``, ``block_height >= …`` and
+    ``block_height <= …``; without any of them ``filter`` is returned unchanged.
+    """
+
+    conjuncts: List[Filter] = []
+    if trigger_id is not None:
+        conjuncts.append(
+            F.trigger_id
+            == _require_exact_non_empty_string(trigger_id, "trigger completions trigger_id")
+        )
+    if outcome is not None:
+        if outcome not in _TRIGGER_COMPLETION_OUTCOMES:
+            raise ValueError("trigger completions outcome must be Success or Failure")
+        conjuncts.append(F.outcome == outcome)
+    for name, height, bound in (
+        ("from_height", from_height, F.block_height.gte),
+        ("to_height", to_height, F.block_height.lte),
+    ):
+        if height is not None:
+            conjuncts.append(bound(_require_u64(height, f"trigger completions {name}")))
+    if not conjuncts:
+        return filter
+    try:
+        return Filter.all(conjuncts if filter is None else [filter, *conjuncts])
+    except FilterError as error:
+        raise ListQueryError("filter", str(error)) from None
+
+
+class _TriggerCompletionsCollection(HistoryCollection[TriggerCompletionRecord]):
+    """The trigger completion history, read through an operator-signed ``GET``.
+
+    The route has no ``POST …/query`` form; every other rule is the shared
+    :class:`~iroha_torii_client.collection.HistoryCollection` contract.
+    """
+
+    __slots__ = ()
+
+    def _send(self, query: ListQuery) -> Any:
+        return cast("ToriiClient", self._transport)._get_trigger_completions(query)
 
 
 _MAX_NATIVE_AMX_GROUP_SOURCES = 4096
@@ -11532,8 +11422,7 @@ __all__ = [
     "SumeragiParameters",
     "SumeragiParamsSnapshot",
     "SumeragiEvidenceCount",
-    "TriggerRecord",
-    "TriggerListPage",
+    "TriggerCompletionRecord",
     "PipelineDagSnapshot",
     "PipelineTxSnapshot",
     "PipelineRecoverySidecar",
@@ -20190,185 +20079,168 @@ class ToriiClient(
         return (event.data for event in iterator)
 
     # ------------------------------------------------------------------
-    # Triggers API
+    # Trigger completion history
     # ------------------------------------------------------------------
+    def _get_trigger_completions(self, query: ListQuery) -> Any:
+        """Send one operator-signed ``GET /v1/triggers/completed`` and decode its page JSON."""
+
+        context = "trigger completions query"
+        target = "/v1/triggers/completed"
+        pairs = query.to_query_pairs()
+        if pairs:
+            target = f"{target}?{urlencode(pairs)}"
+        response = self._operator_get(
+            target,
+            headers={"Accept": "application/json"},
+            stream=True,
+            context=context,
+        )
+        return self._decode_collection_response(response, context)
+
+    def _trigger_completions(self) -> _TriggerCompletionsCollection:
+        return _TriggerCompletionsCollection(
+            self,
+            "/v1/triggers/completed",
+            TriggerCompletionRecord.from_payload,
+            "trigger completions",
+            "trigger_completions",
+        )
+
+    @overload
     def list_trigger_completions(
         self,
         *,
+        filter: Optional[FilterLike] = None,
+        select: None = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
         trigger_id: Optional[str] = None,
-        entrypoint_hash: Optional[str] = None,
         outcome: Optional[str] = None,
         from_height: Optional[int] = None,
         to_height: Optional[int] = None,
-        limit: Optional[int] = None,
-        scan_limit_blocks: Optional[int] = None,
-    ) -> TriggerCompletionList:
-        """Read typed, step-indexed trigger completion evidence."""
+    ) -> Page[TriggerCompletionRecord]: ...
 
-        params: Dict[str, Any] = {}
-        trigger_id_value = _normalize_optional_string(
-            trigger_id,
-            "list_trigger_completions.trigger_id",
-        )
-        if trigger_id_value is not None:
-            params["id"] = trigger_id_value
-        entrypoint_hash_value = _normalize_optional_string(
-            entrypoint_hash,
-            "list_trigger_completions.entrypoint_hash",
-        )
-        if entrypoint_hash_value is not None:
-            params["entrypoint_hash"] = entrypoint_hash_value
-        if outcome is not None:
-            if not isinstance(outcome, str):
-                raise TypeError("list_trigger_completions.outcome must be a string")
-            outcome_value = outcome.strip().lower()
-            if outcome_value not in {"all", "success", "failure"}:
-                raise ValueError(
-                    "list_trigger_completions.outcome must be all, success, or failure"
-                )
-            params["outcome"] = outcome_value
-        for name, value, allow_zero in (
-            ("from_height", from_height, True),
-            ("to_height", to_height, True),
-            ("limit", limit, False),
-            ("scan_limit_blocks", scan_limit_blocks, False),
-        ):
-            if isinstance(value, bool):
-                raise TypeError(f"list_trigger_completions.{name} must be an integer")
-            normalized = _coerce_int(
-                value,
-                f"list_trigger_completions.{name}",
-                allow_zero=allow_zero,
-            )
-            if normalized is not None:
-                if normalized > 0xFFFFFFFFFFFFFFFF:
-                    raise ValueError(f"list_trigger_completions.{name} must fit in a u64")
-                params[name] = normalized
-
-        payload = self.request_json(
-            "GET",
-            "/v1/triggers/completed",
-            params=params or None,
-            expected_status=(200,),
-        )
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger completion endpoint returned malformed payload")
-        return TriggerCompletionList.from_payload(payload)
-
-    def list_triggers(
+    @overload
+    def list_trigger_completions(
         self,
         *,
-        namespace: Optional[str] = None,
-        authority: Optional[str] = None,
+        filter: Optional[FilterLike] = None,
+        select: Sequence[Union[str, Field]],
         limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> Optional[Any]:
-        """GET `/v1/triggers` with optional filtering."""
+        cursor: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        from_height: Optional[int] = None,
+        to_height: Optional[int] = None,
+    ) -> Page[Dict[str, Any]]: ...
 
-        params: Dict[str, Any] = {}
-        namespace_value = _normalize_optional_string(namespace, "list_triggers.namespace")
-        if namespace_value is not None:
-            params["namespace"] = namespace_value
-        authority_value = _normalize_optional_string(authority, "list_triggers.authority")
-        if authority_value is not None:
-            params["authority"] = authority_value
-        limit_value = _coerce_int(limit, "list_triggers.limit") if limit is not None else None
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = (
-            _coerce_int(offset, "list_triggers.offset", allow_zero=True)
-            if offset is not None
-            else None
-        )
-        if offset_value is not None:
-            params["offset"] = offset_value
-        return self.request_json(
-            "GET",
-            "/v1/triggers",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_triggers_typed(
+    def list_trigger_completions(
         self,
         *,
-        namespace: Optional[str] = None,
-        authority: Optional[str] = None,
+        filter: Optional[FilterLike] = None,
+        select: Optional[Sequence[Union[str, Field]]] = None,
         limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> TriggerListPage:
-        """Typed wrapper for :meth:`list_triggers`."""
+        cursor: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        from_height: Optional[int] = None,
+        to_height: Optional[int] = None,
+    ) -> Union[Page[TriggerCompletionRecord], Page[Dict[str, Any]]]:
+        """One page of the trigger completion history (``GET /v1/triggers/completed``).
 
-        payload = self.list_triggers(
-            namespace=namespace,
-            authority=authority,
-            limit=limit,
-            offset=offset,
+        Operator route: the request is signed with the client's
+        ``operator_signing_context`` and sent once. The route is a history
+        collection of the Torii collection contract: it takes ``filter``,
+        ``select``, ``limit`` and ``cursor``, returns rows newest first by
+        ``block_height``, ``output_index`` and ``completion_index``, and has no
+        ``sort``, total or aggregate. A page has a bounded scan budget, so it may
+        hold fewer than ``limit`` rows, or none, and still carry a
+        ``next_cursor``: pass it back as ``cursor`` with the same filter, or use
+        :meth:`iter_trigger_completions`.
+
+        ``trigger_id``, ``outcome`` (``"Success"`` or ``"Failure"``),
+        ``from_height`` and ``to_height`` are shorthands joined to ``filter`` as
+        the conjuncts ``trigger_id = …``, ``outcome = …``, ``block_height >= …``
+        and ``block_height <= …``; height bounds also bound the blocks a page
+        examines. Rows are :class:`TriggerCompletionRecord`; with ``select`` they
+        are JSON objects holding exactly the selected fields. Invalid controls
+        raise :class:`~iroha_torii_client.list_query.ListQueryError` before any
+        request, and Torii's rejections raise ``ToriiQueryError``.
+        """
+
+        collection = self._trigger_completions()
+        merged = _trigger_completions_filter(
+            filter,
+            trigger_id=trigger_id,
+            outcome=outcome,
+            from_height=from_height,
+            to_height=to_height,
         )
-        if payload is None:
-            return TriggerListPage(items=[], total=0)
-        return TriggerListPage.from_payload(payload)
+        if select is None:
+            return collection.list(filter=merged, limit=limit, cursor=cursor)
+        return collection.rows(filter=merged, select=select, limit=limit, cursor=cursor)
 
-    def get_trigger(self, trigger_id: str) -> Optional[Any]:
-        """GET `/v1/triggers/{trigger_id}` and return the stored trigger or `None` when missing."""
+    @overload
+    def iter_trigger_completions(
+        self,
+        *,
+        filter: Optional[FilterLike] = None,
+        select: None = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        from_height: Optional[int] = None,
+        to_height: Optional[int] = None,
+    ) -> Iterator[TriggerCompletionRecord]: ...
 
-        normalized_id = _require_non_empty_string(trigger_id, "trigger_id")
-        return self.request_json(
-            "GET",
-            f"/v1/triggers/{normalized_id}",
-            expected_status=(200, 404),
+    @overload
+    def iter_trigger_completions(
+        self,
+        *,
+        filter: Optional[FilterLike] = None,
+        select: Sequence[Union[str, Field]],
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        from_height: Optional[int] = None,
+        to_height: Optional[int] = None,
+    ) -> Iterator[Dict[str, Any]]: ...
+
+    def iter_trigger_completions(
+        self,
+        *,
+        filter: Optional[FilterLike] = None,
+        select: Optional[Sequence[Union[str, Field]]] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        from_height: Optional[int] = None,
+        to_height: Optional[int] = None,
+    ) -> Union[Iterator[TriggerCompletionRecord], Iterator[Dict[str, Any]]]:
+        """Lazily yield every matching trigger completion, newest first.
+
+        Takes the controls of :meth:`list_trigger_completions` (``limit`` is the
+        page size, ``cursor`` resumes an earlier read) and follows every
+        ``next_cursor`` until it is null, through short and empty pages. Each
+        page is a separately signed request; breaking out of the loop stops
+        issuing them.
+        """
+
+        collection = self._trigger_completions()
+        merged = _trigger_completions_filter(
+            filter,
+            trigger_id=trigger_id,
+            outcome=outcome,
+            from_height=from_height,
+            to_height=to_height,
         )
+        if select is None:
+            return collection.iter(filter=merged, limit=limit, cursor=cursor)
+        return collection.iter_rows(filter=merged, select=select, limit=limit, cursor=cursor)
 
-    def get_trigger_typed(self, trigger_id: str) -> Optional[TriggerRecord]:
-        """Typed wrapper for :meth:`get_trigger`."""
-
-        payload = self.get_trigger(trigger_id)
-        if payload is None:
-            return None
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger endpoint returned non-object payload")
-        return TriggerRecord.from_payload(payload)
-
-    def register_trigger(self, trigger: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/triggers` with a trigger registration payload."""
-
-        if not isinstance(trigger, Mapping):
-            raise TypeError("trigger must be a mapping")
-        return self.request_json(
-            "POST",
-            "/v1/triggers",
-            json_body=dict(trigger),
-            expected_status=(200, 201, 202),
-        )
-
-    def register_trigger_typed(
-        self, trigger: Mapping[str, Any]
-    ) -> Optional[TriggerMutationResponse]:
-        """Typed wrapper for :meth:`register_trigger`."""
-
-        payload = self.register_trigger(trigger)
-        if payload is None:
-            return None
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger registration returned malformed payload")
-        return TriggerMutationResponse.from_payload(payload)
-
-    def delete_trigger(self, trigger_id: str) -> Optional[Any]:
-        """DELETE `/v1/triggers/{trigger_id}`."""
-
-        response = self._request("DELETE", f"/v1/triggers/{trigger_id}")
-        self._expect_status(response, {200, 202, 204, 404})
-        return self._maybe_json(response)
-
-    def delete_trigger_typed(self, trigger_id: str) -> Optional[TriggerMutationResponse]:
-        """Typed wrapper for :meth:`delete_trigger`."""
-
-        payload = self.delete_trigger(trigger_id)
-        if payload is None:
-            return None
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger deletion returned malformed payload")
-        return TriggerMutationResponse.from_payload(payload)
 
 def create_torii_client(
     base_url: str,

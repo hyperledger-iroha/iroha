@@ -85,6 +85,12 @@ signed `RegisterPeerWithPop` roster. Compose reuses those validator identities
 and embeds relative read-only paths for all three public genesis artifacts, so
 generation cannot silently substitute a new roster. The public verifier key and
 checked network identity are separate Compose secrets; the signed body is a read-only bind.
+A validator whose `peerN.toml` sets `data_dir` (developer localnets) reads its
+identities from the fixed owner-only files of that directory's `secrets/`, so
+Kagami admits the roster through the same node-file loader and private-file
+custody as `iroha3d`. Its container mounts only its own node data directory,
+with `secrets/` read-only; no key is copied or rendered inline, and the same
+bound projection must load the same validator identity from the mounted files.
 The launcher exports `GENESIS`, `GENESIS_PUBLIC_KEY`, and
 `GENESIS_EXPECTED_HASH_FILE` before configuration normalization. It validates
 non-empty inputs and the canonical LF-terminated checked-literal shape; Iroha parses

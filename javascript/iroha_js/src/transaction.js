@@ -1,3 +1,4 @@
+import { normalizeNativeCodecOptions } from "./noritoValueCodecs.js";
 import { requireNetworkPrefix } from "./networkPrefix.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
@@ -554,34 +555,36 @@ function normalizePrivateKeyAlgorithm(
 }
 
 /**
- * Compute the canonical transaction hash (blake2b-256) for an exact canonical
- * VersionedSignedTransaction V1 wire.
+ * Compute the external transaction intent hash in the selected layout.
+ * Defaults to current version-1 wire; dense requires an offline bare/framed archive.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @param {{ encoding?: BufferEncoding }} [options]
+ * @param {import("../index.js").SignedTransactionCodecOptions & { encoding?: BufferEncoding | "buffer" }} [options]
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
 export function hashSignedTransaction(signedTransaction, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true, encoding: true });
   const native = resolveNativeBinding(this);
   if (!native || typeof native.hashSignedTransaction !== "function") {
     throw new Error("native binding 'hashSignedTransaction' is unavailable");
   }
   const buffer = toBuffer(signedTransaction);
-  const hashBuffer = Buffer.from(native.hashSignedTransaction(buffer));
-  if (options.encoding === "buffer") {
+  const hashBuffer = Buffer.from(native.hashSignedTransaction(buffer, wire.layout, wire.format));
+  if (wire.encoding === "buffer") {
     return hashBuffer;
   }
-  const encoding = options.encoding ?? "hex";
+  const encoding = wire.encoding ?? "hex";
   return hashBuffer.toString(encoding);
 }
 
 /**
- * Compute the detached-signature preimage used by Torii for an exact canonical
- * VersionedSignedTransaction V1 wire (`HashOf::new(tx.payload())`).
+ * Compute the typed payload signing hash in the explicitly selected layout.
+ * Defaults to current version-1 wire; dense signatures cover the dense payload hash.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @param {{ encoding?: BufferEncoding }} [options]
+ * @param {import("../index.js").SignedTransactionCodecOptions & { encoding?: BufferEncoding | "buffer" }} [options]
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
 export function hashSignedTransactionPayload(signedTransaction, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true, encoding: true });
   const native = resolveNativeBinding(this);
   if (!native || typeof native.hashSignedTransactionPayload !== "function") {
     throw new Error(
@@ -589,23 +592,25 @@ export function hashSignedTransactionPayload(signedTransaction, options = {}) {
     );
   }
   const buffer = toBuffer(signedTransaction);
-  const hashBuffer = Buffer.from(native.hashSignedTransactionPayload(buffer));
-  if (options.encoding === "buffer") {
+  const hashBuffer = Buffer.from(native.hashSignedTransactionPayload(buffer, wire.layout, wire.format));
+  if (wire.encoding === "buffer") {
     return hashBuffer;
   }
-  const encoding = options.encoding ?? "hex";
+  const encoding = wire.encoding ?? "hex";
   return hashBuffer.toString(encoding);
 }
 
 /**
- * Decode an exact canonical VersionedSignedTransaction V1 wire into JSON.
+ * Decode the selected signed archive into model JSON (current version-1 by default).
+ * Use parseJson: false to retain lossless JSON text, including large integers.
  * This is intended for wallet policy checks before signing an untrusted
  * transaction scaffold.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {number} networkPrefix Canonical I105 network prefix.
  * @returns {Record<string, unknown>}
  */
-export function decodeSignedTransaction(signedTransaction, networkPrefix) {
+export function decodeSignedTransaction(signedTransaction, networkPrefix, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true, parseJson: true });
   requireNetworkPrefix(networkPrefix);
   const native = resolveNativeBinding(this);
   if (!native || typeof native.decodeSignedTransactionJson !== "function") {
@@ -613,14 +618,50 @@ export function decodeSignedTransaction(signedTransaction, networkPrefix) {
       "native binding 'decodeSignedTransactionJson' is unavailable",
     );
   }
-  const decoded = parseTransactionPayloadJson(
-    native.decodeSignedTransactionJson(toBuffer(signedTransaction), networkPrefix),
-    true,
-  );
+  const json = native.decodeSignedTransactionJson(toBuffer(signedTransaction), networkPrefix, wire.layout, wire.format);
+  if (!wire.parseJson) return json;
+  const decoded = parseTransactionPayloadJson(json, true);
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
     throw new Error("decoded signed transaction must be an object");
   }
   return decoded;
+}
+
+/** Decode a typed native transaction payload to exact, lossless JSON text. */
+export function decodeTransactionPayloadJson(payloadBytes, networkPrefix, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { format: true });
+  requireNetworkPrefix(networkPrefix);
+  const native = resolveNativeBinding(this);
+  return native.decodeTransactionPayloadJson(toBuffer(payloadBytes), networkPrefix, wire.layout, wire.format);
+}
+
+/** Encode the canonical native TransactionPayload JSON model in an explicit layout. */
+export function encodeTransactionPayloadJson(json, networkPrefix, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { format: true });
+  requireNetworkPrefix(networkPrefix);
+  if (typeof json !== "string") throw new TypeError("transaction payload JSON must be a string");
+  const native = resolveNativeBinding(this);
+  return Buffer.from(native.encodeTransactionPayloadJson(json, networkPrefix, wire.layout, wire.format));
+}
+
+/** Encode the native SignedTransaction JSON model; this does not authenticate its signature. */
+export function encodeSignedTransaction(json, networkPrefix, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
+  requireNetworkPrefix(networkPrefix);
+  if (typeof json !== "string") throw new TypeError("signed transaction JSON must be a string");
+  const native = resolveNativeBinding(this);
+  return Buffer.from(native.encodeSignedTransactionJson(json, networkPrefix, wire.layout, wire.format));
+}
+
+/** Sign a typed payload for the pinned network, returning a bare or framed archive. */
+export function signTransactionPayload(networkId, payloadBytes, privateKey, networkPrefix, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { format: true });
+  requireNetworkPrefix(networkPrefix);
+  const native = resolveNativeBinding(this);
+  return Buffer.from(native.signTransactionPayload(
+    Buffer.from(networkIdBytes(networkId, "networkId")), toBuffer(payloadBytes),
+    toBuffer(privateKey), networkPrefix, wire.layout, wire.format,
+  ));
 }
 
 /**
@@ -684,7 +725,7 @@ export function hashInstructionBatch(instructions, networkPrefix, options = {}) 
 }
 
 /**
- * Re-sign an exact canonical VersionedSignedTransaction V1 wire for one exact
+ * Re-sign an explicitly selected signed archive (current version-1 by default) for one exact
  * NetworkId with the provided Ed25519 private key. Foreign-network and genesis
  * payloads are rejected by the native boundary before signing.
  * @param {import("./networkId.js").NetworkId} networkId
@@ -692,7 +733,8 @@ export function hashInstructionBatch(instructions, networkPrefix, options = {}) 
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.
  * @returns {Buffer}
  */
-export function resignSignedTransaction(networkId, signedTransaction, privateKey) {
+export function resignSignedTransaction(networkId, signedTransaction, privateKey, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const native = resolveNativeBinding(this);
   if (!native || typeof native.signTransaction !== "function") {
     throw new Error("native binding 'signTransaction' is unavailable");
@@ -706,7 +748,7 @@ export function resignSignedTransaction(networkId, signedTransaction, privateKey
     throw new Error("private key must be a 32- or 64-byte Ed25519 key");
   }
   return Buffer.from(
-    native.signTransaction(expectedNetworkId, txBuffer, keyBuffer),
+    native.signTransaction(expectedNetworkId, txBuffer, keyBuffer, wire.layout, wire.format),
   );
 }
 
@@ -726,7 +768,8 @@ export function resignSignedTransaction(networkId, signedTransaction, privateKey
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function buildRegisterDomainTransaction(input) {
+export function buildRegisterDomainTransaction(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.buildRegisterDomainTransaction !== "function") {
@@ -766,6 +809,7 @@ export function buildRegisterDomainTransaction(input) {
     nonce,
     toBuffer(privateKey),
     normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
+    wire.layout, wire.format,
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -797,7 +841,8 @@ export function buildRegisterDomainTransaction(input) {
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function buildTransaction(input) {
+export function buildTransaction(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.buildTransaction !== "function") {
@@ -839,6 +884,7 @@ export function buildTransaction(input) {
     nonce,
     toBuffer(privateKey),
     normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
+    wire.layout, wire.format,
   );
 
   const signed =
@@ -864,7 +910,8 @@ export function buildTransaction(input) {
  * @param {object} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function buildExecutableBatchTransaction(input) {
+export function buildExecutableBatchTransaction(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (
@@ -903,6 +950,7 @@ export function buildExecutableBatchTransaction(input) {
     nonce,
     toBuffer(privateKey, "privateKey"),
     normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
+    wire.layout, wire.format,
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -935,7 +983,8 @@ export function buildExecutableBatchTransaction(input) {
  * }} input
  * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer}}
  */
-export function buildTransactionPayload(input) {
+export function buildTransactionPayload(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options);
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.buildTransactionPayload !== "function") {
@@ -959,6 +1008,7 @@ export function buildTransactionPayload(input) {
     creationTimeMs,
     ttlMs,
     nonce,
+    wire.layout,
   );
   const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
   const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
@@ -977,7 +1027,8 @@ export function buildTransactionPayload(input) {
 }
 
 /** Build an exact unsigned ordered mixed executable-batch payload. */
-export function buildExecutableBatchTransactionPayload(input) {
+export function buildExecutableBatchTransactionPayload(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options);
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (
@@ -1008,6 +1059,7 @@ export function buildExecutableBatchTransactionPayload(input) {
     creationTimeMs,
     ttlMs,
     nonce,
+    wire.layout,
   );
   const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
   const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
@@ -1039,7 +1091,8 @@ export function buildExecutableBatchTransactionPayload(input) {
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function signQuotedTransactionPayload(input) {
+export function signQuotedTransactionPayload(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.signQuotedTransactionPayload !== "function") {
@@ -1068,6 +1121,7 @@ export function signQuotedTransactionPayload(input) {
       input?.privateKeyAlgorithm,
       "input.privateKeyAlgorithm",
     ),
+    wire.layout, wire.format,
   );
   const signed = result?.signed_transaction ?? result?.signedTransaction ?? null;
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
@@ -1138,13 +1192,14 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @returns {Buffer}
  */
-export function transactionPayloadSigningHash(payloadBytes) {
+export function transactionPayloadSigningHash(payloadBytes, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { format: true });
   const native = resolveNativeBinding(this);
   if (!native || typeof native.transactionPayloadSigningHash !== "function") {
     throw new Error("native binding 'transactionPayloadSigningHash' is unavailable");
   }
   return Buffer.from(
-    native.transactionPayloadSigningHash(toBuffer(payloadBytes, "payloadBytes")),
+    native.transactionPayloadSigningHash(toBuffer(payloadBytes, "payloadBytes"), wire.layout, wire.format),
   );
 }
 
@@ -1153,8 +1208,9 @@ export function transactionPayloadSigningHash(payloadBytes) {
  *
  * The native finalizer checks the payload's network, that `publicKey` is the
  * single signatory of `authority`, and the signature over
- * {@link transactionPayloadSigningHash}; it returns the canonical signed wire
- * and its pipeline hash (the same value as `hashSignedTransaction`).
+ * {@link transactionPayloadSigningHash}; it accepts a bare payload and returns
+ * the selected signed archive and intent hash (`hashSignedTransaction`). Dense
+ * requires an explicit bare/framed output and has no network submission mapping.
  * @param {{
  *   networkId: import("./networkId.js").NetworkId,
  *   payloadBytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -1164,7 +1220,8 @@ export function transactionPayloadSigningHash(payloadBytes) {
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function finalizeSignedTransaction(input) {
+export function finalizeSignedTransaction(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.finalizeSignedTransaction !== "function") {
@@ -1190,7 +1247,7 @@ export function finalizeSignedTransaction(input) {
     signature,
     publicKey,
     authority: normalizeAuthority(input.authority),
-  });
+  }, wire.layout, wire.format);
   const signed = result?.signedTransaction ?? null;
   const hash = result?.hash ?? null;
   if (!signed || !hash) {
@@ -1467,7 +1524,8 @@ export function buildRegisterPinManifestTransaction(client, input, options = {})
  * }} input
  * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer, attachment: object, attachmentJson: string}}
  */
-export function buildIvmProvedTransactionPayload(input) {
+export function buildIvmProvedTransactionPayload(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options);
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (
@@ -1505,6 +1563,7 @@ export function buildIvmProvedTransactionPayload(input) {
     creationTimeMs,
     ttlMs,
     nonce,
+    wire.layout,
   );
   const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
   const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
@@ -1537,7 +1596,8 @@ export function buildIvmProvedTransactionPayload(input) {
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function signQuotedIvmProvedTransactionPayload(input) {
+export function signQuotedIvmProvedTransactionPayload(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (
@@ -1571,6 +1631,8 @@ export function signQuotedIvmProvedTransactionPayload(input) {
       input?.privateKeyAlgorithm,
       "input.privateKeyAlgorithm",
     ),
+    wire.layout,
+    wire.format,
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -1602,7 +1664,8 @@ export function signQuotedIvmProvedTransactionPayload(input) {
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
-export function buildIvmProvedTransaction(input) {
+export function buildIvmProvedTransaction(input, options = {}) {
+  const wire = normalizeNativeCodecOptions(options, { signed: true, format: true });
   const networkId = transactionNetworkIdBytes(input, "input");
   const native = resolveNativeBinding(this);
   if (!native || typeof native.buildIvmProvedTransaction !== "function") {
@@ -1646,6 +1709,8 @@ export function buildIvmProvedTransaction(input) {
     nonce,
     toBuffer(privateKey),
     normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
+    wire.layout,
+    wire.format,
   );
 
   const signed =
@@ -1753,7 +1818,7 @@ export function buildPrecommitTriggerAction(options) {
  * Convenience helper to build a transaction with a single `Mint::Asset` instruction.
  * Additional transaction parameters mirror {@link buildTransaction}.
  */
-export function buildMintAssetTransaction(input) {
+export function buildMintAssetTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -1784,14 +1849,14 @@ export function buildMintAssetTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Convenience helper to build a transaction with a single `Burn::Asset` instruction.
  * Additional transaction parameters mirror {@link buildTransaction}.
  */
-export function buildBurnAssetTransaction(input) {
+export function buildBurnAssetTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -1822,13 +1887,13 @@ export function buildBurnAssetTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Burn::TriggerRepetitions` instruction.
  */
-export function buildBurnTriggerTransaction(input) {
+export function buildBurnTriggerTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -1858,13 +1923,13 @@ export function buildBurnTriggerTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Mint::TriggerRepetitions` instruction.
  */
-export function buildMintTriggerTransaction(input) {
+export function buildMintTriggerTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -1894,13 +1959,13 @@ export function buildMintTriggerTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Transfer::Asset` instruction.
  */
-export function buildTransferAssetTransaction(input) {
+export function buildTransferAssetTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -1933,7 +1998,7 @@ export function buildTransferAssetTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
@@ -1995,7 +2060,7 @@ function buildRegisterAccountInstructions({ account, transfers = [] }) {
 /**
  * Build a transaction containing a multisig registration (custom instruction).
  */
-export function buildRegisterMultisigTransaction(input) {
+export function buildRegisterMultisigTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2022,7 +2087,7 @@ export function buildRegisterMultisigTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
@@ -2187,7 +2252,7 @@ function normalizeTransferSpecs(value, context, options) {
  * Build a transaction that first mints an asset and then transfers part of it.
  * Accepts either a single transfer descriptor or an array of transfers.
  */
-export function buildMintAndTransferTransaction(input) {
+export function buildMintAndTransferTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2250,13 +2315,13 @@ export function buildMintAndTransferTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction that registers a domain and optionally mints an asset.
  */
-export function buildRegisterDomainAndMintTransaction(input) {
+export function buildRegisterDomainAndMintTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2299,13 +2364,13 @@ export function buildRegisterDomainAndMintTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction that registers a new account and optionally transfers an asset.
  */
-export function buildRegisterAccountAndTransferTransaction(input) {
+export function buildRegisterAccountAndTransferTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2348,13 +2413,13 @@ export function buildRegisterAccountAndTransferTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Transfer::AssetDefinition` instruction.
  */
-export function buildTransferAssetDefinitionTransaction(input) {
+export function buildTransferAssetDefinitionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2386,13 +2451,13 @@ export function buildTransferAssetDefinitionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction that registers an asset definition and optionally mints to an account.
  */
-export function buildRegisterAssetDefinitionAndMintTransaction(input) {
+export function buildRegisterAssetDefinitionAndMintTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2454,14 +2519,14 @@ export function buildRegisterAssetDefinitionAndMintTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction that registers an asset definition, mints, and optionally transfers it.
  * Supports either a single `transfer` descriptor or an array of `transfers` for batching.
  */
-export function buildRegisterAssetDefinitionMintAndTransferTransaction(input) {
+export function buildRegisterAssetDefinitionMintAndTransferTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2553,13 +2618,13 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Transfer::Domain` instruction.
  */
-export function buildTransferDomainTransaction(input) {
+export function buildTransferDomainTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2591,13 +2656,13 @@ export function buildTransferDomainTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Transfer::Nft` instruction.
  */
-export function buildTransferNftTransaction(input) {
+export function buildTransferNftTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2629,13 +2694,13 @@ export function buildTransferNftTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RegisterRwa` instruction.
  */
-export function buildRegisterRwaTransaction(input) {
+export function buildRegisterRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2662,13 +2727,13 @@ export function buildRegisterRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `TransferRwa` instruction.
  */
-export function buildTransferRwaTransaction(input) {
+export function buildTransferRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2702,13 +2767,13 @@ export function buildTransferRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `MergeRwas` instruction.
  */
-export function buildMergeRwasTransaction(input) {
+export function buildMergeRwasTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2735,13 +2800,13 @@ export function buildMergeRwasTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RedeemRwa` instruction.
  */
-export function buildRedeemRwaTransaction(input) {
+export function buildRedeemRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2768,13 +2833,13 @@ export function buildRedeemRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `FreezeRwa` instruction.
  */
-export function buildFreezeRwaTransaction(input) {
+export function buildFreezeRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2800,13 +2865,13 @@ export function buildFreezeRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing an `UnfreezeRwa` instruction.
  */
-export function buildUnfreezeRwaTransaction(input) {
+export function buildUnfreezeRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2832,13 +2897,13 @@ export function buildUnfreezeRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `HoldRwa` instruction.
  */
-export function buildHoldRwaTransaction(input) {
+export function buildHoldRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2865,13 +2930,13 @@ export function buildHoldRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `ReleaseRwa` instruction.
  */
-export function buildReleaseRwaTransaction(input) {
+export function buildReleaseRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2898,13 +2963,13 @@ export function buildReleaseRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `ForceTransferRwa` instruction.
  */
-export function buildForceTransferRwaTransaction(input) {
+export function buildForceTransferRwaTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2936,13 +3001,13 @@ export function buildForceTransferRwaTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `SetRwaControls` instruction.
  */
-export function buildSetRwaControlsTransaction(input) {
+export function buildSetRwaControlsTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -2974,13 +3039,13 @@ export function buildSetRwaControlsTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `SetRwaKeyValue` instruction.
  */
-export function buildSetRwaKeyValueTransaction(input) {
+export function buildSetRwaKeyValueTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3008,13 +3073,13 @@ export function buildSetRwaKeyValueTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RemoveRwaKeyValue` instruction.
  */
-export function buildRemoveRwaKeyValueTransaction(input) {
+export function buildRemoveRwaKeyValueTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3041,13 +3106,13 @@ export function buildRemoveRwaKeyValueTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::CreateKaigi` instruction.
  */
-export function buildCreateKaigiTransaction(input) {
+export function buildCreateKaigiTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3073,13 +3138,13 @@ export function buildCreateKaigiTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::JoinKaigi` instruction.
  */
-export function buildJoinKaigiTransaction(input) {
+export function buildJoinKaigiTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3105,13 +3170,13 @@ export function buildJoinKaigiTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::LeaveKaigi` instruction.
  */
-export function buildLeaveKaigiTransaction(input) {
+export function buildLeaveKaigiTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3137,13 +3202,13 @@ export function buildLeaveKaigiTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::EndKaigi` instruction.
  */
-export function buildEndKaigiTransaction(input) {
+export function buildEndKaigiTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3169,13 +3234,13 @@ export function buildEndKaigiTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::RecordKaigiUsage` instruction.
  */
-export function buildRecordKaigiUsageTransaction(input) {
+export function buildRecordKaigiUsageTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3201,13 +3266,13 @@ export function buildRecordKaigiUsageTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::SetKaigiRelayManifest` instruction.
  */
-export function buildSetKaigiRelayManifestTransaction(input) {
+export function buildSetKaigiRelayManifestTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3233,13 +3298,13 @@ export function buildSetKaigiRelayManifestTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::RegisterKaigiRelay` instruction.
  */
-export function buildRegisterKaigiRelayTransaction(input) {
+export function buildRegisterKaigiRelayTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3265,13 +3330,13 @@ export function buildRegisterKaigiRelayTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::UnregisterKaigiRelay` instruction.
  */
-export function buildUnregisterKaigiRelayTransaction(input) {
+export function buildUnregisterKaigiRelayTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3297,13 +3362,13 @@ export function buildUnregisterKaigiRelayTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `Kaigi::ReportKaigiRelayHealth` instruction.
  */
-export function buildReportKaigiRelayHealthTransaction(input) {
+export function buildReportKaigiRelayHealthTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3329,13 +3394,13 @@ export function buildReportKaigiRelayHealthTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `ProposeDeployContract` instruction.
  */
-export function buildProposeDeployContractTransaction(input) {
+export function buildProposeDeployContractTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3361,13 +3426,13 @@ export function buildProposeDeployContractTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `CastZkBallot` instruction.
  */
-export function buildCastZkBallotTransaction(input) {
+export function buildCastZkBallotTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3393,13 +3458,13 @@ export function buildCastZkBallotTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `CastPlainBallot` instruction.
  */
-export function buildCastPlainBallotTransaction(input) {
+export function buildCastPlainBallotTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3425,13 +3490,13 @@ export function buildCastPlainBallotTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing one choice-free `UpdatePlainConviction` instruction.
  */
-export function buildUpdatePlainConvictionTransaction(input) {
+export function buildUpdatePlainConvictionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3457,10 +3522,10 @@ export function buildUpdatePlainConvictionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildRegisterZkAssetTransaction(input) {
+export function buildRegisterZkAssetTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3486,10 +3551,10 @@ export function buildRegisterZkAssetTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildScheduleConfidentialPolicyTransitionTransaction(input) {
+export function buildScheduleConfidentialPolicyTransitionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3516,10 +3581,10 @@ export function buildScheduleConfidentialPolicyTransitionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildCancelConfidentialPolicyTransitionTransaction(input) {
+export function buildCancelConfidentialPolicyTransitionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3546,10 +3611,10 @@ export function buildCancelConfidentialPolicyTransitionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildCreateElectionTransaction(input) {
+export function buildCreateElectionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3575,10 +3640,10 @@ export function buildCreateElectionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildSubmitBallotTransaction(input) {
+export function buildSubmitBallotTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3604,10 +3669,10 @@ export function buildSubmitBallotTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
-export function buildFinalizeElectionTransaction(input) {
+export function buildFinalizeElectionTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3633,13 +3698,13 @@ export function buildFinalizeElectionTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RegisterSmartContractCode` instruction.
  */
-export function buildRegisterSmartContractCodeTransaction(input) {
+export function buildRegisterSmartContractCodeTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3666,13 +3731,13 @@ export function buildRegisterSmartContractCodeTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RegisterSmartContractBytes` instruction.
  */
-export function buildRegisterSmartContractBytesTransaction(input) {
+export function buildRegisterSmartContractBytesTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3702,13 +3767,13 @@ export function buildRegisterSmartContractBytesTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
  * Build a transaction containing a `RemoveSmartContractBytes` instruction.
  */
-export function buildRemoveSmartContractBytesTransaction(input) {
+export function buildRemoveSmartContractBytesTransaction(input, options = {}) {
   transactionNetworkIdBytes(input, "input");
   const {
     networkId,
@@ -3738,7 +3803,7 @@ export function buildRemoveSmartContractBytesTransaction(input) {
     nonce,
     privateKey,
     privateKeyAlgorithm,
-  });
+  }, options);
 }
 
 /**
@@ -3802,6 +3867,10 @@ export function _createTransactionApi(nativeRuntime) {
     hashSignedTransaction: bind(hashSignedTransaction),
     hashSignedTransactionPayload: bind(hashSignedTransactionPayload),
     decodeSignedTransaction: bind(decodeSignedTransaction),
+    decodeTransactionPayloadJson: bind(decodeTransactionPayloadJson),
+    encodeTransactionPayloadJson: bind(encodeTransactionPayloadJson),
+    encodeSignedTransaction: bind(encodeSignedTransaction),
+    signTransactionPayload: bind(signTransactionPayload),
     encodeContractArgumentRecord: bind(encodeContractArgumentRecord),
     hashInstructionBatch: bind(hashInstructionBatch),
     resignSignedTransaction: bind(resignSignedTransaction),

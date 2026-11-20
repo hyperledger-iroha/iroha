@@ -210,6 +210,83 @@ pub fn run_list<C: RunContext>(
     print_page(context, &page, &columns)
 }
 
+/// Columns shown in text mode for `iroha trigger completed list` when `--select` is not given.
+pub const TRIGGER_COMPLETION_COLUMNS: &[&str] = &[
+    "block_height",
+    "trigger_id",
+    "outcome",
+    "step_index",
+    "trigger_execution_hash",
+    "message",
+];
+
+/// Run a `list` command over a collection that `fetch` reads one page at a time:
+/// a single page, or every page with `all` by following each `next_cursor`.
+///
+/// Used by collections outside [`Collection`] (the operator-signed trigger completion
+/// history); output and traversal match [`run_list`].
+///
+/// # Errors
+/// Returns the first failed page, or a `next_cursor` that does not advance.
+pub fn run_fetched_list<C: RunContext>(
+    context: &mut C,
+    name: &str,
+    query: ListQuery,
+    all: bool,
+    default_columns: &[&str],
+    mut fetch: impl FnMut(&ListQuery) -> Result<Page<Value>>,
+) -> Result<()> {
+    let columns: Vec<String> = query.select.as_ref().map_or_else(
+        || {
+            default_columns
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect()
+        },
+        |fields| {
+            fields
+                .iter()
+                .map(|field| field.as_str().to_owned())
+                .collect()
+        },
+    );
+    if !all {
+        let page = fetch(&query).wrap_err_with(|| format!("failed to list {name}"))?;
+        return print_page(context, &page, &columns);
+    }
+    let json_lines = context.output_format() == CliOutputFormat::Json && context.json_lines();
+    let mut items = Vec::new();
+    let mut request = Some(query);
+    while let Some(query) = request.take() {
+        let page = fetch(&query).wrap_err_with(|| format!("failed to list {name}"))?;
+        // A cursor that does not advance would repeat the same page forever.
+        eyre::ensure!(
+            page.next_cursor.is_none() || page.next_cursor != query.cursor,
+            "failed to list {name}: the node returned a `next_cursor` that does not advance"
+        );
+        request = query.next_page(&page);
+        if json_lines {
+            for row in &page.items {
+                context.print_data(row)?;
+            }
+        } else {
+            items.extend(page.items);
+        }
+    }
+    if json_lines {
+        return Ok(());
+    }
+    print_page(
+        context,
+        &Page {
+            items,
+            next_cursor: None,
+            total: None,
+        },
+        &columns,
+    )
+}
+
 /// Print one page in the selected output format.
 fn print_page<C: RunContext>(
     context: &mut C,
@@ -334,6 +411,186 @@ mod tests {
 
     fn args() -> ListArgs {
         ListArgs::default()
+    }
+
+    /// Records what a `list` command prints.
+    struct Printed {
+        config: iroha::config::Config,
+        i18n: iroha_i18n::Localizer,
+        format: CliOutputFormat,
+        json_lines: bool,
+        data: Vec<Value>,
+        text: Vec<String>,
+    }
+
+    impl Printed {
+        fn new(format: CliOutputFormat, json_lines: bool) -> Self {
+            Self {
+                config: crate::fallback_config(),
+                i18n: iroha_i18n::Localizer::new(
+                    iroha_i18n::Bundle::Cli,
+                    iroha_i18n::Language::English,
+                ),
+                format,
+                json_lines,
+                data: Vec::new(),
+                text: Vec::new(),
+            }
+        }
+    }
+
+    impl RunContext for Printed {
+        fn config(&self) -> &iroha::config::Config {
+            &self.config
+        }
+        fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
+            None
+        }
+        fn input_instructions(&self) -> bool {
+            false
+        }
+        fn output_instructions(&self) -> bool {
+            false
+        }
+        fn i18n(&self) -> &iroha_i18n::Localizer {
+            &self.i18n
+        }
+        fn output_format(&self) -> CliOutputFormat {
+            self.format
+        }
+        fn json_lines(&self) -> bool {
+            self.json_lines
+        }
+        fn print_data<T: norito::json::JsonSerialize + ?Sized>(&mut self, value: &T) -> Result<()> {
+            self.data.push(norito::json::to_value(value)?);
+            Ok(())
+        }
+        fn println(&mut self, text: impl std::fmt::Display) -> Result<()> {
+            self.text.push(text.to_string());
+            Ok(())
+        }
+    }
+
+    /// Pages of a fetched collection: two rows, an empty page, then the last row.
+    fn completion_pages(query: &ListQuery) -> Result<Page<Value>> {
+        let row = |height: u64| norito::json!({"block_height": height, "trigger_id": "clock"});
+        Ok(match query.cursor.as_deref() {
+            None => Page {
+                items: vec![row(9), row(8)],
+                next_cursor: Some("first".to_owned()),
+                total: None,
+            },
+            Some("first") => Page {
+                items: Vec::new(),
+                next_cursor: Some("second".to_owned()),
+                total: None,
+            },
+            Some("second") => Page::last(vec![row(3)]),
+            Some(other) => eyre::bail!("unexpected cursor {other}"),
+        })
+    }
+
+    #[test]
+    fn fetched_lists_print_one_page_or_follow_every_continuation() {
+        let columns = &["block_height", "trigger_id"];
+        // One page: the envelope keeps its continuation for the caller.
+        let mut context = Printed::new(CliOutputFormat::Json, false);
+        run_fetched_list(
+            &mut context,
+            "trigger_completions",
+            ListQuery::new(),
+            false,
+            columns,
+            completion_pages,
+        )
+        .expect("first page");
+        assert_eq!(context.data.len(), 1);
+        assert_eq!(context.data[0]["items"].as_array().map(Vec::len), Some(2));
+        assert_eq!(context.data[0]["next_cursor"].as_str(), Some("first"));
+
+        // `--all` follows every continuation, through the empty page, into one document.
+        let mut requests = Vec::new();
+        let mut context = Printed::new(CliOutputFormat::Json, false);
+        run_fetched_list(
+            &mut context,
+            "trigger_completions",
+            ListQuery::new().limit(2),
+            true,
+            columns,
+            |query| {
+                requests.push(query.cursor.clone());
+                assert_eq!(
+                    query.limit,
+                    Some(2),
+                    "every page keeps the query's controls"
+                );
+                completion_pages(query)
+            },
+        )
+        .expect("every page");
+        assert_eq!(
+            requests,
+            [None, Some("first".to_owned()), Some("second".to_owned())]
+        );
+        assert_eq!(context.data.len(), 1);
+        assert_eq!(context.data[0]["items"].as_array().map(Vec::len), Some(3));
+        assert!(context.data[0]["next_cursor"].is_null());
+
+        // JSON lines print rows as pages arrive; text prints one table of the columns.
+        let mut context = Printed::new(CliOutputFormat::Json, true);
+        run_fetched_list(
+            &mut context,
+            "trigger_completions",
+            ListQuery::new(),
+            true,
+            columns,
+            completion_pages,
+        )
+        .expect("rows");
+        let heights: Vec<_> = context
+            .data
+            .iter()
+            .map(|row| row["block_height"].as_u64())
+            .collect();
+        assert_eq!(heights, [Some(9), Some(8), Some(3)]);
+        let mut context = Printed::new(CliOutputFormat::Text, false);
+        run_fetched_list(
+            &mut context,
+            "trigger_completions",
+            ListQuery::new(),
+            true,
+            TRIGGER_COMPLETION_COLUMNS,
+            completion_pages,
+        )
+        .expect("table");
+        assert_eq!(context.text.len(), 1);
+        let header = context.text[0].lines().next().expect("table header");
+        assert!(header.starts_with("BLOCK_HEIGHT") && header.contains("OUTCOME"));
+        assert_eq!(
+            context.text[0].lines().count(),
+            4,
+            "a header and three rows"
+        );
+
+        // A continuation that does not advance is an error, never an endless walk.
+        let mut context = Printed::new(CliOutputFormat::Json, false);
+        let error = run_fetched_list(
+            &mut context,
+            "trigger_completions",
+            ListQuery::new().cursor("stuck"),
+            true,
+            columns,
+            |_| {
+                Ok(Page {
+                    items: Vec::new(),
+                    next_cursor: Some("stuck".to_owned()),
+                    total: None,
+                })
+            },
+        )
+        .expect_err("stalled cursor");
+        assert!(error.to_string().contains("does not advance"), "{error}");
+        assert!(context.data.is_empty());
     }
 
     #[test]

@@ -313,6 +313,13 @@ into the output directory.
   operator signer for node diagnostics. There is no faucet, account
   onboarding, fee sponsorship, alias setup intent or SoraNet VPN operator, and
   `start.sh`/`stop.sh` need only bash
+- Gives every validator one node data directory, `nodes/peerN`, which its
+  `peerN.toml` names as `data_dir`. The validator, SoraNet transport and
+  streaming keys are the owner-only files `validator.key`, `transport.key` and
+  `streaming.key` of `nodes/peerN/secrets/`, and the node derives every state
+  path under `nodes/peerN/state/`. A peer config therefore holds no private key
+  and no per-path state setting; `iroha3d --config peerN.toml --check-config`
+  loads it through the same key custody checks as any `data_dir` node
 - Protects validator/client configs and the runtime operator signer with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.signed.nrt`, `genesis.public_key`, and
@@ -322,8 +329,10 @@ into the output directory.
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
   logs and runtime state. Localnet start scripts retain pidfiles.
-- Generated startup scripts launch each validator from its own `state/peerN`
-  directory so relative default stores remain isolated across peers and restarts.
+- Generated startup scripts launch each validator from its own node data
+  directory (`nodes/peerN`) so relative default stores remain isolated across
+  peers and restarts, and assert fresh validator keys only while
+  `nodes/peerN/state/kura-sumeragi-records` does not exist yet.
 - Defaults to `permissioned` unless a perf preset requires `npos`
 
 `kagami sora-network generate`
@@ -341,8 +350,9 @@ into the output directory.
   namespaces in genesis before signing. The preset assigns no public Taira
   allocation. BPNG application contracts, fee sponsorship and application
   service provisioning remain separate unfinished work.
-- Produces the same bundle layout as `kagami localnet generate`, so
-  `kagami docker` accepts either
+- Names its files like `kagami localnet generate` (`peerN.toml` beside the
+  signed genesis artifacts), so `kagami docker` accepts either. Its validator
+  configs are flat: they keep inline identities and explicit state paths
 
 `kagami docker`
 - Docker Compose generator for an authoritative prepared bundle from
@@ -359,12 +369,25 @@ into the output directory.
   read-hash-parse startup check. Validator keys and the private onboarding/faucet
   files of Sora network bundles are absent from Compose YAML and environment
   variables; the latter are mounted as separate Compose secrets.
+- A peer config that sets `data_dir` (a developer localnet) is rendered in
+  container form: the projection sets `data_dir = "/var/lib/iroha"` and names no
+  key and no state path, and the container bind-mounts the validator's node data
+  directory `nodes/peerN` there, with its `secrets/` mounted again read-only.
+  Keys reach the node as the layout's owner-only files and are never copied or
+  rendered inline; state and safety records stay beside them in
+  `nodes/peerN/state/`. The container daemon UID must own those files. The
+  launcher runs from `/var/lib/iroha` and, like `start.sh`, asserts fresh
+  validator keys only while `state/kura-sumeragi-records` does not exist; this
+  developer-network rule makes Kagami refuse a `data_dir` bundle with a public
+  chain identity. It also refuses a `data_dir` config that sets an inline key,
+  a key file or a state path outside its node data directory.
 - Byte-exact public policy assets are interned by digest as base64 Compose
-  configs and decoded into `/config/runtime` before `iroha3d` starts. Prepared
-  Compose accepts fresh state only, uses named validator storage volumes, never
-  migrates live state, resolves relative source-state paths and omitted
-  defaults against the prepared bundle directory for freshness checks, and
-  fails closed on unsupported transport, CIDR-filter, or helper-service modes.
+  configs and decoded into `/config/runtime` before `iroha3d` starts. For flat
+  peer configs (Sora network bundles) prepared Compose accepts fresh state only,
+  uses named validator storage volumes, never migrates live state, and resolves
+  relative source-state paths and omitted defaults against the prepared bundle
+  directory for freshness checks. Both forms fail closed on unsupported
+  transport, CIDR-filter, or helper-service modes.
 - `--seed` is an explicit deterministic development mode for relocatable sample
   manifests. That mode requires `IROHA_GENESIS_SIGNED_FILE`,
   `IROHA_GENESIS_PUBLIC_KEY_FILE`, and `IROHA_GENESIS_EXPECTED_HASH_FILE` when

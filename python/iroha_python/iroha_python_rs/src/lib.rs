@@ -23,6 +23,7 @@ mod scheduled_contract_trigger;
 mod scheduled_execution_verification;
 mod sorafs_orderbook_submission;
 mod state_rows;
+mod transaction_codec;
 mod transaction_details;
 mod zk_vk_draft;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -11677,6 +11678,55 @@ impl TransactionBuilder {
         let payload_bytes = self.to_model_builder().encode_payload();
         Ok(PyBytes::new(py, &payload_bytes))
     }
+    /// Encode the same typed payload in an explicit `current` or `dense` layout.
+    #[pyo3(signature = (*, layout))]
+    fn encode_payload_with_layout<'py>(
+        &self,
+        py: Python<'py>,
+        layout: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.validate_executable()?;
+        let layout = transaction_codec::layout(layout)?;
+        let bytes = transaction_codec::encode(self.to_model_builder().payload(), layout, false)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    /// Return the signing prehash for the explicitly selected payload layout.
+    #[pyo3(signature = (*, layout))]
+    fn payload_hash_with_layout<'py>(
+        &self,
+        py: Python<'py>,
+        layout: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.validate_executable()?;
+        let layout = transaction_codec::layout(layout)?;
+        let hash = transaction_codec::payload_hash(self.to_model_builder().payload(), layout)?;
+        Ok(PyBytes::new(py, &hash))
+    }
+    /// Sign and encode bare typed bytes in an explicit layout, without a transport envelope.
+    ///
+    /// Dense is not selected by any network yet. These bytes are codec output,
+    /// not the current versioned transaction wire accepted by submission APIs.
+    #[pyo3(signature = (private_key, *, layout))]
+    fn sign_with_layout<'py>(
+        &mut self,
+        py: Python<'py>,
+        private_key: &[u8],
+        layout: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        ensure_ed25519_account(&self.authority)?;
+        self.validate_executable()?;
+        let layout = transaction_codec::layout(layout)?;
+        let private_key = parse_private_key(private_key)?;
+        let signed = self
+            .to_model_builder()
+            .try_sign_with_layout(&private_key, layout)
+            .map_err(|error| {
+                PyValueError::new_err(format!("transaction signing failed: {error}"))
+            })?;
+        let bytes = transaction_codec::encode(&signed, layout, false)?;
+        self.clear_transaction_state();
+        Ok(PyBytes::new(py, &bytes))
+    }
     /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
     fn payload_json(&self) -> PyResult<String> {
         let _guard = ChainDiscriminantGuard::enter(self.chain_discriminant);
@@ -15795,6 +15845,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     transaction_details::register(module)?;
     confidential_wallet::register(module)?;
     identity_codec_v1::register(module)?;
+    transaction_codec::register(module)?;
     module.add(
         "SorafsMultiFetchError",
         _py.get_type::<SorafsMultiFetchError>(),

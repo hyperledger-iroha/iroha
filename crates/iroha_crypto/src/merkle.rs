@@ -830,9 +830,22 @@ impl<T> MerkleTree<T> {
     /// Returns [`MerkleError::AllocationUnavailable`] if the node array does
     /// not fit the host allocation geometry or the allocator refuses it.
     pub fn try_clone_allocation(&self) -> Result<Self, MerkleError> {
+        self.try_copy_nodes(self.nodes.len())
+    }
+
+    /// Copy the node array with its original capacity for an owner that has
+    /// reserved that exact allocation. Preserves the hash scheme and all nodes.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::AllocationUnavailable`] if the reservation fails.
+    pub fn try_clone_retained_allocation(&self) -> Result<Self, MerkleError> {
+        self.try_copy_nodes(self.nodes.capacity())
+    }
+
+    fn try_copy_nodes(&self, capacity: usize) -> Result<Self, MerkleError> {
         let mut nodes = Vec::new();
         nodes
-            .try_reserve_exact(self.nodes.len())
+            .try_reserve_exact(capacity)
             .map_err(|_| MerkleError::AllocationUnavailable)?;
         nodes.extend_from_slice(&self.nodes);
         Ok(Self {
@@ -2353,6 +2366,9 @@ mod tests {
                 .expect("bounded Merkle node clone");
             assert_eq!(copied, source);
             assert_eq!(copied.root(), source.root());
+            let retained = source.try_clone_retained_allocation().unwrap();
+            assert_eq!(retained, source);
+            assert_eq!(retained.allocated_bytes(), source.allocated_bytes());
             if let Some(first) = source.nodes.first_mut() {
                 *first = None;
                 assert_ne!(copied, source);

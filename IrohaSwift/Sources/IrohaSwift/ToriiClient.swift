@@ -9141,12 +9141,20 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
     }
 }
 
+/// Strict reader for one Norito payload in a named layout.
+///
+/// The layout defaults to `.compact`, the layout of every current ledger wire.
+/// A decoder that supports another layout passes it explicitly; the reader
+/// never infers a layout from the bytes.
 struct ToriiVerifyingKeyCompactReader {
     private let data: Data
     private var offset = 0
+    /// Layout of the payload being read.
+    let layout: NoritoWireLayout
 
-    init(_ data: Data) {
+    init(_ data: Data, layout: NoritoWireLayout = .compact) {
         self.data = data
+        self.layout = layout
     }
 
     var isFinished: Bool { offset == data.count }
@@ -9173,7 +9181,12 @@ struct ToriiVerifyingKeyCompactReader {
         }
     }
 
+    /// Per-value length prefix: a shortest-form varint in the compact and dense
+    /// layouts, a `u64` in the fixed layout.
     mutating func takeLength(_ field: String) throws -> UInt64 {
+        if layout == .fixed {
+            return try takeUInt64(field)
+        }
         var value: UInt64 = 0
         var shift: UInt64 = 0
         for count in 1...10 {
@@ -9194,12 +9207,57 @@ struct ToriiVerifyingKeyCompactReader {
         throw ToriiClientError.invalidPayload("\(field) compact length is overlong")
     }
 
+    /// Element count of a sequence, map or set: a `u64` in the current layouts,
+    /// a shortest-form varint in the dense layout.
+    mutating func takeCount(_ field: String) throws -> UInt64 {
+        if layout == .dense {
+            return try takeLength(field)
+        }
+        return try takeUInt64(field)
+    }
+
+    /// Enum discriminant: a `u32` in the current layouts, its shortest-form
+    /// varint in the dense layout.
+    mutating func takeEnumTag(_ field: String) throws -> UInt32 {
+        guard layout == .dense else {
+            return try takeUInt32(field)
+        }
+        let tag = try takeLength(field)
+        guard tag <= UInt64(UInt32.max) else {
+            throw ToriiClientError.invalidPayload("\(field) enum discriminant overflows UInt32")
+        }
+        return UInt32(tag)
+    }
+
     mutating func takeField(_ field: String) throws -> Data {
         let length = try takeLength("\(field).length")
         guard length <= UInt64(Int.max) else {
             throw ToriiClientError.invalidPayload("\(field) exceeds the runtime bound")
         }
         return try takeBytes(Int(length), field: field)
+    }
+
+    /// The `count` elements of a fixed `[u8; N]` or of a `u8` element sequence:
+    /// canonical `[len = 1][byte]` runs in the current layouts, raw bytes in the
+    /// dense layout.
+    mutating func takeByteElements(_ count: Int, field: String) throws -> Data {
+        if layout == .dense {
+            return try takeBytes(count, field: field)
+        }
+        guard count >= 0, count <= (data.count - offset) / 2 else {
+            throw ToriiClientError.invalidPayload("\(field) is truncated")
+        }
+        var bytes = Data()
+        bytes.reserveCapacity(count)
+        for _ in 0..<count {
+            guard try takeLength(field) == 1 else {
+                throw ToriiClientError.invalidPayload(
+                    "\(field) byte fields must each contain exactly one byte"
+                )
+            }
+            bytes.append(try takeUInt8(field))
+        }
+        return bytes
     }
 
     mutating func takeBytes(_ count: Int, field: String) throws -> Data {

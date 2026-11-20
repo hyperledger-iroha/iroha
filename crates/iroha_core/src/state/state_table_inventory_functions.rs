@@ -280,6 +280,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
+        "crates/iroha_core/src/runtime/taira_read_scope.rs",
+        "validate_context",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/code.rs",
         "fetch_bound_contract_program",
         1,

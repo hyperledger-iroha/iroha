@@ -13,12 +13,62 @@ public abstract record class TransactionInstruction
 
     internal abstract byte[] EncodePayload(TransactionEncodingContext context);
 
+    /// <summary>
+    /// Whether this instruction's payload encoder writes every count, discriminant and byte
+    /// sequence through the context's layout-aware writers, so its bare payload is valid in the
+    /// dense layout as well as the compact one. Any other instruction (Kaigi, replication-order,
+    /// asset-lock and conviction) reaches the dense layout through the native bridge, which
+    /// transcodes its compact frame by wire ID.
+    /// </summary>
+    internal virtual bool SupportsDenseLayout => false;
+
+    /// <summary>The instruction's complete compact-layout Norito frame.</summary>
     internal virtual byte[] EncodeFramedPayload(TransactionEncodingContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Layout != NoritoWireLayout.Compact)
+        {
+            throw new InvalidOperationException(
+                "A framed instruction payload exists only in the compact layout; a dense envelope carries the bare payload.");
+        }
+
         return NoritoCodec.Encode(
             TypeName,
             EncodePayload(context),
             NoritoCodec.CanonicalLayoutFlags);
+    }
+
+    /// <summary>
+    /// The bytes this instruction's envelope carries in the context's layout: the complete
+    /// Norito frame in the compact layout, or the bare dense payload with no nested header in
+    /// the dense layout (<c>norito.md</c>, "Dense layout", rule 6).
+    /// </summary>
+    /// <remarks>
+    /// An instruction without a managed dense encoder is transcoded from its compact frame by
+    /// the native bridge, which requires the ABI-33 <c>connect_norito_bridge</c>.
+    /// </remarks>
+    internal byte[] EncodeEnvelopePayload(TransactionEncodingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Layout != NoritoWireLayout.Dense)
+        {
+            return EncodeFramedPayload(context);
+        }
+
+        if (SupportsDenseLayout)
+        {
+            return EncodePayload(context);
+        }
+
+        var compact = new TransactionEncodingContext(context.AuthorityAccountId, NoritoWireLayout.Compact);
+        return NoritoInstructionLayoutNative.Transcode(
+                WireId,
+                EncodeFramedPayload(compact),
+                NoritoWireLayout.Compact,
+                NoritoWireLayout.Dense,
+                nameof(context))
+            ?? throw new NotSupportedException(
+                $"Instruction `{WireId}` ({GetType().Name}) is not registered by the native bridge, so it has no dense encoding.");
     }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)

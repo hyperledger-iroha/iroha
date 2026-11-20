@@ -3456,6 +3456,151 @@
       }
     ]
   },
+  "BallotBodyContextV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "election_attempt_id",
+        "type": "BodyElectionAttemptId"
+      },
+      {
+        "name": "body_role",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "BallotClosureRecordV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "proposal_content_id",
+        "type": "ProposalContentId"
+      },
+      {
+        "name": "proposal_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "election_attempt_id",
+        "type": "BodyElectionAttemptId"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "body_role",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "seats",
+        "type": "u16"
+      },
+      {
+        "name": "profile_id",
+        "type": "ProofProfileIdV1"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Digest512"
+      },
+      {
+        "name": "list_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "registration_mapping_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "opening_anchor",
+        "type": "GovernanceAnchorV1"
+      },
+      {
+        "name": "casting_clock_height",
+        "type": "u64"
+      },
+      {
+        "name": "casting_clock_timestamp_ms",
+        "type": "u64"
+      },
+      {
+        "name": "casting_window_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closing_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closure_anchor",
+        "type": "GovernanceAnchorV1"
+      },
+      {
+        "name": "corpus_root",
+        "type": "Digest512"
+      },
+      {
+        "name": "accepted_ballots",
+        "type": "u32"
+      },
+      {
+        "name": "aye",
+        "type": "u32"
+      },
+      {
+        "name": "nay",
+        "type": "u32"
+      },
+      {
+        "name": "abstain",
+        "type": "u32"
+      },
+      {
+        "name": "outcome",
+        "type": "BallotOutcomeV1"
+      },
+      {
+        "name": "narrow",
+        "type": "bool"
+      }
+    ]
+  },
+  "BallotOutcomeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "approved"
+      },
+      {
+        "discriminant": 1,
+        "tag": "rejected"
+      },
+      {
+        "discriminant": 2,
+        "tag": "no_quorum"
+      }
+    ]
+  },
+  "BallotScopeV1": "Array<u8, 64>",
   "BeaconEpochBindingV1": {
     "Enum": [
       {
@@ -3855,6 +4000,8 @@
     ]
   },
   "BlockSubscriptionRequest": "NonZero<u64>",
+  "BodyElectionAttemptId": "Array<u8, 32>",
+  "BodyInstanceId": "Array<u8, 32>",
   "BondCallTerms": {
     "Struct": [
       {
@@ -5365,6 +5512,46 @@
       {
         "name": "node",
         "type": "u32"
+      }
+    ]
+  },
+  "CastingClockEstablishedV1": {
+    "Struct": [
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "casting_window_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closing_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "CastingOpenedV1": {
+    "Struct": [
+      {
+        "name": "body_context",
+        "type": "BallotBodyContextV1"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Digest512"
+      },
+      {
+        "name": "opening_at_ms",
+        "type": "u64"
       }
     ]
   },
@@ -7591,6 +7778,38 @@
     ]
   },
   "DefinitionId": "Array<u8, 32>",
+  "DeliberationPhaseV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Orientation"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Evidence"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Questions"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Responses"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Deliberation"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Reflection"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Vote"
+      }
+    ]
+  },
   "DiagnosticTraceStatus": {
     "Struct": [
       {
@@ -7611,6 +7830,7 @@
       }
     ]
   },
+  "Digest512": "Array<u8, 64>",
   "DirectContractDeploymentOriginV1": {
     "Struct": [
       {
@@ -8931,6 +9151,11 @@
         "discriminant": 5,
         "tag": "time_with_lifecycle",
         "type": "TimeExecutionOutputV2"
+      },
+      {
+        "discriminant": 6,
+        "tag": "governance_block_start",
+        "type": "GovernanceBlockStartOutputV1"
       }
     ]
   },
@@ -12890,7 +13115,51 @@
     ]
   },
   "GoldilocksDigest384V1": "Array<u8, 48>",
+  "GovernanceAnchorV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "position",
+        "type": "u32"
+      },
+      {
+        "name": "timestamp_ms",
+        "type": "u64"
+      }
+    ]
+  },
   "GovernanceAttemptId": "Array<u8, 32>",
+  "GovernanceAttemptStatusV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Active"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Certified"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Rejected"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Enacted"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Superseded"
+      },
+      {
+        "discriminant": 5,
+        "tag": "ExecutionFailed"
+      }
+    ]
+  },
   "GovernanceBallotAccepted": {
     "Struct": [
       {
@@ -12928,6 +13197,52 @@
       {
         "name": "reason",
         "type": "String"
+      }
+    ]
+  },
+  "GovernanceBlockStartEventV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "sealed_credential_list_published",
+        "type": "SealedCredentialListPublishedV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "casting_opened",
+        "type": "CastingOpenedV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "casting_clock_established",
+        "type": "CastingClockEstablishedV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ballot_closed",
+        "type": "BallotClosureRecordV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "lifecycle_applied",
+        "type": "LifecycleAppliedV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "native_slot_advanced",
+        "type": "NativeSlotAdvancedV1"
+      }
+    ]
+  },
+  "GovernanceBlockStartOutputV1": {
+    "Struct": [
+      {
+        "name": "anchor",
+        "type": "GovernanceOutputAnchorV1"
+      },
+      {
+        "name": "event",
+        "type": "GovernanceBlockStartEventV1"
       }
     ]
   },
@@ -13183,6 +13498,121 @@
       }
     ]
   },
+  "GovernanceLifecycleItemV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "draw_generation",
+        "type": "GovernanceLifecycleItemV1::DrawGeneration"
+      },
+      {
+        "discriminant": 1,
+        "tag": "start_qualification"
+      },
+      {
+        "discriminant": 2,
+        "tag": "end_qualification"
+      },
+      {
+        "discriminant": 3,
+        "tag": "advance_phase",
+        "type": "GovernanceLifecycleItemV1::AdvancePhase"
+      },
+      {
+        "discriminant": 4,
+        "tag": "reject_exhausted",
+        "type": "GovernanceLifecycleItemV1::RejectExhausted"
+      },
+      {
+        "discriminant": 5,
+        "tag": "close_invitations",
+        "type": "GovernanceLifecycleItemV1::CloseInvitations"
+      },
+      {
+        "discriminant": 6,
+        "tag": "conclude_finding",
+        "type": "GovernanceLifecycleItemV1::ConcludeFinding"
+      },
+      {
+        "discriminant": 7,
+        "tag": "close_ballot",
+        "type": "GovernanceLifecycleItemV1::CloseBallot"
+      },
+      {
+        "discriminant": 8,
+        "tag": "open_ballot",
+        "type": "GovernanceLifecycleItemV1::OpenBallot"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::AdvancePhase": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "phase",
+        "type": "DeliberationPhaseV1"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::CloseBallot": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::CloseInvitations": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "election",
+        "type": "BodyElectionAttemptId"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::ConcludeFinding": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "instance",
+        "type": "BodyInstanceId"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::DrawGeneration": {
+    "Struct": [
+      {
+        "name": "slot",
+        "type": "u64"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::OpenBallot": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::RejectExhausted": {
+    "Struct": [
+      {
+        "name": "slot",
+        "type": "u64"
+      }
+    ]
+  },
   "GovernanceLockCreated": {
     "Struct": [
       {
@@ -13359,6 +13789,32 @@
       },
       {
         "name": "rejected",
+        "type": "u64"
+      }
+    ]
+  },
+  "GovernanceOutputAnchorV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "casting_clock_prelude",
+        "type": "GovernanceOutputAnchorV1::CastingClockPrelude"
+      },
+      {
+        "discriminant": 1,
+        "tag": "pass",
+        "type": "GovernanceAnchorV1"
+      }
+    ]
+  },
+  "GovernanceOutputAnchorV1::CastingClockPrelude": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "timestamp_ms",
         "type": "u64"
       }
     ]
@@ -13580,6 +14036,62 @@
       {
         "discriminant": 4,
         "tag": "Restitution"
+      }
+    ]
+  },
+  "GovernanceStageV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Qualification"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Rules"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Agenda"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Interest"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Review"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Coordination"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Mpc"
+      },
+      {
+        "discriminant": 7,
+        "tag": "Fma"
+      },
+      {
+        "discriminant": 8,
+        "tag": "Oversight"
+      },
+      {
+        "discriminant": 9,
+        "tag": "PolicyJury"
+      },
+      {
+        "discriminant": 10,
+        "tag": "ConfirmationJury"
+      },
+      {
+        "discriminant": 11,
+        "tag": "Certification"
+      },
+      {
+        "discriminant": 12,
+        "tag": "Enactment"
       }
     ]
   },
@@ -15115,6 +15627,46 @@
     ]
   },
   "LaneId": "u32",
+  "LifecycleAppliedV1": {
+    "Struct": [
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "item",
+        "type": "GovernanceLifecycleItemV1"
+      },
+      {
+        "name": "status",
+        "type": "GovernanceAttemptStatusV1"
+      },
+      {
+        "name": "stage",
+        "type": "GovernanceStageV1"
+      },
+      {
+        "name": "attempt_state_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "board",
+        "type": "Option<LifecycleBoardDigestV1>"
+      }
+    ]
+  },
+  "LifecycleBoardDigestV1": {
+    "Struct": [
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "record_digest",
+        "type": "Digest512"
+      }
+    ]
+  },
   "ManifestAbiHashMismatchInfo": {
     "Struct": [
       {
@@ -19064,6 +19616,22 @@
       }
     ]
   },
+  "NativeSlotAdvancedV1": {
+    "Struct": [
+      {
+        "name": "target_height",
+        "type": "u64"
+      },
+      {
+        "name": "cursor_height",
+        "type": "u64"
+      },
+      {
+        "name": "ticket_height",
+        "type": "u64"
+      }
+    ]
+  },
   "NetworkExecutionOutputV1": {
     "Struct": [
       {
@@ -20262,6 +20830,9 @@
   },
   "Option<LaneId>": {
     "Option": "LaneId"
+  },
+  "Option<LifecycleBoardDigestV1>": {
+    "Option": "LifecycleBoardDigestV1"
   },
   "Option<ManifestAliasBinding>": {
     "Option": "ManifestAliasBinding"
@@ -21936,6 +22507,50 @@
       }
     ]
   },
+  "ParliamentBody": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "RulesCommittee"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AgendaCouncil"
+      },
+      {
+        "discriminant": 2,
+        "tag": "InterestPanel"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ReviewPanel"
+      },
+      {
+        "discriminant": 4,
+        "tag": "CoordinationCouncil"
+      },
+      {
+        "discriminant": 5,
+        "tag": "MpcCommittee"
+      },
+      {
+        "discriminant": 6,
+        "tag": "FmaCommittee"
+      },
+      {
+        "discriminant": 7,
+        "tag": "OversightCommittee"
+      },
+      {
+        "discriminant": 8,
+        "tag": "PolicyJury"
+      },
+      {
+        "discriminant": 9,
+        "tag": "ConfirmationJury"
+      }
+    ]
+  },
   "ParliamentCandidateTestingPolicyV1": {
     "Struct": [
       {
@@ -23284,6 +23899,58 @@
         "discriminant": 3,
         "tag": "excluded",
         "type": "PorTerminalExcludedKindV1"
+      }
+    ]
+  },
+  "PortablePrefixFrameV1": {
+    "Struct": [
+      {
+        "name": "certificate",
+        "type": "SumeragiCommitCertificateV1"
+      },
+      {
+        "name": "availability",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "executed_parent_header",
+        "type": "BlockHeader"
+      },
+      {
+        "name": "parent_da_commitments",
+        "type": "Option<DaCommitmentBundle>"
+      },
+      {
+        "name": "parent_da_pin_intents",
+        "type": "Option<DaPinIntentBundle>"
+      },
+      {
+        "name": "rows",
+        "type": "Vec<PortablePrefixRowV1>"
+      }
+    ]
+  },
+  "PortablePrefixRowV1": {
+    "Struct": [
+      {
+        "name": "instance",
+        "type": "Hash32"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Hash32"
+      },
+      {
+        "name": "index",
+        "type": "u32"
+      },
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
       }
     ]
   },
@@ -30343,6 +31010,14 @@
       }
     ]
   },
+  "ScheduleTairaReadScopeV1": {
+    "Struct": [
+      {
+        "name": "certificate",
+        "type": "TairaReadScopeCertificateV1"
+      }
+    ]
+  },
   "ScheduleTairaTimeIronwoodV1": {
     "Struct": [
       {
@@ -30436,6 +31111,42 @@
       {
         "name": "event",
         "type": "AssetDefinitionEvent"
+      }
+    ]
+  },
+  "SealedCredentialListBytesV1": {
+    "Struct": [
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "SealedCredentialListPublishedV1": {
+    "Struct": [
+      {
+        "name": "body_context",
+        "type": "BallotBodyContextV1"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "roster_root",
+        "type": "Digest512"
+      },
+      {
+        "name": "list_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "registration_mapping_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "sealed_list_bytes",
+        "type": "SealedCredentialListBytesV1"
       }
     ]
   },
@@ -36286,6 +36997,66 @@
       }
     ]
   },
+  "TairaReadScopeCertificateV1": {
+    "Struct": [
+      {
+        "name": "plan",
+        "type": "TairaReadScopePlanV1"
+      },
+      {
+        "name": "signatures",
+        "type": "Array<Signature, 4>"
+      }
+    ]
+  },
+  "TairaReadScopePlanV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "chain_id",
+        "type": "ChainId"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "change_set",
+        "type": "ChangeSetV1"
+      },
+      {
+        "name": "notice",
+        "type": "RuntimeNoticeV1"
+      },
+      {
+        "name": "committee",
+        "type": "Array<PublicKey, 4>"
+      },
+      {
+        "name": "expires_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authorization_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "release_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_closure_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "ThresholdKeyLifecycleActionV1": {
     "Enum": [
       {
@@ -38806,6 +39577,9 @@
   },
   "Vec<PipelineEventBox>": {
     "Vec": "PipelineEventBox"
+  },
+  "Vec<PortablePrefixRowV1>": {
+    "Vec": "PortablePrefixRowV1"
   },
   "Vec<PrivacyAcceptedMediumDispositionV1>": {
     "Vec": "PrivacyAcceptedMediumDispositionV1"

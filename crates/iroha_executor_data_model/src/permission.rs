@@ -531,6 +531,80 @@ pub mod query {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         }
     }
+    /// One family of certified State rows a direct reader can request.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        iroha_schema::IntoSchema,
+    )]
+    #[norito(tag = "kind", content = "value")]
+    pub enum StateReadScope {
+        /// Balances of this asset definition, across holders.
+        AssetBalances(AssetDefinitionId),
+        /// Smart-contract State keys beginning with this segment-aligned path.
+        ContractStatePrefix(iroha_model_base::state_path::StatePath),
+        /// Existing escrow records for this asset definition.
+        AssetEscrows(AssetDefinitionId),
+        /// Existing claims made under this identifier policy.
+        IdentifierClaims(iroha_data_model::identifier::IdentifierPolicyId),
+        /// Approval-outcome and terminal-execution records of this multisig account.
+        MultisigRecords(AccountId),
+    }
+
+    permission! {
+        /// Read certified State rows matching one governed scope.
+        #[norito(deny_unknown_fields)]
+        pub struct CanReadStateScope {
+            /// The only family of rows this token authorizes.
+            pub scope: StateReadScope,
+        }
+    }
+
+    impl CanReadStateScope {
+        /// Require a nonempty path namespace ending at an actual segment boundary.
+        pub fn is_valid(&self) -> bool {
+            match &self.scope {
+                StateReadScope::ContractStatePrefix(path) => path
+                    .as_ref()
+                    .strip_suffix('/')
+                    .is_some_and(|root| root.split('/').all(|part| !part.is_empty())),
+                _ => true,
+            }
+        }
+    }
+    #[cfg(test)]
+    mod scoped_read_tests {
+        use super::*;
+
+        #[test]
+        fn grant_json_roundtrips_and_preserves_its_segment_boundary() {
+            let payload =
+                r#"{"scope":{"kind":"ContractStatePrefix","value":"sc/native/escrows/"}}"#;
+            let grant: CanReadStateScope = norito::json::from_str(payload).unwrap();
+            assert!(grant.is_valid());
+            assert_eq!(
+                norito::json::parse_value(&norito::json::to_json(&grant).unwrap()).unwrap(),
+                norito::json::parse_value(payload).unwrap()
+            );
+            for invalid in ["/", "sc/native/escrows", "sc//"] {
+                let grant = CanReadStateScope {
+                    scope: StateReadScope::ContractStatePrefix(invalid.parse().unwrap()),
+                };
+                assert!(!grant.is_valid());
+            }
+            assert!(
+                norito::json::from_str::<CanReadStateScope>(
+                    r#"{"scope":{"kind":"WholeLedger","value":null}}"#
+                )
+                .is_err()
+            );
+        }
+    }
+
     permission! {
         /// Permission to read private data belonging to one exact account.
         pub struct CanReadAccountData {

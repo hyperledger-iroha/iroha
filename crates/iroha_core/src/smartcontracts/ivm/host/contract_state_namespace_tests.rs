@@ -719,6 +719,7 @@ fn a_contract_spelling_an_activation_receipt_never_reaches_it() {
     let declared: StatePath = "declared_user_key".parse().unwrap();
     for text in [
         "runtime/taira_time_ironwood/certificate",
+        "runtime/taira_read_scope/certificate",
         "sorafs/repair/certificate",
     ] {
         let receipt: StatePath = text.parse().unwrap();

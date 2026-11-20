@@ -3,11 +3,11 @@ package org.hyperledger.iroha.sdk.tx.norito
 import java.util.Optional
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
-import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.norito.WireLayout
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.MultisigSignatures
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -28,21 +28,39 @@ object SignedTransactionEncoder {
         NoritoAdapters.option(MULTISIG_SIGNATURES_ADAPTER)
     @JvmStatic
     @Throws(NoritoException::class)
-    fun encode(transaction: SignedTransaction): ByteArray {
+    fun encode(transaction: SignedTransaction): ByteArray = encode(transaction, WireLayout.COMPACT)
+
+    /**
+     * Encodes the bare signed transaction in an explicit layout.
+     *
+     * The transaction's payload bytes must already be the exact canonical payload in that
+     * layout ([NoritoJavaCodecAdapter] with the same `layout`): the signature covers their hash,
+     * and payload bytes of the other layout are refused. [WireLayout.COMPACT] is the current
+     * transaction layout; [WireLayout.DENSE] is `norito.md`, "Dense layout (header minor 1)".
+     */
+    @JvmStatic
+    @Throws(NoritoException::class)
+    fun encode(transaction: SignedTransaction, layout: WireLayout): ByteArray {
         try {
             val payloadBytes = transaction.encodedPayload()
-            TransactionPayloadAdapter.validateCanonicalPayloadBytes(payloadBytes)
+            TransactionPayloadAdapter.validateCanonicalPayloadBytes(payloadBytes, layout)
             val record = SignedRecord(
                 transaction.signature(),
                 payloadBytes,
                 transaction.multisigSignatures(),
             )
-            return NoritoCodec.encodeAdaptive(record, SignedTransactionAdapter).payload()
+            return TransactionPayloadAdapter.encodeBare(record, SignedTransactionAdapter, layout)
         } catch (ex: Exception) {
             throw NoritoException("Failed to encode signed transaction", ex)
         }
     }
 
+    /**
+     * Encodes the versioned wire form. Its version byte names the current compact layout.
+     *
+     * TODO(dense-activation): no version byte selects the dense layout yet, so there is no
+     * versioned dense form.
+     */
     @JvmStatic
     @Throws(NoritoException::class)
     fun encodeVersioned(transaction: SignedTransaction): ByteArray {
@@ -55,10 +73,18 @@ object SignedTransactionEncoder {
 
     @JvmStatic
     @Throws(NoritoException::class)
-    fun decode(encoded: ByteArray): SignedTransaction {
+    fun decode(encoded: ByteArray): SignedTransaction = decode(encoded, WireLayout.COMPACT)
+
+    /**
+     * Decodes a bare signed transaction in the layout its owner names. Bytes of the other
+     * layout are refused rather than reinterpreted.
+     */
+    @JvmStatic
+    @Throws(NoritoException::class)
+    fun decode(encoded: ByteArray, layout: WireLayout): SignedTransaction {
         try {
-            val record = NoritoCodec.decodeAdaptive(encoded, SignedTransactionAdapter)
-            TransactionPayloadAdapter.validateCanonicalPayloadBytes(record.payloadBytes)
+            val record = TransactionPayloadAdapter.decodeBare(encoded, SignedTransactionAdapter, layout)
+            TransactionPayloadAdapter.validateCanonicalPayloadBytes(record.payloadBytes, layout)
             return SignedTransaction.builder()
                 .setEncodedPayload(record.payloadBytes)
                 .setSignature(record.signature)

@@ -2843,6 +2843,48 @@ mod tests {
     use crate::error::{VmDeferral, VmTrap};
 
     #[test]
+    fn diagnostic_deltas_trace_all_baseline_registers_with_unchanged_execution() {
+        use ivm_abi::baseline::{
+            encode_header, encoding::wide, instruction::wide::arithmetic::ADDI,
+        };
+        let mut artifact = encode_header(&ProgramMetadata::default(), 0);
+        for word in [
+            wide::encode_ri(ADDI, 200, 0, 42),
+            wide::encode_ri(ADDI, 255, 200, 1),
+            wide::encode_halt(),
+        ] {
+            artifact.extend_from_slice(&word.to_le_bytes());
+        }
+        let run = |mode| {
+            let mut vm = IVM::new(1000);
+            vm.load_program_for_profile(&artifact, IvmProfileId::BASELINE_ABI_V1)
+                .unwrap();
+            vm.set_trace_mode(mode);
+            vm.run().unwrap();
+            vm
+        };
+        let plain = run(TraceMode::Off);
+        let traced = run(TraceMode::DeltaRegisters);
+        assert_eq!(traced.register(255), 43);
+        assert_eq!(
+            plain.registers.baseline_snapshot(),
+            traced.registers.baseline_snapshot()
+        );
+        assert_eq!(
+            (plain.pc, plain.cycles, plain.remaining_gas()),
+            (traced.pc, traced.cycles, traced.remaining_gas())
+        );
+        let trace = traced.delta_register_trace();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(
+            trace.entry(0).unwrap().changes.len(),
+            crate::registers::BASELINE_REGISTER_COUNT
+        );
+        assert_eq!(trace.entry(1).unwrap().changes, &[(200, 42, false)]);
+        assert_eq!(trace.entry(2).unwrap().changes, &[(255, 43, false)]);
+    }
+
+    #[test]
     fn baseline_arithmetic_traps_and_vector_bounds_are_the_anchor_rules() {
         assert!(matches!(
             checked_div_i64(1, 0),

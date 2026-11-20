@@ -97,7 +97,12 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         );
     }
 
-    // Game partitions alone are refused; their capture service is what a root can draft.
+    // Game partitions alone are refused: they extend the endorsed-proposal addition, which the
+    // founded selection has not activated, so their successor names an unpublished definition.
+    // Once that addition is active the drafter refuses them for the missing captured-transfer
+    // service instead (unit test
+    // `unfinished_game_export_is_not_drafted_or_signed_without_rewriting_frozen_consensus`).
+    // Their capture service is what a root can draft.
     let effective_height = harness::tip(&client)? + LEAD_BLOCKS;
     let refusal = harness::draft_refusal(
         &network.peers()[0],
@@ -105,7 +110,10 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         effective_height,
     )?;
     ensure!(
-        refusal.contains("captured-transfer service"),
+        refusal.contains(&format!(
+            "addition {}: successor selection",
+            harness::GAME_PARTITIONS
+        )) && refusal.contains("is not published"),
         "game partitions were refused for another reason: {refusal}"
     );
     harness::draft_on_every_validator(

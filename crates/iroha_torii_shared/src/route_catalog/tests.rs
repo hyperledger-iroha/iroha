@@ -2950,6 +2950,12 @@ mod tests {
             pipeline::TRIGGER_COMPLETIONS.authentication(),
             AuthenticationPolicy::OperatorSignature
         );
+        // The completion list is a collection read of the app API's query engine.
+        assert_eq!(
+            pipeline::TRIGGER_COMPLETIONS.feature_gate(),
+            FeatureGate::Feature("app_api")
+        );
+        assert_eq!(pipeline::TRIGGER_COMPLETIONS.method(), HttpMethod::Get);
         assert_eq!(
             pipeline::TRANSACTION_DETAILS.effect(),
             RouteEffect::ExpensiveCompute

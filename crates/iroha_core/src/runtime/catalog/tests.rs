@@ -596,6 +596,7 @@ mod addition_tests {
             iroha_data_model::runtime::keyed_state::adoption_kernel(&catalog.keyed_storage),
             crate::runtime::keyed_state::descriptor(),
             crate::runtime::state_row_permission::descriptor(),
+            crate::runtime::state_scope_permission::descriptor(),
         ] {
             expected.insert(descriptor.id().expect("keyed State identity"));
         }

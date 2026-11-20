@@ -149,10 +149,14 @@ fn exact_samples_keep_all_four_original_owners_through_patterns_refusal_and_unwi
             .is_err()
         );
         assert_eq!(owner.usage().host_bytes[0], 0);
-        assert!(matches!(
-            calibrate(geometry, baseline, Instant::now()),
-            Err(CalibrationFailure::BackendUnavailable)
-        ));
+        // Calibration computes the scalar reference before trying Metal. Use the
+        // smallest supported batch to exercise refusal for each round shape.
+        let refusal_geometry = Geometry::new(work, MIN_BLOCKS).unwrap();
+        let result = calibrate(refusal_geometry, baseline, Instant::now());
+        assert!(
+            matches!(result, Err(CalibrationFailure::BackendUnavailable)),
+            "{result:?}"
+        );
         assert_eq!(
             owner.usage().host_bytes[0],
             0,

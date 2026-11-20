@@ -1696,3 +1696,91 @@ fn artifact_registry_instructions_bind_full_width_dataspace_without_hash_only_al
         }
     }
 }
+
+#[test]
+fn dense_instruction_frames_and_archives_roundtrip_with_explicit_layout() {
+    use norito::core::WireLayout;
+    let source = text(&object([("CancelAssetLock", cancel_payload())]));
+    for layout in [WireLayout::Compact, WireLayout::Dense] {
+        let frame =
+            encode_instruction_frame_with_layout(&source, FIXTURE_NETWORK_PREFIX, layout).unwrap();
+        let archive =
+            encode_instruction_archive_with_layout(&source, FIXTURE_NETWORK_PREFIX, layout)
+                .unwrap();
+        let frame_json =
+            decode_instruction_frame_with_layout(&frame, FIXTURE_NETWORK_PREFIX, layout).unwrap();
+        let archive_json =
+            decode_instruction_archive_with_layout(&archive, FIXTURE_NETWORK_PREFIX, layout)
+                .unwrap();
+        assert_eq!(frame_json, archive_json);
+        assert_eq!(
+            encode_instruction_frame_with_layout(&frame_json, FIXTURE_NETWORK_PREFIX, layout)
+                .unwrap(),
+            frame
+        );
+        assert_eq!(
+            encode_instruction_archive_with_layout(&archive_json, FIXTURE_NETWORK_PREFIX, layout)
+                .unwrap(),
+            archive
+        );
+        let opposite = if layout == WireLayout::Dense {
+            WireLayout::Compact
+        } else {
+            WireLayout::Dense
+        };
+        assert!(
+            decode_instruction_frame_with_layout(&frame, FIXTURE_NETWORK_PREFIX, opposite).is_err()
+        );
+        assert!(
+            decode_instruction_archive_with_layout(&archive, FIXTURE_NETWORK_PREFIX, opposite)
+                .is_err()
+        );
+        assert!(
+            decode_instruction_archive_with_layout(
+                &archive[..archive.len() - 1],
+                FIXTURE_NETWORK_PREFIX,
+                layout
+            )
+            .is_err()
+        );
+        let mut trailing = archive;
+        trailing.push(0);
+        assert!(
+            decode_instruction_archive_with_layout(&trailing, FIXTURE_NETWORK_PREFIX, layout)
+                .is_err()
+        );
+        let mut unknown_minor = frame;
+        unknown_minor[5] = 2;
+        assert!(
+            decode_instruction_frame_with_layout(&unknown_minor, FIXTURE_NETWORK_PREFIX, layout)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn explicit_layout_archives_restore_the_callers_dense_scope() {
+    let input = text(&object([("CancelAssetLock", cancel_payload())]));
+    let _outer = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Dense);
+    for layout in [
+        norito::core::WireLayout::Compact,
+        norito::core::WireLayout::Dense,
+    ] {
+        let archive =
+            encode_instruction_archive_with_layout(&input, FIXTURE_NETWORK_PREFIX, layout)
+                .expect("typed archive");
+        decode_instruction_archive_with_layout(&archive, FIXTURE_NETWORK_PREFIX, layout)
+            .expect("typed decode");
+        assert_eq!(
+            norito::core::effective_layout(),
+            norito::core::WireLayout::Dense
+        );
+        assert!(
+            decode_instruction_archive_with_layout(&[1], FIXTURE_NETWORK_PREFIX, layout).is_err()
+        );
+        assert_eq!(
+            norito::core::effective_layout(),
+            norito::core::WireLayout::Dense
+        );
+    }
+}

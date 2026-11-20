@@ -13,7 +13,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter edit/run  •  Esc/q exit";
+const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter select  •  r run  •  Esc/q exit";
+const EDIT_HELP_TEXT: &str = "Enter save  •  Tab save & move  •  Ctrl+u clear  •  Esc cancel";
 pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
     let mut stdout = std::io::stdout();
     enable_raw_mode()?;
@@ -169,11 +170,7 @@ fn parse_bool_input(buffer: &str, label: &str) -> Result<bool, String> {
     }
 }
 impl App {
-    fn new(mut args: IzanamiArgs) -> Self {
-        // ensure seed default display is empty rather than zero
-        if args.seed == Some(0) && std::env::var("IZANAMI_TUI_ALLOW_ZERO_SEED").is_err() {
-            args.seed = None;
-        }
+    fn new(args: IzanamiArgs) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         Self {
@@ -224,16 +221,23 @@ impl App {
             .highlight_symbol("→ ");
         f.render_stateful_widget(list, chunks[1], &mut self.list_state);
         let info = self.message.as_ref().map_or_else(
-            || Paragraph::new(HELP_TEXT.to_string()).style(Style::default().fg(Color::DarkGray)),
+            || {
+                Paragraph::new(if self.input.is_some() {
+                    EDIT_HELP_TEXT
+                } else {
+                    HELP_TEXT
+                })
+                .style(Style::default().fg(Color::Gray))
+            },
             |msg| {
-                Paragraph::new(msg.text.clone()).style(if msg.is_error {
+                Paragraph::new(msg.text.as_str()).style(if msg.is_error {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default().fg(Color::Green)
                 })
             },
         );
-        f.render_widget(info, chunks[2]);
+        f.render_widget(info.wrap(Wrap { trim: true }), chunks[2]);
         let editing = self.input.as_ref().map_or_else(
             || {
                 Paragraph::new("Press Enter on a field to edit.")
@@ -739,6 +743,34 @@ enum Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn help_tracks_edit_mode_without_starting_a_terminal() {
+        let mut app = App::new(IzanamiArgs::defaults());
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        for (editing, expected) in [(false, HELP_TEXT), (true, EDIT_HELP_TEXT)] {
+            if editing {
+                app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                    .unwrap();
+            }
+            let frame = terminal.draw(|frame| app.draw(frame)).unwrap();
+            let found = frame.buffer.content.chunks(80).any(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .contains(expected)
+            });
+            assert!(found, "missing shortcuts: {expected}");
+        }
+    }
+    #[test]
+    fn opening_form_preserves_explicit_zero_seed() {
+        let mut args = IzanamiArgs::defaults();
+        args.seed = Some(0);
+        let app = App::new(args);
+        assert_eq!(app.value_for(Field::Seed), "0");
+        assert_eq!(app.args.seed, Some(0));
+    }
     #[test]
     fn apply_input_rejects_non_finite_tps() {
         let args = IzanamiArgs::defaults();

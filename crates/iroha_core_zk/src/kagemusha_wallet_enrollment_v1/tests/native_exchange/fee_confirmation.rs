@@ -396,7 +396,7 @@ fn actual_a_acknowledges_certified_fee_payout_with_restart_and_exact_retry() {
     );
     let evidence = FinalizedPayoutEvidence {
         block: &terminal,
-        world: &world,
+        state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World { world: &world },
         payout,
     };
     assert!(matches!(
@@ -421,7 +421,9 @@ fn actual_a_acknowledges_certified_fee_payout_with_restart_and_exact_retry() {
         ));
         let wrong_cut = FinalizedPayoutEvidence {
             block: &previous,
-            world: &world,
+            state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World {
+                world: &world,
+            },
             payout,
         };
         assert!(matches!(
@@ -450,7 +452,9 @@ fn actual_a_acknowledges_certified_fee_payout_with_restart_and_exact_retry() {
             };
             let invalid = FinalizedPayoutEvidence {
                 block: &terminal,
-                world: &world,
+                state: crate::kagemusha_wallet_state_v1::FinalizedPayoutStateV1::World {
+                    world: &world,
+                },
                 payout: changed,
             };
             assert!(

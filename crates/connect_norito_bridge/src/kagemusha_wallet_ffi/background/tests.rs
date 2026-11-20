@@ -1309,8 +1309,9 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
         },
         S::FeePayout {
             credit: [1; 32],
-            world: vec![1],
+            state: vec![1],
             payout: vec![1],
+            selection: vec![1],
         },
         S::RequestFeeSelection,
         S::ValidateRequestFeePolicy {

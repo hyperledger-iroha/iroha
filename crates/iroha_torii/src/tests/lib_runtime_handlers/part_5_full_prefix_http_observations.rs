@@ -161,12 +161,12 @@ async fn prepared_submit_outcome_refuses_a_foreign_query_owner() {
     );
 }
 
+#[cfg(feature = "app_api")]
 #[test]
-fn trigger_completion_query_reads_past_fetch_budget_and_keeps_cumulative_work_limit() {
+fn trigger_completion_collection_reads_past_fetch_budget_and_pages_a_sparse_scan() {
     use iroha_data_model::{
         events::data::prelude::{AccountEventFilter, AccountEventSet, DataEventFilter},
         isi::{Register, SetKeyValue},
-        query::error::QueryExecutionFail,
         trigger::{
             Trigger,
             action::{Action, Repeats},
@@ -228,52 +228,61 @@ fn trigger_completion_query_reads_past_fetch_budget_and_keeps_cumulative_work_li
         "one actual data invocation at 501"
     );
     assert_eq!(output.completions[0].trigger_id, trigger_id);
-    let available = app.query_fanout_inflight.available_bytes();
-    let response = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: Some(trigger_id.to_string()),
-            entrypoint_hash: None,
-            outcome: None,
-            from_height: Some(501),
-            to_height: Some(501),
-            limit: Some(10),
-            scan_limit_blocks: Some(1),
-        },
-    )
-    .expect("the HTTP observation serves a completion past the full-prefix budget");
-    assert_eq!(response.scanned_blocks, 1);
-    assert_eq!(response.completions.len(), 1);
-    let record = &response.completions[0];
-    assert_eq!(record.block_height, 501);
-    assert_eq!(record.entrypoint_index, Some(0));
-    assert_eq!(record.source, "execution_output");
-    assert_eq!(record.completion.trigger_id, trigger_id.to_string());
+    // A read bounded to the deep block serves its completion past the full-prefix budget.
+    let filter = format!(r#"trigger_id = "{trigger_id}" and block_height = 501"#);
+    let (status, page) = trigger_completions_http(&app, &[("filter", &filter), ("limit", "10")]);
+    assert_eq!(status, StatusCode::OK, "{page:?}");
+    let rows = trigger_completion_rows(&page);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["block_height"].as_u64(), Some(501));
+    assert_eq!(row["entrypoint_index"].as_u64(), Some(0));
+    assert_eq!(row["trigger_id"].as_str(), Some(&*trigger_id.to_string()));
     assert_eq!(
-        record.completion.trigger_execution_hash,
-        entrypoint_hash.to_string()
+        row["trigger_execution_hash"].as_str(),
+        Some(&*entrypoint_hash.to_string())
     );
-    assert_eq!(record.completion.outcome, "Success");
-    assert_eq!(app.query_fanout_inflight.available_bytes(), available);
-    // Checkpoint ancestry does not widen a scan: its unchanged cumulative work still refuses.
-    let refused = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: Some("absent_past_budget_trigger".to_owned()),
-            entrypoint_hash: None,
-            outcome: None,
-            from_height: None,
-            to_height: None,
-            limit: Some(10),
-            scan_limit_blocks: Some(TRIGGER_COMPLETION_MAX_SCAN_BLOCKS),
-        },
-    )
-    .expect_err("the cumulative work budget still bounds a wide scan");
-    assert!(matches!(
-        refused,
-        Error::Query(ValidationFail::QueryFailed(
-            QueryExecutionFail::GasBudgetExceeded
-        ))
-    ));
-    assert_eq!(app.query_fanout_inflight.available_bytes(), available);
+    assert_eq!(row["outcome"].as_str(), Some("Success"));
+    assert!(
+        page["next_cursor"].is_null(),
+        "the walk ended at the bottom of its height range"
+    );
+
+    // Checkpoint ancestry does not widen a scan: the unchanged cumulative work budget
+    // ends the page, and the read continues below the last block it examined. The
+    // retired route refused such a scan; a collection read pages through it.
+    let work = routing::app_query_limits().max_fetch_size;
+    let absent = r#"trigger_id = "absent_past_budget_trigger""#;
+    let (status, first) = trigger_completions_http(&app, &[("filter", absent)]);
+    assert_eq!(status, StatusCode::OK, "{first:?}");
+    assert!(trigger_completion_rows(&first).is_empty());
+    let cursor = first["next_cursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("502 blocks exceed one page's {work} work units"))
+        .to_owned();
+    let (status, second) =
+        trigger_completions_http(&app, &[("filter", absent), ("cursor", &cursor)]);
+    assert_eq!(status, StatusCode::OK, "{second:?}");
+    assert!(trigger_completion_rows(&second).is_empty());
+    assert_ne!(
+        second["next_cursor"].as_str(),
+        Some(cursor.as_str()),
+        "an empty page still advances below a complete block"
+    );
+
+    // Following every continuation of a bounded walk finds the one completion exactly once.
+    let present = format!(r#"trigger_id = "{trigger_id}" and block_height >= 440"#);
+    let pages = trigger_completion_pages(&app, &[("filter", &present), ("limit", "1")]);
+    let found: Vec<u64> = pages
+        .iter()
+        .flat_map(|page| trigger_completion_rows(page))
+        .map(|row| row["block_height"].as_u64().expect("block height"))
+        .collect();
+    assert_eq!(found, [501]);
+
+    // A block-boundary continuation binds the filter that issued it.
+    let (status, error) =
+        trigger_completions_http(&app, &[("filter", &present), ("cursor", &cursor)]);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error:?}");
+    assert_eq!(error["code"].as_str(), Some("invalid_cursor"));
 }

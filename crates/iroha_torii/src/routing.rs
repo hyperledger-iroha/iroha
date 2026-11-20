@@ -38127,6 +38127,94 @@ mod explorer_lookup_tests {
         assert!(read(&all).is_err(), "changed source bytes must never reuse the warm row");
     }
 
+    routing_test! { sync explorer_block_feed_reads_while_no_state_or_world_view_can_be_acquired
+        // A Nexus configuration writer excludes every State and World view: `State::view`
+        // needs the configuration's reader and `State::world_view` its Nexus snapshot. The
+        // block feed captures only the committed hash journal, so canonical bodies, cached
+        // summaries and hash-only rows must all be served while that writer is held. A
+        // feed that built a World or runtime projection per row would wait here instead.
+        fn rows(
+            state: &Arc<CoreState>,
+            visibility: &DataspaceReadVisibility,
+            summaries: &crate::explorer_history::ExplorerBlockSummaryCache,
+        ) -> Vec<norito::json::Value> {
+            let response = handle_v1_explorer_blocks_with_summaries(
+                state,
+                visibility,
+                &crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
+                EXPLORER_BLOCK_HEIGHTS_ALL,
+                summaries,
+            )
+            .expect("block page");
+            let bytes = futures::executor::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+                .expect("body");
+            let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+            payload.get("items").and_then(norito::json::Value::as_array).cloned().expect("items")
+        }
+        /// Read a cold page, the same page warm, another reader's cold page, all with
+        /// every State and World view excluded; fail instead of waiting on a regression.
+        fn rows_without_views(state: &Arc<CoreState>) -> [Vec<norito::json::Value>; 3] {
+            let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+            let all = DataspaceReadVisibility::all_for_tests();
+            let restricted = DataspaceReadVisibility::default();
+            let mut writer = Some(state.nexus.write());
+            assert!(
+                state.try_view_once().is_err(),
+                "the held Nexus writer excludes a State view, and with it every World view"
+            );
+            let served = std::thread::scope(|scope| {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let (summaries, all, restricted) = (&summaries, &all, &restricted);
+                scope.spawn(move || {
+                    let _ = sender.send([
+                        rows(state, all, summaries),
+                        rows(state, all, summaries),
+                        rows(state, restricted, summaries),
+                    ]);
+                });
+                let served = receiver.recv_timeout(std::time::Duration::from_secs(120));
+                // Release a regressed reader that waits for a view, so the failure is reported.
+                drop(writer.take());
+                served
+            });
+            served.expect("the block feed is served while no State or World view can be acquired")
+        }
+        let heights = |rows: &[norito::json::Value]| -> Vec<u64> {
+            rows.iter()
+                .map(|row| row.get("height").and_then(norito::json::Value::as_u64).expect("height"))
+                .collect()
+        };
+
+        // Canonical bodies: cold decode, warm fixed-size summaries, and another reader's scope.
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "viewless".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let state = chain.state();
+        let committed = u64::try_from(state.committed_height()).expect("height");
+        let expected: Vec<u64> = (1..=committed).rev().collect();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let with_views = rows(state, &DataspaceReadVisibility::all_for_tests(), &summaries);
+        let [cold, warm, restricted] = rows_without_views(state);
+        assert_eq!(heights(&cold), expected);
+        assert_eq!(cold, with_views, "excluding views changes no public row");
+        assert_eq!(warm, cold, "a warm summary page is the cold page");
+        assert_eq!(heights(&restricted), expected);
+        assert!(
+            cold.iter().any(|row| row.get("transactions_total").and_then(norito::json::Value::as_u64) > Some(0)),
+            "the canonical bodies were decoded, not replaced by hash-only rows"
+        );
+        assert!(restricted.iter().all(|row| {
+            row.get("transactions_total").and_then(norito::json::Value::as_u64) == Some(0)
+        }), "another reader's visibility is applied from the block alone");
+
+        // Hash-only journal rows need no body, and no view either.
+        let journal = explorer_blocks_seek_test_state(5);
+        let [cold, warm, _] = rows_without_views(&journal);
+        assert_eq!(heights(&cold), [5, 4, 3, 2, 1]);
+        assert_eq!(warm, cold);
+    }
+
     routing_test! { sync native_history_rejects_mixed_execution_routes
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole};

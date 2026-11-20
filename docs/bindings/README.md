@@ -109,3 +109,8 @@ opens every `encoded_file`, verifies the canonical Base64, lengths, hashes, and
 Norito frames, and sends the shared argument payload through the production
 contract-call boundary. Any rotation must come from the reviewed two-root owner
 publication and pass `norito-rpc-verify` before the C# suite consumes it.
+The project also links the dense-layout vectors
+(`fixtures/norito_dense/vectors.json`) and
+`fixtures/norito_rpc/transaction_fixtures.dense.json`. Its dense suites decode
+and re-encode both byte-identically and check each dense signing hash; see
+"Norito layouts" in `csharp/README.md`.

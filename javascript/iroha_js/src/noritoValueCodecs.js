@@ -65,6 +65,10 @@ const NORITO_FRAME_HEADER_LENGTH = 40;
 const NORITO_MAX_HEADER_PADDING = 64;
 
 const NORITO_SUPPORTED_HEADER_FLAGS = COMPACT_LEN_FLAG;
+const NORITO_FRAME_OPTION_KEYS = new Set([
+  "context", "expectedSchemaHash", "expectedTypeName", "expectedPaddingLength",
+  "expectedLayout", "requireNonEmptyPayload",
+]);
 
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 
@@ -73,12 +77,14 @@ const EVENT_FILTER_BOX_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
 );
 
 let noritoLengthFlags = 0;
+let noritoWireLayout = "current";
 
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
     this.buffer = buffer;
     this.context = context;
     this.lengthFlags = lengthFlags;
+    this.layout = noritoWireLayout;
     this.offset = 0;
   }
   readU8(name) {
@@ -106,7 +112,7 @@ class BufferReader {
     return value;
   }
   readLength(name) {
-    if ((this.lengthFlags & COMPACT_LEN_FLAG) !== 0) {
+    if (this.layout === "dense" || (this.lengthFlags & COMPACT_LEN_FLAG) !== 0) {
       const [value, bytesRead] = decodeUnsignedLeb128(
         this.buffer,
         this.offset,
@@ -116,6 +122,18 @@ class BufferReader {
       return value;
     }
     return bigintToSafeNumber(this.readU64LE(name), `${this.context}.${name}`);
+  }
+  readCount(name) {
+    return this.layout === "dense"
+      ? this.readLength(name)
+      : bigintToSafeNumber(this.readU64LE(name), `${this.context}.${name}`);
+  }
+  readEnumTag(name) {
+    const tag = this.layout === "dense" ? this.readLength(name) : this.readU32LE(name);
+    if (tag > 0xffff_ffff) {
+      rejectRange(`${this.context}.${name} enum tag exceeds u32`);
+    }
+    return tag;
   }
   readBytes(length, name) {
     const safeLength = Number(length);
@@ -132,7 +150,7 @@ class BufferReader {
   }
 
   #ensureAvailable(length, name) {
-    if (this.offset + length > this.buffer.length) {
+    if (!Number.isSafeInteger(length) || length < 0 || length > this.buffer.length - this.offset) {
       rejectError(`${this.context}.${name} overran payload (${length} bytes requested, ${this.buffer.length - this.offset} remaining)`);
     }
   }
@@ -408,12 +426,12 @@ function encodeAccountIdValue(value, context) {
   switch (controller.tag) {
     case 0:
       return Buffer.concat([
-        u32ToLittleEndianBuffer(0),
+        encodeNoritoEnumTag(0),
         encodeNoritoField(encodePublicKeyValue(controller, context)),
       ]);
     case 1:
       return Buffer.concat([
-        u32ToLittleEndianBuffer(1),
+        encodeNoritoEnumTag(1),
         encodeNoritoField(encodeMultisigPolicyPayload(controller, context)),
       ]);
     default:
@@ -423,7 +441,7 @@ function encodeAccountIdValue(value, context) {
 
 function decodeAccountIdValue(payload, context) {
   const reader = new BufferReader(payload, context);
-  const kind = reader.readU32LE("kind");
+  const kind = reader.readEnumTag("kind");
   const controllerPayload = readNoritoField(reader, "payload");
   reader.assertEof();
   let header;
@@ -464,6 +482,9 @@ function decodePublicKeyValue(payload, context) {
 
 function encodeConstVecU8Value(bytes) {
   const normalized = Buffer.from(normalizeFlexibleBytes(bytes, "ConstVec<u8>"));
+  if (noritoWireLayout === "dense") {
+    return encodeNoritoByteVec(normalized);
+  }
   const parts = [u64ToLittleEndianBuffer(normalized.length)];
   for (const byte of normalized) {
     parts.push(encodeNoritoLength(1), Buffer.of(byte));
@@ -472,6 +493,9 @@ function encodeConstVecU8Value(bytes) {
 }
 
 function decodeConstVecU8Value(payload, context) {
+  if (noritoWireLayout === "dense") {
+    return decodeNoritoByteVec(payload, context);
+  }
   const reader = new BufferReader(payload, context, noritoLengthFlags);
   const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
   // Every element needs its field length and one byte. Reject impossible
@@ -600,13 +624,13 @@ function decodeMultisigMemberPayload(payload, context) {
 
 function encodeEnumTagValue(index, encodePayload) {
   const payload = encodePayload ? encodeNoritoField(encodePayload()) : Buffer.alloc(0);
-  return Buffer.concat([u32ToLittleEndianBuffer(index), payload]);
+  return Buffer.concat([encodeNoritoEnumTag(index), payload]);
 }
 
 function encodeEventFilterBoxFramePayload(value, context) {
   const frameBytes = decodeExactStandardBase64(value, context);
   const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);
-  const expectedFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
+  const expectedFlags = noritoWireLayout === "dense" ? 0 : noritoLengthFlags & COMPACT_LEN_FLAG;
   if (frame.flags !== expectedFlags) {
     rejectError(`${context} uses Norito layout flags ${frame.flags}; expected ${expectedFlags}`);
   }
@@ -625,7 +649,7 @@ function decodeEventFilterBoxFramePayload(payload, _context) {
   return frameNoritoPayload(
     payload,
     EVENT_FILTER_BOX_SCHEMA_HASH,
-    noritoLengthFlags & COMPACT_LEN_FLAG,
+    noritoWireLayout === "dense" ? 0 : noritoLengthFlags & COMPACT_LEN_FLAG,
   ).toString(BASE64_ENCODING);
 }
 
@@ -732,7 +756,7 @@ function encodeNoritoField(payload) {
 
 function encodeNoritoVec(values, encode) {
   const payloads = values.map(encode);
-  const parts = [u64ToLittleEndianBuffer(payloads.length)];
+  const parts = [encodeNoritoCount(payloads.length)];
   for (const payload of payloads) {
     parts.push(encodeNoritoLength(payload.length), payload);
   }
@@ -753,8 +777,114 @@ function withNoritoLengthFlags(flags, fn) {
   }
 }
 
+/** Synchronous, nestable context for bare values whose owner declares the layout. */
+function withNoritoWireLayout(layout, fn, flags = layout === "dense" ? 0 : COMPACT_LEN_FLAG) {
+  assertNoritoWireLayout(layout);
+  if (!Number.isInteger(flags) || (flags !== 0 && flags !== COMPACT_LEN_FLAG) || (layout === "dense" && flags !== 0)) {
+    rejectType("Norito layout uses unsupported flags");
+  }
+  const previous = noritoWireLayout;
+  noritoWireLayout = layout;
+  try {
+    return withNoritoLengthFlags(flags, fn);
+  } finally {
+    noritoWireLayout = previous;
+  }
+}
+
+function assertNoritoWireLayout(layout) {
+  if (layout !== "current" && layout !== "dense") {
+    rejectType("Norito layout must be current or dense");
+  }
+}
+
+function getNoritoWireLayout() {
+  return noritoWireLayout;
+}
+
+/** Snapshot exact native codec options before native execution or caller-owned reads. */
+function normalizeNativeCodecOptions(options = {}, { signed = false, format = false, parseJson = false, encoding = false } = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options) ||
+      (Object.getPrototypeOf(options) !== Object.prototype && Object.getPrototypeOf(options) !== null)) {
+    rejectType("codec options must be a plain data object");
+  }
+  const allowed = new Set(["layout", ...(format ? ["format"] : []), ...(parseJson ? ["parseJson"] : []), ...(encoding ? ["encoding"] : [])]);
+  const snapshot = Object.create(null);
+  for (const key of Reflect.ownKeys(options)) {
+    const descriptor = Object.getOwnPropertyDescriptor(options, key);
+    if (!allowed.has(key) || !descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      rejectType("codec options contain an unknown field or accessor");
+    }
+    snapshot[key] = descriptor.value;
+  }
+  const layout = snapshot.layout === undefined ? "current" : snapshot.layout;
+  assertNoritoWireLayout(layout);
+  const wireFormat = snapshot.format === undefined ? (signed ? "versioned" : "bare") : snapshot.format;
+  if (format && !["bare", "framed", ...(signed ? ["versioned"] : [])].includes(wireFormat)) {
+    rejectType("codec format must be bare, framed, or a supported versioned wire");
+  }
+  if (signed && layout === "dense" && wireFormat === "versioned") {
+    rejectType("dense has no governed versioned transaction mapping; select bare or framed");
+  }
+  if (parseJson && snapshot.parseJson !== undefined && typeof snapshot.parseJson !== "boolean") {
+    rejectType("codec parseJson must be a boolean");
+  }
+  if (encoding && snapshot.encoding !== undefined && typeof snapshot.encoding !== "string") {
+    rejectType("codec encoding must be a string");
+  }
+  return { layout, format: wireFormat, parseJson: snapshot.parseJson !== false, encoding: snapshot.encoding ?? "hex" };
+}
+
+function encodeNoritoCount(value) {
+  return noritoWireLayout === "dense" ? encodeUnsignedLeb128(value) : u64ToLittleEndianBuffer(value);
+}
+
+function encodeNoritoEnumTag(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    rejectRange("Norito enum tag must fit in u32");
+  }
+  return noritoWireLayout === "dense" ? encodeUnsignedLeb128(value) : u32ToLittleEndianBuffer(value);
+}
+
+/** Vec<u8> uses raw bytes in both layouts; only its count changes. */
+function encodeNoritoByteVec(value) {
+  const bytes = toBuffer(value);
+  return Buffer.concat([encodeNoritoCount(bytes.length), bytes]);
+}
+
+function decodeNoritoByteVec(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const bytes = reader.readBytes(reader.readCount("count"), "bytes");
+  reader.assertEof();
+  return bytes;
+}
+
+/** Generic [u8; N]; derived record fields already store their array bytes raw. */
+function encodeNoritoByteArray(value) {
+  const bytes = toBuffer(value);
+  return noritoWireLayout === "dense" ? bytes : Buffer.concat(Array.from(bytes, (byte) => encodeNoritoField(Buffer.of(byte))));
+}
+
+function decodeNoritoByteArray(payload, length, context) {
+  const reader = new BufferReader(payload, context);
+  if (!Number.isSafeInteger(length) || length < 0 || length > payload.length) {
+    rejectRange(`${context} invalid byte array length`);
+  }
+  if (noritoWireLayout === "dense") {
+    const bytes = reader.readBytes(length, "bytes");
+    reader.assertEof();
+    return bytes;
+  }
+  const bytes = Buffer.alloc(length);
+  for (let index = 0; index < length; index += 1) {
+    bytes[index] = decodeU8Value(readNoritoField(reader, `item${index}`), `${context}[${index}]`);
+  }
+  reader.assertEof();
+  return bytes;
+}
+
 function encodeNoritoLength(value) {
-  if ((noritoLengthFlags & COMPACT_LEN_FLAG) !== 0) {
+  if (noritoWireLayout === "dense" || (noritoLengthFlags & COMPACT_LEN_FLAG) !== 0) {
     return encodeUnsignedLeb128(value);
   }
   return u64ToLittleEndianBuffer(value);
@@ -762,9 +892,13 @@ function encodeNoritoLength(value) {
 
 function decodeNoritoVec(payload, decode, context, maxCount = null) {
   const reader = new BufferReader(payload, context, noritoLengthFlags);
-  const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
+  const count = reader.readCount("count");
   if (maxCount !== null && count > maxCount) {
     rejectRange(`${context}${TEXT_EXCEEDS_THE}${maxCount}-item limit`);
+  }
+  const prefixSize = noritoWireLayout === "dense" || (noritoLengthFlags & COMPACT_LEN_FLAG) !== 0 ? 1 : 8;
+  if (count > Math.floor((reader.buffer.length - reader.offset) / prefixSize)) {
+    rejectError(`${context} count exceeds its encoded byte geometry`);
   }
   const values = [];
   for (let index = 0; index < count; index += 1) {
@@ -800,11 +934,25 @@ function schemaHashForTypeName(typeName) {
  *   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer,
  *   expectedTypeName?: string,
  *   expectedPaddingLength?: number,
+ *   expectedLayout?: "current" | "dense",
  *   requireNonEmptyPayload?: boolean,
  * }} [options]
- * @returns {{payload: Buffer, schemaHash: Buffer, flags: number}}
+ * @returns {{payload: Buffer, schemaHash: Buffer, flags: number, layout: "current" | "dense"}}
  */
 export function validateNoritoFrame(bytes, options = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options) ||
+      (Object.getPrototypeOf(options) !== Object.prototype && Object.getPrototypeOf(options) !== null)) {
+    rejectType("Norito frame options must be a plain data object");
+  }
+  const snapshot = Object.create(null);
+  for (const key of Reflect.ownKeys(options)) {
+    const descriptor = Object.getOwnPropertyDescriptor(options, key);
+    if (!NORITO_FRAME_OPTION_KEYS.has(key) || !descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      rejectType("Norito frame options contain an unknown field or accessor");
+    }
+    snapshot[key] = descriptor.value;
+  }
+  options = snapshot;
   const context = options.context ?? "Norito frame";
   const buffer = toBuffer(bytes);
   if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
@@ -815,8 +963,15 @@ export function validateNoritoFrame(bytes, options = {}) {
   }
   const major = buffer[4];
   const minor = buffer[5];
-  if (major !== 0 || minor !== 0) {
+  if (major !== 0 || (minor !== 0 && minor !== 1)) {
     rejectError(`${context}${TEXT_USES_UNSUPPORTED}NRT0 version ${major}.${minor}`);
+  }
+  const layout = minor === 1 ? "dense" : "current";
+  if (options.expectedLayout !== undefined) {
+    assertNoritoWireLayout(options.expectedLayout);
+    if (layout !== options.expectedLayout) {
+      rejectError(`${context} layout ${layout} does not match expected ${options.expectedLayout}`);
+    }
   }
 
   const schemaHash = buffer.subarray(6, 22);
@@ -860,13 +1015,16 @@ export function validateNoritoFrame(bytes, options = {}) {
   }
   const expectedCrc = buffer.readBigUInt64LE(31);
   const flags = buffer[39];
-  if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0) {
+  if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0 || (layout === "dense" && flags !== 0)) {
     rejectError(`${context}${TEXT_USES_UNSUPPORTED}Norito header flags 0x${flags.toString(16)}`);
   }
 
   const paddingLength = buffer.length - NORITO_FRAME_HEADER_LENGTH - payloadLength;
   if (paddingLength < 0) {
     rejectError(`${context} payload length${TEXT_EXCEEDS_THE}available frame bytes`);
+  }
+  if (layout === "dense" && paddingLength !== 0) {
+    rejectError(`${context} dense frame must not contain padding or trailing bytes`);
   }
   if (paddingLength > NORITO_MAX_HEADER_PADDING) {
     rejectError(`${context}${TEXT_EXCEEDS_THE}${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`);
@@ -896,7 +1054,7 @@ export function validateNoritoFrame(bytes, options = {}) {
   if (actualCrc !== expectedCrc) {
     rejectError(`${context} CRC64 mismatch`);
   }
-  return { payload, schemaHash, flags };
+  return { payload, schemaHash, flags, layout };
 }
 
 function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
@@ -907,14 +1065,19 @@ function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
   }
   return validateNoritoFrame(buffer, {
     context,
+    expectedLayout: noritoWireLayout,
     ...(expectedSchemaHash == null ? {} : { expectedSchemaHash }),
   });
 }
 
-function frameNoritoPayload(payload, schemaHash, flags = 0, padding = 0) {
+function frameNoritoPayload(payload, schemaHash, flags = 0, padding = 0, layout = noritoWireLayout) {
+  assertNoritoWireLayout(layout);
+  if (layout === "dense" && (flags !== 0 || padding !== 0)) {
+    rejectError("dense frame must have zero flags and no padding");
+  }
   const header = Buffer.concat([
     Buffer.from("NRT0", "ascii"),
-    Buffer.from([0, 0]),
+    Buffer.from([0, layout === "dense" ? 1 : 0]),
     schemaHash,
     Buffer.from([0]),
     u64ToLittleEndianBuffer(payload.length),
@@ -973,7 +1136,7 @@ function bigintToSafeNumber(value, context) {
 }
 
 function encodeUnsignedLeb128(value) {
-  let remaining = BigInt(value);
+  let remaining = normalizeU64Input(value, "varint");
   const bytes = [];
   while (remaining >= 0x80n) {
     bytes.push(Number((remaining & 0x7fn) | 0x80n));
@@ -1080,6 +1243,15 @@ function tryDecodeBase64(value) {
 }
 
 export {
+  normalizeNativeCodecOptions,
+  withNoritoWireLayout,
+  getNoritoWireLayout,
+  encodeNoritoCount,
+  encodeNoritoEnumTag,
+  encodeNoritoByteVec,
+  decodeNoritoByteVec,
+  encodeNoritoByteArray,
+  decodeNoritoByteArray,
   TEXT_MUST_BE_AN_OBJECT_2,
   TEXT_MUST_CONTAIN,
   TEXT_MUST_BE,

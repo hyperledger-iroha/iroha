@@ -111,6 +111,8 @@ extraction installs only the inventoried file content and manifest.
 
 `--smoke` first checks the exact retained profile image and packaged Kagami network-name
 projection. It then runs the packaged Kagami from an empty workspace with an empty `PATH`.
+Startup-capable smoke commands pass `--timeout 600` to packaged Kagami so the four
+validators and their storage services can initialize. Latency samples use the CLI default.
 It supplies no TOML, starts the localnet through `contract deploy hello.ko`,
 also deploys `.to` and a local Musubi package, and verifies artifact readback and
 a live contract result on each of the four peers. It checks repeated starts and
@@ -126,7 +128,9 @@ cache. Native resource limits remain unchanged. The same smoke then creates a se
 context, with only one network running at a time. It checks context list/show/use, explicit
 `contract deploy --context` without changing workspace selection, and original-journal recovery
 after restarting the intended network. Both deployments are read and executed on all four
-validators; cleanup covers both named environments.
+validators; cleanup covers both named environments. The two-context exercise reserves that startup time for
+the secondary launch, the explicit restart of local, and journal recovery. It
+keeps a separate 600-second aggregate allowance for the remaining context work.
 
 After that workflow passes, separate fresh stores exercise `.to` and local-package
 inputs as the first deployment command. Each must start four validators, execute

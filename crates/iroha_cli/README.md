@@ -1008,6 +1008,12 @@ use `iroha explorer accounts`, `domains`, `asset-definitions`, `assets`, `nfts`,
 `--limit`, `--cursor`, `--all`); history and Explorer feeds reject sorting,
 totals and aggregates.
 
+`iroha trigger completed list` reads the operator-signed trigger completion
+history (`GET /v1/triggers/completed`) with the same list flags. `--id`,
+`--outcome`, `--from-height` and `--to-height` are shorthand conjuncts for
+`trigger_id`, `outcome` and `block_height` filters. A page may be short or empty
+and still print a `next_cursor`; `--all` follows every continuation.
+
 ### Dataspace verification routes
 
 `iroha dataspace status dpn.toml --trust trust.json` verifies the original

@@ -75,6 +75,13 @@ independent deployment input bound to that complete digest; neither client may
 bootstrap it from its own response. Registry slot 11 carries the one capability
 and its two separately injected transports.
 
+The managed Configure and Enroll journals retain the bounded canonical custody proof
+at each selected certified cut before publishing its immutable intent or body reservation.
+After a restart or a later block, the attester and paid dispatch paths verify that frame
+against the original Global checkpoint, provider, owner, signer binding and qualified
+World schema. Each also verifies the fresh predecessor required by its signing boundary.
+A pre-existing journal can acquire missing evidence only at its original certified cut.
+
 ## Native custody authority
 
 `MutateSorafsStreamTokenCustody` owns the provider's governed public signer binding,

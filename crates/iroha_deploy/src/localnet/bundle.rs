@@ -42,7 +42,7 @@ pub(super) fn write_lifecycle(out_dir: &Path, request: &Request<'_>) -> Result<(
     let peers = request.opts.peers.get();
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
-    custody::write(&start, start_script(peers)).wrap_err("write start.sh")?;
+    custody::write(&start, start_script(peers)?).wrap_err("write start.sh")?;
     custody::write(&stop, stop_script(peers)).wrap_err("write stop.sh")?;
     #[cfg(unix)]
     for script in [&start, &stop] {
@@ -66,8 +66,10 @@ pub(super) fn write_lifecycle(out_dir: &Path, request: &Request<'_>) -> Result<(
             "`genesis.public_key`: the signed genesis the peers load.\n",
             "- `genesis.private_key`: the genesis signing key; keep it offline and never ",
             "commit it.\n",
-            "- `peerN.toml`: validator configs; state lives in `storage/peerN` and ",
-            "`state/peerN`, logs in `peerN.log`.\n\n",
+            "- `peerN.toml`: validator configs. Each names its node data directory ",
+            "`{nodes}/peerN` as `data_dir`: the validator, SoraNet transport and streaming keys ",
+            "are the owner-only files of `{nodes}/peerN/secrets/` and all node state lives ",
+            "under `{nodes}/peerN/state/`. Logs go to `peerN.log`.\n\n",
             "## Run\n\n",
             "```bash\n",
             "cd {out_dir}\n",
@@ -77,13 +79,14 @@ pub(super) fn write_lifecycle(out_dir: &Path, request: &Request<'_>) -> Result<(
             "```\n\n",
             "`bash ./start.sh --peer-index N` starts one validator. Set `IROHAD_BIN` to choose ",
             "the `iroha3d` binary. `kagami docker --config-dir .` renders Docker Compose from ",
-            "this bundle.\n",
+            "this bundle: every container mounts its validator's `{nodes}/peerN`.\n",
         ),
         peers = peers,
         consensus = consensus_mode_label(request.opts.consensus_mode),
         chain = request.chain_id,
         torii_url = torii_url,
         operator_key = OPERATOR_SIGNER_KEY_FILE,
+        nodes = config::NODES_DIRECTORY,
         out_dir = shell_out_dir,
     );
     custody::write(out_dir.join("README.md"), readme).wrap_err("write localnet guide")?;
@@ -123,6 +126,12 @@ pub(super) fn write_summary<T: Write>(
     ] {
         writeln!(writer, "{label}: {}", out_dir.join(file).display())?;
     }
+    // Every validator's keys (`peerN/secrets/`) and state (`peerN/state/`).
+    writeln!(
+        writer,
+        "node_data_dirs: {}",
+        out_dir.join(config::NODES_DIRECTORY).display()
+    )?;
     writeln!(
         writer,
         "operator_signer_key: {}",
@@ -185,9 +194,15 @@ if [ "$#" -ne 0 ]; then
 fi
 "#;
 
-fn start_script(peers: u16) -> String {
+fn start_script(peers: u16) -> Result<String> {
     let (debug, release) = default_daemon_paths();
-    format!(
+    // The data directory layout is fixed, so the script names its paths literally.
+    let nodes = config::NODES_DIRECTORY;
+    let records = config::records_dir_in_data_dir();
+    let records = records
+        .to_str()
+        .ok_or_else(|| eyre!("the safety-record directory name is not UTF-8"))?;
+    Ok(format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
 umask 077
@@ -233,21 +248,23 @@ for i in $SELECTED_PEERS; do
     rm -f "$PIDFILE"
   fi
   set -- "$IROHAD_BIN_RESOLVED" --config "$DIR/peer${{i}}.toml"
+  # Each validator owns the node data directory its config names as data_dir: keys in
+  # secrets/, state in state/.
+  NODE_DIR="$DIR/{nodes}/peer${{i}}"
   # A fresh key is asserted only on the first start, before safety records exist.
-  if [ ! -d "$DIR/state/peer${{i}}/sumeragi-records" ]; then
+  if [ ! -d "$NODE_DIR/{records}" ]; then
     set -- "$@" --sumeragi-assert-fresh-key
   fi
-  # Each validator runs from its own state directory, so node defaults that name relative
+  # Each validator runs from its own data directory, so node defaults that name relative
   # paths stay isolated per peer.
-  mkdir -p "$DIR/state/peer${{i}}"
-  (cd "$DIR/state/peer${{i}}" && exec nohup "$@" >>"$DIR/peer${{i}}.log" 2>&1 </dev/null) &
+  (cd "$NODE_DIR" && exec nohup "$@" >>"$DIR/peer${{i}}.log" 2>&1 </dev/null) &
   echo "$!" > "$PIDFILE"
   echo "peer$i pid $(cat "$PIDFILE")"
 done
 "#,
         debug = shell_literal(&debug),
         release = shell_literal(&release),
-    )
+    ))
 }
 
 fn stop_script(peers: u16) -> String {

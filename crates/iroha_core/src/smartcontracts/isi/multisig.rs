@@ -401,6 +401,36 @@ pub fn multisig_approval_outcome_state_key(
     ))
     .expect("multisig approval outcome path must be valid")
 }
+/// Match only the two canonical immutable effect keys of this exact multisig account.
+pub(crate) fn is_multisig_effect_key(path: &StatePath, account: &AccountId) -> bool {
+    let mut segments = path.as_ref().split('/');
+    let (Some(MULTISIG), Some(family), Some(entrypoint), Some(_), Some(proposal), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    let (Ok(hash), Ok(proposal)) = (
+        entrypoint.parse::<Hash>(),
+        proposal.parse::<MultisigProposalId>(),
+    ) else {
+        return false;
+    };
+    let expected = match family {
+        MULTISIG_APPROVAL_OUTCOME_STATE => {
+            multisig_approval_outcome_state_key(*hash.as_ref(), account, &proposal)
+        }
+        MULTISIG_PROPOSAL_TERMINAL_EXECUTION_STATE => {
+            multisig_proposal_terminal_execution_state_key(*hash.as_ref(), account, &proposal)
+        }
+        _ => return false,
+    };
+    path == &expected
+}
 fn account_role_suffix(account: &AccountId) -> String {
     const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
     if let Ok(canonical_suffix) = account.canonical_i105()

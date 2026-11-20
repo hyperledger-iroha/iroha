@@ -9,9 +9,8 @@ use iroha::client::{
     PreparedOperationBindingV1, verify_account_faucet_prepared_transaction_v1,
 };
 use iroha_data_model::{
-    account::address::ChainDiscriminantGuard,
-    asset::AssetDefinitionId,
-    transaction::{FeePaymentIntent, signed::TransactionBuilder},
+    account::address::ChainDiscriminantGuard, asset::AssetDefinitionId,
+    transaction::FeePaymentIntent,
 };
 use iroha_primitives::numeric::Quantity;
 use napi::bindgen_prelude::{Buffer, Uint8Array};
@@ -19,8 +18,8 @@ use napi_derive::napi;
 use norito::json;
 
 use crate::{
-    EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES, codec_to_napi, parse_account_id,
-    parse_transaction_network_id_bytes, scoped_chain_discriminant_for_literal,
+    codec_to_napi, parse_account_id, parse_transaction_network_id_bytes,
+    scoped_chain_discriminant_for_literal,
 };
 
 /// Upper bound for JSON accepted by these helpers.
@@ -135,13 +134,22 @@ pub fn instruction_json_from_wire_pair(
 /// This is `HashOf<TransactionPayload>` of the exact decoded payload (BLAKE2b-256 with the
 /// Iroha marker bit). The payload must decode canonically without trailing bytes.
 #[napi(js_name = "transactionPayloadSigningHash")]
-pub fn transaction_payload_signing_hash(payload_bytes: Uint8Array) -> napi::Result<Buffer> {
-    if payload_bytes.is_empty() || payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
-        return Err(invalid("payloadBytes must contain 1..=1048576 bytes"));
-    }
-    let builder = TransactionBuilder::decode_payload(payload_bytes.as_ref())
-        .map_err(|error| invalid(format!("invalid canonical transaction payload: {error}")))?;
-    Ok(Buffer::from(builder.payload_hash_bytes().to_vec()))
+pub fn transaction_payload_signing_hash(
+    payload_bytes: Uint8Array,
+    layout: Option<String>,
+    format: Option<String>,
+) -> napi::Result<Buffer> {
+    let options = crate::transaction_codec::Options::payload(layout.as_deref(), format.as_deref())?;
+    let builder = crate::transaction_codec::decode_payload(payload_bytes.as_ref(), options)
+        .map_err(|error| {
+            invalid(format!(
+                "invalid canonical transaction payload: {}",
+                error.reason
+            ))
+        })?;
+    Ok(Buffer::from(
+        crate::transaction_codec::payload_hash(builder.payload(), options.layout)?.to_vec(),
+    ))
 }
 
 /// Decode one canonical unsigned transaction payload into its model JSON.
@@ -152,13 +160,18 @@ pub fn transaction_payload_signing_hash(payload_bytes: Uint8Array) -> napi::Resu
 pub fn decode_transaction_payload_json(
     payload_bytes: Uint8Array,
     network_prefix: f64,
+    layout: Option<String>,
+    format: Option<String>,
 ) -> napi::Result<String> {
     let _network = network_guard(network_prefix)?;
-    if payload_bytes.is_empty() || payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
-        return Err(invalid("payloadBytes must contain 1..=1048576 bytes"));
-    }
-    let builder = TransactionBuilder::decode_payload(payload_bytes.as_ref())
-        .map_err(|error| invalid(format!("invalid canonical transaction payload: {error}")))?;
+    let options = crate::transaction_codec::Options::payload(layout.as_deref(), format.as_deref())?;
+    let builder = crate::transaction_codec::decode_payload(payload_bytes.as_ref(), options)
+        .map_err(|error| {
+            invalid(format!(
+                "invalid canonical transaction payload: {}",
+                error.reason
+            ))
+        })?;
     json::to_json(builder.payload()).map_err(|error| invalid(error.to_string()))
 }
 
@@ -364,7 +377,11 @@ mod tests {
 
     #[test]
     fn payload_decoder_and_signing_hash_cover_the_exact_built_payload() {
-        use iroha_data_model::{NetworkId, isi::Log, transaction::FeePaymentIntent};
+        use iroha_data_model::{
+            NetworkId,
+            isi::Log,
+            transaction::{FeePaymentIntent, TransactionBuilder},
+        };
         let authority = AccountId::new(
             KeyPair::try_from_seed(vec![6; 32], Algorithm::Ed25519)
                 .expect("key")
@@ -382,8 +399,9 @@ mod tests {
         )
         .with_instructions([Log::new(iroha_data_model::Level::INFO, "review".into())]);
         let bytes = builder.encode_payload();
-        let json_text = decode_transaction_payload_json(Uint8Array::from(bytes.clone()), 369.0)
-            .expect("decode");
+        let json_text =
+            decode_transaction_payload_json(Uint8Array::from(bytes.clone()), 369.0, None, None)
+                .expect("decode");
         let value: json::Value = json::from_str(&json_text).expect("payload JSON");
         let _network = ChainDiscriminantGuard::enter(369);
         assert_eq!(
@@ -391,7 +409,7 @@ mod tests {
             json::to_value(&authority).expect("authority JSON")
         );
         assert_eq!(
-            transaction_payload_signing_hash(Uint8Array::from(bytes.clone()))
+            transaction_payload_signing_hash(Uint8Array::from(bytes.clone()), None, None)
                 .expect("signing hash")
                 .to_vec(),
             builder.payload_hash_bytes().to_vec()
@@ -399,9 +417,10 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(
-            decode_transaction_payload_json(Uint8Array::from(trailing.clone()), 369.0).is_err()
+            decode_transaction_payload_json(Uint8Array::from(trailing.clone()), 369.0, None, None)
+                .is_err()
         );
-        assert!(transaction_payload_signing_hash(Uint8Array::from(trailing)).is_err());
+        assert!(transaction_payload_signing_hash(Uint8Array::from(trailing), None, None).is_err());
     }
 
     #[test]

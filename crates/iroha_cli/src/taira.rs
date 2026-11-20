@@ -193,6 +193,8 @@ pub enum Command {
     RetireValidatorConfig(crate::taira_public_reset::RetireValidatorConfig),
     /// Prepare, sign or assemble the local one-time Time and Ironwood activation certificate.
     TimeIronwood(crate::taira_time_ironwood::TimeIronwood),
+    /// Prepare, sign and assemble the scoped-read permission activation on Taira.
+    ReadScope(crate::taira_read_scope::ReadScope),
     /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from `AArch64` guest assets.
@@ -224,6 +226,9 @@ impl Run for Command {
             ),
             Self::TimeIronwood(_) => {
                 eyre::bail!("`taira time-ironwood` must run before client configuration is loaded")
+            }
+            Self::ReadScope(_) => {
+                eyre::bail!("`taira read-scope` must run before client configuration is loaded")
             }
             Self::WriteCanary(cmd) => cmd.run(context),
             Self::InrouWorkspace(cmd) => cmd.run(context),

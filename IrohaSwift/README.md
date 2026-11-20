@@ -24,7 +24,7 @@ Features:
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
 - Petal Stream animated optical transport (format 5): stream encoder/assembler, camera-frame decoder, turn and katakana band readers, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
-- Norito envelope encoder (header + CRC64-XZ)
+- Norito envelope encoder (header + CRC64-XZ) for the current layouts and the dense layout (`NoritoWireLayout`)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - One-shot pipeline submission helpers (POST `/v1/pipeline/transactions` plus hash-bound status polling)
@@ -2434,6 +2434,55 @@ if let state = AccelerationSettings.runtimeState() {
 status exposed by the bridge (`available` reflects whether the backend passed parity
 self-tests on the current host). The helper returns `nil` when the Norito bridge
 symbols are unavailable, matching the behaviour of the setter.
+
+### Norito layouts
+
+The Swift codec writes and reads the three V1 payload layouts of `norito.md`
+through one `NoritoWireLayout` parameter:
+
+| Layout | Header | Per-value length | Sequence/map count | Enum tag | `u8` element |
+| --- | --- | --- | --- | --- | --- |
+| `.fixed` | minor `0`, flags `0x00` | `u64` | `u64` | `u32` | `[len = 1][byte]` |
+| `.compact` | minor `0`, flags `0x02` | varint | `u64` | `u32` | `[len = 1][byte]` |
+| `.dense` | minor `1`, flags `0x00` | varint | varint | varint | raw byte |
+
+`.compact` is the layout of every current ledger wire and stays the default of
+every builder; its bytes are unchanged. `.dense` is the layout of `norito.md`,
+"Dense layout (header minor 1)"; it has no header padding and no layout flags.
+No ledger definition or signed-transaction wire version selects it yet, so no
+public transaction builder emits it.
+
+The layout is chosen explicitly and never guessed from payload bytes:
+
+- A frame declares it in the header. `noritoEncode(typeName:payload:layout:)`
+  writes that header (`flags:` remains the minor-`0` spelling), and
+  `NoritoHeader.layout` reads it back from `minor` and `flags`. Frame decoding
+  refuses an unknown minor version, reserved flags, any flag or padding on a
+  dense header, truncated input and a checksum mismatch. Decoders written for
+  the current layouts refuse a dense frame instead of reading it.
+- A headerless payload's owner names it. The public encoders
+  `AccountAddress.noritoAccountControllerPayload(layout:)` and
+  `CanonicalNorito.encodeAccountId(_:layout:)` take `layout:`, and so do the
+  SDK's internal fee-payment, metadata, executable, transaction-payload and
+  signed-transaction codecs that the transaction builders and inspectors use.
+  Each typed decoder reads a payload only in the layout it is given, and a
+  signature covers the payload bytes of one layout.
+
+Instruction bodies keep one typed form, their current-layout Norito frame, in
+every layout. A dense transaction carries each instruction's bare dense payload,
+which the native bridge (`connect_norito_transcode_instruction_v1`) decodes into
+the frame of exactly the instruction its wire ID registers and transcodes back
+when a dense payload is written. A dense transaction therefore decodes,
+verifies and re-encodes down to typed instruction frames, and a dense payload
+builds from the same frames as the current layout. Only a wire ID the bridge
+does not register stays an opaque bare payload, which encodes only in the dense
+layout it was decoded from.
+
+`NoritoDenseLayoutTests` pins every rule to the shared vectors in
+`fixtures/norito_dense/vectors.json`, and `NoritoRpcDenseFixtureTests` decodes,
+verifies and byte-identically rebuilds every transaction of
+`fixtures/norito_rpc/transaction_fixtures.dense.json` next to its
+current-layout twin. Both read the canonical fixture directories directly.
 
 ### Norito fixtures & parity
 

@@ -729,7 +729,7 @@ sumeragi.status.read	GET	/v1/sumeragi/status	operator	operator_signature	operato
 sumeragi.status.stream_sse	GET	/v1/sumeragi/status/sse	operator	operator_signature	operator	stream	sse	feature(telemetry)	false	true	false	true
 time.now	GET	/v1/time/now	public	torii_default	public	read	http	always	true	true	false	false
 time.status	GET	/v1/time/status	operator	operator_signature	operator	read	http	always	true	true	false	true
-trigger.completion.list	GET	/v1/triggers/completed	operator	operator_signature	operator	compute	http	always	true	true	false	true
+trigger.completion.list	GET	/v1/triggers/completed	operator	operator_signature	operator	compute	http	feature(app_api)	true	true	false	true
 trigger.lifecycle_activation	GET	/v1/triggers/lifecycle-activation	public	torii_default	public	read	http	always	true	true	false	false
 trigger.lifecycle_witness	GET	/v1/triggers/lifecycle-witness	public	torii_default	public	read	http	always	true	true	false	false
 validation_fee.policy.current_proof	POST	/v1/validation-fee/policy/current/proof	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true

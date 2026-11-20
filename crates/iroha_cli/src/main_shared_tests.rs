@@ -1082,6 +1082,76 @@ fn trigger_completed_list_rejects_retired_timeout_flag() {
     assert!(error.to_string().contains("--timeout-ms"));
 }
 
+#[test]
+fn trigger_completed_list_builds_the_collection_query_from_its_flags() {
+    let parse = |flags: &[&str]| {
+        let mut argv = vec!["iroha", "trigger", "completed", "list"];
+        argv.extend_from_slice(flags);
+        let args = Args::try_parse_from(argv).expect("parse trigger completed list");
+        let Command::Trigger(trigger::Command::Completed(trigger::Completed::List(list))) =
+            args.command
+        else {
+            panic!("expected trigger completed list command");
+        };
+        list
+    };
+    // Without flags the read is the collection's first page in its default order.
+    assert_eq!(
+        parse(&[]).to_query().expect("default query"),
+        iroha::collections::ListQuery::new()
+    );
+    let list = parse(&[
+        "--id",
+        "soraswap_tick",
+        "--outcome",
+        "failure",
+        "--from-height",
+        "10",
+        "--to-height",
+        "20",
+        "--filter",
+        "step_index = 0",
+        "--select",
+        "block_height,trigger_id,message",
+        "--limit",
+        "5",
+        "--all",
+    ]);
+    assert!(list.list.all);
+    let query = list.to_query().expect("collection query");
+    assert_eq!(
+        query.filter.as_ref().map(ToString::to_string).as_deref(),
+        Some(
+            r#"step_index = 0 and trigger_id = "soraswap_tick" and outcome = "Failure" and block_height >= 10 and block_height <= 20"#
+        )
+    );
+    assert_eq!(query.limit, Some(5));
+    assert_eq!(
+        query.select.as_ref().map(Vec::len),
+        Some(3),
+        "the projection is the shared `--select` control"
+    );
+    // History order is fixed, and the bespoke scan window is gone.
+    for (flags, code) in [
+        (&["--sort", "block_height"][..], "invalid_sort"),
+        (&["--include-total"][..], "invalid_include_total"),
+        (&["--filter", "from_height >"][..], "invalid_filter"),
+    ] {
+        let error = parse(flags).to_query().expect_err("rejected control");
+        assert_eq!(error.code(), code, "{flags:?}");
+    }
+    let error = Args::try_parse_from([
+        "iroha",
+        "trigger",
+        "completed",
+        "list",
+        "--scan-limit-blocks",
+        "5",
+    ])
+    .expect_err("the retired scan window flag is rejected");
+    assert!(error.to_string().contains("--scan-limit-blocks"));
+}
+
 fn json_output() -> OutputSelection {
     OutputSelection::resolve(Some(OutputFormatArg::Json), true, false)
 }

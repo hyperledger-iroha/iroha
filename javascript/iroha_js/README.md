@@ -1071,6 +1071,50 @@ explicit `networkPrefix` (an integer in `0..65535`, `369` for Taira). Obtain it
 from the selected deployment alongside its exact `NetworkId`; there is no
 implicit network default. Decoders take `(bytes, networkPrefix, options)`.
 
+### Norito layouts
+
+The shared pure-JS value codec supports the [dense layout](../../norito.md#dense-layout-header-minor-1).
+`validateNoritoFrame` selects `layout: "current"` from header minor `0` and
+`layout: "dense"` from minor `1`; `expectedLayout` can constrain that selection.
+Dense requires zero flags, shortest-form varints and no header padding. Unknown
+minors, incompatible flags, truncation and trailing bytes are rejected. Existing
+minor-0 bytes and the default compact encoding are unchanged.
+Other typed frame APIs continue to enforce their current-layout contracts.
+
+Bare transfer payloads have no header: pass `{ layout: "dense" }` explicitly as
+the final options argument to `buildBrowserTransferPayload`,
+`browserTransactionPayloadHashHex` and `validateBrowserTransferSignable` (after
+its constraints argument). Pass `{ layout: "dense", format: "bare" }` to
+`finalizeBrowserSignedTransaction` and `browserSignedTransactionHashHex` for an
+offline bare signed archive. Sign the dense payload's hash. Dense has no governed
+versioned submission mapping; these archives must not be submitted as current
+version-1 transactions. Omitting options preserves the current versioned output.
+
+Transfer serialization, validation and hashing are JavaScript; account/address
+admission still requires the verified native owner. Native instruction codecs and
+offline transaction builders also accept an exact final `{ layout: "current" | "dense" }`
+options object. Signed builders, `decodeSignedTransaction`, `encodeSignedTransaction`,
+`hashSignedTransaction`, `hashSignedTransactionPayload`, `resignSignedTransaction`
+and `finalizeSignedTransaction` additionally accept `format: "bare" | "framed"`;
+the default is current versioned bytes. Dense signed operations require an explicit
+bare or framed format. Finalization takes a bare payload and selects the signed
+output format. Headered decoders verify that the header agrees with the selected
+layout; bare bytes require a caller-owned selection. They never detect a layout
+from payload contents.
+
+`decodeTransactionPayloadJson` and `encodeTransactionPayloadJson` exchange exact
+native model JSON text, preserving large integers. `decodeSignedTransaction` with
+`parseJson: false` supplies the same lossless text for `encodeSignedTransaction`.
+`signTransactionPayload` signs a typed payload for the caller's pinned `NetworkId`;
+it and `transactionPayloadSigningHash` default to bare payloads and accept explicit
+framed payloads. These native paths reuse Rust's `WireLayout` codecs and signing
+APIs. Fixture coverage includes every dense vector and all 27 typed RPC transaction
+pairs, hashes and deterministic signatures. Native JS tests skip only when the
+addon is absent; the pure-JS fixture tests run independently. None of these offline
+codec APIs activates dense layout on a network.
+The ergonomic instruction-object adapter keeps its existing variant coverage;
+use the canonical native model JSON APIs for the complete shared fixture corpus.
+
 ### External transaction signing
 
 Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
@@ -1146,7 +1190,7 @@ already use the exact canonical encoding; use an object when canonicalization
 is desired. Transfer quantities use positive plain-decimal syntax, at most 28
 fractional digits, and the current Rust 64-byte signed-integer positive range
 (`2^511 - 1`).
-The codec only returns verified bytes and the canonical compact-entrypoint
+The codec returns verified bytes and the selected layout's canonical entrypoint
 pipeline hash: importing it does not enable Nexus, connect a wallet, submit to
 Torii, or turn on live-send behavior. Applications must authorize and perform
 those steps separately.
@@ -5391,56 +5435,9 @@ const protectedNamespaces = await torii.getProtectedNamespaces({
 });
 console.log(protectedNamespaces.namespaces); // ["apps", "system"]
 
-const registeredTriggers = await torii.listTriggers({
-  namespace: "apps",
-  authority: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-  limit: 5,
-});
-registeredTriggers.items.forEach((trigger) => {
-  console.log(trigger.id, trigger.action.Mint?.Asset?.object);
-});
-
-const trigger = await torii.getTrigger("apps::mint_rewards");
-if (!trigger) {
-  await torii.registerTrigger({
-    id: "apps::mint_rewards",
-    namespace: "apps",
-    action: {
-      Mint: {
-        Asset: {
-          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-          value: "5",
-        },
-      },
-    },
-  });
-  const draft = await torii.registerTriggerTyped({
-    id: "apps::mint_rewards",
-    namespace: "apps",
-    action: {
-      Mint: {
-        Asset: {
-          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-          value: "5",
-        },
-      },
-    },
-  });
-  if (draft) {
-    console.log(`trigger queued ok=${draft.ok} tx_instructions=${draft.tx_instructions.length}`);
-  }
-}
-
-await torii.deleteTrigger("apps::archived");
-await torii.deleteTriggerTyped("apps::archived");
-const pending = await torii.queryTriggers({ limit: 10 });
-console.log("latest triggers", pending.items.map((item) => item.id));
-
-// Helpers are available for building the Norito action payloads expected by
-// `/v1/triggers`. The builders serialise the action to base64 so Torii receives
-// the canonical Norito representation regardless of how the instructions were
+// Triggers are registered and removed through transactions; Torii has no
+// `/v1/triggers` registry routes. The builders below serialise a trigger
+// action to canonical base64 Norito regardless of how the instructions were
 // assembled in JS.
 const timeAction = buildTimeTriggerAction({
   authority,
@@ -5455,11 +5452,6 @@ const timeAction = buildTimeTriggerAction({
   repeats: 10,
   metadata: { label: "hourly faucet" },
 });
-await torii.registerTrigger({
-  id: "apps::mint_rose_hourly",
-  namespace: "apps",
-  action: timeAction,
-});
 
 const precommitAction = buildPrecommitTriggerAction({
   authority,
@@ -5467,11 +5459,7 @@ const precommitAction = buildPrecommitTriggerAction({
     buildMintTriggerRepetitionsInstruction({ triggerId: "apps::guardian", repetitions: 1 }),
   ],
 });
-await torii.registerTrigger({
-  id: "apps::guardian_refill",
-  namespace: "apps",
-  action: precommitAction,
-});
+console.log(timeAction.length, precommitAction.length);
 ```
 
 The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are

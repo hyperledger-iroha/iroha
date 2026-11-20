@@ -396,6 +396,8 @@ def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
             # The Google first-device sign-up key JNI owner retired at bridge ABI 29.
             "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve",
             "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore",
+            # Superseded by the explicit-layout signed-transaction JSON decoder.
+            "connect_norito_decode_signed_transaction_json",
         },
         "csharp": {
             'connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1',
@@ -406,6 +408,7 @@ def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
             "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
             "connect_norito_kagemusha_device_response_authenticator_v1_verify",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+            "connect_norito_decode_signed_transaction_json",
         },
         "node": {"privateSettlementVerifyAuditorCapsuleResponseV1", "validationFeeHijiriQuoteRequestV1", "validationFeeVerifyHijiriQuoteResponseV1"},
         "python": {"private_settlement_verify_auditor_capsule_response_v1", "validation_fee_hijiri_quote_request_v1", "validation_fee_verify_hijiri_quote_response_v1"},

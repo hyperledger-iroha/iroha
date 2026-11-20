@@ -704,8 +704,6 @@ __all__ = [
     "PeerTelemetryConfig",
     "PeerTelemetryLocation",
     "PeerTelemetryInfo",
-    "TriggerRecord",
-    "TriggerListPage",
     "LoggerConfig",
     "NetworkConfig",
     "QueueConfig",
@@ -2499,65 +2497,6 @@ class SubscriptionUsageDraft(AppApiTransactionDraft):
             signing_message_b64=signing_message_b64,
             subscription_id=subscription_id,
         )
-
-
-@dataclass(frozen=True)
-class TriggerRecord:
-    """Trigger definition surfaced by listing/query endpoints."""
-
-    id: str
-    action: Dict[str, Any]
-    metadata: Dict[str, Any]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerRecord":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger record must be an object")
-        trigger_id = payload.get("id")
-        if not isinstance(trigger_id, str) or not trigger_id:
-            raise RuntimeError("trigger record missing `id`")
-        action = payload.get("action")
-        if not isinstance(action, Mapping):
-            raise RuntimeError("trigger record missing `action` object")
-        metadata_value = payload.get("metadata", {})
-        if metadata_value is None:
-            metadata: Dict[str, Any] = {}
-        elif isinstance(metadata_value, Mapping):
-            metadata = dict(metadata_value)
-        else:
-            raise RuntimeError("trigger record `metadata` must be an object when present")
-        return cls(
-            id=trigger_id,
-            action=dict(action),
-            metadata=metadata,
-            raw=dict(payload),
-        )
-
-
-@dataclass(frozen=True)
-class TriggerListPage:
-    """Paginated trigger listing."""
-
-    items: List[TriggerRecord]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TriggerListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("trigger listing payload must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("trigger listing `items` must be a list")
-        total_value = payload.get("total", len(items_value))
-        try:
-            total = int(total_value)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("trigger listing `total` must be numeric") from exc
-        items = [TriggerRecord.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
 
 
 @dataclass(frozen=True)
@@ -6228,117 +6167,6 @@ class ToriiClient(
         return ProtectedNamespacesStatus(found=found, namespaces=namespaces)
 
     # ------------------------------------------------------------------
-    # Trigger registry helpers
-    # ------------------------------------------------------------------
-    def list_triggers(
-        self,
-        *,
-        namespace: Optional[str] = None,
-        authority: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> TriggerListPage:
-        """List triggers via ``GET /v1/triggers`` applying optional filters."""
-
-        params: Dict[str, Any] = {}
-        namespace_value = self._normalize_optional_string(namespace, "triggers.namespace")
-        if namespace_value is not None:
-            params["namespace"] = namespace_value
-        authority_value = self._normalize_optional_string(authority, "triggers.authority")
-        if authority_value is not None:
-            params["authority"] = authority_value
-        limit_value = self._normalize_optional_int(limit, "triggers.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = self._normalize_optional_int(offset, "triggers.offset", allow_zero=True)
-        if offset_value is not None:
-            params["offset"] = offset_value
-        payload = self._get_json_object(
-            "/v1/triggers",
-            params=params or None,
-            context="trigger listing",
-        )
-        return TriggerListPage.from_payload(payload)
-
-    def get_trigger(self, trigger_id: str) -> Optional[TriggerRecord]:
-        """Fetch a trigger definition, returning ``None`` when missing."""
-
-        normalized_id = self._require_non_empty_string(trigger_id, "trigger_id")
-        response = self._request("GET", f"/v1/triggers/{normalized_id}")
-        self._expect_status(response, {200, 404})
-        if response.status_code == 404 or not response.content:
-            return None
-        payload = self._ensure_mapping(response.json(), "trigger lookup")
-        return TriggerRecord.from_payload(payload)
-
-    def register_trigger(self, trigger: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Register or update a trigger via ``POST /v1/triggers``."""
-
-        if not isinstance(trigger, Mapping):
-            raise TypeError("trigger must be a mapping")
-        return self._post_json(
-            "/v1/triggers",
-            dict(trigger),
-            context="trigger registration",
-            expected_status=(200, 201, 202),
-        )
-
-    def delete_trigger(self, trigger_id: str) -> bool:
-        """Delete a trigger by id, returning ``False`` when already absent."""
-
-        response = self._request("DELETE", f"/v1/triggers/{trigger_id}")
-        self._expect_status(response, {200, 202, 204, 404})
-        return response.status_code != 404
-
-    def query_triggers(
-        self,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        query_name: Optional[str] = None,
-    ) -> TriggerListPage:
-        """Query triggers via ``POST /v1/triggers/query``."""
-
-        payload: Dict[str, Any] = {}
-        if filter is not None:
-            if not isinstance(filter, Mapping):
-                raise TypeError("triggers.query.filter must be a mapping")
-            payload["filter"] = dict(filter)
-        if sort is not None:
-            payload["sort"] = sort
-        limit_value = self._normalize_optional_int(limit, "triggers.query.limit")
-        if limit_value is not None:
-            payload["limit"] = limit_value
-        offset_value = self._normalize_optional_int(
-            offset,
-            "triggers.query.offset",
-            allow_zero=True,
-        )
-        if offset_value is not None:
-            payload["offset"] = offset_value
-        fetch_size_value = self._normalize_optional_int(
-            fetch_size,
-            "triggers.query.fetch_size",
-        )
-        if fetch_size_value is not None:
-            payload["fetch_size"] = fetch_size_value
-        query_name_value = self._normalize_optional_string(
-            query_name,
-            "triggers.query.query_name",
-        )
-        if query_name_value is not None:
-            payload["query_name"] = query_name_value
-        response = self._post_json(
-            "/v1/triggers/query",
-            payload,
-            context="trigger query",
-        )
-        return TriggerListPage.from_payload(response)
-
-    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod
@@ -7133,6 +6961,16 @@ class ToriiClient(
             allow_retry=canonical_auth is None,
             allow_redirects=False,
         )
+        return self._decode_collection_response(response, context)
+
+    @staticmethod
+    def _decode_collection_response(response: requests.Response, context: str) -> Any:
+        """Decode one collection page response (exact decimals, no floats).
+
+        Any status other than 200 raises the typed
+        :class:`~iroha_torii_client.errors.ToriiError` of Torii's error envelope.
+        """
+
         if response.status_code != 200:
             raise error_for_response(response, expected=(200,), context=context)
         raw = _read_collection_page(response, context)

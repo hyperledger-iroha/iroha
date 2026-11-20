@@ -120,7 +120,9 @@ class KagemushaWalletSetupV1Test {
         }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(21, first = ByteArray(21_093)) }
         KagemushaWalletSetupInputV1(24)
-        KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1), second = byteArrayOf(2))
+        KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1), second = byteArrayOf(2), third = byteArrayOf(3))
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1), second = byteArrayOf(2)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1), second = byteArrayOf(2), third = ByteArray(16 * 1024 * 1024 + 1)) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(25, identity = id, first = byteArrayOf(1)) }
         for (status in 31..35) {
             val bytes = if (status == 31) ByteArray(21_092) { 1 } else if (status == 33) id else byteArrayOf()

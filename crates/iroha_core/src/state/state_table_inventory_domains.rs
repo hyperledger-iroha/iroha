@@ -189,6 +189,37 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "KAGEMUSHA Spartan module name, instruction wire IDs and Norito payload schema names for verifier installation, activation and Unload.",
+        literals: &[
+            r"iroha.kagemusha.spartan.Activate.v1",
+            r"iroha.kagemusha.spartan.InstallPrograms.v1",
+            r"iroha.kagemusha.spartan.Unload.v1",
+            r"iroha.kagemusha.spartan.activate.v1",
+            r"iroha.kagemusha.spartan.programs.install.v1",
+            r"iroha.kagemusha.spartan.unload.v1",
+            r"iroha.kagemusha.spartan.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Release catalog module name that drafts the scoped State read permission.",
+        literals: &[r"iroha.permission.state_scope.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Wire identity of Taira's certified scoped-read permission schedule.",
+        literals: &[r"iroha.runtime.taira_read_scope.schedule.v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Identity and signature domains of the four-seat scoped-read activation plan.",
+        literals: &[
+            r"iroha:runtime:taira-read-scope:plan:v1\0",
+            r"iroha:runtime:taira-read-scope:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Wire identity of the one certified Taira activation; no selection binds it and it hashes no State content.",
         literals: &[r"iroha.runtime.taira_time_ironwood.schedule.v1"],
     },

@@ -1216,18 +1216,6 @@ const SORAFS_ORDERBOOK_WEBSOCKET_STREAM_OPTION_KEYS = new Set([
   "closeOnReturn",
 ]);
 const SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155;
-const ITERABLE_QUERY_OPTION_KEYS = new Set([
-  "limit",
-  "offset",
-  "filter",
-  "sort",
-  "fetchSize",
-  "countMode",
-  "queryName",
-  "select",
-  "signal",
-  CANONICAL_AUTH_FIELD,
-]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type", "signal", CANONICAL_AUTH_FIELD]);
 export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
@@ -1347,14 +1335,6 @@ export function decodePdpCommitmentHeader(headers) {
  * @property {string} [verdictIdHex]
  * @property {boolean} [requireVerdict]
  * @property {boolean} [onlyMissingVerdict]
- *
- * @typedef {IterableListOptions & {
- *   fetchSize?: number;
- *   fetch_size?: number;
- *   queryName?: string;
- *   query_name?: string;
- *   select?: ReadonlyArray<string | Record<string, unknown>>;
- * }} IterableQueryOptions
  *
  * @typedef {IterableListOptions & {
  *   pageSize?: number;
@@ -8800,158 +8780,6 @@ export class ToriiClient {
   }
 
   /**
-   * List registered triggers (`GET /v1/triggers`).
-   * @param {TriggerListOptions} [options]
-   * @returns {Promise<ToriiTriggerListPage>}
-   */
-  async listTriggers(options = {}) {
-    const { signal, params } = buildTriggerListQuery(options);
-    const response = await this._request("GET", "/v1/triggers", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeTriggerListResponse(payload, "trigger list response");
-  }
-
-  /**
-   * Fetch a trigger definition (`GET /v1/triggers/{trigger_id}`).
-   * @param {string} triggerId
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiTriggerRecord | null>}
-  */
-  async getTrigger(triggerId, options = {}) {
-    const normalizedId = requireNonEmptyString(triggerId, "triggerId");
-    const { signal } = normalizeSignalOnlyOption(options, "getTrigger");
-    const response = await this._request(
-      "GET",
-      `/v1/triggers/${encodeURIComponent(normalizedId)}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-      },
-    );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      return null;
-    }
-    return normalizeTriggerRecord(payload, "trigger response");
-  }
-
-  /**
-   * Register or update a trigger (`POST /v1/triggers`).
-   * @param {ToriiTriggerUpsertRequest} trigger
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<Record<string, unknown> | null>}
-   */
-  async registerTrigger(trigger, options = {}) {
-    const payload = normalizeTriggerUpsertPayload(trigger);
-    const { signal } = normalizeSignalOnlyOption(options, "registerTrigger");
-    const response = await this._request("POST", "/v1/triggers", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200, 201, 202]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * Register or update a trigger and normalise the response payload.
-   * @param {ToriiTriggerUpsertRequest} trigger
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiTriggerMutationResponse | null>}
-   */
-  async registerTriggerTyped(trigger, options = {}) {
-    const payload = await this.registerTrigger(trigger, options);
-    if (!payload) {
-      return null;
-    }
-    return normalizeTriggerMutationResponse(payload, "registerTrigger response");
-  }
-
-  /**
-   * Delete a trigger (`DELETE /v1/triggers/{trigger_id}`).
-   * @param {string} triggerId
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<Record<string, unknown> | null>}
-   */
-  async deleteTrigger(triggerId, options = {}) {
-    const normalizedId = requireNonEmptyString(triggerId, "triggerId");
-    const { signal } = normalizeSignalOnlyOption(options, "deleteTrigger");
-    const response = await this._request(
-      "DELETE",
-      `/v1/triggers/${encodeURIComponent(normalizedId)}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200, 202, 204, 404]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * Delete a trigger and normalise the response payload when available.
-   * @param {string} triggerId
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiTriggerMutationResponse | null>}
-   */
-  async deleteTriggerTyped(triggerId, options = {}) {
-    const payload = await this.deleteTrigger(triggerId, options);
-    if (!payload) {
-      return null;
-    }
-    return normalizeTriggerMutationResponse(payload, "deleteTrigger response");
-  }
-
-  /**
-   * Query triggers with structured filters (`POST /v1/triggers/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiTriggerListPage>}
-   */
-  async queryTriggers(options = {}) {
-    const normalizedOptions = normalizeIterableQueryOptions(
-      options,
-      "trigger query options",
-    );
-    const { signal, ...rest } = normalizedOptions;
-    const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
-    const response = await this._request("POST", "/v1/triggers/query", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(envelope),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeTriggerListResponse(payload, "trigger query response");
-  }
-
-  /**
-   * Iterate triggers using the `GET /v1/triggers` endpoint.
-   * @param {TriggerIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiTriggerRecord, void, unknown>}
-   */
-  iterateTriggers(options = {}) {
-    return this._iterateIterable(this.listTriggers, options);
-  }
-
-  /**
-   * Iterate triggers using the structured query endpoint.
-   * @param {TriggerQueryIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiTriggerRecord, void, unknown>}
-   */
-  iterateTriggersQuery(options = {}) {
-    return this._iterateIterable(this.queryTriggers, options);
-  }
-
-  /**
    * Create a subscription plan (`POST /v1/subscriptions/plans`).
    * @param {SubscriptionPlanCreateRequest} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
@@ -10683,97 +10511,6 @@ export class ToriiClient {
     return typeof normalizePage === JS_TYPE_FUNCTION ? normalizePage(base) : base;
   }
 
-  _iterateIterable(fetchPage, options = {}) {
-    const iteratorLabel =
-      typeof fetchPage === JS_TYPE_FUNCTION && fetchPage.name
-        ? `${fetchPage.name} iterator options`
-        : "iterator options";
-    const normalizedOptions = ToriiClient._normalizeIterableOptions(
-      options,
-      iteratorLabel,
-    );
-    const {
-      pageSize: rawPageSize,
-      maxItems,
-      signal,
-      ...rest
-    } = normalizedOptions;
-    const normalizedOffset = ToriiClient._normalizeOffset(rest.offset);
-    const baseOptions = { ...rest };
-    if (baseOptions.offset !== undefined) {
-      delete baseOptions.offset;
-    }
-    const overallLimit =
-      maxItems === undefined || maxItems === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(maxItems, "maxItems", {
-            allowZero: false,
-          });
-    const preferredPageSize =
-      rawPageSize === undefined || rawPageSize === null
-        ? baseOptions.limit
-        : rawPageSize;
-    const defaultPageSize = ToriiClient._normalizeUnsignedInteger(
-      preferredPageSize ?? DEFAULT_PAGE_SIZE,
-      preferredPageSize === undefined ? "pageSize" : "limit",
-      { allowZero: false },
-    );
-    if (baseOptions.limit !== undefined) {
-      delete baseOptions.limit;
-    }
-    const self = this;
-    return (async function* iterator() {
-      let offset = normalizedOffset;
-      let remaining = overallLimit;
-      let produced = 0;
-      let knownTotal = null;
-      while (true) {
-        let pageLimit = defaultPageSize;
-        if (remaining !== null) {
-          pageLimit = Math.min(pageLimit, remaining);
-          if (pageLimit <= 0) {
-            return;
-          }
-        }
-        const pageOptions = {
-          ...baseOptions,
-          limit: pageLimit,
-          offset,
-          signal,
-        };
-        const page = await fetchPage.call(self, pageOptions);
-        if (page && page.total !== undefined && page.total !== null) {
-          const parsedTotal = Number(page.total);
-          if (numberIsFinite(parsedTotal)) {
-            knownTotal = Math.max(0, parsedTotal);
-          }
-        }
-        const items = arrayIsArray(page?.items) ? page.items : [];
-        if (items.length === 0) {
-          return;
-        }
-        for (const item of items) {
-          yield item;
-          produced += 1;
-          if (remaining !== null) {
-            remaining -= 1;
-            if (remaining <= 0) {
-              return;
-            }
-          }
-        }
-        if (
-          page?.hasMore === false ||
-          (knownTotal !== null && produced >= knownTotal) ||
-          items.length < pageLimit
-        ) {
-          return;
-        }
-        offset += items.length;
-      }
-    })();
-  }
-
   _iterateOffsetIterable(
     fetchPage,
     options = {},
@@ -11805,82 +11542,6 @@ export class ToriiClient {
     );
   }
 
-  static _buildIterableQueryEnvelope(options = {}) {
-    const pagination = {
-      offset: ToriiClient._normalizeOffset(options.offset),
-    };
-    if (options.limit !== undefined && options.limit !== null) {
-      pagination.limit = ToriiClient._normalizeUnsignedInteger(options.limit, "limit", {
-        allowZero: true,
-      });
-    }
-    const envelope = {
-      pagination,
-      sort: ToriiClient._encodeSortArray(options.sort),
-    };
-    const filterObject = ToriiClient._normalizeFilterObject(options.filter);
-    if (filterObject !== undefined) {
-      envelope.filter = filterObject;
-    }
-    if (options.fetchSize !== undefined && options.fetchSize !== null) {
-      envelope.fetch_size = ToriiClient._normalizeUnsignedInteger(
-        options.fetchSize,
-        "fetchSize",
-        { allowZero: false },
-      );
-    }
-    const countMode = ToriiClient._normalizeCountModeOption(options.countMode, "countMode");
-    if (countMode !== undefined) {
-      envelope.count_mode = countMode;
-    }
-    if (options.queryName !== undefined && options.queryName !== null) {
-      const name = String(options.queryName).trim();
-      if (!name) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_STRING,
-          "queryName must be a non-empty string",
-          "queryName",
-        );
-      }
-      envelope.query = name;
-    }
-    if (options.select !== undefined && options.select !== null) {
-      if (!arrayIsArray(options.select)) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          "select must be an array of projection field paths or objects",
-          "select",
-        );
-      }
-      envelope.select = options.select.map((entry, index) =>
-        ToriiClient._normalizeSelectEntry(entry, `select[${index}]`),
-      );
-    }
-    return envelope;
-  }
-
-  static _normalizeSelectEntry(entry, context) {
-    if (typeof entry === JS_TYPE_STRING) {
-      const fieldPath = entry.trim();
-      if (!fieldPath) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_STRING,
-          `${context} must be a non-empty field path`,
-          context,
-        );
-      }
-      return fieldPath;
-    }
-    if (isPlainObject(entry)) {
-      return entry;
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be a field-path string or plain object`,
-      context,
-    );
-  }
-
   static _normalizeCountModeOption(value, context = "countMode") {
     if (value === undefined || value === null) {
       return undefined;
@@ -11893,111 +11554,6 @@ export class ToriiClient {
       ValidationErrorCode.INVALID_STRING,
       `${context} must be "bounded" or "exact"`,
       context,
-    );
-  }
-
-  static _normalizeFilterObject(filter) {
-    if (filter === undefined || filter === null) {
-      return undefined;
-    }
-    if (typeof filter === JS_TYPE_STRING) {
-      const trimmed = filter.trim();
-      if (!trimmed) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_STRING,
-          "filter string must be non-empty",
-          "filter",
-        );
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch (error) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_JSON_VALUE,
-          `failed to parse filter JSON: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          "filter",
-          error instanceof Error ? error : undefined,
-        );
-      }
-      return ToriiClient._requirePlainObject(parsed, "filter");
-    }
-    if (typeof filter === JS_TYPE_OBJECT) {
-      return ToriiClient._requirePlainObject(filter, "filter");
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "filter must be a string or plain object",
-      "filter",
-    );
-  }
-
-  static _encodeSortArray(sort) {
-    if (sort === undefined || sort === null) {
-      return [];
-    }
-    if (arrayIsArray(sort)) {
-      return sort.map((entry, index) => {
-        if (!entry || typeof entry !== JS_TYPE_OBJECT || typeof entry.key !== JS_TYPE_STRING) {
-          throw createValidationError(
-            ValidationErrorCode.INVALID_OBJECT,
-            `sort[${index}] must provide a key`,
-            `sort[${index}]`,
-          );
-        }
-        const key = entry.key.trim();
-        if (!key) {
-          throw createValidationError(
-            ValidationErrorCode.INVALID_STRING,
-            `sort[${index}] key must be non-empty`,
-            `sort[${index}].key`,
-          );
-        }
-        const order = ToriiClient._normalizeSortOrder(
-          entry.order,
-          `sort[${index}].order`,
-        );
-        return { key, order };
-      });
-    }
-    if (typeof sort === JS_TYPE_STRING) {
-      return sort
-        .split(",")
-        .map((token) => token.trim())
-        .filter((token) => token.length > 0)
-        .map((token, index) => {
-          const [rawKey, rawOrder] = token.split(":");
-          if (!rawKey) {
-            throw createValidationError(
-              ValidationErrorCode.INVALID_OBJECT,
-              `sort token at index ${index} must include a key`,
-              `sort[${index}]`,
-            );
-          }
-          const key = rawKey.trim();
-          if (!key) {
-            throw createValidationError(
-              ValidationErrorCode.INVALID_STRING,
-              `sort token at index ${index} must include a key`,
-              `sort[${index}]`,
-            );
-          }
-          const order =
-            rawOrder === undefined
-              ? "asc"
-              : ToriiClient._normalizeSortOrder(
-                  rawOrder,
-                  `sort token at index ${index} order`,
-                );
-          return { key, order };
-        });
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "sort must be a string or array of {key, order}",
-      "sort",
     );
   }
 
@@ -18808,7 +18364,6 @@ const {
   normalizeMinistryAgendaProposalDraftRequest,
   normalizeMinistryAgendaProposalDraftResponse,
   normalizeMinistryAgendaProposalGetResponse,
-  normalizeTriggerMutationResponse,
 } = createToriiGovernanceNormalizers({
   LocalSigningContext,
   NetworkId,
@@ -27015,35 +26570,6 @@ function buildKaigiCallEventParams(options = {}) {
   return objectKeys(params).length === 0 ? undefined : params;
 }
 
-function buildTriggerListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined || options === null
-      ? undefined
-      : requirePlainObjectOption(options, "trigger list options", {
-          message: "must be an object",
-        });
-  const { signal } = normalizeSignalOption(normalizedOptions ?? undefined, "triggers");
-  const params = {};
-  const source = normalizedOptions ?? {};
-  if (source.namespace !== undefined && source.namespace !== null) {
-    params.namespace = requireNonEmptyString(source.namespace, "triggers.namespace");
-  }
-  if (source.authority !== undefined && source.authority !== null) {
-    params.authority = normalizeAccountId(source.authority, "triggers.authority");
-  }
-  if (source.limit !== undefined && source.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(source.limit, "triggers.limit", {
-      allowZero: false,
-    });
-  }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(source.offset, "triggers.offset", {
-      allowZero: true,
-    });
-  }
-  return { signal, params: objectKeys(params).length === 0 ? undefined : params };
-}
-
 function normalizeSignalOption(options, context) {
   if (options === undefined) {
     return { signal: undefined };
@@ -27219,32 +26745,6 @@ function assertSupportedOptionKeys(record, allowedKeys, context) {
 function normalizeIterableListOptions(options, context, allowedKeys = ITERABLE_LIST_OPTION_KEYS) {
   const normalized = ToriiClient._normalizeIterableOptions(options, context, allowedKeys);
   assertSupportedOptionKeys(normalized, allowedKeys, context);
-  return normalized;
-}
-
-function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) {
-  const allowedKeys = new Set([
-    ...ITERABLE_QUERY_OPTION_KEYS,
-    ...extraAllowedKeys,
-    "fetch_size",
-    "count_mode",
-    "query_name",
-  ]);
-  const normalized = ToriiClient._normalizeIterableOptions(options, context, allowedKeys);
-  if (normalized.fetch_size !== undefined && normalized.fetchSize === undefined) {
-    normalized.fetchSize = normalized.fetch_size;
-  }
-  if (normalized.count_mode !== undefined && normalized.countMode === undefined) {
-    normalized.countMode = normalized.count_mode;
-  }
-  if (normalized.query_name !== undefined && normalized.queryName === undefined) {
-    normalized.queryName = normalized.query_name;
-  }
-  delete normalized.fetch_size;
-  delete normalized.count_mode;
-  delete normalized.query_name;
-  const resolvedAllowedKeys = new Set([...ITERABLE_QUERY_OPTION_KEYS, ...extraAllowedKeys]);
-  assertSupportedOptionKeys(normalized, resolvedAllowedKeys, context);
   return normalized;
 }
 
@@ -28019,59 +27519,6 @@ function normalizeAccountPermissionItem(value, context) {
   return { ...record, name };
 }
 
-function normalizeTriggerUpsertPayload(input) {
-  const record = ensureRecord(input, "registerTrigger payload");
-  const payload = cloneJsonValue(record, "registerTrigger.payload");
-  const id = requireNonEmptyString(
-    record.id,
-    "registerTrigger.id",
-  );
-  payload.id = id;
-  delete payload.trigger_id;
-  delete payload.triggerId;
-
-  const actionValue =
-    record.action ??
-    record.payload ??
-    record.definition ??
-    record.trigger ??
-    record.triggerDefinition ??
-    payload.action;
-  if (actionValue === undefined || actionValue === null) {
-    rejectType("registerTrigger.action is required");
-  }
-  if (typeof actionValue === JS_TYPE_STRING) {
-    const trimmed = actionValue.trim();
-    if (trimmed.length === 0) {
-      rejectType("registerTrigger.action must be a non-empty string when provided as base64");
-    }
-    try {
-      const decoded = strictDecodeBase64(trimmed);
-      payload.action = Buffer.from(decoded).toString("base64");
-    } catch {
-      rejectType("registerTrigger.action must be a valid base64 string");
-    }
-  } else if (!arrayIsArray(actionValue) && typeof actionValue === JS_TYPE_OBJECT) {
-    payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
-  } else {
-    rejectType("registerTrigger.action must be an object or base64 string produced by Norito serialization");
-  }
-  delete payload.payload;
-  delete payload.definition;
-  delete payload.trigger;
-  delete payload.triggerDefinition;
-
-  if (payload.metadata === null || payload.metadata === undefined) {
-    delete payload.metadata;
-  } else if (
-    typeof payload.metadata !== JS_TYPE_OBJECT ||
-    arrayIsArray(payload.metadata)
-  ) {
-    rejectType("registerTrigger.metadata must be an object when provided");
-  }
-  return payload;
-}
-
 function normalizeSubscriptionPlanCreateRequest(input) {
   const record = ensureRecord(input, "createSubscriptionPlan request");
   const credentials = normalizeSecretFreeAuthority(record, "createSubscriptionPlan");
@@ -28198,43 +27645,6 @@ function normalizeSubscriptionUsageRequest(input, context) {
     );
   }
   return payload;
-}
-
-function normalizeTriggerRecord(payload, context) {
-  const record = ensureRecord(payload, context);
-  const id = requireNonEmptyString(record.id, `${context}.id`);
-  const action = ensureRecord(record.action ?? {}, `${context}.action`);
-  let metadata = {};
-  if (record.metadata !== undefined && record.metadata !== null) {
-    metadata = ensureRecord(record.metadata, `${context}.metadata`);
-  }
-  return {
-    id,
-    action,
-    metadata,
-    raw: record,
-  };
-}
-
-function normalizeTriggerListResponse(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const rawItems = record.items ?? [];
-  if (!arrayIsArray(rawItems)) {
-    rejectType(`${context}.items must be an array`);
-  }
-  const items = rawItems.map((entry, index) =>
-    normalizeTriggerRecord(entry, `${context}.items[${index}]`),
-  );
-  const totalValue =
-    record.total === undefined || record.total === null
-      ? items.length
-      : ToriiClient._normalizeUnsignedInteger(record.total, `${context}.total`, {
-          allowZero: true,
-        });
-  return {
-    items,
-    total: totalValue,
-  };
 }
 
 const {

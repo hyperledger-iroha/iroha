@@ -6017,6 +6017,7 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
             // with or without a valid snapshot of another contract's invocation.
             for receipt in [
                 "runtime/taira_time_ironwood/certificate",
+                "runtime/taira_read_scope/certificate",
                 "sorafs/repair/certificate",
             ] {
                 let receipt: StatePath = receipt.parse().unwrap();

@@ -64,9 +64,13 @@ def literal(host, port):
     return f"addr:{host}:{port}#{crc(f'{host}:{port}')}"
 trusted = ", ".join(f'"k{j}@{literal("127.0.0.1", args.base_p2p_port + j)}"' for j in range(args.peers))
 for i in range(args.peers):
-    (out / "storage" / f"peer{i}").mkdir(parents=True)
-    (out / "state" / f"peer{i}").mkdir(parents=True)
+    # Like the kagami generator: one node data directory per peer, keys in secrets/ and
+    # every state path derived under state/; the peer file names only data_dir.
+    (out / "nodes" / f"peer{i}" / "state").mkdir(parents=True)
+    (out / "nodes" / f"peer{i}" / "secrets").mkdir(parents=True)
+    (out / "nodes" / f"peer{i}" / "secrets" / "validator.key").write_text(f"8926FAKEVALIDATOR{i}\n")
     (out / f"peer{i}.toml").write_text(f"""chain = "soak-test"
+data_dir = "{out}/nodes/peer{i}"
 trusted_peers = [{trusted}]
 
 [network]
@@ -74,10 +78,10 @@ address = "{literal("0.0.0.0", args.base_p2p_port + i)}"
 public_address = "{literal("127.0.0.1", args.base_p2p_port + i)}"
 
 [kura]
-store_dir = "{out}/storage/peer{i}"
+fsync_mode = "batched"
 
 [sumeragi]
-records_dir = "{out}/state/peer{i}/sumeragi-records"
+role = "validator"
 
 [logger]
 format = "compact"
@@ -106,7 +110,7 @@ DIR=$(cd "$(dirname "$0")" && pwd)
 [ "$1" = "--peer-index" ] || exit 2
 i="$2"
 FRESH=""
-if [ ! -d "$DIR/state/peer$i/sumeragi-records" ]; then FRESH="--sumeragi-assert-fresh-key"; fi
+if [ ! -d "$DIR/nodes/peer$i/state/kura-sumeragi-records" ]; then FRESH="--sumeragi-assert-fresh-key"; fi
 # Like the kagami launcher: LOG_LEVEL and LOG_FILTER reach the node, empty when unset.
 LOG_LEVEL="${LOG_LEVEL:-info}" LOG_FILTER="${LOG_FILTER:-}" nohup "$IROHAD_BIN" --config "$DIR/peer$i.toml" $FRESH >> "$DIR/peer$i.log" 2>&1 &
 echo $! > "$DIR/peer$i.pid"
@@ -144,9 +148,13 @@ def check(literal):
 for literal in config["trusted_peers"] + [config["network"]["address"], config["network"]["public_address"]]:
     check(literal)
 port = int(config["torii"]["address"].rsplit(":", 1)[1])
-store = Path(config["kura"]["store_dir"])
+# Like the node: state derives from data_dir, and the soak never restates a state path.
+assert "store_dir" not in config["kura"] and "records_dir" not in config["sumeragi"], config
+data_dir = Path(config["data_dir"])
+assert (data_dir / "secrets" / "validator.key").is_file(), "the soak keeps the peer's keys"
+store = data_dir / "state" / "kura"
 store.mkdir(parents=True, exist_ok=True)
-records = Path(config["sumeragi"]["records_dir"])
+records = data_dir / "state" / "kura-sumeragi-records"
 if "--sumeragi-assert-fresh-key" in sys.argv:
     assert not records.exists(), "the assertion is passed only at the first boot"
 records.mkdir(parents=True, exist_ok=True)
@@ -358,7 +366,11 @@ class OrchestratorRunTests(unittest.TestCase):
             self.assertTrue(any(probe["ok"] for probe in load["probes"]))
             self.assertGreater(verdict["oracles"]["O-PERF"]["checked"]["committed_tps"], 0.5)
             self.assertIn("proxy", verdict)
-            self.assertFalse((out / "net" / "state").exists())
+            # Durable state is removed after the run; configs and keys stay for inspection.
+            for index in range(4):
+                node = out / "net" / "nodes" / f"peer{index}"
+                self.assertFalse((node / "state").exists())
+                self.assertTrue((node / "secrets" / "validator.key").is_file())
             # The verdict is reproducible offline.
             self.assertEqual(soak.main(["--analyze", str(out)]), soak.EXIT_OK)
 

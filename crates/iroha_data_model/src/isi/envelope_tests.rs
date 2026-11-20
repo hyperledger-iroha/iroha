@@ -529,3 +529,90 @@ fn dense_tolerant_and_strict_registrations_keep_their_verdicts() {
     // A strict registration refuses it outright.
     assert!(decode_dense(&dense_pair(STRICT_WIRE_ID, &[0xff; 3])).is_err());
 }
+
+#[test]
+fn explicit_layout_payloads_transcode_typed_instructions_between_layouts() {
+    let _registry = RegistryGuard::test_registry();
+    let instruction = InstructionBox::from(log("transcode"));
+    let bare =
+        norito::codec::encode_bare_with_layout(&log("transcode"), norito::core::WireLayout::Dense)
+            .unwrap();
+    let (wire_id, dense) =
+        instruction_payload_with_layout(&instruction, norito::core::WireLayout::Dense).unwrap();
+    assert_eq!(
+        (wire_id, dense.as_slice()),
+        (TOLERANT_WIRE_ID, bare.as_slice())
+    );
+    let (wire_id, frame) =
+        instruction_payload_with_layout(&instruction, norito::core::WireLayout::Compact).unwrap();
+    assert_eq!(wire_id, TOLERANT_WIRE_ID);
+    assert_eq!(frame, framed_instruction_payload(&instruction).unwrap().1);
+    assert!(
+        instruction_payload_with_layout(&instruction, norito::core::WireLayout::Fixed).is_none()
+    );
+    for (layout, payload) in [
+        (norito::core::WireLayout::Dense, &dense),
+        (norito::core::WireLayout::Compact, &frame),
+    ] {
+        assert_eq!(
+            decode_instruction_with_layout(TOLERANT_WIRE_ID, payload, layout).unwrap(),
+            instruction
+        );
+    }
+    // The selection is never inferred: each payload refuses the other layout.
+    assert!(
+        decode_instruction_with_layout(TOLERANT_WIRE_ID, &dense, norito::core::WireLayout::Compact)
+            .is_err()
+    );
+    assert!(
+        decode_instruction_with_layout(TOLERANT_WIRE_ID, &frame, norito::core::WireLayout::Dense)
+            .is_err()
+    );
+    assert!(
+        decode_instruction_with_layout(TOLERANT_WIRE_ID, &dense, norito::core::WireLayout::Fixed)
+            .is_err()
+    );
+    // A strict typed decode never yields an opaque envelope: unknown IDs, truncated or extended
+    // payloads and a tolerant registration's refused bytes are errors.
+    assert!(
+        decode_instruction_with_layout(UNKNOWN_WIRE_ID, &dense, norito::core::WireLayout::Dense)
+            .is_err()
+    );
+    let mut extended = dense.clone();
+    extended.push(0);
+    for refused in [&dense[..dense.len() - 1], extended.as_slice(), &[0xff; 3]] {
+        assert!(
+            decode_instruction_with_layout(
+                TOLERANT_WIRE_ID,
+                refused,
+                norito::core::WireLayout::Dense
+            )
+            .is_err()
+        );
+    }
+    // The caller's ambient layout survives the explicit selection.
+    let _ambient = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Compact);
+    decode_instruction_with_layout(TOLERANT_WIRE_ID, &dense, norito::core::WireLayout::Dense)
+        .unwrap();
+    assert!(!norito::core::dense_layout_active());
+}
+
+#[test]
+fn explicit_layout_payloads_keep_opaque_envelopes_in_their_own_layout() {
+    let _registry = RegistryGuard::test_registry();
+    let dense = InstructionBox::from(
+        OpaqueInstructionV1::new_dense(UNKNOWN_WIRE_ID, [1_u8, 2, 3]).unwrap(),
+    );
+    assert_eq!(
+        instruction_payload_with_layout(&dense, norito::core::WireLayout::Dense).unwrap(),
+        (UNKNOWN_WIRE_ID, vec![1, 2, 3])
+    );
+    assert!(instruction_payload_with_layout(&dense, norito::core::WireLayout::Compact).is_none());
+    let framed =
+        InstructionBox::from(OpaqueInstructionV1::new(UNKNOWN_WIRE_ID, garbage_frame()).unwrap());
+    assert_eq!(
+        instruction_payload_with_layout(&framed, norito::core::WireLayout::Compact).unwrap(),
+        (UNKNOWN_WIRE_ID, garbage_frame())
+    );
+    assert!(instruction_payload_with_layout(&framed, norito::core::WireLayout::Dense).is_none());
+}
