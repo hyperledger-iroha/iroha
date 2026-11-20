@@ -159,6 +159,12 @@ fn activation_discovery_scope_deadline_and_carrier_mismatch_make_no_http() {
         )
         .is_err()
     );
+    let repeated = ServiceRead {
+        provider,
+        enrollment: &enrollment,
+        required,
+    };
+    assert!(observe_generated_service_set(&prepared, [repeated; 3], deadline).is_err());
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }
@@ -333,4 +339,14 @@ fn generated_service_observation_keeps_independent_custody_from_live_archive_cli
         observer.directory.identity().unwrap()
     );
     peers.finish();
+}
+
+#[test]
+fn separately_verified_decisions_require_the_same_height_and_certified_context() {
+    use iroha_crypto::Hash;
+    let cut = (3, Hash::new(b"authenticated header and result"));
+    let neighbor = (3, Hash::new(b"other authenticated result"));
+    assert!(consistent_cuts([cut; 3]).is_ok());
+    assert!(consistent_cuts([cut, neighbor, cut]).is_err());
+    assert!(consistent_cuts([cut, cut, (4, cut.1)]).is_err());
 }

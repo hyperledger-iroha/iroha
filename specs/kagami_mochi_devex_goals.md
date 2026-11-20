@@ -406,7 +406,13 @@ custody, signed compliance catalog installation and runtime activation are wired
 startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
 replacing its finite readiness observation. The worker services the longest-overdue provider
 on either clock first. A failed turn delays only the attempted provider. All three original
-expiries still bound every turn. Restart reconstructs each provider's native-selected
+expiries still bound every turn. After the three catalog and advertisement publications,
+startup verifies the three provider discoveries and custody records against one freshly
+authenticated Global decision. One cursor owns finality and each provider retains its own
+custody lock. Concurrent read-only verifiers join before the aggregate accepts any row.
+The common UTC and monotonic clocks start before the first proof. An active decode owner
+keeps the independent serial proof operations and requires the same certified decision across
+all three. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid

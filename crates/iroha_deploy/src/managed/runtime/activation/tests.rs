@@ -399,12 +399,12 @@ fn slow_advertisement_does_not_consume_another_providers_discovery_window() {
             elapsed.set(elapsed.get() + freshness);
             Ok(*provider)
         },
-        |index, provider, floor| {
-            assert_eq!(index, *provider);
-            assert_eq!(floor, *provider);
+        |providers, floors| {
+            assert_eq!(*providers, floors);
+            assert_eq!(floors, [0, 1, 2]);
             let observed = elapsed.get();
-            elapsed.set(observed + Duration::from_secs(1));
-            Ok(observed)
+            elapsed.set(observed + Duration::from_secs(3));
+            Ok([observed; 3])
         },
     )
     .unwrap();
@@ -424,9 +424,9 @@ fn slow_advertisement_does_not_consume_another_providers_discovery_window() {
                 Ok(())
             }
         },
-        |_, _, ()| {
+        |_, _| {
             observations.set(observations.get() + 1);
-            Ok(())
+            Ok([(); 3])
         },
     );
     assert!(result.is_err());
