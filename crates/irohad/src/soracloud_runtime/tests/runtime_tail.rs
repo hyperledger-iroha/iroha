@@ -1,4 +1,4 @@
-use ivm::error::{VmDeferral, VmErrorRef, VmTrap};
+use ivm::error::VmErrorRef;
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
 
 #[test]
