@@ -2128,6 +2128,39 @@ fn validate_reputation_archive_presence(
         }
     }
 }
+fn provider_ingest_archive_start_report(
+    error: sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1,
+) -> Report<StartError> {
+    use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+    use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+
+    // These protocol failures contain only public network identities, heights and bounds.
+    // Other native causes can carry filesystem paths or underlying I/O and codec text.
+    let report = match &error {
+        Startup::Archive { source, .. }
+            if matches!(
+                source.as_ref(),
+                Cause::ArchiveCoverageGap { .. }
+                    | Cause::ArchiveAheadOfKura { .. }
+                    | Cause::ArchiveKuraTipLagExceeded { .. }
+                    | Cause::FinalizedFork { .. }
+                    | Cause::PredecessorSubstitution { .. }
+            ) =>
+        {
+            Report::new(error).change_context(StartError::StartP2p)
+        }
+        Startup::KuraBoundary { .. } => Report::new(StartError::StartP2p)
+            .attach(
+                "finalized provider-ingest startup could not read the exact durable Kura boundary",
+            )
+            .attach_opaque(error),
+        _ => Report::new(StartError::StartP2p)
+            .attach(error.to_string())
+            .attach_opaque(error),
+    };
+    report.attach("failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup")
+}
+
 fn validate_provider_ingest_archive_presence(
     runtime_enabled: bool,
     archive_present: bool,
@@ -3392,11 +3425,7 @@ impl Iroha {
                             .sorafs_provider_ingest_retention_authority
                             .clone(),
                     )
-                    .map_err(|error| {
-                        Report::new(StartError::StartP2p).attach(format!(
-                            "failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup: {error}"
-                        ))
-                    })?;
+                    .map_err(provider_ingest_archive_start_report)?;
             if let Some(retention) = prepared.retention_authority() {
                 iroha_logger::info!(
                     authority_handle = retention.authority().handle(),
@@ -4404,9 +4433,9 @@ impl Iroha {
                 stream_token_reputation_delivery,
             )
             .map_err(|error| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to initialise qualified stream-token gateway admission: {error:#}"
-                ))
+                Report::new(error)
+                    .change_context(StartError::StartTorii)
+                    .attach("failed to initialise qualified stream-token gateway admission")
             })?
         };
         if let Some(capture) = sorafs_stream_token_admission_capture.as_ref() {
@@ -10293,6 +10322,41 @@ mod tests {
             Err("disabled SoraFS reputation runtime rejects an unexpected Sumeragi archive")
         );
     }
+    #[test]
+    fn provider_ingest_startup_reports_typed_coverage_and_keeps_private_paths_opaque() {
+        use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+        use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+        let stage = "exact Kura-tip reconciliation";
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"ingest-startup-report"),
+            ));
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::ArchiveCoverageGap {
+                network_id,
+                missing_height: 33,
+                observed_height: 34,
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(diagnostic.contains("missing height 33 before 34"));
+        let private = "private-path-must-remain-opaque";
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::InvalidStorage {
+                path: private.into(),
+                reason: "unexpected object",
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(!diagnostic.contains(private));
+    }
+
     #[test]
     fn provider_ingest_archive_presence_matches_runtime_enablement() {
         assert!(validate_provider_ingest_archive_presence(false, false).is_ok());

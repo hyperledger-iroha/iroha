@@ -401,6 +401,10 @@ discovery; a cold fetch authenticates the current provider policy and native tok
 signer against a newly observed parent decision. A private child context cannot
 select its own registry or forward its listener credentials.
 
+The daemon reports the native gateway qualification or initial pending-reconciliation phase on a
+startup refusal. Its provider-ingest archive startup report names the missing and observed heights
+for an authenticated coverage gap and keeps private filesystem and codec errors opaque.
+
 The composed cold-package workflow remains unqualified. Initial funding, governed token
 custody, signed compliance catalog installation and runtime activation are wired into the
 startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
