@@ -76,6 +76,7 @@ use std::{
 use url::Url;
 mod provider_inventory;
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
+const MAX_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";
 /// Retry classification for a redacted registry failure.
@@ -410,7 +411,7 @@ impl RegistryReadClientV1 {
             || !client.endpoint().username().is_empty()
             || client.endpoint().password().is_some()
             || timeout == Duration::ZERO
-            || timeout > Duration::from_secs(60)
+            || timeout > MAX_REGISTRY_REQUEST_TIMEOUT
             || account_chain_discriminant == 0
             || client.account().controller.single_signatory()
                 != Some(client.key_pair().public_key())
@@ -512,7 +513,8 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     ///
     /// Publication uses this entry point so the signer, private runtime client, and finalized
     /// registry reader all derive from the same bounded file image instead of reopening a path
-    /// after authenticated storage coordination has started.
+    /// after authenticated storage coordination has started. An omitted request timeout uses the
+    /// shorter of the platform default and the registry's one-minute ceiling.
     pub(crate) fn load_from_config_bytes(
         path: &Path,
         bytes: &[u8],
@@ -522,7 +524,19 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         }
         let (configuration, _) = Config::load_bytes_with_musubi_publication(path, bytes)
             .map_err(|_| invalid_public_config())?;
-        let timeout = configuration.torii_request_timeout;
+        let mut timeout = configuration.torii_request_timeout;
+        // The platform default also covers routed Torii requests. Registry reads have a
+        // shorter ceiling. Keep an explicit out-of-range request a configuration error.
+        if timeout > MAX_REGISTRY_REQUEST_TIMEOUT {
+            let source = std::str::from_utf8(bytes).map_err(|_| invalid_public_config())?;
+            let table = source
+                .parse::<toml::Table>()
+                .map_err(|_| invalid_public_config())?;
+            if table.contains_key("torii_request_timeout_ms") {
+                return Err(invalid_public_config());
+            }
+            timeout = MAX_REGISTRY_REQUEST_TIMEOUT;
+        }
         let account_chain_discriminant = configuration.account_chain_discriminant;
         Self::new(
             &AsyncClient::builder(configuration)
@@ -861,7 +875,7 @@ impl RegistrySigningClientV1 {
         let account_chain_discriminant = configuration.account_chain_discriminant;
         configuration.torii_request_timeout = configuration
             .torii_request_timeout
-            .min(Duration::from_secs(60));
+            .min(MAX_REGISTRY_REQUEST_TIMEOUT);
         let client = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
             Client::new(configuration).map_err(|_| {
@@ -3004,6 +3018,58 @@ private_key = "{}"
             client.account_chain_discriminant()
         );
     }
+    #[test]
+    fn generated_registry_reader_and_signer_share_the_bounded_default() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("client.toml");
+        let identity = test_network_id(0x15);
+        fs::write(
+            temp.path().join("genesis.expected_hash"),
+            format!("{identity}\n"),
+        )
+        .unwrap();
+        let source = authenticated_reader_config("http://127.0.0.1:8080/")
+            .replace(
+                &format!("network_id = \"{identity}\""),
+                "network_id_file = \"genesis.expected_hash\"",
+            )
+            .replace("profile = \"taira\"", "chain_discriminant = 753");
+        let default = source.replace("torii_request_timeout_ms = 2000\n", "");
+        let (sdk, _) =
+            Config::load_bytes_with_musubi_publication(&path, default.as_bytes()).unwrap();
+        assert_eq!(
+            sdk.torii_request_timeout,
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT
+        );
+        for (image, expected) in [
+            (&default, Duration::from_secs(60)),
+            (&source, Duration::from_secs(2)),
+        ] {
+            let reader =
+                RegistryReadClientV1::load_from_config_bytes(&path, image.as_bytes()).unwrap();
+            let (signer, _) = RegistrySigningClientV1::load_with_publication_config_bytes(
+                &path,
+                image.as_bytes(),
+            )
+            .unwrap();
+            let signing_reader = signer.authenticated_reader().unwrap();
+            assert_eq!(reader.timeout, expected);
+            assert_eq!(signing_reader.timeout, expected);
+            assert_eq!(reader.client.torii_request_timeout(), expected);
+            assert_eq!(reader.network_id(), identity);
+            assert_eq!(reader.client.account(), signer.authority());
+            assert_eq!(reader.account_chain_discriminant(), 753);
+        }
+        // An explicitly requested platform-sized deadline retains its independent refusal.
+        let explicit = source.replace(
+            "torii_request_timeout_ms = 2000",
+            "torii_request_timeout_ms = 70000",
+        );
+        let refused =
+            RegistryReadClientV1::load_from_config_bytes(&path, explicit.as_bytes()).unwrap_err();
+        assert_eq!(refused.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+    }
+
     #[test]
     fn authenticated_config_requires_network_context_without_changing_universal_identity() {
         let path = Path::new("authenticated-reader-network-context-test.toml");

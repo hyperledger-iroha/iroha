@@ -48,6 +48,10 @@ manifest or member directory deploys that member by default and refuses `--packa
 another member. Selecting the actual workspace-root manifest or directory keeps the declared
 workspace defaults and explicit package selection, including roots which also declare a package.
 
+The authenticated registry reader uses the shorter of the SDK request timeout and 60 seconds
+when the client configuration omits `torii_request_timeout_ms`. Explicit registry request
+timeouts must be positive and at most 60 seconds.
+
 Generated publication profiles initialize their empty client journal directory before the generation
 is published. Begin, Resume and Recover require that original custody before namespace or registry
 HTTP; losing either directory refuses the action without recreating history. The shared service
