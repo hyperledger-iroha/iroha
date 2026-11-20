@@ -109,6 +109,26 @@ impl ManagedGatewayCompliance {
             provider,
             ProviderPurpose::GatewayCompliance,
         )?;
+        Self::from_authority(authority)
+    }
+
+    /// Reopen the existing private catalog writer lock to authenticate its serving head.
+    /// A missing journal cannot satisfy a maintenance read.
+    pub(super) fn read_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        let authority = ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::GatewayCompliance,
+            None,
+        )?
+        .ok_or_else(|| invalid("original gateway compliance purpose is absent"))?;
+        Self::from_authority(authority)
+    }
+
+    fn from_authority(authority: ServiceAuthority) -> Result<Self> {
         let plan = authority.gateway_compliance_plan(authority.provider_id()?)?;
         Ok(Self { authority, plan })
     }

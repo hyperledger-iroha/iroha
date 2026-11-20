@@ -53,13 +53,13 @@ pub(in crate::managed::runtime) fn observe(
     budget: &Budget,
 ) -> std::result::Result<[PromotedGeneratedCatalog; 3], Failure> {
     budget.check()?;
-    if !live[0].shares_original_for_read() {
+    let Some(renderer) = live[0].read_renderer() else {
         return observe_independently(prepared, live, expected, budget);
-    }
+    };
     let owners = crate::managed::provider_round::run(
         live.each_ref(),
         true,
-        |gateway| budget.call(|_| ManagedGatewayCompliance::open(prepared, gateway.provider())),
+        |gateway| budget.call(|_| renderer.open_catalog_reader(prepared, gateway.provider())),
         || budget.progress.unconfirmed(),
     )?;
     budget.call(|deadline| {

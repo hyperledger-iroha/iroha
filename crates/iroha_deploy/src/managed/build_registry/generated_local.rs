@@ -261,6 +261,7 @@ impl ServiceRead<'_> {
 /// network journal has one owner, and all workers join before its final source check.
 pub(in crate::managed) fn observe_generated_service_set(
     prepared: &PreparedLocalnet,
+    renderer: Option<&crate::managed::generated_service_runtime::GeneratedServiceRuntime>,
     requests: [ServiceRead<'_>; 3],
     deadline: Instant,
 ) -> Result<[GeneratedServiceObservation; 3]> {
@@ -293,7 +294,10 @@ pub(in crate::managed) fn observe_generated_service_set(
         consistent_cuts(rows.map(|observation| observation.certified_cut))?;
         return Ok(rows);
     }
-    let parent = crate::managed::service_bootstrap::ManagedServiceBootstrap::open(prepared)?;
+    let parent = match renderer {
+        Some(renderer) => renderer.open_original_bootstrap(prepared)?,
+        None => crate::managed::service_bootstrap::ManagedServiceBootstrap::open(prepared)?,
+    };
     let policies = parent.selected_policies()?;
     drop(parent);
     for (request, original) in requests.iter().zip(&policies.providers) {
@@ -302,7 +306,10 @@ pub(in crate::managed) fn observe_generated_service_set(
         }
         request.require_policy(original)?;
     }
-    let mut owner = ServiceAuthority::open_network(prepared, NetworkPurpose::ServiceObservation)?;
+    let mut owner = match renderer {
+        Some(renderer) => renderer.open_observation(prepared)?,
+        None => ServiceAuthority::open_network(prepared, NetworkPurpose::ServiceObservation)?,
+    };
     owner.validate_profile()?;
     let block = discovery_cut(&mut owner, deadline)
         .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))?;

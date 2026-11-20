@@ -504,7 +504,12 @@ pub(super) fn observe_native_set(
             enrollment: enrollments[index],
             required: floors[index],
         });
-        build_registry::observe_generated_service_set(prepared, reads, deadline)
+        build_registry::observe_generated_service_set(
+            prepared,
+            live[0].read_renderer(),
+            reads,
+            deadline,
+        )
     })?;
     Ok((currents, observed_at, observed_utc))
 }

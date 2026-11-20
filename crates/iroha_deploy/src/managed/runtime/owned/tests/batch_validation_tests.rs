@@ -554,7 +554,53 @@ fn catalog_status_round_checks_three_original_children_and_their_independent_pla
             .unwrap()
             .unwrap()
     });
-    assert!(fixture.gateways[0].shares_original_for_read());
+    assert!(fixture.gateways[0].read_renderer().is_some());
+    let renderer = fixture.gateways[0].read_renderer().unwrap();
+    let mut foreign = fixture.prepared.clone();
+    foreign.context.name.push_str("-foreign");
+    let provider = fixture.gateways[0].provider();
+    assert!(renderer.open_catalog_reader(&foreign, provider).is_err());
+    assert!(renderer.open_observation(&foreign).is_err());
+    // An observation cannot create a missing catalog purpose or take another owner's lock.
+    assert!(
+        renderer
+            .open_catalog_reader(&fixture.prepared, provider)
+            .is_err()
+    );
+    let original = crate::managed::gateway_compliance::ManagedGatewayCompliance::open(
+        &fixture.prepared,
+        provider,
+    )
+    .unwrap();
+    assert!(
+        renderer
+            .open_catalog_reader(&fixture.prepared, provider)
+            .is_err()
+    );
+    drop(original);
+    let catalog = renderer
+        .open_catalog_reader(&fixture.prepared, provider)
+        .unwrap();
+    assert!(
+        crate::managed::gateway_compliance::ManagedGatewayCompliance::open(
+            &fixture.prepared,
+            provider,
+        )
+        .is_err()
+    );
+    drop(catalog);
+    let cursor = renderer.open_observation(&fixture.prepared).unwrap();
+    let identity = cursor.directory.identity().unwrap();
+    assert!(renderer.open_observation(&fixture.prepared).is_err());
+    drop(cursor);
+    let reopened = crate::managed::service_authority::ServiceAuthority::open_network_existing(
+        &fixture.prepared,
+        crate::managed::service_authority::NetworkPurpose::ServiceObservation,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(reopened.directory.identity().unwrap(), identity);
+    drop(reopened);
     let check = |f: &Fixture, indices: [usize; 3]| {
         OwnedGateway::validate_catalog_read(
             &f.prepared,
@@ -594,7 +640,7 @@ fn enrollment_read_requires_an_admitted_stream_token_revision_before_returning_a
         block_time_ms: 1,
     };
     let limits = DecodeBudgetContext::new(norito::DecodeLimits::new(1, 1, 1, 1, 1));
-    limits.with(|| assert!(!fixture.gateways[0].shares_original_for_read()));
+    limits.with(|| assert!(fixture.gateways[0].read_renderer().is_none()));
     assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
     fixture.processes.stop().unwrap();
     assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());

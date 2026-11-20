@@ -3,8 +3,11 @@
 use super::*;
 
 impl OwnedGateway {
-    pub(in crate::managed::runtime) fn shares_original_for_read(&self) -> bool {
-        self.launch.owner.shares_original_for_read()
+    pub(in crate::managed::runtime) fn read_renderer(&self) -> Option<&GeneratedServiceRuntime> {
+        self.launch
+            .owner
+            .shares_original_for_read()
+            .then_some(self.launch.owner.as_ref())
     }
 
     fn shared_read_launch(live: &[Self; 3]) -> Result<&GeneratedLaunch> {
@@ -49,7 +52,7 @@ impl OwnedGateway {
         live: &[Self; 3],
         floors: [ManagedTransactionFinality; 3],
     ) -> Result<[&RetainedCustodyEnrollment; 3]> {
-        if !live[0].shares_original_for_read() {
+        if live[0].read_renderer().is_none() {
             return Ok([
                 live[0].selected_enrollment(floors[0])?,
                 live[1].selected_enrollment(floors[1])?,

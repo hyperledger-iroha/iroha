@@ -164,7 +164,7 @@ fn activation_discovery_scope_deadline_and_carrier_mismatch_make_no_http() {
         enrollment: &enrollment,
         required,
     };
-    assert!(observe_generated_service_set(&prepared, [repeated; 3], deadline).is_err());
+    assert!(observe_generated_service_set(&prepared, None, [repeated; 3], deadline).is_err());
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }
