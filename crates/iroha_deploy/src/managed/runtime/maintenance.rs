@@ -116,6 +116,39 @@ impl Timing {
         now >= self.next_monotonic || utc >= self.next_utc
     }
 }
+
+/// Overdue observations keep their priority across another provider's turn. Either clock
+/// can make a slot due. Ties retain the original provider order.
+fn oldest_due_slot<'a>(
+    timings: impl Iterator<Item = &'a Timing>,
+    now: Instant,
+    utc: u64,
+) -> Option<usize> {
+    timings
+        .enumerate()
+        .filter(|(_, timing)| timing.due_at(now, utc))
+        .min_by_key(|(_, timing)| {
+            std::cmp::Reverse(
+                now.saturating_duration_since(timing.next_monotonic)
+                    .max(Duration::from_millis(utc.saturating_sub(timing.next_utc))),
+            )
+        })
+        .map(|(slot, _)| slot)
+}
+/// A failed native check defers only its own slot. Other observations retain their original
+/// schedules even if they came due while the physical turn was running.
+fn defer_failed_slot<'a>(
+    mut timings: impl Iterator<Item = &'a mut Timing>,
+    slot: usize,
+    now: Instant,
+    utc: u64,
+) -> Result<()> {
+    timings
+        .nth(slot)
+        .ok_or_else(|| invalid("unknown original provider slot"))?
+        .schedule(utc, now, utc)
+}
+
 impl ProviderObservation {
     pub(super) fn new(
         continuation: renewal::Continuation,
@@ -155,9 +188,6 @@ impl ProviderObservation {
             timing,
         })
     }
-    pub(super) fn due(&self) -> Result<bool> {
-        Ok(self.timing.due_at(Instant::now(), now_ms()?))
-    }
     pub(super) fn begin(&self, cancelled: Arc<AtomicBool>) -> Result<(Selection, Budget)> {
         let started = Instant::now();
         let deadline = self.timing.expiry.deadline(TURN_MAXIMUM)?;
@@ -176,10 +206,6 @@ impl ProviderObservation {
                 progress: Arc::new(Progress::default()),
             },
         ))
-    }
-    pub(super) fn retry(&mut self) -> Result<()> {
-        let utc = now_ms()?;
-        self.timing.schedule(utc, Instant::now(), utc)
     }
 }
 
@@ -287,25 +313,21 @@ impl Observation {
                 .current_at(value.selection.continuation.expiry(), mono, utc)
         }))
     }
-    pub(super) fn due(&self) -> Result<bool> {
-        let mono = Instant::now();
-        let utc = now_ms()?;
-        Ok(self
-            .providers
-            .iter()
-            .any(|value| value.timing.due_at(mono, utc)))
+    pub(super) fn due_slot(&self) -> Result<Option<usize>> {
+        Ok(oldest_due_slot(
+            self.providers.iter().map(|value| &value.timing),
+            Instant::now(),
+            now_ms()?,
+        ))
     }
-    pub(super) fn begin(&self, cancelled: Arc<AtomicBool>) -> Result<(RefreshSelection, Budget)> {
+    pub(super) fn begin(
+        &self,
+        slot: usize,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<(RefreshSelection, Budget)> {
         if !self.current()? {
             return Err(invalid("aggregate refresh observation expired"));
         }
-        let mono = Instant::now();
-        let utc = now_ms()?;
-        let slot = self
-            .providers
-            .iter()
-            .position(|value| value.timing.due_at(mono, utc))
-            .ok_or_else(|| invalid("no original provider observation is due"))?;
         let (selected, mut budget) = self.providers[slot].begin(cancelled)?;
         budget.cap_to_expiries(
             self.providers
@@ -322,12 +344,14 @@ impl Observation {
             budget,
         ))
     }
-    pub(super) fn retry(&mut self) -> Result<()> {
-        for value in &mut self.providers {
-            if value.due()? {
-                value.retry()?;
-            }
-        }
+    pub(super) fn retry(&mut self, slot: usize) -> Result<()> {
+        let utc = now_ms()?;
+        defer_failed_slot(
+            self.providers.iter_mut().map(|value| &mut value.timing),
+            slot,
+            Instant::now(),
+            utc,
+        )?;
         if !self.current()? {
             return Err(invalid("aggregate retry observation expired"));
         }

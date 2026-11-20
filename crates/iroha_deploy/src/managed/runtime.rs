@@ -200,9 +200,10 @@ pub fn run_worker(
             )
         })?;
     let mut service_expiry: Option<maintenance::Observation> = None;
-    let mut refresh: Option<
+    let mut refresh: Option<(
+        usize,
         mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
-    > = None;
+    )> = None;
     let mut attachment_attempted = false;
     loop {
         if status.phase == ManagedPhase::Starting
@@ -434,12 +435,14 @@ pub fn run_worker(
         {
             let result = refresh
                 .as_ref()
-                .and_then(|receiver| match receiver.try_recv() {
-                    Ok(result) => Some(result),
+                .and_then(|(slot, receiver)| match receiver.try_recv() {
+                    Ok(result) => Some((*slot, result)),
                     Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        Some((*slot, Err(progress.unconfirmed())))
+                    }
                 });
-            if let Some(result) = result {
+            if let Some((slot, result)) = result {
                 refresh = None;
                 // The old observation wins over queued success; a slow refresh cannot bridge
                 // an interval in which the worker had no current authenticated observation.
@@ -455,7 +458,7 @@ pub fn run_worker(
                 match result {
                     Ok(next) if next.current().unwrap_or(false) => *observation = next,
                     _ => {
-                        if observation.retry().is_err() {
+                        if observation.retry(slot).is_err() {
                             return fail_worker(
                                 &directory,
                                 &mut status,
@@ -467,9 +470,20 @@ pub fn run_worker(
                     }
                 }
             }
-            if refresh.is_none() && observation.due().unwrap_or(true) {
+            if refresh.is_none()
+                && let Some(slot) = observation.due_slot().map_err(|error| {
+                    close_worker_error(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                        error,
+                    )
+                })?
+            {
                 let next = (|| -> Result<_> {
-                    let (selection, turn) = observation.begin(Arc::clone(&cancelled))?;
+                    let (selection, turn) = observation.begin(slot, Arc::clone(&cancelled))?;
                     let live = processes.gateway(selection.provider())?;
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
@@ -480,9 +494,9 @@ pub fn run_worker(
                     Ok(receiver)
                 })();
                 match next {
-                    Ok(receiver) => refresh = Some(receiver),
+                    Ok(receiver) => refresh = Some((slot, receiver)),
                     Err(_) => {
-                        if observation.retry().is_err() {
+                        if observation.retry(slot).is_err() {
                             return fail_worker(
                                 &directory,
                                 &mut status,

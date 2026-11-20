@@ -404,7 +404,9 @@ select its own registry or forward its listener credentials.
 The composed cold-package workflow remains unqualified. Initial funding, governed token
 custody, signed compliance catalog installation and runtime activation are wired into the
 startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
-replacing its finite readiness observation. Restart reconstructs each provider's native-selected
+replacing its finite readiness observation. The worker services the longest-overdue provider
+on either clock first. A failed turn delays only the attempted provider. All three original
+expiries still bound every turn. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid
