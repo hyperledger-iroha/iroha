@@ -103,6 +103,14 @@ impl OperatorSignatureError {
         )
     }
 
+    fn replay_cache_full() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "operator_signature_replay_cache_full",
+            "operator nonce replay cache is full; retry later",
+        )
+    }
+
     fn bad_signature() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -132,13 +140,21 @@ impl IntoResponse for OperatorSignatureError {
     }
 }
 
+/// Outcome of recording a nonce in the replay cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NonceCheck {
+    Fresh,
+    Replayed,
+    CacheFull,
+}
+
 #[derive(Debug)]
 struct ReplayCache {
     ttl: Duration,
     capacity: NonZeroUsize,
     // key -> expiry
     entries: DashMap<String, Instant>,
-    // FIFO for bounded pruning; duplicates allowed.
+    // FIFO for expiry pruning; duplicates allowed.
     order: Mutex<VecDeque<(String, Instant)>>,
 }
 
@@ -152,34 +168,39 @@ impl ReplayCache {
         }
     }
 
-    fn check_and_insert(&self, key: String) -> bool {
+    fn check_and_insert(&self, key: String) -> NonceCheck {
         let now = Instant::now();
         let expires_at = now + self.ttl;
+        let mut order = self
+            .order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.prune_locked(&mut order, now);
 
         match self.entries.entry(key.clone()) {
             Entry::Occupied(mut occ) => {
                 if *occ.get() > now {
-                    return false;
+                    return NonceCheck::Replayed;
                 }
                 occ.insert(expires_at);
             }
             Entry::Vacant(vac) => {
+                // Never evict a live nonce to make room: forgetting it would let the
+                // request that used it be replayed while its timestamp is still fresh.
+                if order.len() >= self.capacity.get() {
+                    return NonceCheck::CacheFull;
+                }
                 vac.insert(expires_at);
             }
         }
+        order.push_back((key, expires_at));
 
-        if let Ok(mut guard) = self.order.lock() {
-            guard.push_back((key, expires_at));
-            self.prune_locked(&mut guard, now);
-        }
-
-        true
+        NonceCheck::Fresh
     }
 
     fn prune_locked(&self, order: &mut VecDeque<(String, Instant)>, now: Instant) {
-        let cap = self.capacity.get();
         while let Some((_key, expiry)) = order.front() {
-            if *expiry > now && order.len() <= cap {
+            if *expiry > now {
                 break;
             }
             let (key, expiry) = order
@@ -268,7 +289,6 @@ impl OperatorSignatures {
         &self,
         timestamp_ms: u64,
         nonce: &str,
-        public_key: &PublicKey,
     ) -> Result<(), OperatorSignatureError> {
         let now_ms = Self::now_unix_ms();
         let delta_ms = now_ms.abs_diff(timestamp_ms);
@@ -287,12 +307,21 @@ impl OperatorSignatures {
                 HEADER_OPERATOR_NONCE,
             ));
         }
-
-        let replay_key = format!("{public_key}:{nonce}");
-        if !self.replay_cache.check_and_insert(replay_key) {
-            return Err(OperatorSignatureError::replay());
-        }
         Ok(())
+    }
+
+    /// Record a nonce whose request signature has already been verified.
+    fn consume_nonce(
+        &self,
+        nonce: &str,
+        public_key: &PublicKey,
+    ) -> Result<(), OperatorSignatureError> {
+        let replay_key = format!("{public_key}:{nonce}");
+        match self.replay_cache.check_and_insert(replay_key) {
+            NonceCheck::Fresh => Ok(()),
+            NonceCheck::Replayed => Err(OperatorSignatureError::replay()),
+            NonceCheck::CacheFull => Err(OperatorSignatureError::replay_cache_full()),
+        }
     }
 
     fn operator_request_message(
@@ -338,14 +367,15 @@ impl OperatorSignatures {
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
         let signature = Signature::from_bytes(&signature_bytes);
 
-        self.ensure_freshness(timestamp_ms, nonce, &public_key)?;
+        self.ensure_freshness(timestamp_ms, nonce)?;
 
         let msg = Self::operator_request_message(method, uri, body, timestamp_ms, nonce);
         signature
             .verify(&public_key, &msg)
             .map_err(|_| OperatorSignatureError::bad_signature())?;
 
-        Ok(())
+        // Only signed requests may occupy replay-cache slots.
+        self.consume_nonce(nonce, &public_key)
     }
 
     fn authorize_request(
@@ -510,6 +540,112 @@ mod tests {
             .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .err()
             .expect("second use rejected");
+        assert_eq!(err.code, "operator_signature_replay");
+    }
+
+    fn auth_with_capacity(key_pair: &KeyPair, capacity: usize) -> OperatorSignatures {
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: true,
+            allowed_public_keys: Vec::new(),
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(capacity).unwrap(),
+        };
+        OperatorSignatures::new(
+            cfg,
+            key_pair.public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        )
+    }
+
+    fn headers_with_nonce(
+        key_pair: &KeyPair,
+        uri: &crate::Uri,
+        body: &[u8],
+        nonce: &str,
+        valid_signature: bool,
+    ) -> HeaderMap {
+        let ts = OperatorSignatures::now_unix_ms();
+        let msg = OperatorSignatures::operator_request_message(
+            &crate::Method::POST,
+            uri,
+            body,
+            ts,
+            nonce,
+        );
+        let signer = if valid_signature {
+            key_pair.clone()
+        } else {
+            KeyPair::random()
+        };
+        let signature = Signature::new(signer.private_key(), &msg);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_OPERATOR_PUBLIC_KEY,
+            key_pair.public_key().to_string().parse().unwrap(),
+        );
+        headers.insert(
+            HEADER_OPERATOR_TIMESTAMP_MS,
+            ts.to_string().parse().unwrap(),
+        );
+        headers.insert(HEADER_OPERATOR_NONCE, nonce.parse().unwrap());
+        headers.insert(
+            HEADER_OPERATOR_SIGNATURE,
+            BASE64_STANDARD.encode(signature.payload()).parse().unwrap(),
+        );
+        headers
+    }
+
+    #[test]
+    fn operator_signatures_unsigned_flood_cannot_evict_nonce() {
+        let key_pair = KeyPair::random();
+        let auth = auth_with_capacity(&key_pair, 2);
+        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let body = b"{}";
+        let operator = headers_with_nonce(&key_pair, &uri, body, "operator-nonce", true);
+        auth.authorize_bytes(&operator, &crate::Method::POST, &uri, body)
+            .expect("operator request accepted");
+
+        // Anyone who knows the node key can send these; they must not touch the cache.
+        for idx in 0..8 {
+            let forged = headers_with_nonce(&key_pair, &uri, body, &format!("forged-{idx}"), false);
+            let err = auth
+                .authorize_bytes(&forged, &crate::Method::POST, &uri, body)
+                .err()
+                .expect("forged signature rejected");
+            assert_eq!(err.code, "operator_signature_bad");
+        }
+
+        let err = auth
+            .authorize_bytes(&operator, &crate::Method::POST, &uri, body)
+            .err()
+            .expect("replayed operator request rejected");
+        assert_eq!(err.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn operator_signatures_full_cache_keeps_live_nonces() {
+        let key_pair = KeyPair::random();
+        let auth = auth_with_capacity(&key_pair, 1);
+        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let body = b"{}";
+        let first = headers_with_nonce(&key_pair, &uri, body, "nonce-a", true);
+        auth.authorize_bytes(&first, &crate::Method::POST, &uri, body)
+            .expect("first request accepted");
+
+        let second = headers_with_nonce(&key_pair, &uri, body, "nonce-b", true);
+        let err = auth
+            .authorize_bytes(&second, &crate::Method::POST, &uri, body)
+            .err()
+            .expect("full cache rejects new nonce");
+        assert_eq!(err.code, "operator_signature_replay_cache_full");
+
+        let err = auth
+            .authorize_bytes(&first, &crate::Method::POST, &uri, body)
+            .err()
+            .expect("live nonce still remembered");
         assert_eq!(err.code, "operator_signature_replay");
     }
 

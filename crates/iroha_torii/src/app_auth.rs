@@ -117,6 +117,14 @@ impl From<CanonicalRequestAuthConfig> for ReplayCacheConfig {
     }
 }
 
+/// Outcome of recording a nonce in the replay cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NonceCheck {
+    Fresh,
+    Replayed,
+    CacheFull,
+}
+
 #[derive(Debug)]
 struct ReplayCache {
     config: RwLock<ReplayCacheConfig>,
@@ -140,11 +148,11 @@ impl ReplayCache {
             .write()
             .expect("canonical request replay cache config lock") = config;
         if let Ok(mut guard) = self.order.lock() {
-            self.prune_locked(&mut guard, Instant::now(), config.capacity);
+            self.prune_locked(&mut guard, Instant::now());
         }
     }
 
-    fn check_and_insert(&self, key: String) -> bool {
+    fn check_and_insert(&self, key: String) -> NonceCheck {
         let now = Instant::now();
         let (expires_at, capacity) = {
             let replay_config = self
@@ -153,36 +161,36 @@ impl ReplayCache {
                 .expect("canonical request replay cache config lock");
             (now + replay_config.ttl, replay_config.capacity)
         };
+        let mut order = self
+            .order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.prune_locked(&mut order, now);
 
         match self.entries.entry(key.clone()) {
             Entry::Occupied(mut occ) => {
                 if *occ.get() > now {
-                    return false;
+                    return NonceCheck::Replayed;
                 }
                 occ.insert(expires_at);
             }
             Entry::Vacant(vac) => {
+                // Never evict a live nonce to make room: forgetting it would let the
+                // request that used it be replayed while its timestamp is still fresh.
+                if order.len() >= capacity.get() {
+                    return NonceCheck::CacheFull;
+                }
                 vac.insert(expires_at);
             }
         }
+        order.push_back((key, expires_at));
 
-        if let Ok(mut guard) = self.order.lock() {
-            guard.push_back((key, expires_at));
-            self.prune_locked(&mut guard, now, capacity);
-        }
-
-        true
+        NonceCheck::Fresh
     }
 
-    fn prune_locked(
-        &self,
-        order: &mut VecDeque<(String, Instant)>,
-        now: Instant,
-        capacity: NonZeroUsize,
-    ) {
-        let cap = capacity.get();
+    fn prune_locked(&self, order: &mut VecDeque<(String, Instant)>, now: Instant) {
         while let Some((_key, expiry)) = order.front() {
-            if *expiry > now && order.len() <= cap {
+            if *expiry > now {
                 break;
             }
             let (key, expiry) = order
@@ -425,6 +433,18 @@ fn validate_freshness(
     Ok(())
 }
 
+fn consume_nonce(replay_cache: &ReplayCache, replay_key: String) -> Result<(), crate::Error> {
+    match replay_cache.check_and_insert(replay_key) {
+        NonceCheck::Fresh => Ok(()),
+        NonceCheck::Replayed => Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "request nonce already used".to_owned(),
+        ))),
+        NonceCheck::CacheFull => Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "request nonce replay cache is full; retry later".to_owned(),
+        ))),
+    }
+}
+
 /// Validate an iterable query against the executor on behalf of `authority`.
 pub fn validate_iter_query_for_authority<Q>(
     state: &Arc<CoreState>,
@@ -612,11 +632,7 @@ pub fn verify_canonical_request(
         };
 
         let replay_key = format!("{account}:{}", witness.nonce);
-        if !replay_cache.check_and_insert(replay_key) {
-            return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                "request nonce already used".to_owned(),
-            )));
-        }
+        consume_nonce(&replay_cache, replay_key)?;
         let signer = verified_signers
             .first()
             .cloned()
@@ -693,11 +709,7 @@ pub fn verify_canonical_request(
         }
     };
     let replay_key = format!("{account}:{nonce}");
-    if !replay_cache.check_and_insert(replay_key) {
-        return Err(crate::Error::Query(ValidationFail::NotPermitted(
-            "request nonce already used".to_owned(),
-        )));
-    }
+    consume_nonce(&replay_cache, replay_key)?;
 
     Ok(Some(VerifiedCanonicalRequest {
         account,
@@ -1050,6 +1062,22 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn replay_cache_full_keeps_live_nonces() {
+        let cache = ReplayCache::new(CanonicalRequestAuthConfig {
+            replay_cache_capacity: nonzero!(2_usize),
+            ..CanonicalRequestAuthConfig::default()
+        });
+        assert_eq!(cache.check_and_insert("a".to_owned()), NonceCheck::Fresh);
+        assert_eq!(cache.check_and_insert("b".to_owned()), NonceCheck::Fresh);
+        assert_eq!(
+            cache.check_and_insert("c".to_owned()),
+            NonceCheck::CacheFull
+        );
+        assert_eq!(cache.check_and_insert("a".to_owned()), NonceCheck::Replayed);
+        assert_eq!(cache.check_and_insert("b".to_owned()), NonceCheck::Replayed);
     }
 
     #[test]
