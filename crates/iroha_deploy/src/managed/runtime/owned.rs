@@ -321,6 +321,14 @@ impl PeerProcesses {
             .owner
             .original_provider_plan(&launch.original, provider)?
             .ok_or_else(|| invalid("original provider plan absent"))?;
+        self.child_for_plan(launch, &plan)
+    }
+
+    fn child_for_plan(
+        &self,
+        launch: &Arc<GeneratedLaunch>,
+        plan: &RetainedProviderServicePlan,
+    ) -> Result<OwnedGateway> {
         let gateway = OwnedGateway {
             child: self
                 .children
@@ -328,7 +336,7 @@ impl PeerProcesses {
                 .ok_or_else(|| invalid("original provider child absent"))?
                 .clone(),
             launch: launch.clone(),
-            provider,
+            provider: plan.provider_id(),
         };
         gateway.require_running()?;
         Ok(gateway)
@@ -339,16 +347,33 @@ impl PeerProcesses {
             .launch
             .as_ref()
             .ok_or_else(|| invalid("generated launch absent"))?;
-        let plans = launch
-            .owner
-            .original_provider_plans(&launch.original)?
-            .ok_or_else(|| invalid("original provider plans absent"))?;
-        plans
-            .iter()
-            .map(|plan| self.gateway(plan.provider_id()))
-            .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .map_err(|_| invalid("owned gateway count differs"))
+        let Some(plans) = launch.owner.shared_provider_plans(&launch.original)? else {
+            let [a, b, c] = launch
+                .original
+                .provider_service_plans()?
+                .ok_or_else(|| invalid("original provider plans absent"))?;
+            return Ok([
+                self.gateway(a.provider_id())?,
+                self.gateway(b.provider_id())?,
+                self.gateway(c.provider_id())?,
+            ]);
+        };
+        if self.children.len() != 4 {
+            return Err(invalid("generated gateway has no complete owned committee"));
+        }
+        // These are three direct child handles of one immutable launch. No HTTP, signing
+        // or callback takes place between the two full material checks.
+        launch.validate()?;
+        let handles = plans
+            .each_ref()
+            .map(|plan| self.child_for_plan(launch, plan));
+        launch.validate()?;
+        let [first, second, third] = handles;
+        let gateways = [first?, second?, third?];
+        for gateway in &gateways {
+            gateway.require_running()?;
+        }
+        Ok(gateways)
     }
 
     #[cfg(test)]

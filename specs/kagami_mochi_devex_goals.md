@@ -439,6 +439,17 @@ providers keep their original monotonic enrollment timers across another provide
 Startup continuation and aggregate construction select immutable provider plans through the
 retained renderer, with fresh whole-profile and operation-lock checks at each selection.
 Current enrollment, discovery, live gateway validation and observation clocks remain independent.
+
+Cold restart after an active storage launch remains open. In a four-validator restart, the
+Catalog launch committed H33 and H34 with provider ingest disabled. Each provider archive
+ended at H32. The next StreamTokens launch correctly refused the missing H33. The warm
+restart carries its paid receipt, native transaction carriers and validated revision in
+memory. A cold worker must independently authenticate the selected enrollments and their
+revocation and expiry before using a retained revision. Deploy and SoraFS own the choice of
+that cold-start proof or a design that continuously captures certified heights while retaining
+the exact sealed outbox and its admission pins. The [storage contract](sorafs/sorafs_node_storage.md)
+defines the archive's zero-gap startup check.
+
 Active decode owners and independently owned profiles keep standalone capture. Ordinary refresh
 also keeps its standalone capture after releasing its gateway owner.
 Each runtime selection owns one bounded checkpoint-import scope across its three temporary custody

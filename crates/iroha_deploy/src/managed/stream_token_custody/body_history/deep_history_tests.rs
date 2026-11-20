@@ -14,14 +14,17 @@ use iroha_data_model::isi::{InstructionBox, Log};
 use iroha_wallet::operations::NativePreparationPhase;
 use std::{path::PathBuf, time::Duration};
 
-// This exercises history depth and custody, not a short-window signing latency target.
-// All 64 bodies expire naturally: 1,920 seconds of expiry pacing leaves 600 seconds in
-// the original finite campaign for fixture setup, native retirement, proofs and assertions.
-// Deep debug histories can spend over ten seconds on original admission and retirement.
-// Focused short-expiry tests retain their own 500 ms / two-second authorizations.
-const BODY_VALIDITY_MS: u64 = 30_000;
-const CAMPAIGN_BUDGET: Duration = Duration::from_mins(42);
-const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(32);
+// Give the original signed body the same finite interval as a native turn. Retaining the
+// 33rd real request took over 30 seconds while its I/O budget still had 75 seconds left.
+// Short-expiry tests exercise refusal separately. This fixture waits for every signed
+// interval to expire before retiring its original and checking the next predecessor.
+const BODY_TURN: Duration = Duration::from_secs(120);
+const BODY_VALIDITY_MS: u64 = BODY_TURN.as_secs() * 1_000;
+const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(BODY_TURN.as_secs() + 2);
+// Allow one expiry wait and one native turn at each of the 64 depths, plus fixture setup
+// and the final proof checks. All individual deadlines still apply inside this outer bound.
+const CAMPAIGN_BUDGET: Duration =
+    Duration::from_secs(64 * (BODY_EXPIRY_WAIT.as_secs() + BODY_TURN.as_secs()) + 600);
 
 struct OriginalBytes {
     body: PathBuf,
@@ -145,7 +148,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         assert!(now_ms().unwrap() < original_policy.active_until_unix_ms);
         // Each separate startup has its own finite I/O budget. No retained body, epoch or
         // wallet Terms are changed, and the originally configured policy remains the cap.
-        fixture.set_deadline((Instant::now() + Duration::from_secs(120)).min(complete_before));
+        fixture.set_deadline((Instant::now() + BODY_TURN).min(complete_before));
         assert!(Fees::from_options(&fixture.options()).unwrap() == original_fees);
         refresh_old_anchor(fixture);
         // Observe the deepest startup and successor's original errors before fixed mapping.

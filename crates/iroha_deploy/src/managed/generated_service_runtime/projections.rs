@@ -62,13 +62,25 @@ impl GeneratedServiceRuntime {
         &self,
         prepared: &PreparedLocalnet,
     ) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
+        if let Some(plans) = self.shared_provider_plans(prepared)? {
+            return Ok(Some(plans));
+        }
+        prepared.provider_service_plans()
+    }
+
+    /// Project the three provider slots together only from an independently revalidated shared
+    /// original. A standalone profile or an active decoder keeps its full per-provider recipe.
+    pub(in crate::managed) fn shared_provider_plans(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
         if prepared != &self.authority.prepared {
             return Err(invalid(
                 "generated runtime projection belongs to another prepared generation",
             ));
         }
         let Some(intent) = self.authority.original_intent_if_shared()? else {
-            return prepared.provider_service_plans();
+            return Ok(None);
         };
         let result = intent.provider_plans().map(|plans| Some(plans.clone()));
         intent.finish()?;
