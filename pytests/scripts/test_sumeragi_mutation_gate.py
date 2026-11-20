@@ -4746,9 +4746,9 @@ def test_checkpoint_status_preserves_g1_h2_and_internal_full_prefix_boundaries()
     source = (ROOT / "crates/iroha_torii/src/lib_pipeline_handlers.rs").read_text()
     selected = source.split("fn read_pipeline_transaction_carrier(", 1)[1].split("\nfn ", 1)[0]
     assert "read_pipeline_execution_carrier(app, anchor.height)" in selected
-    wrapper = named_rust_function(source, "read_pipeline_execution_carrier")
-    assert "read_pipeline_execution_carrier_within(app, height, work, bytes)" in wrapper
-    http = named_rust_function(source, "read_pipeline_execution_carrier_within")
+    http = named_rust_function(source, "read_pipeline_execution_carrier")
+    assert "let work = routing::app_query_limits().max_fetch_size;" in http
+    assert "let bytes = iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work);" in http
     assert "HistoryProducerOwner::authentication_read(app)?" in http
     assert "read_execution_carrier_under_owner(app, owner, height, work, bytes)" in http
     assert "or_else" not in http and "unwrap_or" not in http
