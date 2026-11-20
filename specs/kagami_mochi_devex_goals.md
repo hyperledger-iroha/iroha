@@ -418,7 +418,9 @@ owns one fresh Global cut for all three independent signer/custody reads, and re
 owned launch. The old aggregate remains authoritative until every check has returned and all
 old UTC and monotonic bounds still hold. When publication succeeds before a later proof fails,
 the next turn can recover that provider’s signed, acknowledged and currently serving descendant
-from its original catalog chain. Catalog recovery alone grants no readiness. A read-only refresh of another provider preserves
+from its original catalog chain. The selected writer keeps its previous anchor throughout
+the turn and checks any new promotion receipt against the independently authenticated head.
+Catalog recovery alone grants no readiness. A read-only refresh of another provider preserves
 that provider's place if its signed publication is due. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic

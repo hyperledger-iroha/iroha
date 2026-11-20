@@ -243,6 +243,14 @@ fn failed_group_keeps_original_anchors_for_two_durable_owner_promotions() {
         observe(2, Observation::Promoted).unwrap(),
     ];
     assert_eq!(resolved, [first, second, original[2]]);
+    resolved[0].require_writer_receipt(None).unwrap();
+    resolved[1].require_writer_receipt(Some(second)).unwrap();
+    assert!(
+        resolved[1]
+            .require_writer_receipt(Some(original[1]))
+            .is_err()
+    );
+    assert!(resolved[1].require_writer_receipt(Some(first)).is_err());
     // A fresh serving response for the genuine successor cannot cross its signed exclusive expiry.
     let catalog: GatewayComplianceCatalogV1 =
         retained_at(&operation(&owners[0]), 2, "original.nrt");

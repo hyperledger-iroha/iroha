@@ -219,10 +219,10 @@ impl ProviderObservation {
 /// Only the selected original may publish its advertisement or advance its catalog.
 fn update_selected(
     prepared: &PreparedLocalnet,
-    selected: &mut Selection,
+    selected: &Selection,
     live: &mut OwnedGateway,
     budget: &Budget,
-) -> std::result::Result<(), Failure> {
+) -> std::result::Result<Option<PromotedGeneratedCatalog>, Failure> {
     let now = budget.call(|_| now_ms())?;
     if now >= selected.advert_interval.midpoint() {
         budget.progress.enter(Phase::ProviderAdvertisement);
@@ -234,11 +234,13 @@ fn update_selected(
     }
     if now >= selected.catalog_interval.midpoint() {
         budget.progress.enter(Phase::Catalog);
-        selected.catalog = budget.call(|deadline| {
-            ManagedGatewayCompliance::open(prepared, live.provider())?.advance(live, deadline)
-        })?;
+        return budget
+            .call(|deadline| {
+                ManagedGatewayCompliance::open(prepared, live.provider())?.advance(live, deadline)
+            })
+            .map(Some);
     }
-    Ok(())
+    Ok(None)
 }
 
 /// All three finite observations, in the original profile's validated provider-slot order.
@@ -357,7 +359,7 @@ pub(super) fn refresh(
     mut live: [OwnedGateway; 3],
     budget: &Budget,
 ) -> std::result::Result<Observation, Failure> {
-    let RefreshSelection { mut original, slot } = selected;
+    let RefreshSelection { original, slot } = selected;
     budget.check()?;
     for (gateway, provider) in live.iter().zip(&original.providers) {
         if gateway.provider() != provider.selection.continuation.provider() {
@@ -365,9 +367,9 @@ pub(super) fn refresh(
         }
     }
     validate_gateways(prepared, &mut live, budget)?;
-    update_selected(
+    let written = update_selected(
         prepared,
-        &mut original.providers[slot].selection,
+        &original.providers[slot].selection,
         &mut live[slot],
         budget,
     )?;
@@ -377,6 +379,10 @@ pub(super) fn refresh(
         .each_ref()
         .map(|provider| provider.selection.catalog);
     let promoted = catalog::observe(prepared, &mut live, catalogs, budget)?;
+    // The old lease supplies every anchor, including the writer's. A durably committed
+    // catalog from a failed earlier turn is recoverable. Any effect just returned by this
+    // turn must also agree exactly with the independently authenticated serving head.
+    budget.call(|_| promoted[slot].require_writer_receipt(written))?;
     let floors = original
         .providers
         .each_ref()

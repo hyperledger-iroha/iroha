@@ -70,6 +70,18 @@ pub(super) struct PromotedGeneratedCatalog {
     pub valid_until_unix: u64,
 }
 
+impl PromotedGeneratedCatalog {
+    /// The serving head must equal any promotion that this same turn just witnessed.
+    pub(super) fn require_writer_receipt(self, written: Option<Self>) -> Result<()> {
+        if written.is_some_and(|receipt| receipt != self) {
+            return Err(invalid(
+                "current head differs from the selected writer's promotion",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct ManagedGatewayCompliance {
     authority: ServiceAuthority,
     plan: RetainedGatewayCompliancePlan,
