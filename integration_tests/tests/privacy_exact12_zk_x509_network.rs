@@ -1123,7 +1123,9 @@ async fn certified_x509_reader_binds_voter_tip_and_both_transaction_outcomes() -
         );
         let rejected = instruction_transaction(
             peer,
-            iroha::data_model::isi::Unregister::domain("x509missing".parse()?),
+            iroha::data_model::isi::Unregister::domain(
+                iroha_model_base::domain::DomainId::try_new("x509missing", "universal")?,
+            ),
             70_003,
         )?;
         submit_expecting_rejection(
@@ -1160,9 +1162,16 @@ async fn certified_x509_reader_binds_voter_tip_and_both_transaction_outcomes() -
         .await?;
         let mut substituted = peer.clone();
         substituted.node = peers[1].node.clone();
+        let error = substituted
+            .current_tip()
+            .await
+            .expect_err("reader authenticated a substituted voter");
         ensure!(
-            substituted.current_tip().await.is_err(),
-            "reader authenticated a substituted voter"
+            error_chain_contains(
+                &error,
+                "current finality attestation differs from exact request bindings"
+            ),
+            "wrong-voter control failed outside the signed request-binding check: {error:?}"
         );
         Ok(())
     }
