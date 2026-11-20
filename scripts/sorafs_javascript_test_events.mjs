@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 
-const CONTRACT_SHA256 = "70403b063eae91b9e3fbe2889d3ca525fab6bae74c1bd0ab685a0749c3bc5ee9";
+const CONTRACT_SHA256 = "88b42dd10978351f639f1027ed172419227bf501d8b6f36bc2599d7d877075f6";
 const MAX_EVENTS = 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;
 const BUNDLE_SUITE = "sorafsFixtureBundleValidation";
@@ -85,6 +85,7 @@ export class SorafsJavascriptTestEvents {
   #events = 0; #textBytes = 0; #diagnostics = 0; #diagnosticDuration;
   #nextTopExecution = 0; #nextNestedExecution = 0;
   #nestedPlan = false; #rootPlan = false; #summary; #failed = false; #finished = false; #active = false;
+  #nestedLabels;
 
   constructor(contractBytes, { suiteRoot }) {
     const expected = expectedCases(contractBytes, suiteRoot);
@@ -147,7 +148,8 @@ export class SorafsJavascriptTestEvents {
     const terminal = ["test:complete", "test:pass"].includes(type);
     const queue = ["test:enqueue", "test:dequeue"].includes(type);
     const row = fields(value, [...COMMON, ...(queue ? ["type"] : []),
-      ...(terminal ? ["testNumber", "details"] : [])]);
+      ...(terminal ? ["testNumber", "details"] : [])],
+      type === "test:pass" ? ["classname"] : []);
     demand(row.tags.length === 0 && Array.isArray(row.tags), "tagged test is not the fixed case");
     for (const key of ["testId", "line", "column"]) integer(row[key], 1);
     integer(row.parentId); integer(row.nesting);
@@ -165,8 +167,7 @@ export class SorafsJavascriptTestEvents {
       test.id = row.testId; test.location = [row.line, row.column]; this.#ids.set(row.testId, test);
     }
     demand((this.#ids.get(row.testId) === test && test.stages.has("test:enqueue")) || type === "test:enqueue", "case was not originally enqueued");
-    // The fixed Node24 stream binds the original parent by ID on every event.
-    // It supplies no classname aliases; closed fields above reject injection.
+    // The original parent ID binds every event, whether or not the runtime repeats its name.
     demand(row.parentId === (test.parent?.id ?? 0), "original test parent differs");
     demand(test.location[0] === row.line && test.location[1] === row.column, "case source coordinate changed");
     if (type !== "test:enqueue") demand(test.stages.has("test:enqueue"), "case precedes enqueue");
@@ -181,7 +182,17 @@ export class SorafsJavascriptTestEvents {
     }
     if (terminal) {
       integer(row.testNumber, 1); demand(row.testNumber === test.number, "case ordinal differs");
-      const details = fields(row.details, ["duration_ms", "type", ...(type === "test:complete" ? ["passed"] : [])]);
+      const details = fields(row.details, ["duration_ms", "type", ...(type === "test:complete" ? ["passed"] : [])],
+        ["classname"]);
+      // Node 24 releases differ on whether a nested result repeats its parent's
+      // name. The first nested result settles that for the stream: a label then
+      // appears on every nested result and equals the original parent's name.
+      const labelled = test.parent !== undefined
+        && (this.#nestedLabels ??= Object.hasOwn(details, "classname"));
+      demand(Object.hasOwn(details, "classname") === labelled
+        && Object.hasOwn(row, "classname") === (labelled && type === "test:pass")
+        && (!labelled || details.classname === test.parent.name
+          && (type !== "test:pass" || row.classname === test.parent.name)), "terminal parent label differs");
       duration(details.duration_ms); demand(details.type === "test", "terminal suite substitution");
       if (type === "test:complete") {
         demand(details.passed === true, "test did not complete successfully"); test.duration = details.duration_ms;

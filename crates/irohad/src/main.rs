@@ -12732,9 +12732,11 @@ mod tests {
             };
             assert!(matches!(
                 rejection.reason.as_ref(),
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InstructionFailed(
-                        iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                iroha_data_model::block::execution_output::ProfiledTransactionRejection::Baseline(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::InstructionFailed(
+                            iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                        )
                     )
                 )
             ));

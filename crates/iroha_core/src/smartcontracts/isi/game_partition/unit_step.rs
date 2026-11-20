@@ -98,7 +98,7 @@ pub fn step_unit(input: UnitStepInput) -> Result<UnitStepOutput, VMError> {
     vm.run()?;
     Ok(UnitStepOutput {
         hp: vm.register(1) as u32,
-        x: vm.register(2) as i64 as i32,
+        x: vm.register(2).cast_signed() as i32,
         gas: GAS_LIMIT - vm.remaining_gas(),
         cycles: vm.get_cycle_count(),
     })

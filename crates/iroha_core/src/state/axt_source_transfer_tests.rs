@@ -157,16 +157,21 @@ fn source_claim(block: &SignedBlock) -> AxtSourceTransferOccurrenceV1 {
 
 impl State {
     /// Check the AXT reader on an executed C10 transaction without any transfer transcripts.
+    ///
+    /// The carrier reader charges every frame from signed genesis plus the block's rows.
+    /// The bound here is that exact charge, so one unit less refuses the carrier itself.
     pub(crate) fn assert_c10_source_without_transfer(&self, block: &SignedBlock, accepted: bool) {
         let claim = source_claim(block);
-        let error = self
-            .resolve_finalized_axt_source_transfer_v1(
-                block.header().height().get(),
-                &claim,
-                MAX_WORK,
-                MAX_BYTES,
-            )
-            .expect_err("no transfer was executed");
+        let height = block.header().height().get();
+        let rows = block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1);
+        let work = height.max(2) + u64::try_from(rows).expect("fixture rows fit");
+        let resolve =
+            |work| self.resolve_finalized_axt_source_transfer_v1(height, &claim, work, MAX_BYTES);
+        assert!(matches!(resolve(work - 1), Err(Error::FinalizedCarrier)));
+        let error = resolve(work).expect_err("no transfer was executed");
         assert!(
             matches!(
                 (accepted, &error),

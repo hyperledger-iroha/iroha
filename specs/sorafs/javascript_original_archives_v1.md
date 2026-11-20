@@ -169,7 +169,11 @@ assertion-contract bytes are its sole case inventory: 46 top-level and nine
 nested cases. It checks file/name/parent identity, stable coordinates, unique
 IDs, serial sibling order, all five case events, both plans and complete final
 counts. Reporter buffering can deliver completion before start; successful
-pass still requires both original observations.
+pass still requires both original observations. Node 24 releases differ on
+whether a nested result repeats its parent's name as `classname`. The first
+nested result settles that for the stream: the label then appears on every
+nested result and equals the original parent's name, or on none. A top-level
+result never carries one.
 
 Any failed event, including an entry/final-hook failure, rejects even if Node's
 summary reports success. Skips, TODOs, foreign fields/events, invalid numbers,

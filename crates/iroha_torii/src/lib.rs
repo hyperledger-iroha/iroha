@@ -273,8 +273,6 @@ use iroha_data_model::events::{
 };
 #[cfg(feature = "app_api")]
 use iroha_data_model::proof::ProofRecord;
-#[cfg(test)]
-use iroha_data_model::transaction::error::TransactionRejectionReason;
 use iroha_data_model::{
     account::{
         AccountId,
