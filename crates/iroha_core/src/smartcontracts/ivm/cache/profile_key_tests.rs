@@ -35,21 +35,28 @@ fn keys_of_one_code_hash_differ_by_profile_and_engine_scope() {
     );
     assert_eq!(baseline, SummaryKey::for_profile(BASELINE, hash));
     let c10 = SummaryKey::for_profile(IvmProfileId::C10_ABI_V1, hash);
-    assert_eq!(
-        SummaryKey::every_profile(hash).collect::<Vec<_>>(),
-        vec![baseline, named, c10]
-    );
+    let carrier = SummaryKey::for_profile(IvmProfileId::C10_GENERIC_CARRIER, hash);
+    let keys = [baseline, named, c10, carrier];
+    assert_eq!(SummaryKey::every_profile(hash).collect::<Vec<_>>(), keys);
     assert_eq!(baseline.profile.engine(), IvmEngine::Baseline);
     assert_eq!(named.profile.engine(), IvmEngine::C10);
     assert_eq!(baseline.same_engine_foreign().count(), 0);
-    assert_eq!(named.same_engine_foreign().collect::<Vec<_>>(), [c10]);
-    assert_eq!(c10.same_engine_foreign().collect::<Vec<_>>(), [named]);
-    let runtime = RuntimeKey::for_profile(baseline.profile, hash, 1, 2);
-    let other = RuntimeKey::for_profile(named.profile, hash, 1, 2);
-    assert_ne!(runtime, other);
-    assert_eq!(runtime, RuntimeKey::new(hash, 1, 2));
-    assert_eq!(runtime.summary_key(), baseline);
-    assert_eq!(other.summary_key(), named);
+    assert_eq!(
+        named.same_engine_foreign().collect::<Vec<_>>(),
+        [c10, carrier]
+    );
+    assert_eq!(
+        c10.same_engine_foreign().collect::<Vec<_>>(),
+        [named, carrier]
+    );
+    assert_eq!(
+        carrier.same_engine_foreign().collect::<Vec<_>>(),
+        [named, c10]
+    );
+    let runtimes = keys.map(|key| RuntimeKey::for_profile(key.profile, hash, 1, 2));
+    assert_eq!(runtimes[0], RuntimeKey::new(hash, 1, 2));
+    assert_eq!(runtimes.map(|key| key.summary_key()), keys);
+    assert_eq!(std::collections::BTreeSet::from(runtimes).len(), keys.len());
     assert_eq!(
         generic_program_profile(),
         BASELINE,
@@ -70,6 +77,7 @@ fn baseline_engine_keys_are_disjoint_from_every_c10_key() {
     for profile in [
         IvmProfileId::C10_ABI_V1,
         IvmProfileId::C10_RUNTIME_LIFECYCLE,
+        IvmProfileId::C10_GENERIC_CARRIER,
     ] {
         let key = SummaryKey::for_profile(profile, hash);
         assert_eq!(key.profile.engine(), IvmEngine::C10);
