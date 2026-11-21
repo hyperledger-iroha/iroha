@@ -6516,7 +6516,7 @@
    "sites": [
     ["crates/iroha_data_model/src/governance/anonymous_ballot/ballot.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_data_model/src/governance/anonymous_ballot/context.rs", "unavailable", "unavailable", 4],
-    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 4]
+    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 3]
    ]
   },
   {

@@ -406,7 +406,12 @@ mod zk_hydration_route_tests {
 
     #[test]
     fn trigger_route_preserves_cold_registry_owner_and_fresh_state_retry() {
-        let state = route_state();
+        assert_trigger_route_after_genesis(&route_state());
+    }
+
+    // Keep the trigger transaction frames out of the signed genesis validation stack.
+    #[inline(never)]
+    fn assert_trigger_route_after_genesis(state: &State) {
         let trigger_id: TriggerId = "hydration_registry_callback".parse().unwrap();
         let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
             max_cycles: 1_000,
@@ -437,7 +442,7 @@ mod zk_hydration_route_tests {
             .unwrap(),
         );
         {
-            let mut setup = state.block(next_header(&state));
+            let mut setup = state.block(next_header(state));
             let mut transaction = setup.transaction_for_callback_testing();
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut transaction)
@@ -456,7 +461,7 @@ mod zk_hydration_route_tests {
         let mut route_allocation_limit = 0;
         for _ in 0..2 {
             let budget = route_decode_budget(usize::MAX);
-            let mut warm_block = state.block(next_header(&state));
+            let mut warm_block = state.block(next_header(state));
             let mut warm = warm_block.transaction_for_callback_testing();
             warm.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             warm.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -469,8 +474,8 @@ mod zk_hydration_route_tests {
             route_allocation_limit > 0,
             "real route preparation decodes before hydration"
         );
-        let (id, key_bytes, circuit_bytes) = install_cold_key(&state, "trigger");
-        let baseline = crate::snapshot::canonical_state_snapshot_bytes(&state);
+        let (id, key_bytes, circuit_bytes) = install_cold_key(state, "trigger");
+        let baseline = crate::snapshot::canonical_state_snapshot_bytes(state);
         let key_pointer = state
             .view()
             .world()
@@ -482,7 +487,7 @@ mod zk_hydration_route_tests {
             .unwrap()
             .bytes
             .as_ptr();
-        let mut block = state.block(next_header(&state));
+        let mut block = state.block(next_header(state));
         let mut transaction = block.transaction_for_callback_testing();
         transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -523,7 +528,7 @@ mod zk_hydration_route_tests {
         assert_eq!(block.gas_used_in_block, 0);
         drop(block);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes(&state),
+            crate::snapshot::canonical_state_snapshot_bytes(state),
             baseline
         );
         assert_eq!(
@@ -540,7 +545,7 @@ mod zk_hydration_route_tests {
                 .as_ptr(),
             key_pointer
         );
-        let mut fresh_block = state.block(next_header(&state));
+        let mut fresh_block = state.block(next_header(state));
         let mut fresh = fresh_block.transaction_for_callback_testing();
         fresh.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         fresh.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -574,7 +579,7 @@ mod zk_hydration_route_tests {
         assert_eq!(fresh_block.committed_fragment_count(), 0);
         drop(fresh_block);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes(&state),
+            crate::snapshot::canonical_state_snapshot_bytes(state),
             baseline
         );
     }

@@ -21,7 +21,9 @@ use iroha_executor_data_model::permission::governance::CanProposeRuntimeChangeSe
 use iroha_test_samples::ALICE_KEYPAIR;
 
 fn setup(tx: &mut StateTransaction<'_, '_>) {
-    crate::governance::parliament::seed_npos_sortition_cadence_for_tests(tx, 100);
+    // The signed genesis epoch must cover all three scheduled heights, including a later retry.
+    let epoch_length = 100.max(tx.block_height() + 2);
+    crate::governance::parliament::seed_npos_sortition_cadence_for_tests(tx, epoch_length);
     tx.world
         .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,

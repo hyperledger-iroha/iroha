@@ -630,7 +630,14 @@ fn credential_seal_codec_refusal_cannot_become_a_planned_or_committed_outcome() 
         )
     })
     .unwrap_err();
-    assert!(error.original_codec_refusal().is_some());
+    let apply_refusal = error
+        .original_codec_refusal()
+        .expect("original seal refusal");
+    assert!(matches!(
+        apply_refusal.resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+            if attempted > 0
+    ));
     assert!(error.is_local());
     assert_eq!(driver.state, before);
     let error = norito::core::with_decode_limits_scope(limits(), || {
@@ -641,7 +648,14 @@ fn credential_seal_codec_refusal_cannot_become_a_planned_or_committed_outcome() 
             })
     })
     .unwrap_err();
-    assert!(error.original_codec_refusal().is_some());
+    let plan_refusal = error
+        .original_codec_refusal()
+        .expect("original planner refusal");
+    assert!(matches!(
+        plan_refusal.resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+            if attempted > 0
+    ));
     assert!(error.is_local());
     assert_eq!(driver.state, before);
     let outcomes = close_invitations(&mut driver, &records);

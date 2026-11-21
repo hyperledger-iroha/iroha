@@ -173,6 +173,10 @@ mod tests {
     fn checked_fingerprint_retains_original_serializer_scratch_refusal() {
         // Norito sorts the actual map entries in admitted scratch before encoding them.
         // Streaming the fingerprint must not hide that serializer-owned allocation.
+        #[expect(
+            clippy::disallowed_types,
+            reason = "Norito allocates canonical sorting scratch for unordered maps"
+        )]
         let value = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
         let limits =
             |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 64);

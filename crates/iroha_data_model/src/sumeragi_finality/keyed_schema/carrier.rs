@@ -288,7 +288,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             retained,
-            selected.tables().len() * std::mem::size_of::<TableDescriptor>()
+            std::mem::size_of_val(selected.tables())
                 + selected
                     .tables()
                     .iter()

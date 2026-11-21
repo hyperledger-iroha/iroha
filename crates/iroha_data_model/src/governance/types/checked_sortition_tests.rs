@@ -18,6 +18,10 @@ fn borrowed_governance_elements_keep_the_owned_sequence_payload() {
 
 #[test]
 fn borrowed_governance_elements_retain_original_leaf_allocation_refusal() {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Norito allocates canonical sorting scratch for unordered maps"
+    )]
     let values = [std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)])];
     let original = norito::core::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),

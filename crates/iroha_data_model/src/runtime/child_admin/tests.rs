@@ -267,6 +267,10 @@ fn streamed_policy_and_plan_ids_match_original_frames_without_output_or_scratch_
 fn enclosing_codec_refusal_retains_its_original_retry_classification() {
     // A HashMap serializer genuinely needs sorted-entry scratch. The ordinary policy
     // does not, so zero allocation credit must not manufacture a policy refusal.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Norito allocates canonical sorting scratch for unordered maps"
+    )]
     let payload = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
     let expected: [u8; 32] = Hash::new_from_chunks(&[
         CHILD_ADMIN_POLICY_DOMAIN_V1,

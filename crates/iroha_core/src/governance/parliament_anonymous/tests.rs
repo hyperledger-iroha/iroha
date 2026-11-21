@@ -55,6 +55,14 @@ fn runtime_proposal_binding_refusal_retains_local_authority_and_no_outcome() {
     let driver = Driver::for_proposal(payload, RiskTierV1::Standard);
     let original = driver.state.clone();
     let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let streamed = norito::core::with_decode_limits_scope(limits, || {
+        ProposalContentId::derive_checked_v1(driver.state.proposal())
+    });
+    assert_eq!(
+        streamed.unwrap(),
+        driver.state.attempt().proposal_content_id
+    );
+    let frame_len = norito::canonical_frame_len(driver.state.proposal()).unwrap();
     let refused = norito::core::with_decode_limits_scope(limits, || {
         driver.state.validate_proposal_bindings()
     });
@@ -67,6 +75,13 @@ fn runtime_proposal_binding_refusal_retains_local_authority_and_no_outcome() {
     assert_eq!(
         original_refusal.kind(),
         norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    assert_eq!(
+        original_refusal.resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded {
+            attempted: frame_len as u64,
+            limit: 0,
+        }
     );
     assert_eq!(driver.state, original);
     assert_eq!(driver.state.execution(), None);
