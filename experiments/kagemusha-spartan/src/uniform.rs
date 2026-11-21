@@ -918,10 +918,18 @@ fn chunk_arrays<F: Scalar>(
             dropped.extend(members.iter().map(|(li, _)| *li));
             arrays.push(chunk);
         }
-        dropped.sort_unstable();
-        for li in dropped.into_iter().rev() {
-            arrays[a].lookups.remove(li);
+        // One order-preserving pass. Removing each grouped lookup separately
+        // shifted every later lookup once per removal.
+        let mut removed = vec![false; arrays[a].lookups.len()];
+        for li in dropped {
+            removed[li] = true;
         }
+        let mut index = 0;
+        arrays[a].lookups.retain(|_| {
+            let keep = !removed[index];
+            index += 1;
+            keep
+        });
     }
     // References to moved cells become links into their chunk arrays.
     let rhos: Vec<usize> = arrays.iter().map(|a| a.rho).collect();
@@ -7225,6 +7233,61 @@ pub(crate) mod tests {
     use iroha_pasta::Eq as Vesta;
 
     type Fv = <Vesta as iroha_pasta::PastaCurve>::ScalarExt;
+
+    /// The builder's real pattern: each cell's unit range lookup is followed by
+    /// a shifted lookup of the same cell, which stays with its array. Grouping
+    /// drops every other lookup; the kept ones keep their order and read their
+    /// moved cells through the chunk array.
+    #[test]
+    fn chunk_arrays_keeps_interleaved_ungrouped_lookups_in_order() {
+        let (n, cells) = (2usize, 6usize);
+        let mut lookups = Vec::new();
+        for c in 0..cells {
+            lookups.push((7u32, vec![own::<Fv>(c, n)]));
+            lookups.push((
+                7u32,
+                vec![vec![Term {
+                    src: Src::Own(c),
+                    coef: vec![Fv::from(2u64); n],
+                }]],
+            ));
+        }
+        let mut arrays = vec![Array {
+            name: "interleaved range lookups",
+            family: 0,
+            rho: 1,
+            r_count: n,
+            fixed: false,
+            lookups,
+            widths: vec![16; cells],
+            rows: vec![],
+            values: vec![vec![Fv::from(0u64); n]; cells],
+        }];
+        let mut rfield = vec![(1, n, 1)];
+        let mut moved = vec![vec![None; cells]];
+        let mut challenge = ChallengeRows::default();
+        chunk_arrays(&mut arrays, &mut rfield, &mut moved, &mut challenge);
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[1].r_count, cells);
+        assert_eq!(arrays[1].lookups.len(), 1);
+        assert_eq!(arrays[0].lookups.len(), cells);
+        for (j, (tid, tuple)) in arrays[0].lookups.iter().enumerate() {
+            assert_eq!(*tid, 7);
+            let [term] = tuple[0].as_slice() else {
+                panic!("kept lookup {j} has one term")
+            };
+            assert!(term.coef.iter().all(|c| *c == Fv::from(2u64)));
+            assert_eq!(
+                term.src,
+                Src::Link {
+                    array: 1,
+                    cell: 0,
+                    map: (0..n).map(|r| Some((j << 1) | r)).collect(),
+                },
+                "kept lookup {j} reads its own moved cell"
+            );
+        }
+    }
 
     #[test]
     fn sparse_reader_csr_preserves_cross_family_and_repeated_maps() {
