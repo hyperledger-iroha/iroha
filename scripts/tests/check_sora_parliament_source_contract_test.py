@@ -6024,3 +6024,372 @@ def test_reintroduced_daemon_tle_signer_item_fails_the_full_checker(
     monkeypatch.setattr(guard, "read", lambda path: changed if path == relative else original_read(path))
     with pytest.raises(RuntimeError, match=re.escape(relative)):
         guard.main()
+
+
+# N14 resumable migration barrier: retained World tail, suspension, exact progress.
+N14_MIGRATION_PATH = "crates/iroha_core/src/runtime/migration.rs"
+N14_SCRATCH_PATH = "crates/iroha_core/src/runtime/migration/scratch.rs"
+N14_STORAGE_PATH = "crates/iroha_core/src/runtime/migration/storage.rs"
+N14_FROZEN_PATH = "crates/iroha_core/src/state/block_field/frozen.rs"
+N14_SUSPENDED_PATH = "crates/iroha_core/src/state/block_field/suspended.rs"
+N14_TRY_PUBLISH = "    fn try_publish_inner("
+N14_RESUME = "        if original.world_suspended {"
+N14_CLEANUP = "                        if original.world_suspended && !original.irreversible {"
+N14_BARRIER = "            if let Err(error) =\n                crate::runtime::migration::resume_barrier("
+N14_NON_WORLD = "            if !*non_world_frozen {"
+N14_ACCUMULATOR = "            if !crate::runtime::keyed_state::selected(world.runtime_selection.get()) {"
+N14_RESUME_FN = "pub(crate) fn resume_barrier("
+N14_CENSUS_FN = "pub(super) fn barrier_census("
+N14_TABLE_BARRIER_FN = (
+    "    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) -> MigrationBoundaryResult<()> {"
+)
+N14_WORLD_TRANSITIONS = "    fn apply_block_start_world_transitions<E: std::fmt::Debug>("
+N14_WORLD_CALL = "        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)?;\n"
+N14_CLEANUP_REFUSAL = "a suspended original must recover every partial reacquisition before its notices"
+N14_RETRY_REFUSAL = "only reviewed local refusals of a reversible original may retry"
+N14_RESUME_REFUSAL = "a suspended original must reacquire its exact World before any other step"
+N14_BARRIER_REFUSAL = "only a local barrier refusal may suspend the retained World tail before its freeze"
+N14_OWNER_REFUSAL = "N14 barrier owner"
+N14_MARKER_REFUSAL = "N14 marker"
+N14_PROGRESS_REFUSAL = "barrier progress must advance only after each migration completes"
+N14_CENSUS_REFUSAL = "the barrier census must skip exactly the completed prefix"
+N14_CHILD_REFUSAL = "a refused barrier callback must discard its successor child"
+N14_FROZEN_REFUSAL = "frozen retirement must also retire suspension notices"
+N14_SLOT_REFUSAL = "suspension notices must stay in their original slots until retirement"
+N14_TAIL_REFUSAL = "start phases must propagate world-transition refusals after Parliament"
+N14_STAGES_REFUSAL = "start phases must keep migration refusals local and typed before governance referenda"
+
+
+def _n14_mutate(source: str, path: str, scope: str | None, original: str, replacement: str,
+                decoy: str = "") -> str:
+    """Replace one exact statement in one live owner, optionally leaving a commented copy."""
+    body = source if scope is None else guard.rust_item(source, scope, path)
+    assert source.count(body) == 1 and body.count(original) == 1, (path, scope, original)
+    changed = source.replace(
+        body, body.replace(original, decoy.format(original=original) + replacement, 1), 1)
+    assert changed != source
+    return changed
+
+
+def test_n14_barrier_suspension_baseline_and_connection() -> None:
+    """The reviewed N14 source passes, and both production gates reach the new checks."""
+    guard.require_publication_barrier_suspension(guard.read(PUBLICATION_PATH))
+    guard.require_block_start_phase_call_order(guard.read(STATE_PATH))
+    for owner, check in (
+        (guard.require_parliament_commit_publication, "require_publication_barrier_suspension"),
+        (guard.require_block_start_phase_call_order, "require_block_start_world_transition_refusals"),
+    ):
+        body = ast.parse(inspect.getsource(owner))
+        calls = [node.func.id for node in ast.walk(body)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        assert calls.count(check) == 1
+
+
+def test_n14_reviewed_owner_pins_are_bound() -> None:
+    """Both whole-owner pins are real digests of the reviewed sources, never the sentinel."""
+    for digest in (guard.ORIGINAL_PUBLICATION_OWNER_DIGEST, guard.BLOCK_START_CONSTRUCTOR_DIGEST):
+        assert re.fullmatch(r"[0-9a-f]{64}", digest) and digest != "0" * 64
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    guard.require_block_start_phase_call_order(state)
+
+
+N14_PUBLICATION_MUTATIONS = (
+    # Suspended cleanup recovers every partial reacquisition before any notice.
+    pytest.param(N14_CLEANUP, "                            fields.world.recover_resumption();\n", "",
+                 N14_CLEANUP_REFUSAL, id="cleanup_without_recovery"),
+    pytest.param(N14_CLEANUP,
+                 "fields.world.recover_resumption();\n"
+                 "                            fields.world.retire_suspension_cleanup();",
+                 "fields.world.retire_suspension_cleanup();\n"
+                 "                            fields.world.recover_resumption();",
+                 N14_CLEANUP_REFUSAL, id="cleanup_notices_before_recovery"),
+    pytest.param(N14_CLEANUP, "                            fields.transactions.retire_frozen_cleanup();\n", "",
+                 N14_CLEANUP_REFUSAL, id="cleanup_loses_membership_notice"),
+    pytest.param(N14_CLEANUP, "if original.world_suspended && !original.irreversible {",
+                 "if original.world_suspended {", N14_CLEANUP_REFUSAL, id="cleanup_after_irreversible"),
+    pytest.param(N14_CLEANUP, "let fields = self.fields.as_mut()", "let fields = other.fields.as_mut()",
+                 N14_CLEANUP_REFUSAL, id="cleanup_foreign_fields"),
+    # Retry eligibility: reversible original and the same reviewed World refusals.
+    pytest.param(N14_TRY_PUBLISH, "| mv::storage::AdmittedStorageError::Allocator { .. }\n",
+                 "| mv::storage::AdmittedStorageError::Allocator { .. }\n"
+                 "| mv::storage::AdmittedStorageError::Planning(_)\n",
+                 N14_RETRY_REFUSAL, id="retry_permanent_planning"),
+    pytest.param(N14_TRY_PUBLISH, "mv::storage::AdmittedStorageError::Busy { .. }\n",
+                 "mv::storage::AdmittedStorageError::Poisoned { .. }\n",
+                 N14_RETRY_REFUSAL, id="retry_poisoned_writer"),
+    pytest.param(N14_TRY_PUBLISH, "(original.fields_frozen || original.world_suspended)",
+                 "original.fields_frozen", N14_RETRY_REFUSAL, id="retry_drops_suspended_original"),
+    pytest.param(N14_TRY_PUBLISH, "\n                    && !original.irreversible\n", "\n",
+                 N14_RETRY_REFUSAL, id="retry_after_irreversible"),
+    # Resumption: commit fence, exact even predecessor generation, original target.
+    pytest.param(N14_RESUME, "            let _commit = original.commit_fence.lock();\n", "",
+                 N14_RESUME_REFUSAL, id="resume_without_commit_fence"),
+    pytest.param(N14_RESUME, "original.predecessor_generation != Some(generation)", "false",
+                 N14_RESUME_REFUSAL, id="resume_changed_predecessor"),
+    pytest.param(N14_RESUME, "!generation.is_multiple_of(2) || ", "",
+                 N14_RESUME_REFUSAL, id="resume_during_publication"),
+    pytest.param(N14_RESUME, "&fields.state_ref.world", "&other_state.world",
+                 N14_RESUME_REFUSAL, id="resume_foreign_target"),
+    pytest.param(N14_RESUME, ".map_err(original_preparation_error)?;", ".ok();",
+                 N14_RESUME_REFUSAL, id="resume_swallows_refusal"),
+    pytest.param(N14_RESUME,
+                 "            fields.world.finish_resumption();\n            original.world_suspended = false;\n",
+                 "            original.world_suspended = false;\n            fields.world.finish_resumption();\n",
+                 N14_RESUME_REFUSAL, id="resume_clears_before_completion"),
+    pytest.param(N14_RESUME, "            fields.world.finish_resumption();\n", "",
+                 N14_RESUME_REFUSAL, id="resume_without_completion"),
+    pytest.param(N14_RESUME, "            original.world_suspended = false;\n", "",
+                 N14_RESUME_REFUSAL, id="resume_retains_suspension"),
+    pytest.param(N14_RESUME, N14_RESUME, "        if original.world_suspended && false {",
+                 N14_RESUME_REFUSAL, id="resume_disabled"),
+    pytest.param(None, "            world_suspended,\n            barrier_progress,\n",
+                 "            world_suspended: barrier_suspended,\n            barrier_progress,\n",
+                 N14_RESUME_REFUSAL, id="resume_renamed_binding"),
+    # Only a local barrier refusal suspends; the cause and progress stay original.
+    pytest.param(N14_BARRIER, "                    _ => false,\n", "                    _ => true,\n",
+                 N14_BARRIER_REFUSAL, id="barrier_rejection_suspends"),
+    pytest.param(N14_BARRIER, "                            | mv::storage::AdmittedStorageError::Allocator { .. },\n",
+                 "                            | mv::storage::AdmittedStorageError::Allocator { .. }\n"
+                 "                            | mv::storage::AdmittedStorageError::Planning(_),\n",
+                 N14_BARRIER_REFUSAL, id="barrier_planning_suspends"),
+    pytest.param(N14_BARRIER, "                if retryable {\n", "                if true {\n",
+                 N14_BARRIER_REFUSAL, id="barrier_always_suspends"),
+    pytest.param(N14_BARRIER, "                    *world_suspended = true;\n", "",
+                 N14_BARRIER_REFUSAL, id="barrier_suspension_unmarked"),
+    pytest.param(N14_BARRIER,
+                 "                    world.begin_suspension();\n                    world.finish_suspension();\n"
+                 "                    *world_suspended = true;\n",
+                 "                    *world_suspended = true;\n                    world.begin_suspension();\n"
+                 "                    world.finish_suspension();\n",
+                 N14_BARRIER_REFUSAL, id="barrier_marks_before_suspension"),
+    pytest.param(N14_BARRIER, ") => TransactionsBlockError::ExecutionDeferred(original),",
+                 ") => TransactionsBlockError::WorldCommitPreparation,",
+                 N14_BARRIER_REFUSAL, id="barrier_deferral_becomes_rejection"),
+    pytest.param(N14_BARRIER, "TransactionsBlockError::LocalStateStorage(original)",
+                 "TransactionsBlockError::WorldCommitPreparation",
+                 N14_BARRIER_REFUSAL, id="barrier_loses_storage_cause"),
+    pytest.param(N14_BARRIER, "                return Err(match error {", "                drop(match error {",
+                 N14_BARRIER_REFUSAL, id="barrier_swallows_refusal"),
+    pytest.param(None, "resume_barrier(world, block_height, barrier_progress)",
+                 "resume_barrier(world, block_height, &mut Default::default())",
+                 N14_BARRIER_REFUSAL, id="barrier_fresh_progress"),
+    pytest.param(None, "crate::runtime::migration::resume_barrier(world, block_height, barrier_progress)",
+                 "crate::runtime::migration::barrier(world, block_height)",
+                 N14_BARRIER_REFUSAL, id="barrier_restarts_every_migration"),
+    pytest.param(None, "            if !*non_world_frozen {", "            if true {",
+                 N14_BARRIER_REFUSAL, id="non_world_refreezes_on_retry"),
+    pytest.param(None, "                *non_world_frozen = true;\n", "",
+                 N14_BARRIER_REFUSAL, id="non_world_freeze_unmarked"),
+    pytest.param(None, "            world.begin_freeze();\n            world.finish_freeze();\n            *fields_frozen = true;\n",
+                 "            world.begin_suspension();\n            world.finish_suspension();\n"
+                 "            world.begin_freeze();\n            world.finish_freeze();\n            *fields_frozen = true;\n",
+                 N14_BARRIER_REFUSAL, id="second_suspension_site"),
+    # The tail observer stays test-only; markers keep only their reviewed owners.
+    pytest.param(None, "            #[cfg(test)]\n            migration_tests::observe_tail();\n",
+                 "            migration_tests::observe_tail();\n",
+                 N14_OWNER_REFUSAL, id="tail_observer_in_production"),
+    pytest.param(None, "            world_suspended: false,\n", "            world_suspended: true,\n",
+                 N14_MARKER_REFUSAL, id="constructed_suspended"),
+    pytest.param(None, "        let this = self;\n",
+                 "        let this = self;\n        *barrier_progress = Default::default();\n",
+                 N14_MARKER_REFUSAL, id="progress_reset_on_retry"),
+    pytest.param(None, "        let this = self;\n",
+                 "        let this = self;\n        *non_world_frozen = false;\n",
+                 N14_MARKER_REFUSAL, id="non_world_freeze_reset"),
+    pytest.param(None, "        let terminal = original.poisoned || original.published;\n",
+                 "        original.world_suspended = false;\n"
+                 "        let terminal = original.poisoned || original.published;\n",
+                 N14_MARKER_REFUSAL, id="suspension_forgotten_after_attempt"),
+)
+
+
+@pytest.mark.parametrize("scope,original,replacement,message", N14_PUBLICATION_MUTATIONS)
+@pytest.mark.parametrize("decoy", ("", "/* {original} */"))
+def test_n14_publication_rejects_lost_suspension_custody(
+    scope: str | None, original: str, replacement: str, message: str, decoy: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every new suspension, retry and progress owner is explicit; a comment is no owner."""
+    state = guard.read(STATE_PATH)
+    publication = guard.read(PUBLICATION_PATH)
+    guard.require_publication_barrier_suspension(publication)
+    changed = _n14_mutate(publication, PUBLICATION_PATH, scope, original, replacement, decoy)
+    with pytest.raises(RuntimeError, match=re.escape(f"{PUBLICATION_PATH}: {message}")):
+        guard.require_publication_barrier_suspension(changed)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=re.escape(PUBLICATION_PATH)):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("moved,anchor,message", (
+    pytest.param(N14_RESUME, "        let this = self;\n", N14_RESUME_REFUSAL, id="resume_after_destructure"),
+    pytest.param(N14_NON_WORLD, "            // Only the barrier's exact completed prefix",
+                 N14_BARRIER_REFUSAL, id="non_world_freeze_after_barrier"),
+    pytest.param(N14_ACCUMULATOR, "            if let Err(error) =\n",
+                 N14_BARRIER_REFUSAL, id="accumulator_before_barrier"),
+    pytest.param("            *world_effects = Some(effects);\n", "            world.begin_freeze();\n",
+                 N14_BARRIER_REFUSAL, id="tail_retained_after_barrier"),
+))
+def test_n14_publication_rejects_reordered_retained_stages(
+    moved: str, anchor: str, message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Intact statements cannot move across the barrier, freeze or resumption boundary."""
+    state = guard.read(STATE_PATH)
+    publication = guard.read(PUBLICATION_PATH)
+    block = moved if moved.endswith("\n") else guard.rust_item(publication, moved, PUBLICATION_PATH) + "\n"
+    assert publication.count(block) == 1 and publication.count(anchor) == 1
+    changed = publication.replace(block, "", 1).replace(anchor, block + anchor, 1)
+    assert changed != publication
+    with pytest.raises(RuntimeError, match=re.escape(f"{PUBLICATION_PATH}: {message}")):
+        guard.require_publication_barrier_suspension(changed)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=re.escape(PUBLICATION_PATH)):
+        guard.require_parliament_commit_publication(state)
+
+
+N14_ENGINE_MUTATIONS = (
+    pytest.param(N14_MIGRATION_PATH, N14_RESUME_FN, "        if entry.barrier_holds {\n",
+                 "        progress.completed_through = Some(id);\n        if entry.barrier_holds {\n",
+                 N14_PROGRESS_REFUSAL, id="progress_before_callback"),
+    pytest.param(N14_MIGRATION_PATH, N14_RESUME_FN,
+                 "scratch::barrier_census(world, progress.completed_through)?",
+                 "scratch::barrier_census(world, None)?", N14_PROGRESS_REFUSAL, id="census_restarts"),
+    pytest.param(N14_MIGRATION_PATH, N14_RESUME_FN, "migration.code.barrier(world, held.cursor(entry))?;",
+                 "let _ = migration.code.barrier(world, held.cursor(entry));",
+                 N14_PROGRESS_REFUSAL, id="callback_refusal_swallowed"),
+    pytest.param(N14_MIGRATION_PATH, None, "    completed_through: Option<DefinitionId>,\n}",
+                 "    pub(crate) completed_through: Option<DefinitionId>,\n}",
+                 N14_PROGRESS_REFUSAL, id="progress_supplied_by_caller"),
+    pytest.param(N14_SCRATCH_PATH, N14_CENSUS_FN, "**id > done", "**id >= done",
+                 N14_CENSUS_REFUSAL, id="census_repeats_completed"),
+    pytest.param(N14_SCRATCH_PATH, N14_CENSUS_FN,
+                 "            completed_through.is_none_or(|done| **id > done)\n                && ", "            ",
+                 N14_CENSUS_REFUSAL, id="census_ignores_progress"),
+    pytest.param(N14_STORAGE_PATH, N14_TABLE_BARRIER_FN, "        child.apply();\n", "",
+                 N14_CHILD_REFUSAL, id="successful_mirror_discarded"),
+    pytest.param(N14_STORAGE_PATH, N14_TABLE_BARRIER_FN, "                    storage: &mut child,\n",
+                 "                    storage: successor,\n", N14_CHILD_REFUSAL, id="mirror_outside_child"),
+    pytest.param(N14_STORAGE_PATH, N14_TABLE_BARRIER_FN,
+                 "mv::storage::AdmittedStorageError::Planning(original)",
+                 "mv::storage::AdmittedStorageError::Allocation(original.into())",
+                 N14_CHILD_REFUSAL, id="planning_becomes_retryable"),
+    pytest.param(N14_FROZEN_PATH, "    pub(crate) fn retire_frozen_cleanup(&mut self) {",
+                 "        self.retire_suspension_cleanup();\n", "",
+                 N14_FROZEN_REFUSAL, id="frozen_retains_resumption_notices"),
+    pytest.param(N14_SUSPENDED_PATH, "    pub(crate) fn finish_suspension(&mut self) {",
+                 "        self.suspension_cleanup = cleanup;\n", "        drop(cleanup);\n",
+                 N14_SLOT_REFUSAL, id="suspension_notifies_inside_attempt"),
+    pytest.param(N14_SUSPENDED_PATH, "    pub(crate) fn finish_resumption(&mut self) {",
+                 "        self.resumption_cleanup = Some(slot);\n", "        drop(slot);\n",
+                 N14_SLOT_REFUSAL, id="resumption_notifies_inside_attempt"),
+    pytest.param(N14_SUSPENDED_PATH, "    pub(crate) fn recover_resumption(&mut self) {",
+                 "        self.resumption_cleanup = Some(slot);\n", "        drop(slot);\n",
+                 N14_SLOT_REFUSAL, id="recovery_notifies_before_siblings"),
+    pytest.param(N14_SUSPENDED_PATH, "    pub(crate) fn retire_suspension_cleanup(&mut self) {",
+                 "        assert!(matches!(\n            self.phase,\n"
+                 "            Some(Phase::Suspended(_) | Phase::Frozen(_) | Phase::Reading(_))\n        ));\n",
+                 "", N14_SLOT_REFUSAL, id="notices_retire_with_live_writer"),
+)
+
+
+@pytest.mark.parametrize("path,scope,original,replacement,message", N14_ENGINE_MUTATIONS)
+@pytest.mark.parametrize("decoy", ("", "/* {original} */"))
+def test_n14_barrier_engine_rejects_repeated_or_lost_effects(
+    path: str, scope: str | None, original: str, replacement: str, message: str, decoy: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Completed barrier effects apply once, refused callbacks roll back, notices wait."""
+    original_read = guard.read
+    publication = original_read(PUBLICATION_PATH)
+    guard.require_publication_barrier_suspension(publication)
+    changed = _n14_mutate(original_read(path), path, scope, original, replacement, decoy)
+    monkeypatch.setattr(guard, "read", lambda requested:
+                        changed if requested == path else original_read(requested))
+    with pytest.raises(RuntimeError, match=re.escape(f"{path}: {message}")):
+        guard.require_publication_barrier_suspension(publication)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_commit_publication(original_read(STATE_PATH))
+
+
+N14_START_MUTATIONS = (
+    pytest.param(START_CONSTRUCTOR, N14_WORLD_CALL, N14_WORLD_CALL.replace("?;", ".ok();"),
+                 N14_TAIL_REFUSAL, id="world_transitions_swallowed"),
+    pytest.param(START_CONSTRUCTOR, N14_WORLD_CALL, "        if false {\n    " + N14_WORLD_CALL + "        }\n",
+                 N14_TAIL_REFUSAL, id="world_transitions_disabled"),
+    pytest.param(START_CONSTRUCTOR, N14_WORLD_CALL, "", N14_TAIL_REFUSAL, id="world_transitions_missing"),
+    pytest.param(START_CONSTRUCTOR, N14_WORLD_CALL, N14_WORLD_CALL.replace("&mut sb", "&mut other"),
+                 N14_TAIL_REFUSAL, id="world_transitions_foreign_block"),
+    pytest.param(START_CONSTRUCTOR, N14_WORLD_CALL, N14_WORLD_CALL + N14_WORLD_CALL,
+                 N14_TAIL_REFUSAL, id="world_transitions_repeated"),
+    pytest.param(N14_WORLD_TRANSITIONS, ") => StateBlockStartError::ExecutionDeferred(original),",
+                 ") => StateBlockStartError::Policy(String::new()),",
+                 N14_STAGES_REFUSAL, id="migration_deferral_becomes_verdict"),
+    pytest.param(N14_WORLD_TRANSITIONS, "StateBlockStartError::Storage(original)\n",
+                 "StateBlockStartError::Policy(original.to_string())\n",
+                 N14_STAGES_REFUSAL, id="migration_storage_becomes_verdict"),
+    pytest.param(N14_WORLD_TRANSITIONS,
+                 "            )?;\n            wtx = sb.world.try_transaction_with_axt_lane_map(",
+                 "            ).ok();\n            wtx = sb.world.try_transaction_with_axt_lane_map(",
+                 N14_STAGES_REFUSAL, id="migration_refusal_swallowed"),
+    pytest.param(N14_WORLD_TRANSITIONS, ") -> Result<(), StateBlockStartError<E>> {",
+                 ") -> Result<(), StateStorageAdmissionError> {",
+                 N14_STAGES_REFUSAL, id="transition_error_retyped"),
+)
+
+
+@pytest.mark.parametrize("scope,original,replacement,message", N14_START_MUTATIONS)
+@pytest.mark.parametrize("decoy", ("", "/* {original} */"))
+def test_n14_block_start_keeps_world_transition_refusals_after_parliament(
+    scope: str, original: str, replacement: str, message: str, decoy: str,
+) -> None:
+    """The callee-owned start error keeps migration refusals local, typed and post-Parliament."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_phase_call_order(source)
+    changed = _n14_mutate(source, STATE_PATH, scope, original, replacement, decoy)
+    with pytest.raises(RuntimeError, match=re.escape(f"{STATE_PATH}: {message}")):
+        guard.require_block_start_phase_call_order(changed)
+
+
+def test_n14_world_transitions_cannot_move_before_parliament() -> None:
+    """Moving the intact call ahead of the positioned Parliament pass is refused."""
+    source = guard.read(STATE_PATH)
+    anchor = "        governance_start::run(&mut sb, |sb| {\n"
+    assert source.count(N14_WORLD_CALL) == 1 and source.count(anchor) == 1
+    changed = source.replace(N14_WORLD_CALL, "", 1).replace(anchor, N14_WORLD_CALL + anchor, 1)
+    with pytest.raises(RuntimeError, match=re.escape(f"{STATE_PATH}: start phases")):
+        guard.require_block_start_phase_call_order(changed)
+
+
+@pytest.mark.parametrize("path,original,replacement", (
+    pytest.param(PUBLICATION_PATH, "            let _commit = original.commit_fence.lock();\n",
+                 "            // The commit fence precedes every reacquisition.\n"
+                 "            let _commit =\n                original.commit_fence.lock();\n", id="resume_layout"),
+    pytest.param(PUBLICATION_PATH, "                    world.begin_suspension();\n",
+                 "                    /* install every inert slot */ world.begin_suspension();\n",
+                 id="suspension_comment"),
+    pytest.param(N14_MIGRATION_PATH, "        progress.completed_through = Some(id);\n    }\n    Ok(())",
+                 "        // Only a completed migration advances the cursor.\n"
+                 "        progress.completed_through = Some(id);\n    }\n    Ok(())", id="progress_comment"),
+    pytest.param(STATE_PATH, N14_WORLD_CALL,
+                 "        // World transitions follow the positioned Parliament pass.\n" + N14_WORLD_CALL,
+                 id="start_comment"),
+))
+def test_n14_guard_accepts_comment_and_layout_changes(
+    path: str, original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only live tokens are owners: commentary and layout do not need a repin."""
+    original_read = guard.read
+    source = original_read(path)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    monkeypatch.setattr(guard, "read", lambda requested:
+                        changed if requested == path else original_read(requested))
+    if path == STATE_PATH:
+        guard.require_block_start_phase_call_order(changed)
+    else:
+        guard.require_parliament_commit_publication(original_read(STATE_PATH))
