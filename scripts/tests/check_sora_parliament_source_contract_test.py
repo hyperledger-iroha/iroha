@@ -313,7 +313,9 @@ def test_queue_signed_proposal_gas_admission_prefix_preserves_literal_spaces() -
 
 
 @pytest.mark.parametrize("original,replacement,message", (
-    ("return Err(Self::refused(Error::RuntimeRejected(rejection), checked));", "let _ = rejection;",
+    ("Self::refused(Error::RuntimeRejected(rejection), checked)", "Self::refused(Error::Full, checked)",
+     "signed proposal gas admission prefix changed"),
+    ("Err(original) => return Err(Self::refused(original, checked)),", "Err(_original) => {},",
      "signed proposal gas admission prefix changed"),
     ("Err(original) => return Err(Self::refused(Error::Deferred(original), checked)),",
      "Err(_original) => LanePrivacyRegistry::default(),",
