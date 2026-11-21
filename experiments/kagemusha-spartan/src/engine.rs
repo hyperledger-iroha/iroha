@@ -1140,6 +1140,11 @@ pub(super) fn retained_output_part(bytes: &[u8], part: u32) -> Result<Vec<u8>> {
         _ => Err(Error::Malformed("retained output selector")),
     }
 }
+/// The signed eight-program generation (Receive, Send, Bootstrap, Control on both curves)
+/// has no ArchiveSent selector. Only a newly signed generation carrying an ArchiveSent
+/// program may admit that kind; until then every path that needs its program refuses here.
+pub(crate) const ARCHIVE_SENT_UNSIGNED: &str = "signed generation has no ArchiveSent program";
+
 fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
     match w {
         ExactOperationWitness::Bootstrap(x) => &mut x.input.receipt,
@@ -1148,6 +1153,7 @@ fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
         | ExactOperationWitness::Unload { step: x, .. } => &mut x.receipt,
         ExactOperationWitness::Send(x) => &mut x.receipt,
         ExactOperationWitness::Receive { step, .. } => &mut step.receipt,
+        ExactOperationWitness::ArchiveSent { step, .. } => &mut step.receipt,
     }
 }
 fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Receipt, u8) {
@@ -1166,17 +1172,25 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
         ExactOperationWitness::Receive { step, .. } => {
             (&step.credential, &step.statement, &step.receipt, 4)
         }
+        ExactOperationWitness::ArchiveSent { step, .. } => {
+            (&step.credential, &step.statement, &step.receipt, 5)
+        }
     }
 }
-fn kind(w: &ExactOperationWitness) -> usize {
-    match w {
+/// The installed program that proves this witness. Memory admission, the preparation
+/// relation check, proving and completion verification all select it here.
+fn kind(w: &ExactOperationWitness) -> Result<usize> {
+    Ok(match w {
         ExactOperationWitness::Bootstrap(_) => full::BOOTSTRAP,
         ExactOperationWitness::Load { .. }
         | ExactOperationWitness::RefreshTimeAnchor(_)
         | ExactOperationWitness::Unload { .. } => full::CONTROL,
         ExactOperationWitness::Send(_) => full::SEND,
         ExactOperationWitness::Receive { .. } => full::RECEIVE,
-    }
+        ExactOperationWitness::ArchiveSent { .. } => {
+            return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+        }
+    })
 }
 /// The kind's name in measurement lines.
 fn kind_name(k: usize) -> &'static str {
@@ -1886,10 +1900,15 @@ impl NativeEngine {
                     can_credit,
                 }));
             }
+            // No installed relation exists to check; `prepare` has already rechecked the
+            // native evidence and refused, so this frozen path is never reached.
+            ExactOperationWitness::ArchiveSent { .. } => {
+                return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+            }
         }
         check_constraints(
             w,
-            p.programs[kind(witness)].primary.shape.col_bits,
+            p.programs[kind(witness)?].primary.shape.col_bits,
             self.time.as_deref(),
         )?;
         Ok(receive)
@@ -1947,7 +1966,7 @@ impl NativeEngine {
         stage.mark("head");
         let receive = self.check_preparation(&frozen, head, parameters)?;
         stage.mark("preparation");
-        stage.finish(&format!("prepare {}", kind_name(kind(&frozen))));
+        stage.finish(&format!("prepare {}", kind_name(kind(&frozen)?)));
         let body = receipt_mut(&mut frozen).body;
         Ok(PreparedOperation {
             resumed_under: None,
@@ -2008,6 +2027,7 @@ impl Engine for NativeEngine {
             2 | 6 | 7 => full::CONTROL,
             3 => full::SEND,
             4 => full::RECEIVE,
+            5 => return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED)),
             _ => return Err(Error::Malformed("capsule kind")),
         };
         self.require_minimum_memory(parameters, kind)?;
@@ -2024,7 +2044,7 @@ impl Engine for NativeEngine {
         if !self.resumed_here(prepared, parameters) {
             return Err(Error::AuthorityMismatch("resumed selection authority"));
         }
-        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
+        self.require_minimum_memory(parameters, kind(&prepared.witness)?)?;
         prepared.require_receive_admission()?;
         // A resumed preparation must bind its frozen interval to the operation's actual
         // capture before fresh policy checking and selection. Selected recovery bypasses both.
@@ -2114,7 +2134,13 @@ impl Engine for NativeEngine {
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
-        self.require_minimum_memory(parameters, kind(witness))?;
+        if matches!(witness, ExactOperationWitness::ArchiveSent { .. }) {
+            // Recheck the complete native evidence and successor first, so an invalid or
+            // changed ArchiveSent keeps its own refusal. The selector below then refuses a
+            // valid one: nothing is frozen into a capsule, selected or signed.
+            self.check_archive_sent(witness, head, parameters)?;
+        }
+        self.require_minimum_memory(parameters, kind(witness)?)?;
         self.check_send_time(witness, false)?;
         self.authenticate_send_request(witness, parameters)?;
         let prepared = self.prepare_retained(witness, head, parameters)?;
@@ -2184,7 +2210,7 @@ impl Engine for NativeEngine {
         }
         // A selected capsule can resume in a colder, smaller process than the
         // one that prepared it. Check again before cloning its private witness.
-        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
+        self.require_minimum_memory(parameters, kind(&prepared.witness)?)?;
         self.authorize_debit(DebitBoundary::AfterSelection, &prepared, parameters)?;
         let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
@@ -2200,7 +2226,7 @@ impl Engine for NativeEngine {
         let mut witness = prepared.witness.as_ref().clone();
         *receipt_mut(&mut witness) = receipt.receipt.clone();
         let p = &parameters.inner;
-        let k = kind(&witness);
+        let k = kind(&witness)?;
         let mut pairs = Vec::new();
         if k != full::BOOTSTRAP {
             let (_, _, _, _, u) = decode_head(&prepared.predecessor.pair, parameters)?;
@@ -2281,6 +2307,9 @@ impl Engine for NativeEngine {
                 .0,
                 None,
             ),
+            ExactOperationWitness::ArchiveSent { .. } => {
+                return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+            }
         };
         stage.mark("primary wiring");
         let (cp, ip, wp, rows_p) = build(
@@ -2554,7 +2583,7 @@ impl NativeEngine {
         stage.mark("resume");
         let completed = self.verify_staged_completion(&prepared, record, parameters)?;
         stage.mark("output");
-        stage.finish(&format!("completion {}", kind_name(kind(&prepared.witness))));
+        stage.finish(&format!("completion {}", kind_name(kind(&prepared.witness)?)));
         Ok((prepared, completed))
     }
 }

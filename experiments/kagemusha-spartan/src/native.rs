@@ -6,6 +6,7 @@
 //! implement a second journal or expose a caller-supplied acceptance Boolean.
 
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 use ff::PrimeField;
 use iroha_pasta::Fp;
@@ -320,6 +321,25 @@ pub struct BootstrapWitness {
     pub relation: [u8; 32],
     pub input: bootstrap::Inputs,
 }
+/// Private payer state of one ArchiveSent step (wallet wire §3.3, tag 5). Every field other
+/// than the successor nonce `after_core[29]` is recomputed by Native from the selected
+/// predecessor, the exact retained originals and the two removal openings; a witness that
+/// differs in any derived word is refused.
+#[derive(Clone)]
+pub struct ArchiveSentWitness {
+    pub before_core: [Fp; 30],
+    pub before_rest: [Fp; 6],
+    pub after_core: [Fp; 30],
+    pub after_rest: [Fp; 6],
+    pub credential: Credential,
+    pub statement: [Fp; 26],
+    /// Unsigned receipt template: zero signature, proof and capsule digests.
+    pub receipt: bootstrap::Receipt,
+    /// Removal of the Payment's pending-outgoing leaf under the committed core root.
+    pub core_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+    /// The same removal under the predecessor head's lineage-adjusted pending root.
+    pub adjusted_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+}
 #[derive(Clone)]
 pub enum ExactOperationWitness {
     Bootstrap(Box<BootstrapWitness>),
@@ -342,6 +362,19 @@ pub enum ExactOperationWitness {
         /// verification verdict; the Receive relation constrains valid credit or
         /// Burn, retaining malformed cryptographic words without rewriting them.
         incoming_payment: Arc<[u8]>,
+    },
+    /// Payer ArchiveSent of one delivered Send. The four exact originals are its fold
+    /// witnesses: the released Send capsule and completion (historical payer credential,
+    /// certificate and the exact Payment), the hosted open Request and the Credited
+    /// CreditStatus. No program of the signed generation proves this kind, so Native
+    /// rechecks it completely and then refuses to freeze, select or finalize it.
+    ArchiveSent {
+        step: Box<ArchiveSentWitness>,
+        /// Contains the original private Send witness. Erase it when the last owner drops.
+        send_capsule: Arc<Zeroizing<Vec<u8>>>,
+        send_completion: Arc<[u8]>,
+        open_request: Arc<[u8]>,
+        credit_status: Arc<[u8]>,
     },
 }
 impl ExactOperationWitness {
@@ -377,6 +410,7 @@ impl ExactOperationWitness {
             Self::RefreshTimeAnchor(w) | Self::Unload { step: w, .. } => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
+            Self::ArchiveSent { step, .. } => &step.credential,
         }
     }
     /// Decode bounded canonical private witness data, without granting authority.
@@ -554,6 +588,7 @@ impl PreparedOperation {
             | ExactOperationWitness::RefreshTimeAnchor(step) => {
                 (&step.after_core, &step.after_rest)
             }
+            ExactOperationWitness::ArchiveSent { step, .. } => (&step.after_core, &step.after_rest),
         }
     }
 
@@ -950,7 +985,7 @@ impl RecoveryCapsule {
         if capsule.scheme() != scheme {
             return Err(Error::AuthorityMismatch("capsule scheme"));
         }
-        if capsule.encode()? != bytes {
+        if Zeroizing::new(capsule.encode()?).as_slice() != bytes {
             return Err(Error::Malformed("capsule canonical frame"));
         }
         Ok(capsule)

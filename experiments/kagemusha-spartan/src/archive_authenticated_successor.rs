@@ -875,3 +875,5 @@ fn successor_archive_receiver_request_signature_and_payer_specialization() {
 
 #[path = "archive_later_head_successor.rs"]
 mod later_receiver_head;
+#[path = "archive_sent_custody_tests.rs"]
+mod payer_custody;

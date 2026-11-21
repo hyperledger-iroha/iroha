@@ -928,6 +928,7 @@ fn operation_id(witness: &native::ExactOperationWitness) -> [u8; 32] {
         | native::ExactOperationWitness::Unload { step, .. } => &step.receipt.body,
         native::ExactOperationWitness::Send(step) => &step.receipt.body,
         native::ExactOperationWitness::Receive { step, .. } => &step.receipt.body,
+        native::ExactOperationWitness::ArchiveSent { step, .. } => &step.receipt.body,
     };
     body[114..146].try_into().unwrap()
 }
