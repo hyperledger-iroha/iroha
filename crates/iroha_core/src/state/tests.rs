@@ -26470,10 +26470,10 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .expect("original callback source starts recording before block effects");
         ValidBlock::execute_recorded_component_outputs(&mut source, &mut state_block, &recorder)
             .expect("original signed callback completes with an ordinary rejection");
-        let err = source.output_error(0).expect("trigger must fail to execute");
+        let err = source.output_error(0).expect("trigger must fail to execute").baseline().expect("baseline trigger fixture");
         assert!(
             matches!(
-                &err,
+                err,
                 TransactionRejectionReason::Validation(
                     ValidationFail::InstructionFailed(InstructionExecutionError::Find(
                         FindError::Domain(domain),
@@ -28404,10 +28404,10 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
     let_row! { register_trigger = Register::trigger(Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), )) };
     let register_tx = chain.sign(&ALICE_KEYPAIR, [register_trigger.into()], 1);
     assert_eq!(chain.commit(vec![register_tx]), vec![true]);
-    let reg_err = chain.committed(2).block().output_error(0).cloned();
+    let reg_err = chain.committed(2).block().output_error(0).map(|error| error.baseline().expect("baseline trigger fixture").clone());
     let exec_tx = chain.sign(&ALICE_KEYPAIR, [ExecuteTrigger::new(trigger_id.clone()).into()], 1001);
     assert_eq!(chain.commit(vec![exec_tx]), vec![false]);
-    let exec_err = chain.committed(3).block().output_error(0).cloned();
+    let exec_err = chain.committed(3).block().output_error(0).map(|error| error.baseline().expect("baseline trigger fixture").clone());
     let view = chain.state().view();
     let asset_exists = view.world.asset_definition(&asset_definition_id).is_ok();
     let trigger_present = view.world.triggers().ids().get(&trigger_id).is_some();

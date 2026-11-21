@@ -46,26 +46,12 @@ extension KagemushaWalletExchangeCallV1 {
                 },
                 ingest: { finality in try self.ingestLedgerAttempt(attempt, finality: finality) },
                 synchronize: { entrypoint, targetHeight in
-                    let selection = try ToriiKagemushaWalletLedgerSelectionV1(
-                        schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint)
-                    let before = try self.wallet.epochProgress()
-                    do {
-                        let after = try await kagemushaWalletSynchronizeEpochsV1(
-                            targetHeight: targetHeight, maximumBoundaries: maximumBoundaries,
-                            requireCurrentOwner: requireCurrentOwner,
-                            progress: { try self.wallet.epochProgress() },
-                            fetch: { height in
-                                let read = try await transport.getKagemushaWalletLedgerAttemptEpochV1(
-                                    selection: selection, boundaryHeight: height,
-                                    canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
-                                guard case .original(let bytes) = read else { throw KagemushaWalletLedgerWaitV1() }
-                                return bytes
-                            },
-                            ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
-                        return (targetHeight <= after.boundaryHeight, after.epoch != before.epoch)
-                    } catch is KagemushaWalletLedgerWaitV1 {
-                        return (false, try self.wallet.epochProgress().epoch != before.epoch)
-                    }
+                    try await kagemushaWalletSynchronizeLedgerAttemptV1(
+                        selection: .init(schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint),
+                        targetHeight: targetHeight, transport: transport, canonicalAuth: canonicalAuth,
+                        maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner,
+                        progress: { try self.wallet.epochProgress() },
+                        ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
                 })
         }
     }
@@ -130,3 +116,97 @@ func kagemushaWalletConfirmLedgerAttemptV1(
         return .init(outcome: decided, advanced: true)
     }
 }
+
+private func kagemushaWalletSynchronizeLedgerAttemptV1(
+    selection: ToriiKagemushaWalletLedgerSelectionV1, targetHeight: UInt64,
+    transport: ToriiClient, canonicalAuth: ToriiCanonicalRequestAuth, maximumBoundaries: Int,
+    requireCurrentOwner: @escaping @Sendable () async throws -> Void,
+    progress: () throws -> KagemushaWalletEpochProgressV1,
+    ingest: (UInt64, Data) throws -> KagemushaWalletEpochProgressV1
+) async throws -> (covered: Bool, selected: Bool) {
+    let before = try progress()
+    do {
+        let after = try await kagemushaWalletSynchronizeEpochsV1(targetHeight: targetHeight,
+            maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner, progress: progress,
+            fetch: { height in
+                let read = try await transport.getKagemushaWalletLedgerAttemptEpochV1(selection: selection,
+                    boundaryHeight: height, canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
+                guard case .original(let bytes) = read else { throw KagemushaWalletLedgerWaitV1() }
+                return bytes
+            }, ingest: ingest)
+        return (targetHeight <= after.boundaryHeight, after.epoch != before.epoch)
+    } catch is KagemushaWalletLedgerWaitV1 {
+        return (false, try progress().epoch != before.epoch)
+    }
+}
+
+extension KagemushaSpartanWalletV1 {
+    /// Confirm a released Unload through its account-authenticated Torii route. Pending or unavailable
+    /// reads preserve the local claim and its last known payout.
+    public func confirmUnload(operationId: Data, signedTransaction: Data, schemeID: Data, walletID: Data,
+        transport: ToriiClient, canonicalAuth: ToriiCanonicalRequestAuth, maximumBoundaries: Int = 64,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> KagemushaSpartanUnloadSettlementV1 {
+        let result = try await confirmSpartanLedgerAttempt(schemeID: schemeID, walletID: walletID, transport: transport,
+            canonicalAuth: canonicalAuth, maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner) { proof in
+                try self.unloadSettlement(operationId: operationId, signedTransaction: signedTransaction, finality: proof)
+            }
+        return result
+    }
+
+    /// Verify this account-signed Activate using account-authenticated finality and the wallet's certified epochs.
+    public func confirmActivation(signedTransaction: Data, schemeID: Data, walletID: Data,
+        transport: ToriiClient, canonicalAuth: ToriiCanonicalRequestAuth, maximumBoundaries: Int = 64,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> KagemushaSpartanActivationSettlementV1 {
+        try await confirmSpartanLedgerAttempt(schemeID: schemeID, walletID: walletID, transport: transport,
+            canonicalAuth: canonicalAuth, maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner) { proof in
+                try self.activationSettlement(signedTransaction: signedTransaction, finality: proof)
+            }
+    }
+
+    private func confirmSpartanLedgerAttempt<Value: SpartanCertifiedAttemptV1>(
+        schemeID: Data, walletID: Data, transport: ToriiClient, canonicalAuth: ToriiCanonicalRequestAuth, maximumBoundaries: Int,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void, read: (Data) throws -> Value
+    ) async throws -> Value {
+        guard (1...64).contains(maximumBoundaries) else { throw KagemushaWalletErrorV1.invalidInput }
+        func retained(_ proof: Data = Data()) throws -> Value { try read(proof) }
+        func outcome(_ value: Value) -> KagemushaWalletLedgerOutcomeV1 {
+            guard value.height != 0 else { return .awaiting(entrypoint: value.entrypoint) }
+            let commit = KagemushaWalletLedgerCommitV1(height: value.height, commitHash: value.block)
+            return value.accepted ? .confirmed(commit) : .rejected(commit)
+        }
+        func route(_ entrypoint: Data) throws -> ToriiKagemushaWalletLedgerSelectionV1 {
+            try .init(schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint)
+        }
+        _ = try await kagemushaWalletConfirmLedgerAttemptV1(requireCurrentOwner: requireCurrentOwner,
+            outcome: { try outcome(retained()) },
+            fetch: { try await transport.getKagemushaWalletLedgerAttemptFinalityV1(selection: route($0),
+                canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner) },
+            ingest: { proof in
+                let seen = try retained(proof)
+                if let height = seen.requiredHeight { return .epochRequired(targetHeight: height) }
+                return .outcome(outcome(seen))
+            },
+            synchronize: { entry, target in
+                try await kagemushaWalletSynchronizeLedgerAttemptV1(selection: route(entry), targetHeight: target,
+                    transport: transport, canonicalAuth: canonicalAuth, maximumBoundaries: maximumBoundaries,
+                    requireCurrentOwner: requireCurrentOwner, progress: { try self.epochProgress() },
+                    ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
+            })
+        try Task.checkCancellation()
+        try await requireCurrentOwner()
+        return try retained()
+    }
+}
+
+
+private protocol SpartanCertifiedAttemptV1 {
+    var height: UInt64 { get }
+    var accepted: Bool { get }
+    var block: Data { get }
+    var entrypoint: Data { get }
+    var requiredHeight: UInt64? { get }
+}
+extension KagemushaSpartanUnloadSettlementV1: SpartanCertifiedAttemptV1 {}
+extension KagemushaSpartanActivationSettlementV1: SpartanCertifiedAttemptV1 {}

@@ -166,6 +166,11 @@ impl ExecutionOutputPhase {
     pub fn of(output: &ExecutionOutputV1) -> Self {
         match output {
             ExecutionOutputV1::GovernanceBlockStart(_) => Self::GovernanceStart,
+            ExecutionOutputV1::C10(output) => match &output.source {
+                super::execution_output::ExecutionSourceC10V1::Network(_) => Self::Network,
+                super::execution_output::ExecutionSourceC10V1::Pipeline { .. } => Self::Pipeline,
+                super::execution_output::ExecutionSourceC10V1::Time { .. } => Self::Time,
+            },
             ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => {
                 Self::Network
             }
@@ -492,6 +497,26 @@ pub enum ReservedExecutionOutput {
 }
 
 impl ExecutionOutputReservation<'_> {
+    /// Bind the preowned diagnostic to the selected C10 source before a disposition is retained.
+    /// Reuses the original allocations and checks the actual canonical bound.
+    ///
+    /// # Errors
+    /// Returns an error if the applying policy did not fund the C10 terminal.
+    pub fn select_c10(&mut self) -> Result<(), String> {
+        let row = self
+            .terminal
+            .take()
+            .ok_or("terminal ownership disappeared")?
+            .into_c10_output_limit()?;
+        let bytes = output_bytes(&row)?;
+        if bytes > self.terminal_ceiling_bytes {
+            return Err("C10 terminal exceeds its profile-aware reservation".into());
+        }
+        self.terminal = Some(row);
+        self.terminal_bytes = bytes;
+        Ok(())
+    }
+
     /// Retain an actual Network rejection without changing its economic disposition.
     ///
     /// The execution owner has already dropped the rejected business overlay and
@@ -510,14 +535,12 @@ impl ExecutionOutputReservation<'_> {
         use super::execution_output::NETWORK_REJECTION_DIAGNOSTIC_OMITTED;
         use crate::transaction::error::TransactionRejectionReason;
 
-        let network = match &actual {
-            ExecutionOutputV1::Network(network) => network,
-            ExecutionOutputV1::NetworkWithLifecycle(row) => &row.execution,
-            _ => return Err("rejection settlement requires a Network output".into()),
-        };
-        if network.result.is_ok()
-            || !network.result.batch_transfer_outcomes().is_empty()
-            || !network.completions.is_empty()
+        if actual.network_index().is_none() {
+            return Err("rejection settlement requires a Network output".into());
+        }
+        if actual.result().is_ok()
+            || !actual.result().batch_transfer_outcomes().is_empty()
+            || !actual.completions().is_empty()
             || actual
                 .trigger_lifecycle()
                 .is_some_and(|trace| !trace.effects().is_empty())
@@ -547,13 +570,33 @@ impl ExecutionOutputReservation<'_> {
                 }
             };
         }
-        let network = match terminal {
-            ExecutionOutputV1::Network(network) => network,
-            ExecutionOutputV1::NetworkWithLifecycle(row) => &mut row.execution,
+        let (error, fee) = match terminal {
+            ExecutionOutputV1::Network(network)
+            | ExecutionOutputV1::NetworkWithLifecycle(
+                super::execution_output::NetworkExecutionOutputV2 {
+                    execution: network, ..
+                },
+            ) => {
+                let Err(TransactionRejectionReason::LimitCheck(error)) = &mut network.result.0
+                else {
+                    return Err("Network terminal lost its bounded diagnostic".into());
+                };
+                (error, &mut network.result.2)
+            }
+            ExecutionOutputV1::C10(row)
+                if matches!(
+                    row.source,
+                    super::execution_output::ExecutionSourceC10V1::Network(_)
+                ) =>
+            {
+                let Err(crate::ivm_c10::TransactionRejectionReasonC10V1::LimitCheck(error)) =
+                    &mut row.result.0
+                else {
+                    return Err("C10 Network terminal lost its bounded diagnostic".into());
+                };
+                (error, &mut row.result.2)
+            }
             _ => return Err("rejection has no Network terminal".into()),
-        };
-        let Err(TransactionRejectionReason::LimitCheck(error)) = &mut network.result.0 else {
-            return Err("Network terminal lost its bounded diagnostic".into());
         };
         // Reuse the already allocated terminal string. The shorter diagnostic
         // has the same enum/layout and cannot need more capacity than its owner.
@@ -570,7 +613,7 @@ impl ExecutionOutputReservation<'_> {
             {
                 return Err("rejection Nexus receipt exceeds portable bound".into());
             }
-            network.result.set_nexus_fee_receipt(Some(receipt.clone()));
+            *fee = Some(receipt.clone());
         }
         self.terminal_bytes = output_bytes(terminal)?;
         let total = self
@@ -617,6 +660,9 @@ impl ExecutionOutputReservation<'_> {
             transaction::error::TransactionRejectionReason,
         };
 
+        if matches!(actual, ExecutionOutputV1::C10(_)) {
+            return self.finish_c10_internal_rejection(actual);
+        }
         if matches!(
             &actual,
             ExecutionOutputV1::PipelineWithLifecycle(_) | ExecutionOutputV1::TimeWithLifecycle(_)
@@ -638,7 +684,8 @@ impl ExecutionOutputReservation<'_> {
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
-            | ExecutionOutputV1::GovernanceBlockStart(_) => {
+            | ExecutionOutputV1::GovernanceBlockStart(_)
+            | ExecutionOutputV1::C10(_) => {
                 return Err("internal rejection requires a Pipeline or Time output".into());
             }
         };
@@ -686,7 +733,8 @@ impl ExecutionOutputReservation<'_> {
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
-            | ExecutionOutputV1::GovernanceBlockStart(_) => {
+            | ExecutionOutputV1::GovernanceBlockStart(_)
+            | ExecutionOutputV1::C10(_) => {
                 return Err("internal rejection has no internal terminal".into());
             }
         };
@@ -849,6 +897,114 @@ impl ExecutionOutputReservation<'_> {
             || total.is_none_or(|sum| sum > self.owner.limits.max_total_output_bytes)
         {
             return Err("complete lifecycle rejection exceeds its pre-admitted ceiling".into());
+        }
+        self.commit_retained_output(bytes)?;
+        Ok(projected)
+    }
+
+    /// Preserve the exact C10 failure policy when bounded output omits its full diagnostic.
+    fn finish_c10_internal_rejection(
+        mut self,
+        actual: ExecutionOutputV1,
+    ) -> Result<ExecutionOutputV1, String> {
+        use super::execution_output::{
+            ExecutionSourceC10V1 as Source, TriggerFailureRootV1 as Root, TriggerLifecycleOriginV1,
+        };
+        use crate::{
+            events::trigger_completed::TriggerCompletedOutcome,
+            ivm_c10::TransactionRejectionReasonC10V1,
+        };
+        let ExecutionOutputV1::C10(src) = &actual else {
+            return Err("missing C10 output".into());
+        };
+        let (trigger, root) = match &src.source {
+            Source::Pipeline {
+                invocation,
+                failure_root,
+            } => (&invocation.trigger, failure_root),
+            Source::Time {
+                invocation,
+                failure_root,
+            } => (&invocation.trigger, failure_root),
+            Source::Network(_) => {
+                return Err("internal C10 rejection requires an internal source".into());
+            }
+        };
+        if src.result.0.is_ok()
+            || !src.result.1.is_empty()
+            || src.result.2.is_some()
+            || !src.result.3.is_empty()
+            || !matches!(
+                root,
+                Some(
+                    Root::DeclaredInstructionProjection(_)
+                        | Root::ReturnedBeforeRollback(_)
+                        | Root::OmittedAfterRejection
+                )
+            )
+            || (matches!(root, Some(Root::OmittedAfterRejection))
+                && !actual.is_internal_rejection_diagnostic_omitted())
+            || !matches!(src.completions.as_slice(), [c] if c.callback_index == 0 && c.trigger_id == trigger.trigger_id && matches!(c.outcome, TriggerCompletedOutcome::Failure(_)))
+            || src.trigger_lifecycle.as_ref().is_some_and(|trace| {
+                trace.effects().iter().any(|effect| {
+                    effect.trigger_id != trigger.trigger_id
+                        || !matches!(
+                            effect.origin,
+                            TriggerLifecycleOriginV1::InvocationPolicy {
+                                callback_index: 0,
+                                ..
+                            }
+                        )
+                })
+            })
+        {
+            return Err(
+                "C10 internal rejection retains invalid body output or policy ownership".into(),
+            );
+        }
+        if self.fits(&actual)? {
+            return match self.finish(actual)? {
+                ReservedExecutionOutput::Accepted(row) => Ok(row),
+                ReservedExecutionOutput::OutputLimit(_) => {
+                    Err("fitting C10 rejection lost its budget".into())
+                }
+            };
+        }
+        let mut projected = self
+            .terminal
+            .take()
+            .ok_or("terminal ownership disappeared")?;
+        if !projected.is_output_limit_rejection() {
+            return Err("C10 rejection lost its preowned terminal".into());
+        }
+        let (ExecutionOutputV1::C10(dst), ExecutionOutputV1::C10(src)) = (&mut projected, actual)
+        else {
+            return Err("C10 rejection substituted its output family".into());
+        };
+        let root = match &mut dst.source {
+            Source::Pipeline { failure_root, .. } | Source::Time { failure_root, .. } => {
+                failure_root
+            }
+            Source::Network(_) => {
+                return Err("internal C10 rejection has no internal terminal".into());
+            }
+        };
+        let Err(TransactionRejectionReasonC10V1::LimitCheck(error)) = &mut dst.result.0 else {
+            return Err("C10 terminal lost its bounded result".into());
+        };
+        omit_internal_strings(error, root, &mut dst.completions)?;
+        dst.trigger_lifecycle = src.trigger_lifecycle;
+        let bytes = output_bytes(&projected)?;
+        let limit = self
+            .owner
+            .committed_bytes
+            .checked_add(bytes)
+            .and_then(|v| v.checked_add(self.owner.remaining_terminal_bytes));
+        if bytes > self.terminal_ceiling_bytes
+            || bytes > self.owner.limits.max_output_bytes
+            || limit.is_none_or(|total| total > self.owner.limits.max_total_output_bytes)
+        {
+            return Err("C10 internal rejection exceeds its pre-admitted ceiling".into());
         }
         self.commit_retained_output(bytes)?;
         Ok(projected)
@@ -1232,6 +1388,21 @@ fn output_bytes(output: &ExecutionOutputV1) -> Result<u64, String> {
 
 fn same_origin(left: &ExecutionOutputV1, right: &ExecutionOutputV1) -> bool {
     match (left, right) {
+        (ExecutionOutputV1::C10(left), ExecutionOutputV1::C10(right)) => {
+            use super::execution_output::ExecutionSourceC10V1 as Source;
+            left.trigger_lifecycle.is_some() == right.trigger_lifecycle.is_some()
+                && match (&left.source, &right.source) {
+                    (Source::Network(a), Source::Network(b)) => a == b,
+                    (
+                        Source::Pipeline { invocation: a, .. },
+                        Source::Pipeline { invocation: b, .. },
+                    ) => a == b,
+                    (Source::Time { invocation: a, .. }, Source::Time { invocation: b, .. }) => {
+                        a == b
+                    }
+                    _ => false,
+                }
+        }
         (ExecutionOutputV1::Network(left), ExecutionOutputV1::Network(right)) => {
             left.input_index == right.input_index
         }
@@ -1264,14 +1435,21 @@ fn omit_internal_rejection_diagnostic(
     root: &mut Option<super::execution_output::TriggerFailureRootV1>,
     completions: &mut [super::execution_output::InvocationCompletionV1],
 ) -> Result<(), String> {
-    use super::execution_output::{INTERNAL_REJECTION_DIAGNOSTIC_OMITTED, TriggerFailureRootV1};
-    use crate::{
-        events::trigger_completed::TriggerCompletedOutcome,
-        transaction::error::TransactionRejectionReason,
-    };
-    let Err(TransactionRejectionReason::LimitCheck(error)) = &mut result.0 else {
+    let Err(crate::transaction::error::TransactionRejectionReason::LimitCheck(error)) =
+        &mut result.0
+    else {
         return Err("internal terminal lost its bounded result".into());
     };
+    omit_internal_strings(error, root, completions)
+}
+
+fn omit_internal_strings(
+    error: &mut crate::transaction::error::TransactionLimitError,
+    root: &mut Option<super::execution_output::TriggerFailureRootV1>,
+    completions: &mut [super::execution_output::InvocationCompletionV1],
+) -> Result<(), String> {
+    use super::execution_output::{INTERNAL_REJECTION_DIAGNOSTIC_OMITTED, TriggerFailureRootV1};
+    use crate::events::trigger_completed::TriggerCompletedOutcome;
     let [completion] = completions else {
         return Err("internal terminal lost its root completion".into());
     };

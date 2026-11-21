@@ -64,6 +64,19 @@ instructions mount the same-overlay installation and fully verify sigma, require
 and both transported accumulator claims. Missing originals retain `ArtifactsUnavailable`.
 Model validation and finalized load receipts never replace native proof verification.
 
+The separately governed `iroha.kagemusha.spartan.v1` addition publishes a program
+installation instruction, a completed Control Unload instruction, a successor
+handler for verifier selection, and the `world.kagemusha_spartan_programs` table.
+Its installation requires the registered reserve's consent and current exact
+asset permission. The 10 MiB limit covers the complete canonical installation.
+The scheme, asset, signed genesis network, chain, signed manifest digest and all
+eight program originals must agree. A scheme can select one verifier family.
+The World stores the exact signed originals. Unload charges the transaction and
+block verification budgets, verifies both linked proofs with those programs,
+and applies both authenticated destinations and the permanent nullifier through
+the ordinary reserve settlement transaction. The published addition requires
+a governed activation on each root that uses it.
+
 One package reserves one confidential operation and one sigma verification plus an Omega
 verification when lineage is carried. Aggregate transport bytes include both accumulator
 originals. All transaction/block proof limits are checked together before reservation

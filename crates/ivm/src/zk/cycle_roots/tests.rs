@@ -1,6 +1,7 @@
 //! Exact row growth, original-pool refusal and independent copy reclamation.
 
 use super::*;
+use crate::error::VmDeferral;
 
 fn row(value: u64) -> StepEntry {
     let root = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(value.to_le_bytes()));
@@ -22,7 +23,7 @@ fn zero_and_one_short_original_admission_preserve_rows_until_exact_retry() {
     let original = AllocationBudget::new(0);
     let mut log = StepLog::new(Some(&original));
     assert!(
-        matches!(log.prepare_cycles(1), Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. })) if requested_bytes == 4 * size)
+        matches!(log.prepare_cycles(1), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. }))) if requested_bytes == 4 * size)
     );
     assert_eq!(original.peak_reserved_bytes(), 0);
     original.set_limit_bytes(4 * size);
@@ -32,7 +33,7 @@ fn zero_and_one_short_original_admission_preserve_rows_until_exact_retry() {
     let pointer = log.as_slice().as_ptr();
     original.set_limit_bytes(12 * size - 1);
     assert!(
-        matches!(log.prepare_cycles(1), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 8 * size)
+        matches!(log.prepare_cycles(1), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == 8 * size)
     );
     assert_eq!(log.as_slice().as_ptr(), pointer);
     assert_eq!(log.as_slice(), &[row(0), row(1), row(2), row(3)]);
@@ -63,18 +64,18 @@ fn admitted_allocator_refusal_and_overflow_leave_the_previous_owner_unchanged() 
     REFUSE_NEXT_ALLOCATION.set(true);
     assert!(matches!(
         log.prepare_cycles(12),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(log.as_slice(), &[row(17)]);
     assert_eq!(log.as_slice().as_ptr(), pointer);
     assert_eq!(original.reserved_bytes(), 4 * size);
     assert!(matches!(
         log.prepare_cycles(u64::MAX),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::DemandOverflow
-        ))
+        )))
     ));
     assert_eq!(original.reserved_bytes(), 4 * size);
     log.prepare_cycles(12).unwrap();
@@ -98,7 +99,7 @@ fn clear_retains_credit_and_reset_keeps_the_original_pool_for_future_rows() {
     assert_eq!(original.reserved_bytes(), 0);
     assert!(matches!(
         log.prepare_cycles(1),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     original.set_limit_bytes(4 * size);
     append(&mut log, 31);
@@ -113,7 +114,7 @@ fn test_only_copy_keeps_its_independent_original_charge_after_source_drop() {
     append(&mut log, 3);
     assert!(matches!(
         log.try_clone_allocation(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     original.set_limit_bytes(8 * size);
     let copy = log.try_clone_allocation().unwrap();
@@ -132,9 +133,9 @@ fn explicit_standalone_buffer_is_fallible_but_never_adopts_a_new_pool() {
     crate::cache_memory::refuse_next_owned_vec_growth_for_test();
     assert!(matches!(
         log.prepare_cycles(1),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert!(log.as_slice().is_empty());
     for value in 0..12 {

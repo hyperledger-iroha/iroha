@@ -692,7 +692,10 @@ async fn transaction_details_full_carrier_respects_explicit_query_memory() {
     assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
     assert_eq!(details.transaction.entrypoint().hash(), entrypoint_hash);
     assert_eq!(details.transaction.block_hash(), &original.block().hash());
-    assert_eq!(details.transaction.result(), original_output);
+    assert_eq!(
+        details.transaction.result().baseline(),
+        Some(original_output)
+    );
     assert_eq!(
         details.transaction.output_hash(),
         &HashOf::new(details.transaction.output())
@@ -756,7 +759,7 @@ async fn transaction_details_exact_cap_funds_the_complete_response() {
                 .expect("the same original owner funds the selected transaction");
             assert_eq!(projected.entrypoint_hash(), &entrypoint_hash);
             assert_eq!(projected.block_hash(), &original.block().hash());
-            assert_eq!(projected.result(), original_output);
+            assert_eq!(projected.result().baseline(), Some(original_output));
         }
 
         // A fresh original HTTP owner must pay acquisition, authorization,
@@ -782,7 +785,10 @@ async fn transaction_details_exact_cap_funds_the_complete_response() {
             assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
             assert_eq!(details.transaction.entrypoint().hash(), entrypoint_hash);
             assert_eq!(details.transaction.block_hash(), &original.block().hash());
-            assert_eq!(details.transaction.result(), original_output);
+            assert_eq!(
+                details.transaction.result().baseline(),
+                Some(original_output)
+            );
             assert_eq!(
                 details.transaction.output_hash(),
                 &HashOf::new(details.transaction.output())

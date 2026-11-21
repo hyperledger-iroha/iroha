@@ -1,6 +1,7 @@
 //! CoreHost: INPUT_PUBLISH_TLV rejects invalid pointer-ABI envelopes.
 use crate::common;
 use ivm::{CoreHost, IVM, VMError, syscalls};
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -23,5 +24,5 @@ fn input_publish_rejects_unknown_type_id() {
     let err = vm
         .run()
         .expect_err("unknown pointer type should be rejected");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }

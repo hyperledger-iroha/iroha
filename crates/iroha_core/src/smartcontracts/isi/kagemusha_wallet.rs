@@ -28,6 +28,126 @@ where
         .map_err(|_| wallet::Error::Binding)
 }
 
+/// The governed successor preserves every original action and fixes verifier selection
+/// for schemes whose reserve already chose the new proof family.
+pub(crate) fn dispatch_spartan_ledger(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    let original = instruction
+        .as_any()
+        .downcast_ref::<KagemushaWalletLedgerV1>()?;
+    if matches!(original.action, Action::InstallVerifierPack { .. } | Action::Activate(_) | Action::Unload(_))
+        && state
+            .world
+            .kagemusha_spartan_programs
+            .get(&original.scheme)
+            .is_some()
+    {
+        return Some(Err(error(wallet::Error::Conflict)));
+    }
+    if matches!(original.action, Action::IssueLoad { .. })
+        && state.world.kagemusha_spartan_programs.get(&original.scheme).is_some()
+        && !wallet::spartan::redemption_available(&*state.world)
+    {
+        return Some(Err(error(wallet::Error::Lifecycle)));
+    }
+    Some(original.clone().execute(authority, state))
+}
+
+fn spartan_result(
+    result: wallet::Result<()>,
+    state: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    match result {
+        Err(wallet::Error::ArtifactsUnavailable) => {
+            Err(state.world.attempt_error_to_instruction_error(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+                ),
+            ))
+        }
+        other => other.map_err(error),
+    }
+}
+
+pub(super) trait SpartanDispatch {
+    fn execute_spartan(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> wallet::Result<()>;
+}
+
+pub(super) fn dispatch_spartan<T: SpartanDispatch + 'static>(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    let original = instruction.as_any().downcast_ref::<T>()?;
+    let result = original.execute_spartan(authority, state);
+    Some(spartan_result(result, state))
+}
+
+impl SpartanDispatch
+    for iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1
+{
+    fn execute_spartan(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> wallet::Result<()> {
+        wallet::spartan::install(state, authority, self)
+    }
+}
+impl SpartanDispatch
+    for iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1
+{
+    fn execute_spartan(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> wallet::Result<()> {
+        wallet::spartan::unload(state, authority, self).map(|_| ())
+    }
+}
+
+impl Execute
+    for iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1
+{
+    fn execute(
+        self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let result = self.execute_spartan(authority, state);
+        spartan_result(result, state)
+    }
+}
+impl Execute for iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let result = self.execute_spartan(authority, state);
+        spartan_result(result, state)
+    }
+}
+
+impl SpartanDispatch for iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1 {
+    fn execute_spartan(&self, authority: &AccountId, state: &mut StateTransaction<'_, '_>) -> wallet::Result<()> {
+        wallet::spartan::activate(state, authority, self)
+    }
+}
+impl Execute for iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1 {
+    fn execute(self, authority: &AccountId, state: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+        let result = self.execute_spartan(authority, state);
+        spartan_result(result, state)
+    }
+}
+
 impl Execute for KagemushaWalletLedgerV1 {
     fn execute(
         self,

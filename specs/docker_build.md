@@ -168,6 +168,21 @@ This optional local diagnostic is not public-ingress qualification. Run the
 same-revision `iroha taira doctor` directly against a public ingress when
 qualifying that deployment.
 
+## Build memory and time
+
+The root `Dockerfile` compiles every requested binary, Kagami included, in one
+Cargo invocation with the `deploy` profile, so each crate compiles once. The
+profile uses ThinLTO. The largest compiler processes are each daemon binary's
+ThinLTO link and `iroha_core` (about 9–11 GiB each with two jobs, 13–14 GiB
+with eight), then `iroha_data_model` and `iroha_torii` (about 9–10 GiB each).
+Each link optimizes and generates machine code for its whole program again:
+`iroha3d` and `iroha3d_taira` take about 66 CPU-minutes each, `kagami` 47 and
+`iroha` 20, about three quarters of the image's compiler CPU time.
+
+Cargo's job count bounds how many of these processes run at once and how many
+modules a link optimizes in parallel, so it sets the peak memory of the build.
+On a 24 GiB Docker VM pass `--build-arg CARGO_BUILD_JOBS=2`.
+
 ## Release acceleration contract
 
 The Linux/Windows daemon's mandatory target dependency selects the existing IVM

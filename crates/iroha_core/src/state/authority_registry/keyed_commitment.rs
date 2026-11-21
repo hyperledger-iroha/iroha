@@ -144,6 +144,7 @@ pub fn codec_identity(field: &'static str, schema: Schema) -> Result<String, Sch
             Schema::Norito {
                 nominal_name,
                 layout,
+                ..
             } => ("norito", nominal_name(), layout),
             Schema::Semantic {
                 identity, layout, ..

@@ -1,6 +1,7 @@
 //! Native signed GCD, original port custody and complete shared-cell ownership.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn expected(left: u64, right: u64) -> u64 {
     let (mut a, mut b) = (
@@ -216,13 +217,16 @@ fn private_gcd_binds_twelve_gas_cycles_and_native_last_attempt_boundary() {
     for gas in 0..12 {
         let (_, recorder, outcome) =
             shifts::capture(&[instruction], &inputs, root_setup_gas() + gas, 32);
-        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+        assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
         assert_eq!(recorder.records().len(), 1);
         assert_eq!(recorder.records()[0].before, recorder.records()[0].after);
     }
     for limit in 1..=12 {
         let (program, recorder, outcome) = shifts::capture(&[instruction], &inputs, 100, limit);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];
         assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);

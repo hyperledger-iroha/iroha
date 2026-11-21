@@ -79,15 +79,15 @@ use iroha_data_model::{
             AnonymousGovernanceCertificateErrorV1, AnonymousGovernanceCertificateV1,
             AnonymousParliamentBodyBindingV1, AnonymousPublicFindingResultV1,
             AnonymousSealedBodyV1, BallotClosureRecordV1, BallotOutcomeV1, BodyDecisionModeV1,
-            Digest512, FrozenBallotPolicyErrorV1, FrozenParliamentAttemptPolicyV1,
-            ParliamentBallotPurposeErrorV1, ParliamentBallotPurposeV1,
-            anonymous_execution_failure_root_v1, anonymous_governance_attempt_id_v1,
-            digests::proposal_digest_v1,
+            CheckedAnonymousGovernanceCertificateErrorV1, Digest512, FrozenBallotPolicyErrorV1,
+            FrozenParliamentAttemptPolicyV1, ParliamentBallotPurposeErrorV1,
+            ParliamentBallotPurposeV1, checked_anonymous_execution_failure_root_v1,
+            checked_anonymous_governance_attempt_id_v1, digests::proposal_digest_v1,
         },
         types::{
             DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1,
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
-            ProposalKind, RiskTierV1,
+            ProposalKind, RiskTierV1, checked_runtime_upgrade_subject_id_v1,
         },
     },
 };
@@ -99,6 +99,7 @@ use norito::{
 
 pub(crate) mod ballot_input;
 pub mod ballot_lifecycle;
+mod codec_refusal;
 pub mod credentials;
 pub mod deliberation;
 pub mod election;
@@ -152,8 +153,8 @@ pub enum AnonymousParliamentErrorV1 {
         /// The binding that differs.
         field: &'static str,
     },
-    /// The stored proposal has no canonical `Enc` frame, so its digest cannot be derived.
-    /// Every node derives the same frame, so this is a refusal and never a deferral.
+    /// A proposal or identity encoder failed. `DecodeUnavailable` retains its original
+    /// local refusal; it must be deferred without recording a deterministic outcome.
     #[error("the stored proposal has no canonical frame: {0}")]
     ProposalFrame(AnonymousBallotCodecErrorV1),
     /// The stored proposal carries an integer the first release cannot represent exactly.
@@ -411,6 +412,7 @@ pub enum AnonymousBallotDecisionV1 {
 #[norito_schema(
     name = "iroha_core::governance::parliament_anonymous::AnonymousPublicFindingFailureKindV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousPublicFindingFailureKindV1 {
     /// Authenticated absences or split endorsements made the quorum unreachable.
     #[codec(index = 0)]
@@ -437,6 +439,7 @@ pub enum AnonymousPublicFindingFailureKindV1 {
 #[norito_schema(
     name = "iroha_core::governance::parliament_anonymous::AnonymousPublicFindingFailureV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousPublicFindingFailureV1 {
     /// The public body.
     pub body: ParliamentBody,
@@ -463,6 +466,7 @@ pub struct AnonymousPublicFindingFailureV1 {
 #[norito_schema(
     name = "iroha_core::governance::parliament_anonymous::AnonymousSortitionExhaustionV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousSortitionExhaustionV1 {
     /// The body whose election ended without a roster; the first body of a generation that
     /// ended as a whole.
@@ -487,6 +491,7 @@ pub struct AnonymousSortitionExhaustionV1 {
 )]
 #[norito(tag = "cause", content = "details", deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousAttemptRejectionV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousAttemptRejectionV1 {
     /// A binding jury closed without approving: its closure record.
     #[codec(index = 0)]
@@ -518,6 +523,7 @@ pub enum AnonymousAttemptRejectionV1 {
 )]
 #[norito(tag = "outcome", content = "details", deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousExecutionOutcomeV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousExecutionOutcomeV1 {
     /// The exact certified effect was enacted.
     #[codec(index = 0)]
@@ -546,6 +552,7 @@ pub enum AnonymousExecutionOutcomeV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousExecutionV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousExecutionV1 {
     /// Anchor of the block-start item that executed.
     pub at: GovernanceAnchorV1,
@@ -568,6 +575,7 @@ pub struct AnonymousExecutionV1 {
 #[norito_schema(
     name = "iroha_core::governance::parliament_anonymous::AnonymousParliamentAttemptStateV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousParliamentAttemptStateV1 {
     purpose: ParliamentBallotPurposeV1,
     attempt: AnonymousGovernanceAttemptV1,
@@ -606,6 +614,9 @@ impl AnonymousParliamentErrorV1 {
     /// committed verdict: the node defers or retries instead.
     #[must_use]
     pub fn is_local(&self) -> bool {
+        if self.original_codec_refusal().is_some() {
+            return true;
+        }
         match self {
             Self::Credential(error) => error.is_local(),
             Self::Seal(error) => error.is_local(),
@@ -708,6 +719,23 @@ pub struct AnonymousAttemptOriginV1 {
     pub randomness_redraws_before_attempt: u32,
 }
 
+impl From<norito::core::DecodeAttemptError> for AnonymousParliamentErrorV1 {
+    fn from(error: norito::core::DecodeAttemptError) -> Self {
+        Self::ProposalFrame(AnonymousBallotCodecErrorV1::from_attempt(error))
+    }
+}
+
+impl From<CheckedAnonymousGovernanceCertificateErrorV1> for AnonymousParliamentErrorV1 {
+    fn from(error: CheckedAnonymousGovernanceCertificateErrorV1) -> Self {
+        match error {
+            CheckedAnonymousGovernanceCertificateErrorV1::Rejected(error) => {
+                Self::Certificate(error)
+            }
+            CheckedAnonymousGovernanceCertificateErrorV1::Codec(error) => error.into(),
+        }
+    }
+}
+
 impl AnonymousParliamentAttemptStateV1 {
     /// Create the State of a new attempt about `proposal`, which the State stores.
     ///
@@ -734,7 +762,7 @@ impl AnonymousParliamentAttemptStateV1 {
     ) -> Result<Self, AnonymousParliamentErrorV1> {
         let proposal_digest =
             proposal_digest_v1(&proposal).map_err(AnonymousParliamentErrorV1::ProposalFrame)?;
-        let effect_preimage_hash = proposal.effect_preimage_hash_v1();
+        let effect_preimage_hash = proposal.checked_effect_preimage_hash_v1()?;
         let state = Self {
             purpose,
             attempt,
@@ -811,23 +839,30 @@ impl AnonymousParliamentAttemptStateV1 {
         if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
             return Err(Error::ProposalInvariant(reason));
         }
-        let content = ProposalContentId::derive_v1(proposal);
+        let content = ProposalContentId::derive_checked_v1(proposal)?;
         if self.attempt.proposal_content_id != content {
             return Err(binding("proposal_content_id"));
         }
-        if self.attempt.id != anonymous_governance_attempt_id_v1(content, self.attempt.sequence) {
+        if self.attempt.id
+            != checked_anonymous_governance_attempt_id_v1(content, self.attempt.sequence)?
+        {
             return Err(Error::ImmutableBinding);
         }
         if self.proposal_digest != proposal_digest_v1(proposal).map_err(Error::ProposalFrame)? {
             return Err(binding("proposal_digest"));
         }
-        if self.effect_preimage_hash != proposal.effect_preimage_hash_v1() {
+        if self.effect_preimage_hash != proposal.checked_effect_preimage_hash_v1()? {
             return Err(binding("effect_preimage_hash"));
         }
         // A proposal without a subject has no head the attempt could expect.
-        let subject = proposal
-            .governed_subject_id_v1()
-            .map_err(|_| binding("expected_head"))?;
+        let subject = match proposal {
+            ProposalKind::RuntimeUpgrade(proposal) => {
+                checked_runtime_upgrade_subject_id_v1(&proposal.action)?
+            }
+            _ => proposal
+                .governed_subject_id_v1()
+                .map_err(|_| binding("expected_head"))?,
+        };
         if expected_head_subject(self.expected_head) != subject {
             return Err(binding("expected_head"));
         }
@@ -1024,10 +1059,10 @@ impl AnonymousParliamentAttemptStateV1 {
     }
 
     /// The rules of one sealed body within this attempt, beyond its own
-    /// ([`AnonymousSealedBodyV1::validate`]): a binding jury seals at or above its floor
+    /// ([`AnonymousSealedBodyV1::validate_checked_v1`]): a binding jury seals at or above its floor
     /// under a locked tier.
     fn check_seal(&self, sealed: &AnonymousSealedBodyV1) -> Result<(), AnonymousParliamentErrorV1> {
-        sealed.validate(self.attempt.id, &self.policy)?;
+        sealed.validate_checked_v1(self.attempt.id, &self.policy)?;
         if BodyDecisionModeV1::of(sealed.body) == BodyDecisionModeV1::AnonymousBallot {
             if !self.risk_locked {
                 return Err(AnonymousParliamentErrorV1::RiskTierNotLocked);
@@ -1135,7 +1170,7 @@ impl AnonymousParliamentAttemptStateV1 {
         &self,
         binding: &AnonymousParliamentBodyBindingV1,
     ) -> Result<(), AnonymousParliamentErrorV1> {
-        binding.validate(
+        binding.validate_checked_v1(
             self.attempt.proposal_content_id,
             self.attempt.id,
             self.attempt.risk_tier,
@@ -1212,7 +1247,7 @@ impl AnonymousParliamentAttemptStateV1 {
             return Ok(AnonymousBallotDecisionV1::ConfirmationRequired);
         }
         let certificate = next.build_certificate();
-        certificate.validate()?;
+        certificate.validate_checked_v1()?;
         next.certificate = Some(certificate);
         next.attempt.status = GovernanceAttemptStatusV1::Certified;
         next.attempt.stage = GovernanceStageV1::Enactment;
@@ -1400,7 +1435,7 @@ impl AnonymousParliamentAttemptStateV1 {
         at: GovernanceAnchorV1,
     ) -> Result<[u8; 32], AnonymousParliamentErrorV1> {
         let certificate = self.certificate_for_execution(governance_attempt_id, at)?;
-        let failure_root = anonymous_execution_failure_root_v1(certificate, at);
+        let failure_root = checked_anonymous_execution_failure_root_v1(certificate, at)?;
         self.finish_execution(
             GovernanceAttemptStatusV1::ExecutionFailed,
             at,
@@ -1445,7 +1480,7 @@ impl AnonymousParliamentAttemptStateV1 {
             });
         }
         if let Some(certificate) = &self.certificate {
-            certificate.validate()?;
+            certificate.validate_checked_v1()?;
         }
         self.validate_restored_execution()?;
         self.validate_lifecycle(network_id)
@@ -1601,7 +1636,7 @@ impl AnonymousParliamentAttemptStateV1 {
                 head_supersedes(certificate, observed).is_ok()
             }
             (Status::ExecutionFailed, Outcome::ExecutionFailed(root)) => {
-                root == anonymous_execution_failure_root_v1(certificate, execution.at)
+                root == checked_anonymous_execution_failure_root_v1(certificate, execution.at)?
             }
             _ => false,
         };

@@ -71,3 +71,31 @@ pub(crate) fn schedule_change(
     });
     height
 }
+
+impl CertifiedTestChain {
+    /// Schedule a catalogued service with this fixture's complete validator support.
+    /// The following two certified blocks still evaluate the ordinary activation boundary.
+    pub fn schedule_catalog_service_for_test(&self, module: &str, time_ms: u64) {
+        use crate::state::{StorageReadOnly, WorldReadOnly};
+        let view = self.state().view();
+        let world = view.world();
+        let definitions: std::collections::BTreeMap<_, _> = world
+            .runtime_definitions()
+            .iter()
+            .map(|(id, row)| (*id, row.clone()))
+            .collect();
+        let change = crate::runtime::catalog::release_catalog()
+            .unwrap()
+            .activation(
+                module,
+                world.runtime_selection(),
+                &definitions,
+                self.network_id(),
+                self.height() + 2,
+                [0x10; 32],
+            )
+            .unwrap();
+        drop(view);
+        schedule_change(self, time_ms, change);
+    }
+}

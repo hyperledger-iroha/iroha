@@ -5,6 +5,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan::ReleasePins as SpartanReleasePins;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -71,6 +72,19 @@ impl FinancialSelection {
         bytes.push(b'\n');
         Ok(bytes)
     }
+}
+
+/// The signed release's explicit Spartan profile. Its four carrier pins never reach the
+/// retained wallet graph loader. The registered asset and the manifest pin are named by the
+/// release independently of the carrier that must reproduce them.
+#[derive(Clone, Copy)]
+pub(super) struct SpartanSelection {
+    /// Exact identities of the carrier's pack, inventory, catalog digest and transport.
+    pub release: SpartanReleasePins,
+    /// Digest of the registered asset; `Selection::load` requires the Native asset original's.
+    pub asset: [u8; 32],
+    /// Separately selected digest of the signed parameter manifest.
+    pub manifest_digest: [u8; 32],
 }
 
 /// Construction is private to installed Native policy; offered originals cannot choose a key.
@@ -141,6 +155,8 @@ pub(super) struct AuthenticatedBase {
 
 pub(super) struct Selection {
     pub(super) base: Arc<AuthenticatedBase>,
+    /// Present only when the signed release explicitly names the Spartan profile.
+    pub(super) spartan: Option<SpartanSelection>,
     application: ApplicationBinding,
     pub asset: KagemushaWalletAssetScopeV1,
     pub asset_original: Vec<u8>,
@@ -158,6 +174,15 @@ pub(super) struct Selection {
     bpng_session: Option<session::BpngAuthority>,
     boi_sessions: Vec<session::BoiAuthority>,
     pub apple_app_policy: [u8; 32],
+}
+
+impl Selection {
+    /// The exact rooted Enrollment-role certificate of this signed selection. It is the
+    /// only issuer an installed owner verifies an enrollment result against; a caller's
+    /// original never supplies one.
+    pub(super) fn enrollment_certificate(&self) -> &KagemushaWalletSignerCertificateV1 {
+        &self.enrollment_certificate
+    }
 }
 
 fn invalid() -> Failure {
@@ -440,6 +465,8 @@ impl Selection {
         if !input.registration_source.is_empty() {
             return Err(invalid());
         }
+        // Only the BPNG release grammar can name the explicit Spartan profile.
+        let mut spartan = None;
         let (app, application, financial) = match trust.authority {
             RuntimeAuthority::ApplicationReleaseV1 => return Err(invalid()),
             RuntimeAuthority::CbsiReleaseV1 => {
@@ -474,7 +501,8 @@ impl Selection {
             }
             RuntimeAuthority::BpngTairaV7 => {
                 let app = bpng::application(&document)?;
-                let (digest, financial) = bpng::require_runtime(app, input)?;
+                let (digest, financial, profile) = bpng::require_runtime(app, input)?;
+                spartan = profile;
                 (
                     app,
                     ApplicationBinding::BpngTairaV7 {
@@ -590,19 +618,43 @@ impl Selection {
         signer
             .verify_role(&scheme, KagemushaWalletSignerRoleV1::Artifact)
             .map_err(|_| invalid())?;
+        use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan as program_carrier;
         let artifact_manifest = raw(
             runtime,
             "artifact_manifest_original_base64",
-            KAGEMUSHA_WALLET_ARTIFACT_MANIFEST_MAX_BYTES_V1,
+            if spartan.is_some() {
+                program_carrier::MAX_PACK_BYTES
+            } else {
+                KAGEMUSHA_WALLET_ARTIFACT_MANIFEST_MAX_BYTES_V1
+            },
         )?;
-        let manifest =
-            KagemushaWalletArtifactManifestV1::decode_canonical(&artifact_manifest, &scheme)
-                .map_err(|_| invalid())?;
-        manifest.verify(&scheme, &signer).map_err(|_| invalid())?;
+        let selected_manifest_digest = if let Some(profile) = spartan {
+            if BlobV1::of(&artifact_manifest) != profile.release.pack {
+                return Err(invalid());
+            }
+            let (programs, digest) = program_carrier::authenticated_pack_selection(
+                &artifact_manifest,
+                &scheme,
+                profile.asset,
+            )
+            .map_err(|_| invalid())?;
+            let mut certificate = signer.body.transcript();
+            certificate.extend_from_slice(signer.signature.as_ref());
+            if programs.signer_certificate != certificate || digest != profile.manifest_digest {
+                return Err(invalid());
+            }
+            digest
+        } else {
+            let manifest =
+                KagemushaWalletArtifactManifestV1::decode_canonical(&artifact_manifest, &scheme)
+                    .map_err(|_| invalid())?;
+            manifest.verify(&scheme, &signer).map_err(|_| invalid())?;
+            manifest.manifest_digest()
+        };
         if let ApplicationBinding::CbsiReleaseV1 {
             manifest_digest, ..
         } = &application
-            && manifest.manifest_digest() != *manifest_digest
+            && selected_manifest_digest != *manifest_digest
         {
             return Err(invalid());
         }
@@ -888,6 +940,12 @@ impl Selection {
         {
             return Err(invalid());
         }
+        // The explicit Spartan profile names its registered asset independently of the
+        // carrier. Only the canonical Native asset original, bound just above to the signed
+        // application asset, satisfies that pin.
+        if spartan.is_some_and(|profile: SpartanSelection| profile.asset != asset.asset_digest()) {
+            return Err(invalid());
+        }
         let fi_sessions = match &application {
             ApplicationBinding::CbsiReleaseV1 {
                 service_release_scope,
@@ -931,6 +989,7 @@ impl Selection {
             boi_sessions,
             enrollment_certificate,
             application,
+            spartan,
             base: Arc::new(AuthenticatedBase {
                 financial,
                 _originals: RetainedBaseOriginals {
@@ -944,7 +1003,7 @@ impl Selection {
                 artifact_manifest,
                 installation: InstallationV1 {
                     scheme_id: scheme.scheme_id(),
-                    manifest_digest: manifest.manifest_digest(),
+                    manifest_digest: selected_manifest_digest,
                 },
                 genesis: Arc::new(native),
             }),

@@ -338,11 +338,11 @@ fn exact_successful_pin_transaction(
         }
         let Some((_, output)) = u32::try_from(input_index)
             .ok()
-            .and_then(|index| block.network_output_at(index))
+            .and_then(|index| block.network_execution_output_at(index))
         else {
             return Ok(false);
         };
-        if found || output.result.is_err() {
+        if found || output.result().is_err() {
             return Ok(false);
         }
         let actual = transaction

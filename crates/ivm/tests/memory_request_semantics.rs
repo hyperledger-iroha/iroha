@@ -6,6 +6,7 @@ use ivm::{
     IVM, Memory, Perm, ProgramMetadata, VMError, encoding::wide as encode, instruction::wide,
     ivm_mode,
 };
+use ivm_abi::error::VmTrap;
 
 const LOW: u64 = 0x0123_4567_89ab_cdef;
 const HIGH: u64 = 0xfedc_ba98_7654_3210;
@@ -52,11 +53,11 @@ fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
     let s64 = encode::encode_store(wide::memory::STORE64, 3, 1, 0);
     let l64 = encode::encode_load(wide::memory::LOAD64, 1, 3, 0);
     let cases = [
-        (s64, u64::MAX, VMError::PrivacyViolation, 3),
+        (s64, u64::MAX, VMError::Trap(VmTrap::PrivacyViolation), 3),
         (
             l64,
             u64::MAX,
-            VMError::MisalignedAccess { addr: u32::MAX },
+            VMError::Trap(VmTrap::MisalignedAccess { addr: u32::MAX }),
             3,
         ),
     ];
@@ -71,13 +72,16 @@ fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
             let result = vm.run();
             let error = result.expect_err("the invalid request must fail before publication");
             if insufficient_gas {
-                assert!(matches!(error, VMError::OutOfGas));
+                assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
             } else {
                 match (&error, &expected_error) {
-                    (VMError::PrivacyViolation, VMError::PrivacyViolation) => {}
                     (
-                        VMError::MisalignedAccess { addr },
-                        VMError::MisalignedAccess { addr: expected },
+                        VMError::Trap(VmTrap::PrivacyViolation),
+                        VMError::Trap(VmTrap::PrivacyViolation),
+                    ) => {}
+                    (
+                        VMError::Trap(VmTrap::MisalignedAccess { addr }),
+                        VMError::Trap(VmTrap::MisalignedAccess { addr: expected }),
                     ) => assert_eq!(addr, expected),
                     _ => panic!("request returned {error:?}, expected {expected_error:?}"),
                 }
@@ -147,10 +151,12 @@ fn output_forward_gap_is_preserved_and_rewind_traps_without_mutation() {
     vm.set_program_counter(8).unwrap();
     let before = registers(&vm);
     let gas = vm.gas_remaining;
-    assert!(matches!((&(vm.run()), &(VMError::MemoryAccessViolation {
+    assert!(
+        matches!((&(vm.run()), &(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: (Memory::OUTPUT_START + 8) as u32,
             perm: Perm::WRITE
-        })), (Err(VMError::MemoryAccessViolation { addr: __actual_addr, perm: __actual_perm }), VMError::MemoryAccessViolation { addr: __expected_addr, perm: __expected_perm }) if __actual_addr == __expected_addr && __actual_perm == __expected_perm));
+        }))), (Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: __actual_addr, perm: __actual_perm })), VMError::Trap(VmTrap::MemoryAccessViolation { addr: __expected_addr, perm: __expected_perm })) if __actual_addr == __expected_addr && __actual_perm == __expected_perm)
+    );
     assert_eq!(vm.memory.read_output_used(), original.as_slice());
     assert_eq!(vm.memory.output_used_len(), 24);
     assert_eq!(registers(&vm), before);
@@ -186,10 +192,12 @@ fn signed_immediate_wrap_resolves_the_address_before_region_checks() {
         vm.set_register(3, u64::MAX);
         let before = registers(&vm);
         let code = vm.memory.load_u64(0).unwrap();
-        assert!(matches!((&(vm.run()), &(VMError::MemoryAccessViolation {
+        assert!(
+            matches!((&(vm.run()), &(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: 0,
                 perm: Perm::WRITE
-            })), (Err(VMError::MemoryAccessViolation { addr: __actual_addr, perm: __actual_perm }), VMError::MemoryAccessViolation { addr: __expected_addr, perm: __expected_perm }) if __actual_addr == __expected_addr && __actual_perm == __expected_perm));
+            }))), (Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: __actual_addr, perm: __actual_perm })), VMError::Trap(VmTrap::MemoryAccessViolation { addr: __expected_addr, perm: __expected_perm })) if __actual_addr == __expected_addr && __actual_perm == __expected_perm)
+        );
         assert_eq!(registers(&vm), before);
         assert_eq!(vm.memory.load_u64(0).unwrap(), code);
         assert_eq!(vm.gas_remaining, 97);
@@ -200,7 +208,10 @@ fn signed_immediate_wrap_resolves_the_address_before_region_checks() {
 #[test]
 fn zk_padding_gas_failure_preserves_completed_memory_effects_and_padded_cycles() {
     let store = encode::encode_store(wide::memory::STORE64, 3, 1, 0);
-    for (gas, outcome, remaining) in [(100, Ok(()), 95), (4, Err(VMError::OutOfGas), 1)] {
+    for (gas, outcome, remaining) in [
+        (100, Ok(()), 95),
+        (4, Err(VMError::Trap(VmTrap::OutOfGas)), 1),
+    ] {
         let mut vm = machine_with_max_cycles(&[store, encode::encode_halt()], ivm_mode::ZK, gas, 4);
         let address = Memory::HEAP_START + 0x80;
         vm.set_register(1, LOW);
@@ -209,7 +220,11 @@ fn zk_padding_gas_failure_preserves_completed_memory_effects_and_padded_cycles()
         assert_eq!(vm.memory.load_u64(address).unwrap(), 0);
         assert!(matches!(
             (vm.run(), outcome),
-            (Ok(()), Ok(())) | (Err(VMError::OutOfGas), Err(VMError::OutOfGas))
+            (Ok(()), Ok(()))
+                | (
+                    Err(VMError::Trap(VmTrap::OutOfGas)),
+                    Err(VMError::Trap(VmTrap::OutOfGas))
+                )
         ));
         assert_eq!(registers(&vm), before);
         assert_eq!(vm.memory.load_u64(address).unwrap(), LOW);

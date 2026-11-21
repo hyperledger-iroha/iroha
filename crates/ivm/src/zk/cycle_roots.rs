@@ -4,6 +4,7 @@
 //! delta traces and host scratch have independent allocation boundaries.
 
 use super::StepEntry;
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{OwnedVec, OwnedVecGrowthError},
@@ -119,10 +120,10 @@ impl StepLog {
             .max(needed)
             .max(4);
         let plan = ExecutionMemoryPlan::array::<StepEntry>(capacity)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut replacement = if let Some(original) = &self.original {
             let mut lease = ExecutionMemoryLease::reserve(original, plan)
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             #[cfg(test)]
             if REFUSE_NEXT_ALLOCATION.replace(false) {
                 return Err(unavailable());
@@ -167,7 +168,7 @@ impl StepLog {
     pub fn allocated_bytes(&self) -> Result<usize, VMError> {
         ExecutionMemoryPlan::array::<StepEntry>(self.rows.capacity())
             .map(|plan| plan.requested_bytes())
-            .map_err(VMError::AllocationDeferred)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
 
     /// Erase initialized rows while preserving their original admitted backing.
@@ -195,10 +196,14 @@ impl StepLog {
 }
 
 fn overflow() -> VMError {
-    VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        AllocationRefusal::DemandOverflow,
+    ))
 }
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn local_error(error: OwnedVecGrowthError) -> VMError {
     match error {
@@ -209,7 +214,7 @@ fn local_error(error: OwnedVecGrowthError) -> VMError {
 fn prepaid_error(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(refusal)) => {
-            VMError::AllocationDeferred(refusal)
+            VMError::Deferred(VmDeferral::AllocationDeferred(refusal))
         }
         PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
         | PrepaidBufferError::Reservation(_) => unavailable(),

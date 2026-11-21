@@ -56,7 +56,7 @@ fn is_canonical_table(fields: &'static [Field], id: &str) -> bool {
 }
 
 fn is_exact_norito<T: NoritoSchema>(schema: super::super::Schema) -> bool {
-    matches!(schema, super::super::Schema::Norito { nominal_name, layout }
+    matches!(schema, super::super::Schema::Norito { nominal_name, layout, .. }
         if layout == super::super::V1_LAYOUT && nominal_name() == norito::schema::identity::nominal_name::<T>())
 }
 

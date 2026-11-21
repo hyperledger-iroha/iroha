@@ -15,12 +15,24 @@ pub const CHALLENGE_BITS: usize = 126;
 /// Recursion-friendly transcript: an RP57 duplex sponge (rate 2) over the base
 /// field of the proof's points, so the circuit where those points are native
 /// hashes it directly.
-/// - Points are absorbed as (x, y); the identity is absorbed as (0, 0), which
-///   no circuit can allocate, so in-circuit verification rejects it.
+/// - Points are absorbed as (x, y); the identity (encoded as 32 zero bytes)
+///   as (0, 0), which lies on neither curve. The native rule: every proof
+///   point may be the identity except the IPA's Schnorr commitment A. The
+///   canonical decoders (native and `proof_bytes::total_point`) implement it,
+///   and so does every in-circuit verifier slot whose builder chose
+///   `points::IdentityPoints::Native` (complete arithmetic): the monetary
+///   backend chooses it for its total and hard slots alike
+///   (`full::OPERATION_IDENTITY`), independent of generator folding. Only the
+///   benchmark relations choose hard-slot strictness
+///   (`IdentityPoints::Refused`, incomplete ladders): stricter, never more
+///   accepting.
 /// - Scalars are embedded when the scalar modulus is below the base modulus
 ///   (Vesta proofs: Fp into Fq), else absorbed as 128-bit low and high halves.
-/// - Each squeeze permutes and yields two 126-bit challenges from the
-///   canonical bits of the first state word. Challenges that multiply points
+///   The two 128-bit limbs that carry a full-width value between the circuits
+///   are its canonical encoding in both (`points::canonical_limbs`).
+/// - A full-width challenge consumes an entire fresh first state word.
+///   Each LogUp challenge takes a separate full-width squeeze. Other
+///   squeezes can yield two 126-bit challenges. Challenges that multiply points
 ///   in the verifier are Halo endoscalars of those bits (`endo_challenge`);
 ///   the others are the 126-bit integers themselves (`challenge`).
 /// - Tags are ignored: the absorption order is fixed by the shape.
@@ -36,7 +48,7 @@ pub struct Transcript<C: PastaCurve> {
 impl<C: PastaCurve> Transcript<C> {
     pub fn new(label: &[u8]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"kagemusha-zks-spike/v2");
+        hasher.update(b"kagemusha-spartan/full-logup/v1");
         hasher.update(label);
         let mut wide = [0_u8; 64];
         hasher.finalize_xof().fill(&mut wide);

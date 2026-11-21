@@ -88,6 +88,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             json: false,
             check_storage: false,
             check_replay: false,
+            attest_runtime_floor: None,
             export_runtime_checkpoint: None,
             receive_runtime_checkpoint_from: None,
             runtime_checkpoint_api_token_file: None,

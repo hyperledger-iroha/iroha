@@ -1412,6 +1412,33 @@ fn sccp_evidence_publication_preserves_all_original_preparation_categories() {
 }
 
 #[test]
+fn runtime_support_codec_refusal_remains_original_publication_deferral() {
+    let original = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX),
+        || {
+            norito::core::classify_decode_attempt(|| {
+                norito::core::read_seq_len_slice(&1_u64.to_le_bytes())
+            })
+        },
+    )
+    .unwrap_err();
+    let expected = original.local_refusal().unwrap();
+    let storage =
+        crate::runtime::attestation::ReleaseSupportError::Codec(original).into_block_start(17);
+    let result = validation_failure(BlockValidationError::StateStorageAdmission(storage));
+    let Ok(PublicationError::Deferred(PublicationDeferral::StateStorage(retained))) = result else {
+        panic!("unfinished support observation must retain its original local refusal")
+    };
+    assert_eq!(
+        retained,
+        crate::state::StateStorageAdmissionError::RuntimeSupportDecode(expected)
+    );
+    let deferred = PublicationDeferral::StateStorage(retained);
+    assert!(deferred.release_wait().is_none());
+    assert!(deferred.allocation_refusal().is_none());
+}
+
+#[test]
 fn original_evidence_decode_owner_survives_worker_deferral_until_its_last_reader() {
     use norito::core::{PreparedDecodeWorkspace, classify_decode_attempt};
     let pool = AllocationBudget::new(4096);

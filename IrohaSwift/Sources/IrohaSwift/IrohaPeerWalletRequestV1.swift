@@ -106,3 +106,47 @@ public enum IrohaPeerKagemushaWalletAdapterV1 {
         return try IrohaPeerWalletPaymentV1.decode(message.canonicalPayload).payerCompanion
     }
 }
+
+/// The exact schema-3 receiver originals. Only the installed Native wallet authenticates them.
+public struct IrohaPeerSpartanOpenRequestV3: Sendable, Equatable {
+    public static let maximumBytes = 16 + 1_677 + IrohaPeerWalletRequestV1.maximumAccountBytes
+    public let request: Data
+    public let receiverCredential: Data
+    public let certificates: Data
+    public let feeSchedule: Data
+    public let destinationAccountOriginal: Data
+
+    public init(canonicalPayload: Data) throws {
+        func invalid() -> IrohaPeerWireMessageErrorV1 {
+            .invalidCanonicalPayload(profile: .kagemushaSpartanPaymentV3, kind: .request)
+        }
+        guard (1_267...Self.maximumBytes).contains(canonicalPayload.count) else { throw invalid() }
+        let bytes = [UInt8](canonicalPayload)
+        func length(_ from: Int) -> UInt32 {
+            bytes[from..<from + 4].reduce(0) { ($0 << 8) | UInt32($1) }
+        }
+        let envelope = length(8), account = length(12)
+        guard bytes.prefix(8).elementsEqual("KWRQAC1\0".utf8), envelope == 1_250 || envelope == 1_677,
+              (1...4_096).contains(account), 16 + Int(envelope) + Int(account) == bytes.count else { throw invalid() }
+        let hasFee = envelope == 1_677
+        let end = 16 + Int(envelope), certificatesEnd = end - (hasFee ? 255 : 0)
+        request = Data(bytes[16..<498]); receiverCredential = Data(bytes[498..<1094])
+        certificates = Data(bytes[1094..<certificatesEnd]); feeSchedule = Data(bytes[certificatesEnd..<end])
+        destinationAccountOriginal = Data(bytes[end...])
+        guard request.prefix(2) == Data([1, 0]), request[66..<130].allSatisfy({ $0 == 0 }),
+              request[194..<210].allSatisfy({ $0 == 0 }), request[242..<258].contains(where: { $0 != 0 }),
+              request[386..<418].contains(where: { $0 != 0 }), request[418..<482].contains(where: { $0 != 0 }),
+              request[258..<290].contains(where: { $0 != 0 }) == hasFee,
+              hasFee || request[290..<306].allSatisfy({ $0 == 0 }),
+              receiverCredential.prefix(66) == request.prefix(66), receiverCredential[66..<130] == request[130..<194],
+              receiverCredential[130] == 4 else { throw invalid() }
+        var roles = Set<UInt8>()
+        for start in stride(from: 0, to: certificates.count, by: 172) {
+            guard certificates[start..<start + 34] == request.prefix(34), certificates[start + 35] == 4,
+                  roles.insert(certificates[start + 34]).inserted else { throw invalid() }
+        }
+        guard roles == (hasFee ? [1, 3] : [1]), !hasFee || feeSchedule.prefix(66) == request.prefix(66) else {
+            throw invalid()
+        }
+    }
+}

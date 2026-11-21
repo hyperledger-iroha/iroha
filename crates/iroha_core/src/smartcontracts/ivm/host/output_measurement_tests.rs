@@ -7,6 +7,7 @@
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
 use iroha_test_samples::ALICE_ID;
+use ivm_abi::error::{VmDeferral, VmTrap};
 use norito::core::{DecodeLimits, DecodeLocalRefusalKind, with_decode_limits_scope};
 use std::{cell::Cell, collections::HashMap, io::Write};
 
@@ -33,7 +34,9 @@ fn real_map_scratch_refusal_keeps_original_owner_and_prevents_artifact_export() 
     with_decode_limits_scope(scratch_limit(scratch - 1), || {
         assert!(!host.try_reserve_serialized_output(&value, 1));
     });
-    let ivm::VMError::DecodeDeferred(original) = host.ensure_output_budget().unwrap_err() else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)) =
+        host.ensure_output_budget().unwrap_err()
+    else {
         panic!("canonical map sorting must retain its actual enclosing allocation refusal");
     };
     assert_eq!(original.kind(), DecodeLocalRefusalKind::EnclosingLimit);
@@ -63,7 +66,7 @@ fn real_map_scratch_refusal_keeps_original_owner_and_prevents_artifact_export() 
             .unwrap_err(),
     ] {
         assert!(
-            matches!(refusal, ivm::VMError::DecodeDeferred(ref retained) if retained == &original)
+            matches!(refusal, ivm::VMError::Deferred(VmDeferral::DecodeDeferred(ref retained)) if retained == &original)
         );
     }
     assert_eq!(
@@ -168,7 +171,7 @@ fn allocator_and_malformed_encoders_cannot_claim_a_byte_overflow() {
         );
         match script {
             Script::Allocator => {
-                let ivm::VMError::DecodeDeferred(original) =
+                let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)) =
                     host.ensure_output_budget().unwrap_err()
                 else {
                     panic!("an allocator report remains a local refusal");
@@ -188,7 +191,7 @@ fn allocator_and_malformed_encoders_cannot_claim_a_byte_overflow() {
             _ => {
                 assert!(matches!(
                     host.ensure_output_budget(),
-                    Err(ivm::VMError::NoritoInvalid)
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
                 ));
                 assert!(matches!(
                     host.take_execution_artifacts(None),
@@ -245,14 +248,14 @@ fn measurement_failures_survive_nested_rollback_and_limit_reconfiguration() {
             if malformed {
                 assert!(matches!(
                     host.ensure_output_budget(),
-                    Err(ivm::VMError::NoritoInvalid)
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
                 ));
                 assert!(matches!(
                     host.take_execution_artifacts(None),
                     Err(ExecutionAttemptError::Rejected(_))
                 ));
             } else {
-                let ivm::VMError::DecodeDeferred(original) =
+                let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)) =
                     host.ensure_output_budget().unwrap_err()
                 else {
                     panic!("nested rollback must retain local measurement failure");
@@ -291,11 +294,11 @@ fn actual_counting_sink_overflow_remains_a_deterministic_limit_violation() {
         assert_eq!(host.retained_output_bytes(), 0);
         assert!(matches!(
             host.ensure_output_budget(),
-            Err(ivm::VMError::HostOutputBudgetExceeded {
+            Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                 resource: ivm::HostOutputResource::Bytes,
                 attempted: 66,
                 limit: 65,
-            })
+            }))
         ));
         assert!(matches!(
             host.take_execution_artifacts(None),
@@ -326,11 +329,11 @@ fn prior_output_limit_refusal_stops_the_encoder_before_local_work() {
     assert!(host.output_measurement_failure.is_none());
     assert!(matches!(
         host.ensure_output_budget(),
-        Err(ivm::VMError::HostOutputBudgetExceeded {
+        Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
             resource: ivm::HostOutputResource::Items,
             attempted: 1,
             limit: 0,
-        })
+        }))
     ));
 }
 
@@ -356,9 +359,9 @@ fn encoder_unwind_cannot_export_prior_effects_or_a_partial_measurement() {
     );
     assert!(matches!(
         host.ensure_output_budget(),
-        Err(ivm::VMError::ExecutionDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::ExecutionDeferral::LocalInvariantViolation
-        ))
+        )))
     ));
     assert!(matches!(
         host.take_execution_artifacts(None),
@@ -396,7 +399,7 @@ fn deterministic_output_fault_keeps_diagnostic_drains_but_never_certified_artifa
             assert!(host.ensure_output_measurement().is_ok());
             assert!(matches!(
                 host.ensure_output_budget(),
-                Err(ivm::VMError::HostOutputBudgetExceeded { .. })
+                Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded { .. }))
             ));
             assert!(matches!(
                 host.take_execution_artifacts(None),

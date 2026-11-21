@@ -1,6 +1,7 @@
 //! Compact admission errors preserve allocation-free local conversion and retry ownership.
 
 use iroha_allocation::{AllocationBudget, release::ReleaseRegistration};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use ivm_abi::{
     VMError,
     error::{AllocationRefusal, ExecutionDeferral},
@@ -74,31 +75,40 @@ fn local_reasons_and_nested_metering_convert_without_allocating() {
     for fixture in 0..5 {
         for depth in 0..=2 {
             let original = [
-                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
-                VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
-                VMError::ExecutionDeferred(ExecutionDeferral::VerifierArtifactsUnavailable),
-                VMError::AllocationDeferred(AllocationRefusal::DemandOverflow),
-                VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
-                    requested_bytes: 9,
-                    limit_bytes: 8,
-                }),
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::AllocationUnavailable,
+                )),
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::ActiveMemoryCapacity,
+                )),
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::VerifierArtifactsUnavailable,
+                )),
+                VMError::Deferred(VmDeferral::AllocationDeferred(
+                    AllocationRefusal::DemandOverflow,
+                )),
+                VMError::Deferred(VmDeferral::AllocationDeferred(
+                    AllocationRefusal::ExceedsLimit {
+                        requested_bytes: 9,
+                        limit_bytes: 8,
+                    },
+                )),
             ]
             .into_iter()
             .nth(fixture)
             .unwrap();
             let expected_reason = original.execution_deferral();
             let expected_allocation = match &original {
-                VMError::AllocationDeferred(original) => Some(original.clone()),
-                VMError::ExecutionDeferred(_) => None,
+                VMError::Deferred(VmDeferral::AllocationDeferred(original)) => {
+                    Some(original.clone())
+                }
+                VMError::Deferred(VmDeferral::ExecutionDeferred(_)) => None,
                 _ => unreachable!("fixture consists of exact local variants"),
             };
             let expected_display = original.to_string();
             let mut wrapped = original;
             for _ in 0..depth {
-                wrapped = VMError::Metered {
-                    gas: 91,
-                    source: Box::new(wrapped),
-                };
+                wrapped = VMError::metered(91, wrapped);
             }
             let error = without_allocations(|| {
                 ContractArtifactError::preparation("decoded instructions", wrapped)
@@ -112,10 +122,10 @@ fn local_reasons_and_nested_metering_convert_without_allocating() {
             let converted = without_allocations(|| error.into_vm_error());
             assert_eq!(converted.execution_deferral(), expected_reason);
             match (&converted, expected_allocation.as_ref()) {
-                (VMError::AllocationDeferred(actual), Some(expected)) => {
+                (VMError::Deferred(VmDeferral::AllocationDeferred(actual)), Some(expected)) => {
                     assert_eq!(actual, expected)
                 }
-                (VMError::ExecutionDeferred(_), None) => {}
+                (VMError::Deferred(VmDeferral::ExecutionDeferred(_)), None) => {}
                 _ => panic!("conversion changed the exact local owner variant"),
             }
             assert_eq!(converted.metered_gas(), None);
@@ -144,20 +154,20 @@ fn original_capacity_refusal_survives_unmetered_conversion_and_wakes_only_on_its
     assert!(registration.belongs_to(&budget));
     let occupied = budget.try_reserve_bytes(8).unwrap();
     let refusal = budget.try_reserve_bytes(1).unwrap_err();
-    let original = VMError::AllocationDeferred(refusal.clone());
-    let wrapped = VMError::Metered {
-        gas: 123,
-        source: Box::new(VMError::Metered {
-            gas: 456,
-            source: Box::new(original),
-        }),
-    };
+    let original = VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone()));
+    let wrapped = VMError::metered(123, VMError::metered(456, original));
     let converted = without_allocations(|| {
         ContractArtifactError::preparation("prepared operations", wrapped).into_vm_error()
     });
-    assert!(matches!(&converted, VMError::AllocationDeferred(actual) if actual == &refusal));
+    assert!(
+        matches!(&converted, VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual == &refusal)
+    );
     assert_eq!(converted.metered_gas(), None);
-    let VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. }) = converted else {
+    let VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    })) = converted
+    else {
         panic!("must preserve the actual release owner");
     };
     let wake_count = Arc::new(Wakes::default());
@@ -194,17 +204,17 @@ fn exact_abi_hash_pair_conversion_does_not_require_a_box() {
     });
     assert!(match (
         &(error),
-        &(VMError::ArtifactAbiHashMismatch { expected, actual })
+        &(VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }))
     ) {
         (
-            VMError::ArtifactAbiHashMismatch {
+            VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
                 expected: actual_field_0,
                 actual: actual_field_1,
-            },
-            VMError::ArtifactAbiHashMismatch {
+            }),
+            VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
                 expected: expected_field_0,
                 actual: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });

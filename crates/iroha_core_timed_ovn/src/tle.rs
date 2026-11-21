@@ -71,6 +71,7 @@ pub enum TleKeySessionLifecycleValidationErrorV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::tle_release::TleKeySessionLifecycleV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct TleKeySessionLifecycleV1 {
     /// Fixed lifecycle-record version.
     pub version: u16,
@@ -242,6 +243,7 @@ impl TleKeySessionLifecycleV1 {
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
 #[norito(decode_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct TleAdaptiveDealerCommitmentV1 {
     /// Canonical one-based dealer index.
     pub dealer_index: u16,
@@ -283,6 +285,7 @@ impl TleAdaptiveDealerCommitmentV1 {
     JsonDeserialize,
 )]
 #[norito(decode_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct TleAdaptivePublicShareV1 {
     /// Canonical one-based participant index.
     pub index: u16,
@@ -310,6 +313,7 @@ pub struct TleAdaptivePublicShareV1 {
 )]
 #[norito_schema(name = "iroha_core::tle_release::TleKeySessionPublicStateV1")]
 #[norito(decode_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct TleKeySessionPublicStateV1 {
     /// Fixed adapter version.
     pub version: u16,
@@ -935,6 +939,7 @@ impl VerifiedTlePartialReleaseShareV1 {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TleFinalReleaseSignatureV1 {
     /// Long-lived TLE key session.

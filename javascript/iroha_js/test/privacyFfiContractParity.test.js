@@ -47,7 +47,9 @@ test("native SDK archives expose local compiled profiles without synthesizing re
     const rust = source(path);
     const productionRust = rust.split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/u, 1)[0];
     assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
-    assert.match(rust, /PrivacyProtocolIdV1::ALL/);
+    const catalog = rust.match(/^fn privacy_compiled_profile_catalog\(\)[\s\S]*?^\}/mu)?.[0];
+    assert.ok(catalog, path);
+    assert.match(catalog, /\.eq\(PrivacyRuntimeProtocolIdV1::ALL\)/);
     assert.match(rust, /compiled_privacy_profile_catalog_v1/);
     assert.match(
       rust,

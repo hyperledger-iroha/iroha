@@ -555,6 +555,39 @@ fn apply_contract_call_execution_context(
     }
     Ok(())
 }
+/// The planner can read the authenticated compiler hints of a C10 artifact after its
+/// registered manifest and host have been captured. Its C10 signing frame is separate
+/// from the baseline planner cache.
+fn planner_manifest<'a>(
+    world: &'a impl crate::state::WorldReadOnly,
+    artifact: &ContractArtifactId,
+    contract: &'a ivm::PreparedContract,
+) -> Option<(&'a ContractManifest, bool)> {
+    if contract.profile_id() == ivm::IvmProfileId::C10_ABI_V1 {
+        let registered = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            world, artifact,
+        )?;
+        if !matches!(
+            registered,
+            crate::smartcontracts::code::registered_manifest::RegisteredManifest::C10(_)
+        ) || registered.hashes()
+            != (
+                Some(artifact.code_hash),
+                Some(IrohaHash::prehashed(contract.profile_id().abi_hash())),
+            )
+            || contract.code_hash() != artifact.code_hash
+        {
+            return None;
+        }
+        Some((contract.manifest(), false))
+    } else {
+        world
+            .contract_manifests()
+            .get(artifact)
+            .map(|manifest| (manifest, true))
+    }
+}
+
 fn manifest_access_set(
     manifest: &ContractManifest,
     artifact_id: ContractArtifactId,
@@ -708,13 +741,14 @@ where
                     .filter(|contract| contract.code_hash() == identity.code_hash)
                     .cloned()
                     .or_else(|| prepared_contract_for_access(view, artifact_id))
-                && let Some(manifest) = view.world().contract_manifests().get(&artifact_id)
+                && let Some((manifest, cacheable)) =
+                    planner_manifest(view.world(), &artifact_id, &contract)
             {
                 if let Some((set, source)) = manifest_access_set(
                     manifest,
                     artifact_id,
                     &contract,
-                    view.pipeline().access_set_cache_enabled,
+                    cacheable && view.pipeline().access_set_cache_enabled,
                     Some(call.entrypoint.as_str()),
                     view.prepared_contract_cache().execution_budget(),
                 ) {
@@ -799,18 +833,19 @@ where
             // Prepared overlays retain this exact immutable contract. Cold State
             // callers prepare from their original pool; state-free inspection
             // retains the conservative dependency barrier below.
-            let prepared = prepared_contract.cloned().or_else(|| {
-                state_ro.and_then(|state| {
-                    state
-                        .prepared_contract_cache()
-                        .get_or_prepare_in_world(
+            let prepared = prepared_contract
+                .filter(|contract| contract.profile_id() != ivm::IvmProfileId::C10_ABI_V1)
+                .cloned()
+                .or_else(|| {
+                    state_ro.and_then(|state| {
+                        dynamic_execution::prepare_in_world(
+                            &state.prepared_contract_cache(),
                             state.world(),
-                            ivm::contract_code_hash(bytecode_ref),
                             bytecode_ref,
                         )
                         .ok()
-                })
-            });
+                    })
+                });
             if let Some(contract) = prepared.as_ref() {
                 debug_assert_eq!(contract.artifact(), bytecode_ref);
                 let code_hash = contract.code_hash();
@@ -1998,9 +2033,20 @@ where
 {
     let mut set = AccessSet::new();
     let triggers = state_ro.world().triggers();
-    let Some((executable, metadata)) = triggers.inspect_by_id(trigger_id, |action| {
+    let (executable, metadata) = if let Some(row) = state_ro.world().c10_triggers().get(trigger_id)
+    {
+        let action = &row.trigger().action;
+        let Ok(executable) =
+            crate::runtime::deferred_consent::trigger_executable_ref(action.executable())
+        else {
+            return AccessSet::global();
+        };
+        (executable, action.metadata().clone())
+    } else if let Some(action) = triggers.inspect_by_id(trigger_id, |action| {
         (action.executable().clone(), action.metadata().clone())
-    }) else {
+    }) {
+        action
+    } else {
         return set;
     };
     match executable {
@@ -2025,12 +2071,13 @@ where
                     identity.code_hash,
                 )
                 && let Some(contract) = prepared_contract_for_access(state_ro, artifact_id)
-                && let Some(manifest) = state_ro.world().contract_manifests().get(&artifact_id)
+                && let Some((manifest, cacheable)) =
+                    planner_manifest(state_ro.world(), &artifact_id, &contract)
                 && let Some((hinted, _source)) = manifest_access_set(
                     manifest,
                     artifact_id,
                     &contract,
-                    state_ro.pipeline().access_set_cache_enabled,
+                    cacheable && state_ro.pipeline().access_set_cache_enabled,
                     Some(invocation.entrypoint.as_str()),
                     state_ro.prepared_contract_cache().execution_budget(),
                 )
@@ -2432,7 +2479,8 @@ where
     if let DynamicIvmProgram::Raw(bytecode) = program {
         ivm::ProgramMetadata::parse_for_profile(
             bytecode,
-            crate::smartcontracts::ivm::profile::resolve_artifact(state_ro.world(), bytecode).id(),
+            crate::smartcontracts::ivm::profile::resolve_raw_artifact(state_ro.world(), bytecode)
+                .id(),
         )
         .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))?;
     }
@@ -2535,8 +2583,11 @@ where
         DynamicIvmProgram::Raw(bytecode) => vm
             .load_program_for_profile(
                 bytecode,
-                crate::smartcontracts::ivm::profile::resolve_artifact(state_ro.world(), bytecode)
-                    .id(),
+                crate::smartcontracts::ivm::profile::resolve_raw_artifact(
+                    state_ro.world(),
+                    bytecode,
+                )
+                .id(),
             )
             .map_err(|error| dynamic_execution::vm_error("ivm.load_program", error))?,
         DynamicIvmProgram::Prepared(contract) => vm
@@ -3157,6 +3208,54 @@ mod tests {
             "unexpected generic prepass rejection: {error}"
         );
     }
+    #[test]
+    fn raw_prepass_refuses_selected_c10_even_with_a_warm_deployed_contract() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let state = generic_prepass_test_state(&authority);
+        crate::runtime::activate_additions_for_testing(
+            &state.world,
+            crate::runtime::catalog::additions::IVM_C10.module,
+        )
+        .unwrap();
+        let (code, _) = kotodama_lang::compiler::Compiler::new_c10()
+            .compile_source_with_manifest(
+                "seiyaku Counter { kotoage fn answer() authorize(anyone) { } }",
+            )
+            .unwrap();
+        let block = state.block(prepass_test_header());
+        let cache = block.prepared_contract_cache();
+        let contract = cache
+            .get_or_prepare_in_world(block.world(), ivm::contract_code_hash(&code), &code)
+            .expect("deployed profile is selected");
+        assert_eq!(contract.profile_id(), ivm::IvmProfileId::C10_ABI_V1);
+        assert!(dynamic_execution::prepare_in_world(&cache, block.world(), &code).is_err());
+        let error =
+            derive_from_ivm_dynamic_with_context(&code, &authority, None, &block, TEST_GAS_LIMIT)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
+                .expect_err("raw admission refused before prepass execution");
+        let original =
+            ivm::ProgramMetadata::parse_for_profile(&code, ivm::IvmProfileId::BASELINE_ABI_V1)
+                .unwrap_err();
+        assert_eq!(error, format!("ivm.metadata: {original}"));
+        let transaction = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(code)))
+        .sign(keypair.private_key());
+        for prepared in [None, Some(&contract)] {
+            let (set, source) = derive_for_transaction_with_source_and_prepared(
+                &transaction,
+                Some(&block),
+                IvmStrategy::DynamicThenConservative,
+                prepared,
+            );
+            assert!(set.write_keys.contains("*"));
+            assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
+        }
+    }
+
     #[test]
     fn dynamic_generic_prepass_rejects_reserved_metadata_before_vm_execution() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");

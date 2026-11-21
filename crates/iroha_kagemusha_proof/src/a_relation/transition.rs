@@ -28,6 +28,8 @@ pub struct TransitionInputs<'a> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::core30_inline_receive_accepts;
 
 impl TransitionInputs<'_> {
     /// Lay out the step relation on A's lane and assert each of its statement

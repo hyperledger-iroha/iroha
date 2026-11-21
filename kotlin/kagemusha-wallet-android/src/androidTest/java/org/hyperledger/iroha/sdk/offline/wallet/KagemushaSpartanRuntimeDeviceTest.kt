@@ -2,21 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package org.hyperledger.iroha.sdk.offline.wallet
 
-import android.app.Activity
 import android.content.Intent
-import android.hardware.biometrics.BiometricManager
-import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
-import android.os.CancellationSignal
-import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import android.widget.TextView
+import androidx.fragment.app.FragmentActivity
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,23 +26,46 @@ class KagemushaSpartanRuntimeDeviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         require(context.packageName.startsWith("org.hyperledger.iroha.kagemusha.enrollmentprobe."))
-        val root = File(context.noBackupFilesDir, "spartan-native-runtime").apply { mkdirs() }
-        val artifacts = File(context.filesDir, "spartan-programs").apply { mkdirs() }
+        val assets = instrumentation.context.assets
+        val noBackup = KagemushaWalletAndroidStorageV1.privateNoBackupFilesDir(context)
+        val selected = assets.open("spartan-artifacts/parameter-manifest.norito").use {
+            SpartanDeviceFixturePaths(noBackup, context.filesDir, it.readBytes())
+        }
+        check(selected.custody.mkdirs() || selected.custody.isDirectory) {
+            "Unable to open the Spartan fixture custody directory"
+        }
+        check(selected.programs.mkdirs() || selected.programs.isDirectory) {
+            "Unable to open the Spartan fixture program directory"
+        }
         for (name in listOf("program-bundle.norito", "parameter-manifest.norito", "parameter-signature.bin")) {
-            instrumentation.context.assets.open("spartan-artifacts/$name").use { input ->
-                File(artifacts, name).outputStream().use { output -> input.copyTo(output) }
+            assets.open("spartan-artifacts/$name").use { input ->
+                File(selected.programs, name).outputStream().use { output -> input.copyTo(output) }
             }
         }
         instrumentation.runOnMainSync { SpartanRuntimeWindow.running = true }
         try {
-            instrumentation.startActivitySync(
+            val activity = instrumentation.startActivitySync(
                 Intent(instrumentation.context, KagemushaSpartanRuntimeActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as KagemushaSpartanRuntimeActivity
             System.loadLibrary("kagemusha_spartan_device_fixture")
-            val report = SpartanDeviceRuntimeNative.run(KagemushaWalletAndroidPlatformV1.create(context),
-                root.absolutePath, artifacts.absolutePath, SpartanDeviceConfirmation())
-            File(context.filesDir, "spartan-native-runtime-report.txt").writeText(report)
-            instrumentation.sendStatus(0, Bundle().apply { putString("spartanRuntime", report) })
+            val platform = KagemushaWalletAndroidPlatformV1.create(context)
+            val report = SpartanDeviceRuntimeNative.run(platform, selected.custody.absolutePath,
+                selected.programs.absolutePath, SpartanDeviceConfirmation(platform, activity))
+            selected.report.writeText(report)
+            instrumentation.sendStatus(0, Bundle().apply {
+                putString("spartanRuntime", report)
+                putString("spartanReportSha256", selected.report.inputStream().use(::fixtureSha256))
+                putString("spartanManifestSha256", selected.digest)
+                putString("spartanReportPath", selected.reportPath)
+                putString("spartanCustodyPath", selected.custodyPath)
+                listOf(
+                    "spartanMeasurementsSha256" to "device-measurements.json",
+                    "spartanEventsSha256" to "device-measurements.jsonl",
+                ).forEach { (field, name) ->
+                    val file = File(selected.custody, name)
+                    if (file.isFile) file.inputStream().use { putString(field, fixtureSha256(it)) }
+                }
+            })
             assertTrue(report, report.startsWith("PASS:"))
         } finally {
             instrumentation.runOnMainSync {
@@ -57,6 +77,29 @@ class KagemushaSpartanRuntimeDeviceTest {
     }
 }
 
+/** Preserve every previous scheme's custody across upgrades of this diagnostic package. */
+internal class SpartanDeviceFixturePaths(noBackupDir: File, filesDir: File, manifest: ByteArray) {
+    val digest: String = manifest.inputStream().use(::fixtureSha256)
+    private val generation = "spartan-fixtures/$digest/protected-debit-v1"
+    val custody = File(noBackupDir, generation)
+    private val diagnostics = File(filesDir, generation)
+    val programs = File(diagnostics, "programs")
+    val report = File(diagnostics, "spartan-native-runtime-report.txt")
+    val reportPath = "files/$generation/${report.name}"
+    val custodyPath = "no_backup/$generation"
+}
+
+private fun fixtureSha256(input: java.io.InputStream): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(8192)
+    var count = input.read(buffer)
+    while (count != -1) {
+        digest.update(buffer, 0, count)
+        count = input.read(buffer)
+    }
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+}
+
 /** Keep only this fixture's visible window awake while its native run is active. */
 private object SpartanRuntimeWindow {
     // Accessed only on the main thread. Process death resets the active-run gate.
@@ -65,7 +108,7 @@ private object SpartanRuntimeWindow {
 }
 
 /** A recreated window cannot outlive the active instrumentation run. */
-class KagemushaSpartanRuntimeActivity : Activity() {
+class KagemushaSpartanRuntimeActivity : FragmentActivity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         if (!SpartanRuntimeWindow.running) { finish(); return }
@@ -88,100 +131,33 @@ class KagemushaSpartanRuntimeActivity : Activity() {
 internal object SpartanDeviceRuntimeNative {
     @JvmStatic external fun run(platform: KagemushaWalletAndroidPlatformV1, root: String,
         artifacts: String, confirmation: SpartanDeviceConfirmation): String
+    @JvmStatic external fun confirm(owner: Long, token: Long, message: ByteArray,
+        der: ByteArray): KagemushaSpartanReplyV1?
 }
 
-/** JNI retains this object; the result can only come from a fresh Android prompt. */
-internal class SpartanDeviceConfirmation {
-    @Suppress("unused") fun confirm(review: ByteArray): Boolean {
-        require(Looper.myLooper() != Looper.getMainLooper())
+/** Present the same exact review, hardware operation and Native retention protocol as retail. */
+internal class SpartanDeviceConfirmation(
+    private val platform: KagemushaWalletAndroidPlatformV1,
+    private val activity: KagemushaSpartanRuntimeActivity,
+) {
+    @Suppress("unused") fun confirm(owner: Long, token: Long, slot: ByteArray, review: ByteArray) {
+        check(Looper.myLooper() != Looper.getMainLooper())
         val projection = KagemushaSpartanReviewProjectionV1(review)
         require(projection.operation == KagemushaSpartanOperationV1.SEND)
         require(projection.amount.low == 10L && projection.amount.high == 0L &&
             projection.fee.low == 0L && projection.fee.high == 0L)
-        require(projection.receiverWalletId().contentEquals(projection.walletId()))
-        val request = SpartanDevicePrompt.Request(review.copyOf(), projection)
-        SpartanDevicePrompt.register(request)
-        try {
-            android.util.Log.i("SpartanDeviceFixture", "confirmation-required review=${request.digest}")
-            val context = InstrumentationRegistry.getInstrumentation().context
-            context.startActivity(Intent(context, KagemushaSpartanConfirmationActivity::class.java)
-                .putExtra("ticket", request.ticket.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            val confirmed = request.ticket.await(120, TimeUnit.SECONDS)
-            if (confirmed) {
-                android.util.Log.i("SpartanDeviceFixture", "confirmation-granted review=${request.digest}")
-            }
-            return confirmed
-        } finally {
-            request.ticket.fail(IllegalStateException("Hardware confirmation closed"))
-            SpartanDevicePrompt.clear(request)
-            Handler(Looper.getMainLooper()).post { request.activity?.closePrompt() }
+        require(!projection.receiverWalletId().contentEquals(projection.walletId()))
+        val prompt = createSpartanDebitPromptV1(platform, slot, projection.sendDebitTerms()) { message, der ->
+            KagemushaSpartanWalletV1.call { SpartanDeviceRuntimeNative.confirm(owner, token, message, der) }
         }
-    }
-}
-internal object SpartanDevicePrompt {
-    class Request(val bytes: ByteArray, val projection: KagemushaSpartanReviewProjectionV1) {
-        val ticket = KagemushaProbeConfirmationTicket<Boolean>()
-        var activity: KagemushaSpartanConfirmationActivity? = null
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-            .joinToString("") { "%02x".format(it.toInt() and 255) }
-    }
-    private var current: Request? = null
-    @Synchronized fun register(request: Request) { check(current == null); current = request }
-    @Synchronized fun claim(id: String) = current?.takeIf { it.ticket.claim(id) }
-    @Synchronized fun clear(request: Request) { if (current === request) current = null }
-}
-
-/** Android's biometric/device credential prompt authenticates the exact review. */
-class KagemushaSpartanConfirmationActivity : Activity() {
-    private var request: SpartanDevicePrompt.Request? = null
-    private var cancellation: CancellationSignal? = null
-    private var started = false
-    override fun onCreate(state: Bundle?) {
-        super.onCreate(state)
-        if (android.os.Build.VERSION.SDK_INT < 30 || state != null) { finish(); return }
-        val selected = intent.getStringExtra("ticket")?.let(SpartanDevicePrompt::claim)
-            ?: run { finish(); return }
-        request = selected; selected.activity = this
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE or
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setContentView(TextView(this).apply {
-            textSize = 18f; setPadding(32, 48, 32, 32)
-            text = "Experimental KAGEMUSHA hardware fixture\n\n" +
-                "Self-transfer: 10 test units, fee 0\n\n" +
-                "Exact native review SHA-256:\n${selected.digest}\n\n" +
-                "Confirm this isolated Send using Android authentication."
-        })
-    }
-    override fun onResume() {
-        super.onResume()
-        val selected = request ?: return
-        if (started) return
-        started = true
+        android.util.Log.i("SpartanDeviceFixture", "Protected Send confirmation required")
         try {
-            val signal = CancellationSignal(); cancellation = signal
-            BiometricPrompt.Builder(this).setTitle("Confirm experimental Send")
-                .setSubtitle("Review ${selected.digest.take(12)}")
-                .setDescription("Self-transfer 10 test units, fee 0")
-                .setConfirmationRequired(true)
-                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                    BiometricManager.Authenticators.DEVICE_CREDENTIAL).build()
-                .authenticate(signal, mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        if (result.authenticationType == BiometricPrompt.AUTHENTICATION_RESULT_TYPE_BIOMETRIC ||
-                            result.authenticationType == BiometricPrompt.AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL) {
-                            selected.ticket.succeed(true)
-                        } else selected.ticket.fail(IllegalStateException("Unexpected authentication type"))
-                        finish()
-                    }
-                    override fun onAuthenticationError(code: Int, message: CharSequence) {
-                        selected.ticket.fail(KagemushaProbeAuthenticationFailure(code)); finish()
-                    }
-                })
-        } catch (failure: Throwable) { selected.ticket.fail(failure); finish() }
-    }
-    internal fun closePrompt() { cancellation?.cancel(); cancellation = null; finish() }
-    override fun onDestroy() {
-        request?.ticket?.fail(IllegalStateException("Hardware confirmation dismissed"))
-        cancellation?.cancel(); super.onDestroy()
+            check(runBlocking { withTimeout(120_000L) { prompt.authenticate(activity) } }) {
+                "Protected Send confirmation refused"
+            }
+            android.util.Log.i("SpartanDeviceFixture", "Native retained protected Send confirmation")
+        } finally {
+            prompt.cancel()
+        }
     }
 }

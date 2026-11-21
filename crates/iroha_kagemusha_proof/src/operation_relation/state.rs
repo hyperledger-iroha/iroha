@@ -54,9 +54,23 @@ impl StateCells {
         core: &[Word<Fp>; CORE_FIELDS],
         rest: &[Word<Fp>; REST_FIELDS],
     ) -> Result<Self, Error> {
+        Self::constrain_commitment(uint, sponge, region, core, rest, None)
+    }
+
+    pub(crate) fn constrain_commitment(
+        uint: &mut UintChip<'_, Fp>,
+        sponge: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        core: &[Word<Fp>; CORE_FIELDS],
+        rest: &[Word<Fp>; REST_FIELDS],
+        prior_root: Option<Word<Fp>>,
+    ) -> Result<Self, Error> {
         validate_fields(uint, region, core, rest)?;
         let rest_digest = sponge.hash_words(region, REST_DOMAIN, rest)?;
         let mut preimage = core.to_vec();
+        if let Some(prior_root) = prior_root {
+            preimage.insert(core::CREDENTIAL + 1, prior_root);
+        }
         preimage.push(rest_digest.clone());
         let commitment = sponge.hash_words(region, CORE_DOMAIN, &preimage)?;
         Ok(Self {

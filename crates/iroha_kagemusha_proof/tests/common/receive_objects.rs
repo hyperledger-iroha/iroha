@@ -58,18 +58,12 @@ pub fn renewed_credential() -> bootstrap_objects::Signed {
     renewed
 }
 
-/// Build the same committed step transition for accept or structurally valid
-/// burn. The `valid` value is used only to construct a witness; the circuit's
-/// terminal predicate must derive its own value from all four result owners.
-/// The returned step evaluates, rule for rule, to the returned statement.
-pub fn from_send(
+/// Ordinary Receive step and consumed-map insertion before any receipt or lineage is assembled.
+pub fn monetary_step(
     send: &send_objects::SendFixture,
     before: &StateWitness,
-    payment: Fp,
-    valid: bool,
     insert: bool,
-) -> ReceiveFixture {
-    assert!(!valid || insert);
+) -> (StepWitness<Fp>, IndexedInsert<Fp>) {
     let StepInputs::Send(input) = &send.step.inputs else {
         panic!("Send fixture");
     };
@@ -90,18 +84,11 @@ pub fn from_send(
             slot_siblings: consumed_tree.siblings(0),
         }
     };
-    let mut record_tree = IndexedTree::new();
-    assert_eq!(before.lineage[16], record_tree.root());
-    let record = hash_with_domain(
-        CREDIT_DOMAIN,
-        &[credit_id, payment, Fp::from(u64::from(!valid))],
-    );
-    let credit = record_tree.insert(credit_id, record).unwrap();
-    let step = StepWitness {
-        relation_id: send.step.relation_id,
-        predecessor: send_objects::state(before),
-        successor_nonce: Fp::from(303),
-        inputs: StepInputs::Receive(Box::new(ReceiveInputs {
+    let step = StepWitness::new(
+        send.step.relation_id,
+        send_objects::state(before),
+        Fp::from(303),
+        StepInputs::Receive(Box::new(ReceiveInputs {
             payer_wallet: send.step.predecessor.core.identity.wallet_id,
             payer_account_digest: input.payer_account_digest,
             receiver_account_digest: input.receiver_account_digest,
@@ -110,7 +97,32 @@ pub fn from_send(
             request: input.request,
             successor_consumed_credit: consumed_tree.root(),
         })),
-    };
+    );
+    (step, consumed)
+}
+
+/// Build the same committed step transition for accept or structurally valid
+/// burn. The `valid` value is used only to construct a witness; the circuit's
+/// terminal predicate must derive its own value from all four result owners.
+/// The returned step evaluates, rule for rule, to the returned statement.
+pub fn from_send(
+    send: &send_objects::SendFixture,
+    before: &StateWitness,
+    payment: Fp,
+    valid: bool,
+    insert: bool,
+) -> ReceiveFixture {
+    assert!(!valid || insert);
+    let (step, consumed) = monetary_step(send, before, insert);
+    let credit_id = send.statement[17];
+    let amount = send.statement[21];
+    let mut record_tree = IndexedTree::new();
+    assert_eq!(before.lineage[16], record_tree.root());
+    let record = hash_with_domain(
+        CREDIT_DOMAIN,
+        &[credit_id, payment, Fp::from(u64::from(!valid))],
+    );
+    let credit = record_tree.insert(credit_id, record).unwrap();
     let evaluated = step.evaluate(SigmaRelation::RECEIVE);
     assert!(
         evaluated.violations.is_empty(),

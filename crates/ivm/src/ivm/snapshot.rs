@@ -9,6 +9,7 @@ use super::{
     REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST, REFUSE_TRACE_SNAPSHOT_FOR_TEST,
     REFUSE_WORKER_SNAPSHOT_FOR_TEST,
 };
+use crate::error::VmDeferral;
 use crate::{
     contract_return_stack::ContractReturnStack,
     error::VMError,
@@ -72,8 +73,11 @@ fn trace_allocation_bytes(
     mem_log: &zk::MemLog,
     contract_debug: Option<&EmbeddedContractDebugInfoV1>,
 ) -> Result<usize, VMError> {
-    let unavailable =
-        || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+    let unavailable = || {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::AllocationUnavailable,
+        ))
+    };
     let mut total = 0usize;
     for bytes in [
         mem_log.allocated_bytes()?,
@@ -86,7 +90,9 @@ fn trace_allocation_bytes(
         .ok_or_else(unavailable)
 }
 fn allocation_unavailable() -> VMError {
-    VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::error::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 pub(super) fn checked_allocation_bytes(total: &mut usize, bytes: usize) -> Result<(), VMError> {
     *total = total
@@ -244,7 +250,6 @@ impl IVM {
             reg_log: Some(reg_log),
             host_trace_log_detached: false,
             host_trace_invocation_log: None,
-            proof_state_epoch: self.proof_state_epoch,
             trace_log: traces.trace_log,
             step_log: traces.step_log,
             trace_mode: self.trace_mode,
@@ -309,16 +314,19 @@ impl IVM {
     ) -> Result<Self, VMError> {
         #[cfg(test)]
         if REFUSE_WORKER_SNAPSHOT_FOR_TEST.with(std::cell::Cell::get) {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable,
-            ));
+            )));
         }
         let memory = self.memory.try_clone_for_runtime_template(None)?;
         let registers = self.registers.try_clone_for_runtime_template()?;
         let private_memory_bytes = self.private_memory_bytes.try_clone()?;
         #[cfg(test)]
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let empty = zk::RegLog::new(self.memory.allocation_budget());
         let reg_log = self.reg_log.as_ref().map(zk::SharedRegLog::lock);
         let reg_log_value = reg_log.as_deref().unwrap_or(&empty);

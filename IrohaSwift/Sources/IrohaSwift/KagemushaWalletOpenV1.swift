@@ -129,6 +129,15 @@ public final class KagemushaWalletRuntimeV1: KagemushaWalletCleanupResourceV1, @
     self.lease = nil
     return runtime
   }
+  /// Transfer the same installed, unadmitted lease to the programs Native already authenticated
+  /// from its signed carrier. No program bytes are offered; a refusal retains this lease.
+  func openInstalledSpartan() throws -> KagemushaSpartanRuntimeV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let runtime = try KagemushaSpartanRuntimeV1.openInstalled(lease: lease)
+    self.lease = nil
+    return runtime
+  }
   /// Transfer the existing Native lease only after it authenticates the live session originals.
   func startEnrollment(_ session: KagemushaWalletEnrollmentSessionOriginalsV1) throws -> KagemushaWalletEnrollmentV1 {
     lock.lock(); defer { lock.unlock() }

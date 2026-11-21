@@ -6,7 +6,9 @@
 //! obligations registered through the kernel, their completion capabilities and migration
 //! cursors; [`checkpoint`] holds the startup floor and the policy records a selection carries.
 pub mod adoption;
+pub mod carrier;
 pub mod checkpoint;
+pub mod child_admin;
 pub mod deferred;
 pub mod definition;
 pub mod keyed_state;

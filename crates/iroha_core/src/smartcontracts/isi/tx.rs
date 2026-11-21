@@ -15,7 +15,7 @@ use iroha_data_model::{
         CommittedTransaction, CommittedTxFilters, dsl::CompoundPredicate,
         error::QueryExecutionFail, json::PredicateJson,
     },
-    transaction::{TransactionResult, signed::TransactionEntrypoint},
+    transaction::signed::TransactionEntrypoint,
 };
 use norito::json::Value;
 use norito::{Decode, Encode};
@@ -504,13 +504,12 @@ impl NetworkCarrierProjection {
         let entrypoint = block
             .network_entrypoint_at(input_index as usize)
             .ok_or_else(|| canonical_transaction_history_error("Network source is missing"))?;
-        let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
-            canonical_transaction_history_error("Network input has no exact output")
-        })?;
-        let output = block
-            .execution_outputs()
-            .get(output_index as usize)
-            .ok_or_else(|| canonical_transaction_history_error("joined output is missing"))?;
+        let (output_index, output) =
+            block
+                .network_execution_output_at(input_index)
+                .ok_or_else(|| {
+                    canonical_transaction_history_error("Network input has no exact output")
+                })?;
         let entrypoint_proof = self
             .inputs
             .get_proof(input_index)
@@ -607,7 +606,10 @@ impl FinalizedExecutionCarrier {
     pub fn visit_network_transactions(
         &self,
         expected_hash: HashOf<BlockHeader>,
-        mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
+        mut visitor: impl FnMut(
+            &TransactionEntrypoint,
+            iroha_data_model::block::execution_output::TransactionResultRef<'_>,
+        ),
     ) -> Result<BlockHeader, QueryExecutionFail> {
         if self.block().hash() != expected_hash {
             return Err(canonical_transaction_history_error(
@@ -622,10 +624,10 @@ impl FinalizedExecutionCarrier {
             let index = u32::try_from(index).map_err(|_| {
                 canonical_transaction_history_error("Network count exceeds index space")
             })?;
-            let (_, output) = block.network_output_at(index).ok_or_else(|| {
+            let (_, output) = block.network_execution_output_at(index).ok_or_else(|| {
                 canonical_transaction_history_error("validated output disappeared")
             })?;
-            visitor(entrypoint, &output.result);
+            visitor(entrypoint, output.result());
         }
         Ok(block.header())
     }
@@ -650,7 +652,7 @@ impl FinalizedExecutionCarrier {
 pub struct CommittedNetworkOutcome {
     pub(crate) header: BlockHeader,
     pub(crate) results:
-        Vec<Result<(), iroha_data_model::transaction::error::TransactionRejectionReason>>,
+        Vec<Result<(), iroha_data_model::block::execution_output::ProfiledTransactionRejection>>,
 }
 impl CommittedNetworkOutcome {
     /// The carrier's journal-authenticated Iroha header (height and ledger time).
@@ -660,7 +662,8 @@ impl CommittedNetworkOutcome {
     /// Nonempty results of the authenticated Network inputs, in input order.
     pub fn matched_results(
         &self,
-    ) -> &[Result<(), iroha_data_model::transaction::error::TransactionRejectionReason>] {
+    ) -> &[Result<(), iroha_data_model::block::execution_output::ProfiledTransactionRejection>]
+    {
         &self.results
     }
 }
@@ -1102,7 +1105,10 @@ pub fn visit_finalized_network_transactions(
     expected_hash: HashOf<BlockHeader>,
     max_work: u64,
     max_bytes: u64,
-    mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
+    mut visitor: impl FnMut(
+        &TransactionEntrypoint,
+        iroha_data_model::block::execution_output::TransactionResultRef<'_>,
+    ),
 ) -> Result<BlockHeader, crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>> {
     let carrier = state.read_finalized_execution_carrier(height, max_work, max_bytes)?;
     carrier
@@ -2034,7 +2040,7 @@ pub fn visit_borrowed_committed_transaction_page(
     mut completed_block: impl FnMut(u64),
     mut visitor: impl FnMut(
         &TransactionEntrypoint,
-        &TransactionResult,
+        iroha_data_model::block::execution_output::TransactionResultRef<'_>,
         TransactionHistoryPosition,
         &SignedBlock,
     ) -> ControlFlow<()>,
@@ -2082,15 +2088,17 @@ pub fn visit_borrowed_committed_transaction_page(
                 })?;
                 let input_index_u32 =
                     u32::try_from(input_index).map_err(|_| QueryExecutionFail::CursorMismatch)?;
-                let (_, output) = block.network_output_at(input_index_u32).ok_or_else(|| {
-                    canonical_transaction_history_error("Network input has no exact output")
-                })?;
+                let (_, output) = block
+                    .network_execution_output_at(input_index_u32)
+                    .ok_or_else(|| {
+                        canonical_transaction_history_error("Network input has no exact output")
+                    })?;
                 let position = TransactionHistoryPosition {
                     height: height.get(),
                     block_index: input_index,
                 };
                 last = Some(position);
-                let flow = visitor(input, &output.result, position, &block);
+                let flow = visitor(input, output.result(), position, &block);
                 stopped = flow.is_break();
                 if stopped {
                     return Ok(ControlFlow::Break(()));
@@ -2304,14 +2312,17 @@ pub(crate) mod tests {
         );
         let success = TransactionResult::from(Ok(DataTriggerSequence::default()));
         let (call_id, indexed_authority) =
-            crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, &success)
+            crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, (&success).into())
                 .expect("exact successful signal");
         assert_eq!(call_id.to_string(), "kaigi.universal:indexed");
         assert_eq!(indexed_authority, authority);
         let failed = TransactionResult::from(Err(TransactionRejectionReason::Validation(
             ValidationFail::InternalError("rejected".to_owned()),
         )));
-        assert!(crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, &failed).is_none());
+        assert!(
+            crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, (&failed).into())
+                .is_none()
+        );
     }
     use std::{
         num::{NonZeroU64, NonZeroUsize},
@@ -3380,7 +3391,11 @@ pub(crate) mod tests {
             |transaction, position, _| {
                 expected.push((
                     transaction.entrypoint.clone(),
-                    transaction.result().clone(),
+                    transaction
+                        .result()
+                        .baseline()
+                        .expect("baseline fixture")
+                        .clone(),
                     position,
                 ));
                 ControlFlow::Continue(())
@@ -3410,7 +3425,7 @@ pub(crate) mod tests {
                         .unwrap()
                 ));
                 assert!(std::ptr::eq(
-                    result,
+                    result.baseline().expect("baseline fixture"),
                     &raw const block
                         .network_output_at(
                             u32::try_from(position.block_index())
@@ -3420,7 +3435,11 @@ pub(crate) mod tests {
                         .1
                         .result
                 ));
-                actual.push((input.clone(), result.clone(), position));
+                actual.push((
+                    input.clone(),
+                    result.baseline().expect("baseline fixture").clone(),
+                    position,
+                ));
                 ControlFlow::Continue(())
             },
         )
@@ -3471,7 +3490,11 @@ pub(crate) mod tests {
                 TRANSACTION_HISTORY_MAX_BYTES,
                 |_| {},
                 |input, result, position, _| {
-                    actual.push((input.clone(), result.clone(), position));
+                    actual.push((
+                        input.clone(),
+                        result.baseline().expect("baseline fixture").clone(),
+                        position,
+                    ));
                     page_len += 1;
                     if page_len == 3 {
                         ControlFlow::Break(())
@@ -3750,7 +3773,7 @@ pub(crate) mod tests {
                             .expect("fixture block index fits u32"),
                     )
                     .expect("carrier contains the exact committed output");
-                assert_eq!(&output.result, transaction.result());
+                assert_eq!(transaction.result(), (&output.result).into());
                 visited += 1;
                 ControlFlow::Continue(())
             },
@@ -4278,7 +4301,7 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(position, row.input_index);
             assert_eq!(ordinary[5 - index].entrypoint_hash, entry.hash());
-            assert_eq!(ordinary[5 - index].result(), &row.result);
+            assert_eq!(ordinary[5 - index].result(), (&row.result).into());
         }
     }
 }

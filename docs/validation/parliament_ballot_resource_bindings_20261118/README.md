@@ -1,0 +1,11 @@
+# Parliament symbolic resource bindings for the November 18 candidate
+
+The reviewed source is signed revision `77d1cf33dd45c1568c929b430467e5af73f72ddd` with the explicit input pins in this successor. Of the 91 inputs to the standalone resource model, only the root Cargo manifest and workspace lock changed relative to the November 4 reviewed record. The 89 other inputs match exactly. The provider's current dependency closure resolves to the identical 11-package projected lock. All 681 remaining compiler, standard-library, provider, probe and capture inputs match the previous 683-input receipt.
+
+All eight optimized compile-only probes were repeated. The four targets are ARM64 macOS, iOS and Android, and x86-64 Linux musl. Each measured 960 bytes for both AES provider layouts. Portable alignment is eight bytes and the accelerated wrapper requires sixteen. The only textual difference in the eight LLVM outputs was the crate module identifier. These observations do not involve target-device execution.
+
+The standalone report is identical to the previous report after removing its source identity field. The original four proof lengths, canonical independent fixtures, operation counts, and allocation terms all match. The request, prover, front-end, ideal sampler, oracle-log circuit, write-framing and four static-overlay reports were independently compared with their previously reviewed figures. Every field outside the recorded source identities and receipt hashes agrees. Every function's syntax tree is unchanged. The logical accounting scope and outstanding production terms are preserved.
+
+The sampler and oracle-log directories retain their new source-bound reports and receipts. Their consumers verify the entire current input set and the newly selected report identities. The earlier reports and their named revisions remain intact. The eight focused suites passed 135 tests and 297 subtests. An explicit complete standalone certificate request exited one. The downstream qualification requests remained closed.
+
+The provider measurements and current source comparison are in `review.json`. This evidence records local engineering verification of the symbolic models. External cryptographic review, a complete resource certificate and physical-platform qualification remain outstanding.

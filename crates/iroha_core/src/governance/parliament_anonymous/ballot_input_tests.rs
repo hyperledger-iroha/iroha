@@ -186,7 +186,19 @@ pub(crate) fn pinned_offset(index: usize) -> u64 {
 /// The pass tests' rows with the jury's casting window open and its clock established, the
 /// height of their last block and the window's closing time. No ballot has been cast.
 fn casting() -> (Rows, u64, u64) {
-    let (mut rows, mut height) = deliberating();
+    let (mut rows, _) = opening_cut(deliberating());
+    let s0 = rows.boards[0].1.opening.expect("casting opened");
+    let height = s0.height + 1;
+    rows.block(height, s0.timestamp_ms + 1);
+    let closing_ms = BallotBoardV1::restore(rows.boards[0].1.clone())
+        .expect("the board")
+        .closing_ms()
+        .expect("the clock fixes the closing time");
+    (rows, height, closing_ms)
+}
+
+/// The certified reducer's opening cut, before the next block establishes its casting clock.
+fn opening_cut((mut rows, mut height): (Rows, u64)) -> (Rows, u64) {
     height += 1;
     rows.block(height, rows.next_due());
     if rows.boards[0].1.opening.is_none() {
@@ -194,14 +206,78 @@ fn casting() -> (Rows, u64, u64) {
         height += 1;
         rows.block(height, opening_at);
     }
-    let s0 = rows.boards[0].1.opening.expect("casting opened");
-    height = s0.height + 1;
-    rows.block(height, s0.timestamp_ms + 1);
-    let closing_ms = BallotBoardV1::restore(rows.boards[0].1.clone())
-        .expect("the board")
-        .closing_ms()
-        .expect("the clock fixes the closing time");
-    (rows, height, closing_ms)
+    assert!(rows.boards[0].1.opening.is_some());
+    assert!(rows.boards[0].1.casting_clock.is_none());
+    (rows, height)
+}
+
+/// Public records for the Torii HTTP fixture. Every credential proof, seal and casting
+/// transition comes from the ordinary candidate reducer. No private witness is exported.
+fn torii_opening_files() -> [(&'static str, Vec<u8>); 4] {
+    use crate::governance::parliament_anonymous::test_driver::on_signed_fixture_network;
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let native = CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1000))
+        .expect("apply signed service genesis");
+    let (rows, _) =
+        on_signed_fixture_network(native.network_id(), || opening_cut(jury_in_deliberation()));
+    assert_eq!(rows.attempts.len(), 1);
+    assert_eq!(rows.boards.len(), 1);
+    let board = BallotBoardV1::restore(rows.boards[0].1.clone()).unwrap();
+    let choice = fixture_authorization_v1(
+        board.context(),
+        &[0x40; 48],
+        BallotChoiceV1::Aye,
+        &[0x20; 112],
+    )
+    .unwrap();
+    let target = StampTargetV1::for_ballot(&choice, board.context().context()).unwrap();
+    // Mined from zero against the signed-origin proof. All 28 work bits are checked again.
+    let nonce = AdmissionNonceV1::new(nonce(53_752_413));
+    assert!(target.accepts(&nonce));
+    [
+        (
+            "attempt.nrt",
+            norito::to_bytes(&rows.attempts[0].1).unwrap(),
+        ),
+        ("board.nrt", norito::to_bytes(&rows.boards[0].1).unwrap()),
+        (
+            "registrations.nrt",
+            norito::to_bytes(&rows.registrations).unwrap(),
+        ),
+        (
+            "ballot.nrt",
+            fixture_envelope_v1(&choice, *nonce.as_bytes())
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+        ),
+    ]
+}
+
+fn torii_opening_directory() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/governance/anonymous_ballot_http_v1")
+}
+
+#[test]
+fn torii_opening_fixture_matches_the_candidate_reducer_and_pinned_stamp() {
+    for (name, bytes) in torii_opening_files() {
+        assert_eq!(
+            std::fs::read(torii_opening_directory().join(name)).unwrap(),
+            bytes,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "regenerates the committed public Torii ballot test vectors"]
+fn regenerate_torii_opening_fixture() {
+    let dir = torii_opening_directory();
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, bytes) in torii_opening_files() {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
 }
 
 /// The open casting window of [`casting`] for the tests of other modules (the queue's ballot

@@ -166,8 +166,11 @@ class IrohaPeerNfcDurablePaymentAdmissionV1 @JvmOverloads constructor(
 }
 
 /**
- * A structurally bound exchange presented to application persistence at COMMIT. Native
- * authentication and monetary admission remain required before acknowledging receipt.
+ * The exchange presented to application persistence at COMMIT. Under the wallet V1 profile it is
+ * structurally bound: the Payment carries the hosted Request's completion. Under a wallet-bound
+ * profile only its one profile and the hosted Request are required here, and the commit handler's
+ * wallet binds the Payment. In both, Native authentication and monetary admission remain required
+ * before acknowledging receipt.
  */
 class IrohaPeerNfcCommitContextV1(
     @JvmField val identity: IrohaPeerNfcRequestIdentityV1,
@@ -189,7 +192,9 @@ class IrohaPeerNfcCommitContextV1(
         ) {
             nfcFail(IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH)
         }
-        nfcRequireWalletExchange(receiveRequest, payment)
+        // Read from the wallet V1 messages. A wallet-bound profile's Payment is bound only by the commit
+        // handler's wallet, whose answered acknowledgement is then checked against that wallet's decision.
+        nfcRequireCommitExchange(profilePolicy, receiveRequest, payment)
     }
 
     override fun equals(other: Any?): Boolean = other is IrohaPeerNfcCommitContextV1 && identity == other.identity &&
@@ -230,7 +235,9 @@ class IrohaPeerNfcDurableAcknowledgementV1 private constructor(
 
     /**
      * The durable record of [acknowledgement] (complete Credited IPM1 bytes) for the Payment of
-     * [context]. Credited must name the hosted Request's scheme.
+     * [context]. Under the wallet V1 profile Credited must name the hosted Request's scheme; under a
+     * wallet-bound profile it must be the status the policy's wallet verifier accepts as its own
+     * retained decision for that Request, and no record exists otherwise.
      */
     @JvmOverloads
     constructor(
@@ -292,7 +299,9 @@ class IrohaPeerNfcDurableAcknowledgementV1 private constructor(
         ): IrohaPeerWireMessageV1 {
             val decoded = nfcDecodeMessage(acknowledgement, null, IrohaPeerPayloadKind.CREDITED, limits)
             if (!context.profilePolicy.accepts(decoded.nfcProfile)) nfcFail(IrohaPeerNfcErrorV1.INVALID_PROFILE)
-            nfcRequireWalletExchange(context.receiveRequest, context.payment, decoded)
+            // No acknowledgement record exists for a status the exchange does not bind: read from the
+            // wallet V1 messages, or the wallet's own retained decision for a wallet-bound profile.
+            nfcRequireIssuedStatus(context.profilePolicy, context.receiveRequest, context.payment, decoded)
             return decoded
         }
 
@@ -427,6 +436,8 @@ class IrohaPeerNfcReceiverSessionV1 @JvmOverloads constructor(
     private var acknowledgementConfirmed = false
 
     init {
+        // A wallet-bound profile hosts only a Request of its wallet's signed selection.
+        nfcRequireExchangeRequest(this.profilePolicy, this.receiveRequest)
         if (durableAcknowledgement != null) {
             if (durableAcknowledgement.identity != identity ||
                 !this.profilePolicy.accepts(durableAcknowledgement.paymentProfile) ||
@@ -434,7 +445,7 @@ class IrohaPeerNfcReceiverSessionV1 @JvmOverloads constructor(
             ) {
                 nfcFail(IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH)
             }
-            nfcRequireCreditedScheme(this.receiveRequest, durableAcknowledgement.acknowledgement)
+            nfcRequireIssuedStatus(this.profilePolicy, this.receiveRequest, null, durableAcknowledgement.acknowledgement)
         }
         if (restoredPaymentAdmission != null) {
             val validated = IrohaPeerNfcDurablePaymentAdmissionV1.decode(
@@ -615,7 +626,7 @@ class IrohaPeerNfcReceiverSessionV1 @JvmOverloads constructor(
         if (!profilePolicy.accepts(record.paymentProfile) || !profilePolicy.accepts(record.acknowledgement.nfcProfile)) {
             nfcFail(IrohaPeerNfcErrorV1.INVALID_PROFILE)
         }
-        nfcRequireCreditedScheme(receiveRequest, record.acknowledgement)
+        nfcRequireIssuedStatus(profilePolicy, receiveRequest, null, record.acknowledgement)
         val installed = acknowledgementRecord
         if (installed != null) {
             if (installed != record) nfcFail(IrohaPeerNfcErrorV1.CONFLICTING_REPLAY)

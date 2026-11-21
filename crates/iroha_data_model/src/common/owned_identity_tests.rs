@@ -23,6 +23,41 @@ mod values;
 
 use crate::fixture_json;
 
+#[test]
+fn owned_structural_schema_is_the_exact_recursive_payload() {
+    use iroha_schema::IntoSchema;
+
+    fn check<T: IntoSchema>() {
+        let mut expected = T::schema();
+        let mut actual = Owned::<T>::schema();
+        assert_eq!(actual.get::<Owned<T>>(), actual.get::<T>());
+        assert_eq!(Owned::<T>::type_name(), T::type_name());
+        assert!(actual.remove::<Owned<T>>());
+        assert_eq!(actual, expected, "the complete inner graph is retained");
+        Owned::<T>::update_schema_map(&mut expected);
+        assert!(norito::json::to_value(&expected).is_ok());
+    }
+
+    check::<AccountDetails>();
+    check::<Quantity>();
+    check::<crate::nft::NftData>();
+    check::<crate::rwa::RwaData>();
+
+    let payload = vec![Some(7_u64), None, Some(31)];
+    let owned = Owned(payload.clone());
+    let frame = norito::to_bytes(&payload).expect("encode underlying payload");
+    assert_eq!(
+        norito::to_bytes(&owned).expect("encode owned payload"),
+        frame
+    );
+    assert_eq!(
+        norito::decode_from_bytes::<Owned<Vec<Option<u64>>>>(&frame)
+            .expect("decode transparent storage value")
+            .0,
+        payload
+    );
+}
+
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut result = String::new();

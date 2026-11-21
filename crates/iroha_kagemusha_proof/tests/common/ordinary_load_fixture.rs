@@ -1,20 +1,18 @@
 //! Genuine monetary Load inputs following direct native receipt authentication.
 //! The exact receipt is never relabeled; Load binds its terms and signed Advance.
 
-use super::{bootstrap, bootstrap_objects, common, load_chain, load_objects};
-use ff::{Field, PrimeField};
+use super::{bootstrap_objects, common, load_chain, load_objects};
+use ff::Field;
 use iroha_kagemusha_proof::{
     a_relation::{
         AProofPlan, QProofPlan,
         native::load::{Inputs, Plan, PredecessorInput, QInput},
     },
-    admin_sigma::{LoadCircuit, LoadWitness, StateWitness},
-    operation_relation::map_effects::LOAD_DOMAIN,
+    admin_sigma::LoadCircuit,
     q_signature::QSignaturePlan,
-    tree::{IndexedInsert, IndexedTree},
     witness::core_index as core,
 };
-use iroha_pasta::{Ep, Eq, Fp, msm::MemoryBudget, poseidon::hash_with_domain};
+use iroha_pasta::{Ep, Eq, Fp, msm::MemoryBudget};
 use iroha_plonk::{
     ProverConfig, Witness, create_proof_owned_with_claim,
     cs::InstanceType,
@@ -24,57 +22,7 @@ use iroha_plonk::{
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierPlan};
 use std::{fs, path::Path};
 
-/// Build the first-Load state/map witness from the exact supplied receipt terms.
-pub fn monetary(
-    before: &iroha_kagemusha_proof::admin_sigma::BootstrapWitness,
-    receipt: &[u8; 282],
-) -> (LoadWitness, IndexedInsert<Fp>) {
-    assert_eq!(&receipt[..2], &1_u16.to_le_bytes());
-    for (offset, field) in [(2, core::SCHEME), (34, core::ASSET), (66, core::WALLET)] {
-        assert_eq!(
-            &receipt[offset..offset + 32],
-            bootstrap_objects::id(before.core[field], before.core[field + 1])
-        );
-    }
-    let word = |offset| {
-        Fp::from_u128(u128::from_le_bytes(
-            receipt[offset..offset + 16].try_into().unwrap(),
-        ))
-    };
-    let ordinal = word(130);
-    let amount = word(146);
-    let charge = word(162);
-    assert_eq!(ordinal, before.core[core::NEXT_LOAD]);
-    let receipt = load_objects::OrdinaryReceipt { bytes: *receipt };
-    let mut after = *before;
-    after.core[core::BALANCE] += amount;
-    after.core[core::NEXT_LOAD] += Fp::ONE;
-    after.core[core::SEQUENCE] += Fp::ONE;
-    after.core[core::STATE_NONCE] += Fp::ONE;
-    let mut tree = IndexedTree::new();
-    assert_eq!(tree.root(), before.core[core::LOAD_REDEEM_ROOT]);
-    let insertion = tree
-        .insert(
-            Fp::from(2).pow_vartime([128]) + ordinal,
-            hash_with_domain(LOAD_DOMAIN, &[ordinal, receipt.digest(), amount]),
-        )
-        .unwrap();
-    after.core[core::LOAD_REDEEM_ROOT] = tree.root();
-    bootstrap::rebind(&mut after);
-    let mut statement = after.statement;
-    statement[14] = before.lineage[5];
-    statement[16] = Fp::from(2);
-    statement[17..].fill(Fp::ZERO);
-    statement[17..21].copy_from_slice(&[receipt.digest(), ordinal, amount, charge]);
-    (
-        LoadWitness {
-            predecessor: StateWitness::from(before),
-            successor: StateWitness::from(&after),
-            statement,
-        },
-        insertion,
-    )
-}
+pub use super::load_objects::from_finalized_receipt as monetary;
 
 /// Build from a real rooted predecessor and a natively authenticated receipt.
 /// The monetary relation verifies receipt binding, authorization and the state transition.
@@ -83,21 +31,19 @@ pub fn build(
     receipt: &[u8; 282],
     directory: &Path,
 ) -> load_chain::InstalledLoad {
-    match fs::symlink_metadata(directory) {
-        Ok(metadata) => assert!(metadata.file_type().is_dir()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(directory).unwrap()
-        }
-        Err(error) => panic!("unavailable Load original directory: {error}"),
-    }
-    let (state, insertion) = monetary(&rooted.source.state, receipt);
-    let pallas = PinnedParams::<Ep>::derive(16).unwrap();
-    let vesta = PinnedParams::<Eq>::derive(16).unwrap();
-    // The wallet still proves its k12 step relation before Advance, and the own receipt
-    // binds that proof's digest. Lean lineage proves the Load transition in its single
-    // terminal A directly, so no Q_sigma verifies this proof inside the lineage.
+    build_with_source(
+        rooted,
+        receipt,
+        directory,
+        |plan| plan,
+        ordinary_sigma,
+        |_| {},
+    )
+}
+
+fn ordinary_sigma(state: &mut iroha_kagemusha_proof::admin_sigma::LoadWitness) -> Vec<u8> {
     let sigma_params = PinnedParams::<Eq>::derive(12).unwrap();
-    let sigma = LoadCircuit::new(&state);
+    let sigma = LoadCircuit::new(state);
     let sigma_instances = sigma.instances();
     let sigma_key = keygen_pk_v2(
         &sigma_params,
@@ -113,13 +59,40 @@ pub fn build(
         ProverConfig::default(),
     )
     .unwrap();
-    drop(sigma_key);
+    sigma_proof.proof
+}
+
+/// Exercise the native single-terminal Load with its selected state opening and
+/// independently generated receipt-bound administrative proof.
+pub fn build_with_source(
+    rooted: &load_chain::bootstrap_outer::RootedBootstrapOmega,
+    receipt: &[u8; 282],
+    directory: &Path,
+    select_plan: impl FnOnce(Plan) -> Plan,
+    prepare_sigma: impl FnOnce(&mut iroha_kagemusha_proof::admin_sigma::LoadWitness) -> Vec<u8>,
+    bind_bootstrap: impl FnOnce(&mut iroha_kagemusha_proof::admin_sigma::BootstrapWitness),
+) -> load_chain::InstalledLoad {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) => assert!(metadata.file_type().is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(directory).unwrap()
+        }
+        Err(error) => panic!("unavailable Load original directory: {error}"),
+    }
+    let (mut state, insertion) = monetary(&rooted.source.state, receipt);
+    let pallas = PinnedParams::<Ep>::derive(16).unwrap();
+    let vesta = PinnedParams::<Eq>::derive(16).unwrap();
+    // The wallet still proves its k12 step relation before Advance, and the own receipt
+    // binds that proof's digest. Lean lineage proves the Load transition in its single
+    // terminal A directly, so no Q_sigma verifies this proof inside the lineage.
+    let sigma_proof = prepare_sigma(&mut state);
     let mut signed_state = bootstrap_objects::enrollment();
+    bind_bootstrap(&mut signed_state.0);
     signed_state.0.lineage[17] = rooted.source.state.lineage[17];
     assert_eq!(signed_state.0.core, rooted.source.state.core);
     assert_eq!(signed_state.0.rest, rooted.source.state.rest);
     assert_eq!(signed_state.0.lineage, rooted.source.state.lineage);
-    let own = load_objects::receipt(&state, &sigma_proof.proof);
+    let own = load_objects::receipt(&state, &sigma_proof);
     let (circuit, instances) = load_objects::own_signature(own.signature);
     let signature_plans: [QSignaturePlan; 1] = [circuit.plan().clone()];
     let key = keygen_pk_v2(
@@ -164,6 +137,7 @@ pub fn build(
         vesta.clone(),
     )
     .unwrap();
+    let plan = select_plan(plan);
     let inputs = Inputs {
         state,
         receipt: *receipt,

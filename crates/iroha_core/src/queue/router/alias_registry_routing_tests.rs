@@ -252,7 +252,7 @@ fn alias_registry_fixture_consensus_registration_requires_original_signer_permis
         panic!("expected rejected genesis output: {error:?}");
     };
     assert!(matches!(
-        rejection.reason.as_ref(),
+        rejection.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
         iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
             ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)

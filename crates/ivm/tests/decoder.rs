@@ -1,6 +1,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, VMError, encoding};
+use ivm_abi::error::VmTrap;
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 #[test]
 fn test_compressed_ebreak() {
@@ -11,7 +12,10 @@ fn test_compressed_ebreak() {
     ];
     let prog = assemble(&prog);
     let err = vm.load_program(&prog).unwrap_err();
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }
 #[test]
 fn test_invalid_opcode() {
@@ -19,10 +23,10 @@ fn test_invalid_opcode() {
     let prog: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
     let prog = assemble(&prog);
     match vm.load_program(&prog) {
-        Err(VMError::InvalidOpcode(_)) => (),
+        Err(VMError::Trap(VmTrap::InvalidOpcode(_))) => (),
         Ok(()) => {
             let res = vm.run();
-            assert!(matches!(res, Err(VMError::InvalidOpcode(_))));
+            assert!(matches!(res, Err(VMError::Trap(VmTrap::InvalidOpcode(_)))));
         }
         Err(err) => panic!("unexpected error: {err:?}"),
     }
@@ -33,10 +37,10 @@ fn test_unknown_compressed_traps() {
     let prog: [u8; 4] = [0x00, 0x01, 0x00, 0x00]; // invalid 16-bit opcode
     let prog = assemble(&prog);
     match vm.load_program(&prog) {
-        Err(VMError::InvalidOpcode(_)) => (),
+        Err(VMError::Trap(VmTrap::InvalidOpcode(_))) => (),
         Ok(()) => {
             let res = vm.run();
-            assert!(matches!(res, Err(VMError::InvalidOpcode(_))));
+            assert!(matches!(res, Err(VMError::Trap(VmTrap::InvalidOpcode(_)))));
         }
         Err(err) => panic!("unexpected error: {err:?}"),
     }
@@ -51,7 +55,7 @@ fn test_ebreak_instruction() {
     let prog = assemble(&prog);
     let err = vm.load_program(&prog).unwrap_err();
     assert!(
-        matches!(err, VMError::InvalidOpcode(_)),
+        matches!(err, VMError::Trap(VmTrap::InvalidOpcode(_))),
         "expected compressed ebreak to be rejected"
     );
 }

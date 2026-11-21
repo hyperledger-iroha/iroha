@@ -15,6 +15,7 @@ use iroha_data_model::{
     block::BlockHeader,
     transaction::{Executable, FeePaymentIntent, IvmBytecode, TransactionBuilder},
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::{
     future::Future,
     num::NonZeroU64,
@@ -59,7 +60,10 @@ fn vm_stage_projection_keeps_original_capacity_release_and_completed_errors() {
     let original = budget.try_reserve_bytes(1).unwrap_err();
     let ExecutionAttemptError::Deferred(deferred) = vm_error(
         "ivm.run",
-        ivm::VMError::metered(7, ivm::VMError::AllocationDeferred(original.clone())),
+        ivm::VMError::metered(
+            7,
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(original.clone())),
+        ),
     ) else {
         panic!("original capacity refusal must stay deferred");
     };
@@ -73,8 +77,10 @@ fn vm_stage_projection_keeps_original_capacity_release_and_completed_errors() {
     drop(occupied);
     assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Ready(()));
     drop(wait);
-    assert!(matches!(vm_error("ivm.run", ivm::VMError::InvalidMetadata),
-        ExecutionAttemptError::Rejected(message) if message.starts_with("ivm.run: ")));
+    assert!(
+        matches!(vm_error("ivm.run", ivm::VMError::Trap(VmTrap::InvalidMetadata)),
+        ExecutionAttemptError::Rejected(message) if message.starts_with("ivm.run: "))
+    );
     drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }

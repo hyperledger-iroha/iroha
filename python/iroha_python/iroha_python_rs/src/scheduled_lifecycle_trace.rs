@@ -116,9 +116,9 @@ pub(super) fn check_block(
             if &effect.trigger_id != selected.id() || selected_time {
                 continue;
             }
-            let original_root = output.network().is_some_and(|row| {
+            let original_root = output.network_index().is_some_and(|input_index| {
                 block
-                    .network_entrypoint_at(row.input_index as usize)
+                    .network_entrypoint_at(input_index as usize)
                     .is_some_and(|input| input.hash() == original_hash)
             });
             if original_root

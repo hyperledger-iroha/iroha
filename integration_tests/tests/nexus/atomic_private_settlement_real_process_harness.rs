@@ -1,6 +1,10 @@
 #[path = "atomic_private_settlement_transport.rs"]
 mod transport_evidence;
 
+#[cfg(unix)]
+#[path = "atomic_private_settlement_benchmark_one_call.rs"]
+mod benchmark_one_call;
+
 #[path = "atomic_private_settlement_session.rs"]
 mod benchmark_session;
 
@@ -9587,6 +9591,7 @@ fn run_real_process_leakage_campaign(
 /// endpoints) that run together.
 const REAL_PROCESS_BENCHMARK_FANOUT: usize = 4;
 
+#[cfg(unix)]
 /// Run one independent unit of benchmark client work per index, at most
 /// [`REAL_PROCESS_BENCHMARK_FANOUT`] together and in index-ordered windows.
 ///
@@ -9620,6 +9625,7 @@ fn benchmark_fanout<T: Send>(
     Ok(complete)
 }
 
+#[cfg(unix)]
 fn run_real_process_private_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
@@ -9669,247 +9675,52 @@ fn run_real_process_private_benchmark(
     )?;
 
     // Setup/prefunding is excluded; the storage baseline precedes measurement-ready.
+    // Every private profile stages its already authorized wallet notes before measurement.
+    let payment = benchmark_one_call::Case::new(
+        network,
+        &sponsor,
+        &governed,
+        &private_data,
+        &committees,
+        &manifest,
+    )?;
     let storage_before = network_storage_bytes(&network)?;
     measurement_boundary("ready")?;
     let end_to_end_started = Instant::now();
 
-    ensure!(
-        governed.len() == committees.len() && governed.len() == private_data.len(),
-        "private benchmark leg matrix is incomplete"
-    );
-    let proof_started = Instant::now();
-    // The legs' proofs are independent: they are constructed together, within the bounded
-    // fan-out and the recorded Rayon width, and every prover joins before a proof is used.
-    // No leg is uploaded before every proof exists: the provisional manifest binds them all.
-    let prepared = benchmark_fanout(governed.len(), |ordinal| {
-        prepare_leg_with_private_data(
-            ordinal,
-            governed[ordinal].clone(),
-            &manifest,
-            committees[ordinal].authority.digest()?,
-            &private_data[ordinal],
-        )
-    })?;
-    let proof_generation = elapsed_ms(proof_started);
-    let proof_bytes = prepared.iter().try_fold(0_u64, |total, leg| {
-        total
-            .checked_add(u64::try_from(leg.prepared.proof.len()).expect("proof length fits u64"))
-            .ok_or_else(|| eyre!("proof byte total overflow"))
-    })?;
-
-    let upload_started = Instant::now();
-    let materials = provisional_materials(manifest, &prepared, &committees)?;
-    // Each committee certifies its own leg; every certificate exists before any upload.
-    let certificates = benchmark_fanout(materials.len(), |ordinal| {
-        sponsor
-            .client()
-            .certify_private_settlement_leg_availability_v1(
-                &committees[ordinal].endpoints,
-                &materials[ordinal],
-            )
-    })?;
-    let mut final_manifest = materials[0].manifest.clone();
-    for (ordinal, certificate) in certificates.iter().enumerate() {
-        final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
-    }
-    final_manifest.validate()?;
-    // Every endpoint of every committee must acknowledge its certified leg: the benchmark
-    // keeps all four uploads per leg and does not accept the SDK's promotion quorum.
-    benchmark_fanout(materials.len(), |ordinal| {
-        let committee = &committees[ordinal];
-        let upload = PrivateSettlementLegUploadRequestV1 {
-            manifest: final_manifest.clone(),
-            audit_policy: materials[ordinal].audit_policy.clone(),
-            committee_authority: materials[ordinal].committee_authority.clone(),
-            payload: materials[ordinal].payload_with_certificate(certificates[ordinal].clone()),
-        };
-        let acknowledged = benchmark_fanout(committee.endpoints.len(), |member| {
-            sponsor
-                .client()
-                .upload_private_settlement_leg_to_v1(&committee.endpoints[member], &upload)
-        })?;
-        for response in acknowledged {
-            ensure!(
-                usize::from(response.leg_ordinal) == ordinal,
-                "upload ordinal substitution"
-            );
-        }
-        Ok(())
-    })?;
-    let restricted_upload_availability = elapsed_ms(upload_started);
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
-
-    let auditor_started = Instant::now();
-    // Each leg's auditor reads its capsule quorum, decides and approves independently of
-    // the other legs; every leg is Audited before committee verification starts.
-    benchmark_fanout(prepared.len(), |ordinal| {
-        let (leg, committee) = (&prepared[ordinal], &committees[ordinal]);
-        let auditor_transport_signer =
-            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
-        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
-            audit_policy: leg.governed.policy.clone(),
-        };
-        let fetched = sponsor
-            .client()
-            .private_settlement_auditor_capsule_quorum_for_authority_v1(
-                &committee.endpoints,
-                &materials[ordinal].committee_authority,
-                final_manifest.legs[ordinal].payload_digest,
-                &capsule_request,
-                &auditor_transport_signer,
-            )?;
-        ensure!(
-            fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
-            "unexpected audit lifecycle"
-        );
-        let authoritative_height = fetched.authoritative_height;
-        let view = PrivateSettlementAuditorSidecarViewV1 {
-            manifest: fetched.manifest,
-            policy: fetched.audit_policy,
-            authority: fetched.committee_authority,
-            statement: fetched.statement,
-            delta: fetched.delta,
-            audit_capsule: fetched.audit_capsule,
-            availability: fetched.availability,
-            lifecycle: PrivateSettlementSidecarLifecycleV1::Collecting,
-        };
-        let auditor_id = AccountId::new(leg.governed.auditor_signing.public_key().clone());
-        let approval = approve_private_settlement_leg_v1(
-            &view,
-            &leg.governed.governance,
-            authoritative_height,
-            &auditor_id,
-            leg.governed.auditor_encryption.secret(),
-            &leg.governed.auditor_signing,
-            &approve_all_audit_material,
-        )?;
-        let response = sponsor
-            .client()
-            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
-                &committee.endpoints,
-                &materials[ordinal].committee_authority,
-                final_manifest.legs[ordinal].payload_digest,
-                &auditor_transport_signer,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    audit_policy: capsule_request.audit_policy,
-                    approval,
-                },
-            )?;
-        ensure!(
-            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-            "approval quorum was not durable"
-        );
-        Ok(())
-    })?;
-    let auditor_response = elapsed_ms(auditor_started);
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
-
-    let committee_started = Instant::now();
-    verify_committee_proof_views(&network, &sponsor, &final_manifest, &prepared, &committees)?;
-    let committee_verification = elapsed_ms(committee_started);
-
-    let endpoint_matrix = committees
-        .iter()
-        .map(|committee| committee.endpoints.clone())
-        .collect::<Vec<_>>();
-    let authorities = committees
-        .iter()
-        .map(|committee| committee.authority.clone())
-        .collect::<Vec<_>>();
-    let deltas = prepared
-        .iter()
-        .map(|leg| leg.prepared.delta.clone())
-        .collect::<Vec<_>>();
-    let prepare_started = Instant::now();
-    let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
-        &endpoint_matrix,
-        &final_manifest,
-        &authorities,
-        &deltas,
+    let PrivateBenchmarkExecution {
+        proof_generation,
+        restricted_upload_availability,
+        auditor_response,
+        committee_verification,
+        prepare,
+        prepare_registration,
+        commit,
+        global_finality,
+        end_to_end,
+        proof_bytes,
+        receipt,
+        submit,
+        fee_before_finalization,
+    } = payment.measure(
+        network,
+        &sponsor,
+        &governed,
+        &committees,
+        end_to_end_started,
     )?;
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
-    let prepare = elapsed_ms(prepare_started);
-    let prepare_registration_started = Instant::now();
-    let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
-    submit_prepare_registration_and_wait_v1(&sponsor, &barrier)?;
-    let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
-    ensure_exact_private_settlement_carrier_fee(
-        &fee_before_registration,
-        &fee_after_registration,
-        "benchmark Prepare registration",
-    )?;
-    let prepare_registration = elapsed_ms(prepare_registration_started);
-    let commit_started = Instant::now();
-    let commits = sponsor
-        .client()
-        .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
-    let commit = elapsed_ms(commit_started);
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
-
-    let legs = deltas
-        .into_iter()
-        .zip(barrier.prepare_certificates)
-        .zip(commits)
-        .map(|((delta, prepare), commit)| PrivateSettlementLegReceiptV1 {
-            delta,
-            prepare,
-            commit,
-        })
-        .collect();
-    let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
-        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-        manifest: final_manifest.clone(),
-        authority_catalog: barrier.authority_catalog.clone(),
-        legs,
-    });
-    let transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [InstructionBox::from(carrier)],
-                final_manifest.public_fee_intent.clone(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    let submit = PrivateSettlementBundleSubmitRequestV1 {
-        transaction: transaction.clone(),
-    };
-    let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
-    let finality_started = Instant::now();
-    sponsor
-        .client()
-        .submit_private_settlement_bundle_v1(&submit)?;
-    let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
-    ensure!(
-        receipt.legs.len() == request.participants,
-        "receipt participant count mismatch"
-    );
-    for (ordinal, leg) in receipt.legs.iter().enumerate() {
-        ensure!(
-            usize::from(leg.delta.leg_ordinal) == ordinal
-                && leg.delta == prepared[ordinal].prepared.delta
-                && receipt
-                    .legs
-                    .iter()
-                    .filter(|candidate| candidate.delta.route == leg.delta.route)
-                    .count()
-                    == 1,
-            "receipt omitted, duplicated, or reordered a private leg"
-        );
-    }
-    // Both profiles stop after the expected authenticated receipt agrees on
-    // every peer. Convergence, observer completion, replay and RS16 remain
-    // mandatory acceptance checks outside this matched receipt window.
-    let global_finality = elapsed_ms(finality_started);
-    let end_to_end = elapsed_ms(end_to_end_started);
+    let final_manifest = receipt.manifest.clone();
     measurement_boundary("finished")?;
     // Storage is a sequential all-peer Kura file-size snapshot immediately
     // after the timing handshake, before replay or correctness postchecks.
     // It brackets boundary handshakes too; it is not isolated transaction bytes.
     let storage_after = network_storage_bytes(&network)?;
 
+    let all_peers_receipt = wait_for_identical_receipt(network, final_manifest.bundle_id)?;
+    ensure!(
+        all_peers_receipt == receipt,
+        "peer receipt differs from the SDK-verified receipt"
+    );
     let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     ensure_exact_private_settlement_carrier_fee(
         &fee_before_finalization,
@@ -9997,6 +9808,23 @@ fn run_real_process_private_benchmark(
             partial_spendable_observations: 0,
         },
     })
+}
+
+#[cfg(unix)]
+struct PrivateBenchmarkExecution {
+    receipt: iroha_data_model::nexus::PrivateSettlementReceiptV1,
+    submit: PrivateSettlementBundleSubmitRequestV1,
+    fee_before_finalization: Quantity,
+    proof_generation: f64,
+    restricted_upload_availability: f64,
+    auditor_response: f64,
+    committee_verification: f64,
+    prepare: f64,
+    prepare_registration: f64,
+    commit: f64,
+    global_finality: f64,
+    end_to_end: f64,
+    proof_bytes: u64,
 }
 
 #[cfg(unix)]

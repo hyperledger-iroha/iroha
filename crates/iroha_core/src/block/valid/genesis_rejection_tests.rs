@@ -106,8 +106,13 @@ fn rejected_genesis_outputs_fail_before_schedule_finalization() {
         panic!("expected the actual retained output rejection: {error:?}");
     };
     assert_eq!(rejection.output_index, expected_index, "{rejection:?}");
+    let iroha_data_model::block::execution_output::ProfiledTransactionRejection::Baseline(original) =
+        rejection.reason.as_ref()
+    else {
+        panic!("baseline genesis rejection expected");
+    };
     assert!(matches!(
-        rejection.reason.as_ref(),
+        original,
         TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::InstructionFailed(
                 InstructionExecutionError::Repetition(_)
@@ -119,7 +124,7 @@ fn rejected_genesis_outputs_fail_before_schedule_finalization() {
             .source()
             .unwrap()
             .downcast_ref::<TransactionRejectionReason>(),
-        Some(rejection.reason.as_ref()),
+        Some(original),
     );
     assert!(
         !source.has_results(),

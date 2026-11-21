@@ -1,6 +1,7 @@
 //! Fixed entrypoint indexes and bounded reusable reachability scratch.
 
 use super::PreparedControlFlow;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     cache_memory::OwnedAllocation,
@@ -20,17 +21,18 @@ impl<T: Copy + Default> Fixed<T> {
         let Some(budget) = budget else {
             return OwnedAllocation::try_filled_copy(len, T::default()).map(Self::Local);
         };
-        let plan = ExecutionMemoryPlan::array::<T>(len).map_err(VMError::AllocationDeferred)?;
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let plan = ExecutionMemoryPlan::array::<T>(len)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut values = ExecutionBuffer::new(len, &mut lease).map_err(|error| match error {
             PrepaidBufferError::Allocation(ChargedBufferError::Admission(error)) => {
-                VMError::AllocationDeferred(error)
+                VMError::Deferred(VmDeferral::AllocationDeferred(error))
             }
             PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
-            | PrepaidBufferError::Reservation(_) => {
-                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
-            }
+            | PrepaidBufferError::Reservation(_) => VMError::Deferred(
+                VmDeferral::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
+            ),
         })?;
         for _ in 0..len {
             values.push_reserved(T::default());
@@ -90,7 +92,7 @@ impl Entrypoints {
                 descriptor_index: index,
                 absolute_pc: instruction_entry_pc
                     .checked_add(descriptor.entry_pc)
-                    .ok_or(VMError::DecodeError)?,
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                 requires_private_inputs: scratch.reaches_private_input(
                     instructions,
                     graph,
@@ -109,7 +111,7 @@ impl Entrypoints {
         if entries.values().windows(2).any(|pair| {
             descriptors[pair[0].descriptor_index].name == descriptors[pair[1].descriptor_index].name
         }) {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(Self(entries))
     }
@@ -155,27 +157,38 @@ impl Reachability {
         slots.fill(Visit::default());
         let entry = instructions
             .index_of(entry_pc)
-            .ok_or(VMError::DecodeError)?;
-        slots.get_mut(entry).ok_or(VMError::DecodeError)?.discovered = true;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+        slots
+            .get_mut(entry)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
+            .discovered = true;
         slots[0].queued_index = entry;
         let (mut head, mut tail) = (0, 1);
         while head < tail {
             let index = slots[head].queued_index;
             head += 1;
-            let op = instructions.get(index).ok_or(VMError::DecodeError)?;
+            let op = instructions
+                .get(index)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             let syscall = engine.syscall_number(op.inst);
             if syscall == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) {
                 return Ok(true);
             }
-            for pc in graph.node(op.pc).ok_or(VMError::DecodeError)?.successors() {
-                let next = instructions.index_of(*pc).ok_or(VMError::DecodeError)?;
+            for pc in graph
+                .node(op.pc)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?
+                .successors()
+            {
+                let next = instructions
+                    .index_of(*pc)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if !slots[next].discovered {
                     // Mark on enqueue: every instruction enters the queue once,
                     // even for loops, shared joins and duplicate successors.
                     slots[next].discovered = true;
                     slots
                         .get_mut(tail)
-                        .ok_or(VMError::DecodeError)?
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         .queued_index = next;
                     tail += 1;
                 }

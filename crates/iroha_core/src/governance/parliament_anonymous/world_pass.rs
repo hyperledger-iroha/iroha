@@ -5,7 +5,7 @@
 //! [`run_governance_pass`] runs once per block of the global chain. It establishes the
 //! mandatory casting clocks, then drives G1 (the height-progress ticket and the family's
 //! draws), G2a (the family's lifecycle items merged with the other owner's rank-three
-//! items), G2b closures, G2c openings and G3 (the other owner's enactments) through the one
+//! items), G2b closures, G2c openings and G3 (runtime certificates followed by the other owner's enactments) through the one
 //! [`SharedGovernancePassV1`] cursor. Each segment is listed from the State the earlier
 //! segments left, so a closure frees its casting slot for an opening of the same pass and a
 //! Reflection entry whose opening time has been reached opens in that pass. Each item is
@@ -24,16 +24,14 @@
 //! refusal the node cannot decide ([`AnonymousPassWorldErrorV1::is_local`]) defers the
 //! block and is never a verdict.
 //!
-//! TODO(design §12.3, slice 3, step 4 of the dispatch work): listing reads every attempt and
-//! board, terminal ones included. A derived due index bounded by `K`, rebuilt on restore,
-//! replaces `draw_items`, `lifecycle_items`, `closure_items`, `opening_items` and the clock
-//! scan of `establish_casting_clocks`. It stopped here: nonterminal attempts are bounded by
-//! `K` only through the admission cap of the attempt-creation interface, which does not exist
-//! yet, and the index is a new World member with its own restore, snapshot and inventory
-//! owners. Production enactment (G3) belongs to slice 5; this release certifies no
-//! production attempt.
+//! Listing uses the derived due index, bounded by committed `K`. Runtime-upgrade certificates
+//! have a G3 effect owner; candidate certificates never list an enactment.
+//! TODO(design §12.3, slice 5): qualify production ballot authority and implement the remaining
+//! proposal effects. The qualification constant remains `None`.
 
 use core::cell::RefCell;
+
+mod runtime_upgrade;
 
 use iroha_data_model::{
     block::output_budget::{
@@ -79,6 +77,9 @@ pub(crate) enum AnonymousPassWorldErrorV1 {
     /// World refused a transaction: a local storage refusal.
     #[error("World storage refused a Parliament item: {0}")]
     Storage(StateStorageAdmissionError),
+    /// Original runtime encoding/admission refusal; this block must be retried.
+    #[error("runtime enactment deferred: {0:?}")]
+    Execution(crate::execution_attempt::ExecutionDeferred),
     /// A committed parameter failed decoding or validation.
     #[error("committed governance policy: {0}")]
     Policy(&'static str),
@@ -102,7 +103,7 @@ impl AnonymousPassWorldErrorV1 {
     /// frame or verifier backend the reducer could not use. The block is deferred.
     pub(crate) fn is_local(&self) -> bool {
         match self {
-            Self::Storage(_) | Self::Receipt(_) => true,
+            Self::Storage(_) | Self::Receipt(_) | Self::Execution(_) => true,
             Self::Reducer(error) => error.is_local(),
             Self::Output(error) => *error == GovernanceStartOutputBudgetErrorV1::Allocation,
             Self::Policy(_) | Self::World(_) => false,
@@ -112,7 +113,11 @@ impl AnonymousPassWorldErrorV1 {
 
 impl From<Error> for AnonymousPassWorldErrorV1 {
     fn from(error: Error) -> Self {
-        Self::Reducer(Box::new(error))
+        if let Some(original) = error.original_codec_refusal() {
+            Self::Execution(original.clone().into())
+        } else {
+            Self::Reducer(Box::new(error))
+        }
     }
 }
 
@@ -283,9 +288,20 @@ pub(crate) fn committed_ballot_parameters(
     let ballot = parameters
         .custom()
         .get(ParliamentBallotParametersV1::parameter_id())
-        .map(ParliamentBallotParametersV1::from_custom_parameter)
+        .map(|parameter| {
+            crate::runtime::change_set::anonymous::policy::<ParliamentBallotParametersV1>(
+                parameter, 512,
+            )
+        })
         .transpose()
-        .map_err(|_| PassError::Policy("gov.parliament_ballot does not decode"))?
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                PassError::Execution(original)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                PassError::Policy("gov.parliament_ballot does not decode")
+            }
+        })?
         .unwrap_or_default();
     ballot
         .validate_structure()
@@ -725,9 +741,11 @@ fn occurrence(
         }
         // The ticket is derived for this block alone: nothing can end it within the pass.
         GovernancePassItemV1::HeightProgress => Ok(GovernanceOccurrenceV1::Live),
+        GovernancePassItemV1::EnactParliament { due_ms, attempt } => {
+            Ok(live(runtime_upgrade::live(stored(attempt)?, due_ms)))
+        }
         GovernancePassItemV1::PauseConclusion { .. }
         | GovernancePassItemV1::Reconciliation { .. }
-        | GovernancePassItemV1::EnactParliament { .. }
         | GovernancePassItemV1::EnactPause { .. } => Err(PassError::World(
             "an item of another owner reached Parliament",
         )),
@@ -974,9 +992,11 @@ fn apply(
         GovernancePassItemV1::Open { attempt, body, .. } => {
             apply_open(state, attempt, body, at, rows)
         }
+        GovernancePassItemV1::EnactParliament { attempt, .. } => {
+            runtime_upgrade::apply(state, attempt, at, rows)
+        }
         GovernancePassItemV1::PauseConclusion { .. }
         | GovernancePassItemV1::Reconciliation { .. }
-        | GovernancePassItemV1::EnactParliament { .. }
         | GovernancePassItemV1::EnactPause { .. } => Err(PassError::World(
             "an item of another owner reached Parliament",
         )),
@@ -1105,7 +1125,7 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
                     opening_items(&*state.world.parliament_anonymous_attempts, boards, now_ms)
                         .map_err(parliament_error)?
                 }
-                Segment::G3 => Vec::new(),
+                Segment::G3 => runtime_upgrade::items(attempts, now_ms),
             }
         } else {
             Vec::new()
@@ -1246,6 +1266,7 @@ pub(crate) fn parliament_due(
         .is_some()
         || !lifecycle_items(attempts, timestamp_ms)?.is_empty()
         || !closure_items(boards, timestamp_ms).is_empty()
+        || !runtime_upgrade::items(attempts, timestamp_ms).is_empty()
     {
         return Ok(true);
     }
@@ -1302,6 +1323,13 @@ pub(crate) fn parliament_next_due_ms(
     for (_, attempt) in attempts {
         if let Some(item) = attempt.lifecycle_items()?.first() {
             consider(item.due_ms);
+        }
+        if matches!(
+            attempt.proposal(),
+            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+        ) && let Some(due_ms) = attempt.enactment_due_ms()
+        {
+            consider(due_ms);
         }
     }
     for item in closure_items(boards, u64::MAX) {

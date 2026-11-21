@@ -2,6 +2,7 @@
 
 use super::{tests::*, *};
 use ivm::{encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 
 const REGISTER: [u8; 5] = [
     wide::arithmetic::SLL,
@@ -366,7 +367,7 @@ fn exact_shift_gas_and_cycles_preserve_the_fixed_funding_boundary() {
         if gas == 88 {
             assert!(matches!(
                 result,
-                Err(CaptureError::Execution(VMError::OutOfGas))
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas)))
             ));
         } else {
             let native = result.unwrap();

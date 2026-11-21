@@ -1,6 +1,7 @@
 use iroha_data_model::isi::InstructionBox;
 use ivm::{self, IVM, IVMHost, Memory};
 use ivm_abi::codec::encode_canonical_norito;
+use ivm_abi::error::VmTrap;
 // Exercise canonical NoritoBytes(InstructionBox) decoding in WsvHost for typed ZK ISIs.
 fn sample_account() -> ivm::mock_wsv::AccountId {
     let _domain: iroha_model_base::domain::DomainId =
@@ -61,7 +62,10 @@ fn boxed_submit_ballot_yields_permission_denied_without_verify() {
             &mut vm,
         )
     };
-    assert!(matches!(res, Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }
 #[test]
 fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
@@ -110,5 +114,8 @@ fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
             &mut vm,
         )
     };
-    assert!(matches!(res, Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

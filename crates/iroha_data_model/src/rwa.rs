@@ -175,6 +175,7 @@ pub type RwaEntry<'world> = Ref<'world, RwaId, RwaValue>;
 #[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::rwa::RwaData")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct RwaData {
     /// Current lot quantity.
     pub quantity: Quantity,

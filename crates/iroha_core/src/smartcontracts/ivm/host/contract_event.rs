@@ -1,5 +1,6 @@
 //! Exact original-pool construction of immutable native emission graphs.
 
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::alloc::Layout;
 
 use iroha_allocation::{
@@ -20,7 +21,7 @@ use iroha_data_model::{
         },
     },
 };
-use ivm::{IVM, VMError, value_record::capture_value_record_funded};
+use ivm::{VMError, value_record::capture_value_record_funded};
 
 /// One complete emission and its original allocation ledgers, moved together.
 ///
@@ -92,13 +93,19 @@ impl Demand {
     }
 }
 fn overflow() -> VMError {
-    VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        iroha_allocation::AllocationRefusal::DemandOverflow,
+    ))
 }
 fn invariant() -> VMError {
-    VMError::ExecutionDeferred(ivm::error::ExecutionDeferral::LocalInvariantViolation)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ivm::error::ExecutionDeferral::LocalInvariantViolation,
+    ))
 }
 fn allocation() -> VMError {
-    VMError::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ivm::error::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 /// Fixture metadata demand, excluding the retained charge ledger and payload backing.
@@ -129,7 +136,7 @@ pub fn metadata_allocation_bytes(
 fn prepaid(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(iroha_allocation::ChargedBufferError::Admission(reason)) => {
-            VMError::AllocationDeferred(reason)
+            VMError::Deferred(VmDeferral::AllocationDeferred(reason))
         }
         PrepaidBufferError::Allocation(iroha_allocation::ChargedBufferError::Allocator {
             ..
@@ -252,7 +259,7 @@ impl Construction {
 /// The caller quotes/debits work and output capacity before calling this materializer.
 #[allow(clippy::too_many_arguments)]
 pub fn capture(
-    vm: &IVM,
+    vm: &dyn ivm::host::SyscallContext,
     budget: &AllocationBudget,
     contract: &ContractAddress,
     code_hash: Hash,
@@ -264,7 +271,7 @@ pub fn capture(
     words: usize,
 ) -> Result<OwnedContractEmission, VMError> {
     if !definition.validate() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut demand = Demand::default();
     demand.event(definition)?;
@@ -289,7 +296,7 @@ pub fn capture(
         .ok_or_else(overflow)?;
     let mut reservation = budget
         .try_reserve_bytes(bytes)
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
     let charges =
         ChargedBuffer::from_reservation(demand.allocations, &mut reservation).map_err(prepaid)?;
     let mut construction = Construction {
@@ -358,6 +365,8 @@ mod tests {
     use iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_test_samples::ALICE_ID;
+    use ivm::IVM;
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn emission_materializer_keeps_every_original_allocation_until_payload_drop() {
@@ -421,7 +430,7 @@ mod tests {
                 base,
                 1
             ),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), retained);
         drop(owned);

@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -177,7 +178,10 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(12, Memory::INPUT_START + amount_offset);
     vm.load_program(&prog_mint).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Direct grant via Name TLV → mint ok
     let perm_name = make_tlv(
         PointerType::Name as u16,
@@ -233,5 +237,8 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(12, Memory::INPUT_START + amount_offset);
     vm.load_program(&prog_mint).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

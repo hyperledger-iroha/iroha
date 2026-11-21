@@ -6,6 +6,7 @@ use super::{
     Name, NftId, ParsedProgramMetadata, ProofBlob, QuantityValueV1, SoracloudHostRequestEnvelopeV1,
     SoracloudHostResponseEnvelopeV1, VMError, validate_descriptor, validate_proof_blob,
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use ivm_abi::metadata::{LiteralDirectory, ValidatedLiteral};
 
 pub fn validate_literal_table(
@@ -21,7 +22,10 @@ pub fn validate_literal_table(
             parsed.syscall_policy,
         )
         .map_err(|error| {
-            ivm_abi::error::preserve_execution_deferral(error, VMError::InvalidMetadata)
+            ivm_abi::error::preserve_execution_deferral(
+                error,
+                VMError::Trap(VmTrap::InvalidMetadata),
+            )
         })?;
         for value in directory.iter() {
             if let ValidatedLiteral::Pointer {
@@ -67,9 +71,10 @@ where
         ivm_abi::codec::canonical_norito_decode_limits(payload.len()),
     )
     .map_err(|error| {
-        error
-            .into_local_refusal()
-            .map_or_else(|_| VMError::InvalidMetadata, VMError::DecodeDeferred)
+        error.into_local_refusal().map_or_else(
+            |_| VMError::Trap(VmTrap::InvalidMetadata),
+            |cause| VMError::Deferred(VmDeferral::DecodeDeferred(cause)),
+        )
     })
 }
 pub fn validate_literal_payload(
@@ -100,40 +105,46 @@ pub fn validate_literal_payload(
         }
         PointerType::AxtDescriptor => {
             let descriptor = decode_canonical_literal_payload::<AxtDescriptor>(payload)?;
-            validate_descriptor(&descriptor).map_err(|_| VMError::InvalidMetadata)
+            validate_descriptor(&descriptor).map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))
         }
         PointerType::ProofBlob => {
             let proof = decode_canonical_literal_payload::<ProofBlob>(payload)?;
-            validate_proof_blob(&proof).map_err(|_| VMError::InvalidMetadata)
+            validate_proof_blob(&proof).map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))
         }
         PointerType::AxtAnchoredSpendV1 => {
             let spend = decode_canonical_literal_payload::<AxtAnchoredSpendV1>(payload)?;
             spend
                 .issuer_payload_v1()
                 .map(drop)
-                .map_err(|_| VMError::InvalidMetadata)
+                .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))
         }
         PointerType::SoracloudRequest => {
             let request =
                 decode_canonical_literal_payload::<SoracloudHostRequestEnvelopeV1>(payload)?;
-            request.validate().map_err(|_| VMError::InvalidMetadata)
+            request
+                .validate()
+                .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))
         }
         PointerType::SoracloudResponse => {
             let response =
                 decode_canonical_literal_payload::<SoracloudHostResponseEnvelopeV1>(payload)?;
-            response.validate().map_err(|_| VMError::InvalidMetadata)
+            response
+                .validate()
+                .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))
         }
         PointerType::Int => IntValueV1::decode_frame(payload)
             .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata)),
         PointerType::Decimal => DecimalValueV1::decode_frame(payload)
             .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata)),
         PointerType::Quantity => QuantityValueV1::decode_frame(payload)
             .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
+            .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata)),
     }
-    .map_err(|error| ivm_abi::error::preserve_execution_deferral(error, VMError::InvalidMetadata))
+    .map_err(|error| {
+        ivm_abi::error::preserve_execution_deferral(error, VMError::Trap(VmTrap::InvalidMetadata))
+    })
 }
 
 #[cfg(test)]

@@ -113,7 +113,7 @@ impl State {
         &self,
         tip: NativeExecutionTip,
         header: BlockHeader,
-    ) -> Result<(Arc<SelectedStateSchema>, KeyedStateTreeV1), WorldStateVerificationError> {
+    ) -> Result<(SelectedSchemaHandle, KeyedStateTreeV1), WorldStateVerificationError> {
         use WorldStateVerificationError as Error;
         // Acquire a pristine version containing the exact committed State. Ordinary
         // block-start hooks (including due work) would already mutate the captured state.
@@ -143,7 +143,13 @@ impl State {
                 "State changed while rebuilding its committed keyed publication".into(),
             ));
         }
-        let schema = schema_for(fields.world.runtime_selection.get()).map_err(Error::Capture)?;
+        let schema =
+            schema_for_world(&fields.world, &self.ivm_execution_budget()).map_err(|error| {
+                match error {
+                    CutError::Invalid(reason) => Error::Capture(reason),
+                    CutError::Deferred(original) => Error::KeyedDeferred(original),
+                }
+            })?;
         let cold =
             capture_committed_keyed_image(fields, &schema).map_err(|error| match capture_error(
                 error,

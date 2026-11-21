@@ -67,7 +67,16 @@ impl ProfileEngine for C10Engine {
         host: &mut dyn IVMHost,
         recorder: Option<&mut DiagnosticStepRecorder>,
     ) -> Result<(), VMError> {
-        vm.run_with_host_ref(host, recorder)
+        if vm.zk_mode && vm.zk_trace_enabled {
+            vm.run_with_host_ref(crate::registers::ScopedRegisters, host, recorder)
+        } else if recorder.is_some()
+            || vm.native_packets.is_some()
+            || vm.trace_mode != TraceMode::Off
+        {
+            vm.run_with_host_ref(super::run_observers::LocalObservers, host, recorder)
+        } else {
+            vm.run_with_host_ref(crate::registers::UnobservedRegisters, host, recorder)
+        }
     }
 
     fn metering_schedule_hash() -> iroha_crypto::Hash {
@@ -181,6 +190,7 @@ impl IVM {
 mod tests {
     use super::*;
     use crate::encoding::wide::encode_halt;
+    use crate::error::{VmDeferral, VmTrap};
 
     fn halting_program(policy: SyscallPolicy) -> Vec<u8> {
         let mut program = ProgramMetadata::default().encode_for_policy(policy);
@@ -227,7 +237,7 @@ mod tests {
         assert!(
             matches!(
                 refusal,
-                VMError::ArtifactAbiHashMismatch { expected, actual }
+                VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual })
                     if expected == IvmProfileId::C10_ABI_V1.abi_hash()
                         && actual
                             == IvmProfileId::of_policy(SyscallPolicy::AbiV1RuntimeLifecycle)
@@ -285,7 +295,10 @@ mod tests {
             crate::gas::baseline::schedule_hash()
         );
         assert_eq!(
-            fault_kind(IvmEngine::Baseline, &VMError::VectorExtensionDisabled),
+            fault_kind(
+                IvmEngine::Baseline,
+                &VMError::Trap(VmTrap::VectorExtensionDisabled)
+            ),
             Some(IvmFaultKindV1::VectorExtensionDisabled)
         );
         // Loading a C10 artifact again restores the C10 engine.
@@ -296,14 +309,23 @@ mod tests {
 
     #[test]
     fn engine_projection_and_metering_identity_follow_the_engine() {
-        for error in [VMError::OutOfGas, VMError::AssertionFailed] {
+        for error in [
+            VMError::Trap(VmTrap::OutOfGas),
+            VMError::Trap(VmTrap::AssertionFailed),
+        ] {
             assert_eq!(fault_kind(IvmEngine::Baseline, &error), error.fault_kind());
             assert_eq!(
                 fault_kind(IvmEngine::C10, &error),
                 fault_kind(IvmEngine::Baseline, &error)
             );
         }
-        assert_eq!(fault_kind(IvmEngine::C10, &VMError::HostUnavailable), None);
+        assert_eq!(
+            fault_kind(
+                IvmEngine::C10,
+                &VMError::Deferred(VmDeferral::HostUnavailable)
+            ),
+            None
+        );
         assert_eq!(
             metering_schedule_hash(IvmEngine::C10),
             crate::gas::c10_schedule_hash()

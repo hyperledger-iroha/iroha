@@ -345,6 +345,16 @@ class ScannerUnits(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.scanner = checker.Scanner(load_spec())
 
+    def test_native_game_kernel_hash_belongs_to_ledger_core(self) -> None:
+        path = "crates/iroha_core/src/smartcontracts/isi/game_partition/unit_step.rs"
+        primitives = self.scanner.primitives_in((ROOT / path).read_bytes(), path)
+        self.assertEqual(primitives, ["iroha-hash"])
+        self.assertEqual(self.scanner.unit_of(path, primitives), ("crates/iroha_core#zk", "file"))
+        self.assertEqual(self.scanner.consumer_of(path), "ledger-core")
+        files = load_spec()["scan"]["files"]
+        self.assertEqual(files[path], primitives)
+        self.assertNotIn("crates/ivm/src/game_unit_step.rs", files)
+
     def test_tokens_respect_their_boundaries(self) -> None:
         cases = {
             "use sha2::Sha256;": ["sha2-256"],

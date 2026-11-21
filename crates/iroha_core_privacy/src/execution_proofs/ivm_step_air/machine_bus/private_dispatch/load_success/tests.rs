@@ -7,6 +7,7 @@ use ivm::{
     execution_diagnostics::DiagnosticExecutionRecorders,
     execution_memory_recorder::{DiagnosticMemoryAccessKind, DiagnosticMemoryPrivacyTag},
 };
+use ivm_abi::error::VmTrap;
 use packet::Event;
 
 #[derive(Clone)]
@@ -1130,13 +1131,15 @@ fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_f
         let stack_start = stack_top - u64::from(frame_bytes);
         let setup_gas = 8 + ivm::call_gas::frame(frame_bytes, 1).unwrap();
 
-        let read_fault = |address| VMError::MemoryAccessViolation {
-            addr: u32::from_le_bytes(
-                u64::to_le_bytes(address)[..4]
-                    .try_into()
-                    .expect("low-byte width"),
-            ),
-            perm: Perm::READ,
+        let read_fault = |address| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: u32::from_le_bytes(
+                    u64::to_le_bytes(address)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
+                perm: Perm::READ,
+            })
         };
         // LOAD64 checks base privacy before reading; load_u64 checks alignment
         // before permissions. Base gas is charged before those checks, but an
@@ -1146,27 +1149,27 @@ fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_f
                 Memory::HEAP_START + 0x100,
                 true,
                 1_000,
-                VMError::PrivacyViolation,
+                VMError::Trap(VmTrap::PrivacyViolation),
                 VmTrapKind::PrivacyViolation,
             ),
             (
                 Memory::HEAP_START + 0x101,
                 false,
                 1_000,
-                VMError::MisalignedAccess {
+                VMError::Trap(VmTrap::MisalignedAccess {
                     addr: u32::from_le_bytes(
                         u64::to_le_bytes(Memory::HEAP_START + 0x101)[..4]
                             .try_into()
                             .expect("low-byte width"),
                     ),
-                },
+                }),
                 VmTrapKind::MemoryFault,
             ),
             (
                 Memory::HEAP_START + 0x100,
                 false,
                 setup_gas + 2,
-                VMError::OutOfGas,
+                VMError::Trap(VmTrap::OutOfGas),
                 VmTrapKind::OutOfGas,
             ),
             (
@@ -1216,21 +1219,24 @@ fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_f
                 ),
                 expected_error
             ) {
-                (Err(VMError::PrivacyViolation), VMError::PrivacyViolation)
-                | (Err(VMError::OutOfGas), VMError::OutOfGas) => true,
                 (
-                    Err(VMError::MisalignedAccess { addr: actual }),
-                    VMError::MisalignedAccess { addr: expected },
+                    Err(VMError::Trap(VmTrap::PrivacyViolation)),
+                    VMError::Trap(VmTrap::PrivacyViolation),
+                )
+                | (Err(VMError::Trap(VmTrap::OutOfGas)), VMError::Trap(VmTrap::OutOfGas)) => true,
+                (
+                    Err(VMError::Trap(VmTrap::MisalignedAccess { addr: actual })),
+                    VMError::Trap(VmTrap::MisalignedAccess { addr: expected }),
                 ) => actual == expected,
                 (
-                    Err(VMError::MemoryAccessViolation {
+                    Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                         addr: actual_addr,
                         perm: actual_perm,
-                    }),
-                    VMError::MemoryAccessViolation {
+                    })),
+                    VMError::Trap(VmTrap::MemoryAccessViolation {
                         addr: expected_addr,
                         perm: expected_perm,
-                    },
+                    }),
                 ) => actual_addr == expected_addr && actual_perm == expected_perm,
                 _ => false,
             });

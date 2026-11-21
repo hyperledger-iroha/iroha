@@ -1,3 +1,4 @@
+export { AnonymousBallotClientV1, AnonymousBallotRefusal } from "./anonymousBallot.js";
 /**
  * Entry point for the Iroha JavaScript SDK.
  *

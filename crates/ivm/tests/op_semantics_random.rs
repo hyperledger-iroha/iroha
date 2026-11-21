@@ -1,4 +1,5 @@
 use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 const CLASSIC_LOAD_OPCODE: u32 = 0x03;
 const CLASSIC_STORE_OPCODE: u32 = 0x23;
 fn run_prog(code_words: &[u32]) -> IVM {
@@ -48,7 +49,10 @@ fn loads_stores_alignment_semantics() {
     vm_store.set_register(2, ivm::Memory::HEAP_START);
     vm_store.set_register(3, 0x99);
     let res = vm_store.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
     let load_misal = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 1);
     let mut load_bytes = ProgramMetadata::default().encode();
     for w in [addi_base, store64, load_misal, halt] {
@@ -59,7 +63,10 @@ fn loads_stores_alignment_semantics() {
     vm_load.set_register(2, ivm::Memory::HEAP_START);
     vm_load.set_register(3, 0x55AA);
     let res2 = vm_load.run();
-    assert!(matches!(res2, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res2,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
 }
 #[test]
 fn classic_word_ops_rejected() {
@@ -75,7 +82,7 @@ fn classic_word_ops_rejected() {
     let err = vm
         .load_program(&bytes)
         .expect_err("classic 32-bit ops must be rejected");
-    assert!(matches!(err, VMError::InvalidOpcode(_)));
+    assert!(matches!(err, VMError::Trap(VmTrap::InvalidOpcode(_))));
 }
 #[test]
 fn branches_randomized_consistency() {

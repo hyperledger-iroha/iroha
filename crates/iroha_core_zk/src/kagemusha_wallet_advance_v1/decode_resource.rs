@@ -30,7 +30,7 @@ pub(crate) fn read_model<T>(
     }
 }
 
-pub(super) fn read_canonical<T>(bytes: &[u8], maximum: usize) -> Result<T, Error>
+pub(crate) fn read_canonical<T>(bytes: &[u8], maximum: usize) -> Result<T, Error>
 where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,

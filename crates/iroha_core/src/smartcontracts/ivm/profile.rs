@@ -60,10 +60,12 @@ impl ResolvedIvmProfile {
         static BASELINE_ABI_V1: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         static C10_ABI_V1: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         static C10_RUNTIME_LIFECYCLE: OnceLock<ResolvedIvmProfile> = OnceLock::new();
+        static C10_GENERIC_CARRIER: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         let compiled = match (id.engine(), id.policy()) {
             (IvmEngine::Baseline, _) => &BASELINE_ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1) => &C10_ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1RuntimeLifecycle) => &C10_RUNTIME_LIFECYCLE,
+            (IvmEngine::C10, SyscallPolicy::AbiV1GenericCarrier) => &C10_GENERIC_CARRIER,
         };
         *compiled.get_or_init(|| Self::compile(id))
     }
@@ -110,13 +112,6 @@ impl ResolvedIvmProfile {
     }
 
     /// Host-profile definition this release publishes for the profile.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the selection predicate still matches the ABI hash; the baseline cutover binds roots to this identity"
-        )
-    )]
     pub(crate) const fn definition_id(&self) -> DefinitionId {
         self.definition_id
     }
@@ -137,7 +132,7 @@ impl ResolvedIvmProfile {
     ///
     /// The interface profile, the frozen baseline, keeps its original admission rule: it is not
     /// looked up in the selection, exactly as the anchor admitted it. C10's own ABI V1 surface
-    /// shares the policy but is not implicit: no published definition activates it.
+    /// uses the same version number and requires its selected C10 host and governed service.
     // TODO: binding the interface profile to its frozen catalog definition (`d50c38a8…`) instead
     // of this implicit case changes admission for a root whose selection drops that definition;
     // it is left to the governed retirement plan of the baseline.
@@ -155,13 +150,19 @@ pub(crate) fn interface_profile_id() -> IvmProfileId {
 
 /// Whether the published definition `id` is a host profile that activates `profile`.
 ///
-/// The match is on ABI version and ABI hash, as before this resolver existed. The metering
-/// hash of the selected definition is not compared.
+/// C10 ABI V1 requires the exact compiled definition, including its metering identity, and the
+/// selected C10 service. The other profiles retain their installed selection rules.
 pub(crate) fn activates(
     world: &impl WorldReadOnly,
     id: &DefinitionId,
     profile: ResolvedIvmProfile,
 ) -> bool {
+    if profile.id() == IvmProfileId::C10_ABI_V1
+        && (*id != profile.definition_id()
+            || !crate::runtime::catalog::ivm_c10::selected(world.runtime_selection()))
+    {
+        return false;
+    }
     matches!(
         world.runtime_definitions().get(id),
         Some(DefinitionDescriptorV1::HostProfile(descriptor))
@@ -172,6 +173,11 @@ pub(crate) fn activates(
 /// Whether this root may resolve `profile`: the implicit baseline, or a named profile that an
 /// active definition of the root's selection activates.
 pub(crate) fn is_selected(world: &impl WorldReadOnly, profile: ResolvedIvmProfile) -> bool {
+    // Only the descriptor instruction execution owner may construct a carrier invocation.
+    // Selecting its definition never widens any installed raw, contract or trigger interface.
+    if profile.id() == IvmProfileId::C10_GENERIC_CARRIER {
+        return false;
+    }
     profile.is_implicit()
         || world
             .runtime_selection()
@@ -211,6 +217,17 @@ pub(crate) fn resolve_artifact(world: &impl WorldReadOnly, bytes: &[u8]) -> Reso
                 && is_selected(world, *named)
         })
         .unwrap_or(interface)
+}
+
+/// Resolve the original raw executable interface. C10 ABI V1 is admitted only by its
+/// own registration, deployed invocation and trigger families, even after activation.
+pub(crate) fn resolve_raw_artifact(world: &impl WorldReadOnly, bytes: &[u8]) -> ResolvedIvmProfile {
+    let profile = resolve_artifact(world, bytes);
+    if profile.id() == IvmProfileId::C10_ABI_V1 {
+        ResolvedIvmProfile::interface_default()
+    } else {
+        profile
+    }
 }
 
 /// Resolve the profile an authenticated ABI hash names: the hash of a manifest or of a
@@ -272,7 +289,7 @@ mod tests {
         assert!(interface.is_implicit());
         for id in IvmProfileId::IMPLEMENTED {
             let profile = ResolvedIvmProfile::of_id(id);
-            assert_eq!(profile, ResolvedIvmProfile::of_policy(id.policy()));
+            assert_eq!(profile.id(), id);
             assert_eq!(
                 profile.metering_id(),
                 <[u8; 32]>::from(ivm::gas::schedule_hash_for(id.engine())),
@@ -303,6 +320,10 @@ mod tests {
         let published = crate::runtime::attestation::release_host_profiles(catalog);
         for id in IvmProfileId::IMPLEMENTED {
             let profile = ResolvedIvmProfile::of_id(id);
+            if id == IvmProfileId::C10_GENERIC_CARRIER {
+                assert!(!published.contains(&profile.definition_id()), "unfinished carrier vertical is not advertised");
+                continue;
+            }
             assert!(
                 published.contains(&profile.definition_id()),
                 "the release publishes the definition of {id:?}"
@@ -360,7 +381,7 @@ mod tests {
             (code_after_header.as_slice(), interface, named),
             (unknown.as_slice(), interface, interface),
             (&named_header[..47], interface, interface),
-            // C10's own ABI V1 surface is never selected.
+            // Neither fixture has selected the C10 ABI V1 addition.
             (
                 &ivm::ProgramMetadata::default().encode_for_policy(SyscallPolicy::AbiV1),
                 interface,
@@ -417,7 +438,7 @@ mod tests {
         assert!(is_selected(&block, interface));
         assert!(!is_selected(&block, named));
         assert_eq!(resolve_artifact(&block, &header(NAMED)), interface);
-        // C10's own ABI V1 surface resolves in no root.
+        // The lifecycle addition alone does not select C10 ABI V1.
         let c10 = ResolvedIvmProfile::of_id(IvmProfileId::C10_ABI_V1);
         assert_eq!(resolve_selected(&block, c10.id()), None);
         assert_eq!(resolve_selected(&selected.view(), c10.id()), None);

@@ -264,7 +264,7 @@ async fn exact_transaction_result(
         committed.entrypoint() == &expected_entrypoint,
         "entrypoint hash matched different transaction bytes"
     );
-    Ok(Some(committed.result().0.is_ok()))
+    Ok(Some(committed.result().is_ok()))
 }
 async fn wait_for_transaction_result_on_peers(
     clients: &[Client],

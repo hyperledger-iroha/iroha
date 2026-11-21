@@ -213,6 +213,37 @@ pub(crate) fn reason(reply: PlatformReply) -> Unavailable {
     }
 }
 impl Platform for CallbackPlatform {
+    #[cfg(target_os = "ios")]
+    fn apple_debit_confirmation_key(
+        &self,
+        slot: &Slot,
+        tag: &[u8; 32],
+        create: bool,
+    ) -> std::result::Result<PublicKey, Unavailable> {
+        unsafe extern "C" {
+            fn kagemusha_apple_debit_key(
+                slot: *const u8,
+                tag: *const u8,
+                create: i32,
+                output: *mut u8,
+            ) -> i32;
+        }
+        let mut output = [0; 65];
+        // SAFETY: the function reads 32-byte identifiers and writes the public point of its OS-owned key.
+        let status = unsafe {
+            kagemusha_apple_debit_key(
+                slot.0.as_ptr(),
+                tag.as_ptr(),
+                i32::from(create),
+                output.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            return Err(Unavailable::Platform(status));
+        }
+        PublicKey::from_sec1_bytes(&output).map_err(|_| Unavailable::KeyUnusable)
+    }
+
     fn key_enumerate(&self) -> std::result::Result<Vec<Slot>, Unavailable> {
         let maximum = advance::KAGEMUSHA_WALLET_KEY_ENUMERATION_MAX_SLOTS_V1;
         let (reply, bytes) = self.call(10, None, &[], 0, maximum * 32);

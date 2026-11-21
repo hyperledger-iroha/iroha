@@ -23,6 +23,7 @@ use iroha_primitives::json::Json;
 use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm_abi::error::VmTrap;
 use mv::storage::StorageReadOnly as _;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -219,17 +220,17 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     vm.set_register(10, ptr2);
     assert!(match (
         &(vm.load_program(&prog2)),
-        &(ivm::VMError::GenericSyscallNotAllowed {
+        &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
             syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-        })
+        }))
     ) {
         (
-            Err(ivm::VMError::GenericSyscallNotAllowed {
+            Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: actual_field_0,
-            }),
-            ivm::VMError::GenericSyscallNotAllowed {
+            })),
+            ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: expected_field_0,
-            },
+            }),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });

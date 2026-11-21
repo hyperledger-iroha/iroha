@@ -7,6 +7,7 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::codec::encode_canonical_norito;
+use ivm_abi::error::VmTrap;
 fn sample_account() -> AccountId {
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -49,9 +50,9 @@ fn canonical_query_request_is_validated_before_not_implemented() {
     let probe = vec!["ambient".to_owned(), "layout".to_owned()];
     let before = norito::to_bytes(&probe).expect("encode ambient probe");
     assert!(
-        matches!((&(execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &canonical)), &(VMError::NotImplemented {
+        matches!((&(execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &canonical)), &(VMError::Trap(VmTrap::NotImplemented {
             syscall: syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
-        })), (Err(VMError::NotImplemented { syscall: __actual_syscall }), VMError::NotImplemented { syscall: __expected_syscall }) if __actual_syscall == __expected_syscall)
+        }))), (Err(VMError::Trap(VmTrap::NotImplemented { syscall: __actual_syscall })), VMError::Trap(VmTrap::NotImplemented { syscall: __expected_syscall })) if __actual_syscall == __expected_syscall)
     );
     assert_eq!(
         norito::to_bytes(&probe).expect("re-encode ambient probe"),
@@ -76,7 +77,7 @@ fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
     assert_ne!(alternate, canonical);
     assert!(matches!(
         execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &alternate),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     let wrong_nominal = encode_canonical_norito(&Json::from(norito::json::Value::Object(
         norito::json::Map::new(),
@@ -84,14 +85,14 @@ fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
     .expect("canonical wrong nominal value");
     assert!(matches!(
         execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &wrong_nominal),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert!(matches!(
         execute_query(&mut host, &mut vm, PointerType::Json, &canonical),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert!(matches!(
         execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &[0xFF]),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }

@@ -268,10 +268,11 @@ async fn committed_rejection_on_peer(
             let reason = details
                 .transaction
                 .result()
-                .0
                 .as_ref()
                 .err()
-                .ok_or_else(|| eyre!("rejection details contain a successful result"))?;
+                .ok_or_else(|| eyre!("rejection details contain a successful result"))?
+                .baseline()
+                .ok_or_else(|| eyre!("the proved baseline artifact returned a C10 rejection"))?;
             return require_exact_rejection(Err(eyre!(reason.clone())), expected);
         }
     })

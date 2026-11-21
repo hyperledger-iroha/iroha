@@ -9,6 +9,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, syscalls as ivm_sys};
 use ivm_abi::baseline::{encoding, instruction};
+use ivm_abi::error::VmTrap;
 use std::{num::NonZeroU64, sync::Arc};
 /// A program of the interface profile (ABI V1 on the frozen baseline engine: its header with a
 /// positive cycle limit and its 8-bit `SCALL`) that invokes `sys` and halts.
@@ -70,7 +71,7 @@ fn deny_unlisted_syscall_in_current() {
         )
         .expect_err("strict program loading must reject an unknown syscall");
     assert!(
-        matches!(err, ivm::VMError::UnknownSyscall(__actual_error_field) if __actual_error_field == unlisted_syscall_number())
+        matches!(err, ivm::VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field)) if __actual_error_field == unlisted_syscall_number())
     );
 }
 #[test]

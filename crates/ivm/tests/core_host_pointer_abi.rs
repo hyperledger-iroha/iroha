@@ -3,6 +3,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, syscalls};
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland.universal";
 const ALT_NFT_ID: &[u8] = b"lily$wonderland.universal";
@@ -106,7 +107,7 @@ fn set_account_detail_rejects_wrong_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn nft_mint_asset_validates_tlvs() {
@@ -214,7 +215,7 @@ fn transfer_asset_rejects_wrong_asset_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn nft_set_metadata_validates_tlvs() {
@@ -262,7 +263,7 @@ fn nft_set_metadata_rejects_wrong_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_SET_METADATA);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn nft_burn_asset_validates_tlv() {
@@ -290,7 +291,7 @@ fn nft_burn_asset_rejects_wrong_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn nft_burn_asset_rejects_name_type() {
@@ -303,7 +304,7 @@ fn nft_burn_asset_rejects_name_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn nft_burn_asset_rejects_blob_type() {
@@ -316,5 +317,5 @@ fn nft_burn_asset_rejects_blob_type() {
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }

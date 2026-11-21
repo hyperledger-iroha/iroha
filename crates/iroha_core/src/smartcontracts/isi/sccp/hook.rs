@@ -1068,7 +1068,11 @@ mod tests {
         };
         let iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
             iroha_data_model::executor::ValidationFail::NotPermitted(reason),
-        ) = rejection.reason.as_ref()
+        ) = rejection
+            .reason
+            .as_borrowed()
+            .baseline()
+            .expect("baseline genesis fixture")
         else {
             panic!("expected original SCCP physical-route refusal: {rejection:?}");
         };

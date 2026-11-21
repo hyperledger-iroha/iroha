@@ -258,8 +258,10 @@ fn snapshot_accounting_keeps_release_wire_and_abi_pins() {
     // phase 4) binds ABI V1 to the frozen baseline engine again: the hash is 7531b45d (golden
     // `iroha_data_model/tests/fixtures/abi_v1_hash.rs`) and the wire identity 9d96f872. It is
     // not the anchor's 072924c3 because covered wire roots changed after that anchor.
-    assert!(wire.starts_with("9d96f872"), "wire={wire}");
-    assert!(abi.starts_with("7531b45d"), "abi={abi}");
+    // The certified C10 execution row extends the SignedBlock closure under the owner-approved
+    // decoder rollout. The installed interface still selects exactly the baseline ABI.
+    assert_eq!(wire, "f06b6d0e1ecc75fb87e31314c24061cc74f85405a19346068a05642aee322d3f");
+    assert_eq!(abi, "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7");
     eprintln!("snapshot-byte-accounting: wire={wire} abi={abi}");
 }
 

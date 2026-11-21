@@ -28,7 +28,6 @@ mod acceleration_cost;
 mod aes;
 pub mod analysis;
 mod argument_record;
-pub mod axt;
 #[cfg(feature = "beep")]
 mod beep;
 pub mod bn254_vec;
@@ -127,8 +126,6 @@ mod zk_poseidon;
 pub mod zk_verify;
 use std::sync::{Mutex, OnceLock};
 // Host concurrency policy and declared state access.
-/// Bounded direct-IVM movement adapter for the independent-root unit prototype.
-pub mod game_unit_step;
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
 pub mod prebuilt_fixtures;
@@ -193,8 +190,9 @@ pub use crate::{
     },
     decoder::decode,
     error::{
-        ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
-        VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
+        ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmDeferral,
+        VmErrorRef, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation, VmTrap,
+        VmTrapKind,
     },
     execution_summary::{BaselineExecutionSummary, EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},

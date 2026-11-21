@@ -1,5 +1,6 @@
 //! Original-pool immutable control-flow arrays built without temporary vectors.
 
+use crate::error::VmTrap;
 use crate::{
     IvmEngine, VMError, cache_memory::SharedAllocation, instruction::wide, ivm_cache::DecodedOp,
 };
@@ -24,7 +25,7 @@ impl PreparedControlFlowNode {
     fn push_successor(&mut self, target: u64) -> Result<(), VMError> {
         let index = usize::from(self.successor_count);
         let Some(slot) = self.successors.get_mut(index) else {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         };
         *slot = target;
         self.successor_count = self.successor_count.saturating_add(1);
@@ -70,47 +71,51 @@ impl PreparedControlFlow {
                 | wide::control::BGE
                 | wide::control::BLTU
                 | wide::control::BGEU => {
-                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
+                    let target =
+                        direct_target(op, engine).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(target) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(target)?;
-                    let next = fallthrough.ok_or(VMError::DecodeError)?;
+                    let next = fallthrough.ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(next) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(next)?;
                 }
                 wide::control::JAL => {
-                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
+                    let target =
+                        direct_target(op, engine).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(target) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(target)?;
                     if engine.destination_register(op.inst) != 0 {
-                        let next = fallthrough.ok_or(VMError::DecodeError)?;
+                        let next = fallthrough.ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if !is_boundary(next) {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         node.push_successor(next)?;
                     }
                 }
                 wide::control::JMP => {
-                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
+                    let target =
+                        direct_target(op, engine).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(target) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(target)?;
                 }
                 wide::control::JALS => {
-                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
+                    let target =
+                        direct_target(op, engine).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(target) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(target)?;
-                    let next = fallthrough.ok_or(VMError::DecodeError)?;
+                    let next = fallthrough.ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !is_boundary(next) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     node.push_successor(next)?;
                 }

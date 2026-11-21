@@ -1104,3 +1104,53 @@ fn raw_material_decode_charges_after_shared_validation_and_preserves_refusal_ide
     drop(key);
     assert_eq!(pool.reserved_bytes(), 0);
 }
+
+#[test]
+fn borrowed_key_validation_keeps_native_relation_and_original_limits_without_allocation() {
+    for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
+        let pair = KeyPair::from_seed(vec![0x74; 32], algorithm);
+        for flags in [0, header_flags::COMPACT_LEN] {
+            let _flags = DecodeFlagsGuard::enter(flags);
+            let bytes = encode(pair.public_key());
+            without_allocations(|| {
+                PreparedPublicKeyDecode::with_validated_payload(&bytes, |observed, payload| {
+                    assert_eq!((observed, payload), pair.public_key().to_bytes());
+                    Ok::<_, Error>(())
+                })
+            })
+            .unwrap();
+            let mut malformed = bytes.clone();
+            malformed.push(0);
+            assert!(
+                PreparedPublicKeyDecode::with_validated_payload(&malformed, |_, _| Ok::<_, Error>(
+                    ()
+                ))
+                .is_err()
+            );
+            assert!(norito::core::decode_field_canonical::<PublicKey>(&malformed).is_err());
+            // The caller's refusal survives the borrowed parser, without a new scope or reset.
+            let limits = DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX);
+            norito::with_decode_limits_scope(limits, || {
+                let error = PreparedPublicKeyDecode::with_validated_payload(&bytes, |_, _| {
+                    Ok::<_, Error>(())
+                })
+                .unwrap_err();
+                assert!(error.decode_resource_error().is_some());
+            });
+            let error = without_allocations(|| {
+                PreparedPublicKeyDecode::with_validated_payload(&bytes, |_, _| {
+                    Err::<(), Error>(Error::InvalidValue {
+                        context: "original callback refusal",
+                    })
+                })
+            })
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                Error::InvalidValue {
+                    context: "original callback refusal"
+                }
+            ));
+        }
+    }
+}

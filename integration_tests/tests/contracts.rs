@@ -1,4 +1,5 @@
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
+use ivm_abi::error::{VmErrorRef, VmTrap};
 #[path = "support/contract_deployment.rs"]
 mod contract_deployment;
 #[path = "contracts/ivm_proved.rs"]
@@ -979,7 +980,7 @@ fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value
 fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
     use std::collections::BTreeMap;
 
-    use ivm::{IVM, VMError, error::VmTrapKind, numeric::NumericFaultV1};
+    use ivm::{IVM, error::VmTrapKind, numeric::NumericFaultV1};
     use ivm_abi::pointer_abi::{PointerType, encode_tlv};
 
     let artifact = typed_core_query_pager_artifact();
@@ -1047,7 +1048,7 @@ fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
         let (error, trap) = run(entrypoint, "0", "1");
         assert!(matches!(
             error.as_unmetered(),
-            VMError::NotImplemented { syscall }
+            VmErrorRef::Trap(VmTrap::NotImplemented { syscall })
                 if *syscall == ivm::syscalls::SYSCALL_CORE_QUERY_PAGE
         ));
         assert_eq!(trap, VmTrapKind::NotImplemented);
@@ -1060,7 +1061,7 @@ fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
             assert!(
                 matches!(
                     error.as_unmetered(),
-                    VMError::NumericFault(NumericFaultV1::InexactConversion)
+                    VmErrorRef::Trap(VmTrap::NumericFault(NumericFaultV1::InexactConversion))
                 ),
                 "{entrypoint}: {label}: {error}"
             );

@@ -143,11 +143,11 @@ impl<'view, 'state, 'round, 'bound> PreparedCheckExecutionV1<'view, 'state, 'rou
                 .network_entrypoint_at(entry_index)
                 .ok_or(Error::Execution)?;
             let (_, output) = body
-                .network_output_at(anchor.entry_index())
+                .network_execution_output_at(anchor.entry_index())
                 .ok_or(Error::Execution)?;
             norito::verify_exact_canonical_frame(actual, bound.entry_bytes.as_slice())
                 .map_err(|error| norito_decode_attempt_error(error, |_| Error::Execution))?;
-            if !output.result.is_ok() {
+            if !output.result().is_ok() {
                 return Err(Error::Execution.into());
             }
             self.check_block_hash = Some(hash);

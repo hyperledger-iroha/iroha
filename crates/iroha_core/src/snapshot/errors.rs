@@ -28,6 +28,12 @@ pub enum TryReadError {
     StateVmInitialization(#[source] ivm::VMError),
     /// Local State execution resources were unavailable during snapshot restore
     StateExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// This release does not implement or qualify the restored selected definition {0}
+    StateRuntimeUnsupported(iroha_data_model::runtime::definition::DefinitionId),
+    /// Original selected-runtime descriptor capability failure: {0}
+    StateRuntimeSupport(#[source] crate::runtime::attestation::ReleaseSupportError),
+    /// Immutable release support catalog could not be established: {0}
+    StateRuntimeCatalog(#[source] crate::runtime::CatalogError),
     /// Original complete-State authentication failure or local acquisition refusal: {0}
     StateRootVerification(#[source] crate::state::WorldStateVerificationError),
     /// Local original-pool admission of restored lane signer/sample custody failed: {0}
@@ -212,6 +218,15 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             crate::state::deserialize::StateRestoreError::ExecutionDeferred(error) => {
                 Self::StateExecutionDeferred(error)
             }
+            crate::state::deserialize::StateRestoreError::RuntimeUnsupported(definition) => {
+                Self::StateRuntimeUnsupported(definition)
+            }
+            crate::state::deserialize::StateRestoreError::RuntimeSupport(original) => {
+                Self::StateRuntimeSupport(original)
+            }
+            crate::state::deserialize::StateRestoreError::RuntimeCatalog(original) => {
+                Self::StateRuntimeCatalog(original)
+            }
             crate::state::deserialize::StateRestoreError::NativeLaneCustody(error) => {
                 Self::StateNativeLaneCustody(error)
             }
@@ -252,6 +267,9 @@ impl TryReadError {
             | Self::StateRead(_)
             | Self::StateAdmission(_)
             | Self::StateExecutionDeferred(_)
+            | Self::StateRuntimeUnsupported(_)
+            | Self::StateRuntimeSupport(_)
+            | Self::StateRuntimeCatalog(_)
             | Self::StateRootVerification(_)
             | Self::StateNativeSchedule(_)
             | Self::StateNativeLaneCustody(_)
@@ -282,7 +300,7 @@ impl TryReadError {
 }
 /// Error variants for snapshot writing
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
-pub(super) enum TryWriteError {
+pub(crate) enum TryWriteError {
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes

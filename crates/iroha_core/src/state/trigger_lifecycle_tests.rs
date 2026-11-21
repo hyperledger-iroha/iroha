@@ -569,12 +569,8 @@ fn lifecycle_compact_wire_identity_and_unchanged_ivm_abi() {
     println!("wire_schema_hash={}", iroha_crypto::Hash::prehashed(wire));
     println!("ivm_abi_hash={}", iroha_crypto::Hash::prehashed(abi));
     assert_eq!(
-        wire,
-        [
-            0x9d, 0x96, 0xf8, 0x72, 0x66, 0x32, 0x04, 0x75, 0x14, 0x90, 0xb9, 0xf2, 0x2a, 0x67,
-            0xf1, 0xa7, 0xf0, 0xf2, 0x3b, 0x04, 0x92, 0xee, 0xcd, 0x5f, 0x7c, 0xa0, 0xac, 0x42,
-            0x91, 0x5a, 0x04, 0x5d
-        ]
+        hex::encode(wire),
+        "f06b6d0e1ecc75fb87e31314c24061cc74f85405a19346068a05642aee322d3f"
     );
     assert_eq!(
         abi,

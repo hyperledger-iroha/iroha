@@ -715,7 +715,18 @@ impl SetTransaction<'_> {
     }
 
     pub(crate) fn lifecycle_invoke(&mut self, id: &TriggerId, index: u32) {
-        if let Some(snapshot) = self.lifecycle_snapshot(id) {
+        let snapshot = self.lifecycle_snapshot(id);
+        self.lifecycle_invoke_snapshot(id, index, snapshot);
+    }
+
+    /// Record the actual typed snapshot admitted for this invocation.
+    pub(crate) fn lifecycle_invoke_snapshot(
+        &mut self,
+        id: &TriggerId,
+        index: u32,
+        snapshot: Option<LifecycleSnapshot>,
+    ) {
+        if let Some(snapshot) = snapshot {
             // Authentication historically accepts a wider source language than
             // bounded capture. Never publish a successful Invoke without its
             // exact use-time identity: reject this disposable root deterministically.
@@ -738,7 +749,7 @@ impl SetTransaction<'_> {
         }
     }
 
-    pub(super) fn lifecycle_record(&mut self, id: &TriggerId, change: LifecycleChange) {
+    pub(crate) fn lifecycle_record(&mut self, id: &TriggerId, change: LifecycleChange) {
         if let Some(j) = &mut self.lifecycle_journal {
             j.record(id, change);
         }
@@ -785,6 +796,22 @@ impl SetTransaction<'_> {
     }
 
     pub(super) fn lifecycle_snapshot(&mut self, id: &TriggerId) -> Option<LifecycleSnapshot> {
+        self.lifecycle_snapshot_of(id, None)
+    }
+
+    /// Capture a C10 row under the same selected journal and block work reservation.
+    pub(crate) fn lifecycle_c10_snapshot(
+        &mut self,
+        row: &iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    ) -> Option<LifecycleSnapshot> {
+        self.lifecycle_snapshot_of(&row.trigger().id, Some(row))
+    }
+
+    fn lifecycle_snapshot_of(
+        &mut self,
+        id: &TriggerId,
+        c10: Option<&iroha_data_model::ivm_c10::StoredC10TriggerV1>,
+    ) -> Option<LifecycleSnapshot> {
         if let Some(sealed) = &mut self.lifecycle_sealed {
             *sealed = true;
             return None;
@@ -794,7 +821,9 @@ impl SetTransaction<'_> {
             return None;
         }
         // Absent removals/lookups have no effect and need no capture admission.
-        self.ids.get(id)?;
+        if c10.is_none() {
+            self.ids.get(id)?;
+        }
         if j.effects.as_slice().len() >= j.limits.effects {
             self.lifecycle_journal
                 .as_mut()
@@ -819,14 +848,19 @@ impl SetTransaction<'_> {
         let admitted_before = encode_work;
         let admitted = encode_work.with_snapshot(limits, || {
             norito::core::with_prepaid_validation(&j.scratch, &j.codec, || {
-                captured = Some(capture_snapshot(
-                    self,
-                    id,
-                    &pool,
-                    limits,
-                    applying_height,
-                    j.verified_ivm.as_slice(),
-                ));
+                captured = Some(if let Some(c10) = c10 {
+                    capture_c10_snapshot(c10, &pool, applying_height)
+                        .map(|snapshot| Some((snapshot, None)))
+                } else {
+                    capture_snapshot(
+                        self,
+                        id,
+                        &pool,
+                        limits,
+                        applying_height,
+                        j.verified_ivm.as_slice(),
+                    )
+                });
                 Ok(())
             })
         });
@@ -1079,6 +1113,56 @@ fn unavailable(
     })
 }
 
+/// Parse the canonical decimal registration height shared by both action records.
+pub(crate) fn parse_registration_height(text: &str) -> Option<u64> {
+    if text.is_empty()
+        || text.len() > 20
+        || (text.starts_with('0') && text.len() > 1)
+        || !text.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn capture_c10_snapshot(
+    row: &iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    pool: &AllocationBudget,
+    height: u64,
+) -> Result<LifecycleSnapshot, LifecycleJournalFailure> {
+    let action = &row.trigger().action;
+    let kind = match row.trigger().event_scan_kind() {
+        Some(TriggeringEventType::Time) => TriggerLifecycleStateKindV1::Time,
+        Some(TriggeringEventType::Pipeline) => TriggerLifecycleStateKindV1::Pipeline,
+        Some(TriggeringEventType::Data) => TriggerLifecycleStateKindV1::Data,
+        Some(TriggeringEventType::ExecuteTrigger) | None => TriggerLifecycleStateKindV1::ByCall,
+    };
+    let Some(registered_at_height) = action
+        .metadata()
+        .get(super::super::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY)
+        .and_then(|json| parse_registration_height(json.get()))
+        .filter(|registered| *registered <= height)
+    else {
+        return unavailable(kind, 1, pool);
+    };
+    let digest = row.action_hash().map_err(LifecycleJournalFailure::decode)?;
+    Ok(LifecycleSnapshot {
+        kind,
+        registered_at_height: Some(registered_at_height),
+        action_hash: matches!(
+            kind,
+            TriggerLifecycleStateKindV1::Time | TriggerLifecycleStateKindV1::Pipeline
+        )
+        .then_some(digest),
+        action: compact_bytes(
+            &lifecycle_hash_frame(digest).map_err(LifecycleJournalFailure::decode)?,
+            pool,
+        )?,
+        codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+        retry_state: row.retry_state().cloned(),
+    })
+}
+
 fn capture_snapshot(
     store: &SetTransaction<'_>,
     id: &TriggerId,
@@ -1102,17 +1186,7 @@ fn capture_snapshot(
             let height = action
                 .metadata
                 .get(super::super::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY)
-                .map(|value| {
-                    let text = value.get();
-                    if text.is_empty()
-                        || text.len() > 20
-                        || !text.bytes().all(|byte| byte.is_ascii_digit())
-                        || (text.len() > 1 && text.starts_with('0'))
-                    {
-                        return None;
-                    }
-                    text.parse::<u64>().ok()
-                });
+                .map(|value| parse_registration_height(value.get()));
             if height == Some(None)
                 || ($internal && height.is_none())
                 || height

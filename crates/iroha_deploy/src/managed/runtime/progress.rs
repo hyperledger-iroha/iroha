@@ -63,6 +63,15 @@ impl Progress {
     pub(super) fn enter(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::Release);
     }
+    /// A separate diagnostic for overlapped work, starting at this exact activation phase.
+    /// Later phases entered on either side never reach the other.
+    pub(super) fn fork(&self) -> Self {
+        let forked = Self::default();
+        forked
+            .phase
+            .store(self.phase.load(Ordering::Acquire), Ordering::Release);
+        forked
+    }
     fn phase(&self) -> Phase {
         match self.phase.load(Ordering::Acquire) {
             1 => Phase::InitialReadiness,

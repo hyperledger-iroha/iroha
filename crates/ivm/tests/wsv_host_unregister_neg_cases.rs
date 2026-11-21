@@ -6,6 +6,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -91,7 +92,10 @@ fn unregister_account_with_existing_nft_fails() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT]);
     vm.load_program(&prog_uacc).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }
 #[test]
 fn unregister_domain_with_only_accounts_fails() {
@@ -139,5 +143,8 @@ fn unregister_domain_with_only_accounts_fails() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN]);
     vm.load_program(&prog_udom).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

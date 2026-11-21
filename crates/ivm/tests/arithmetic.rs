@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 #[test]
 fn check_wide_add_opcode_is_valid() {
@@ -78,9 +79,9 @@ fn test_arithmetic_operations() {
     assert!(
         matches!(
             result,
-            Err(VMError::NumericFault(
+            Err(VMError::Trap(VmTrap::NumericFault(
                 ivm::numeric::NumericFaultV1::DivisionByZero
-            ))
+            )))
         ),
         "Expected DivisionByZero on div by zero, got {result:?}"
     );
@@ -148,7 +149,10 @@ fn math_helpers_min_max_abs_divceil_gcd_mean() {
         HALT_WORD,
     ]);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(VMError::RegisterIntegerOverflow)));
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::Trap(VmTrap::RegisterIntegerOverflow))
+    ));
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     // GCD(48, 18) = 6
     vm.set_register(1, 48);

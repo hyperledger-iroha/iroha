@@ -1,5 +1,6 @@
 //! Execute concise contract syntax through the real compiler and IVM ABI.
 use ivm::{CoreHost, IVM, ProgramMetadata, VMError};
+use ivm_abi::error::VmTrap;
 use kotodama_lang::compiler::Compiler;
 
 use crate::common;
@@ -74,14 +75,14 @@ fn expect_absence_aborts_with_the_authenticated_nominal_error() {
             .split_metered()
             .1;
         assert!(
-            matches!((&(error), &(VMError::ContractAbort {
+            matches!((&(error), &(VMError::Trap(VmTrap::ContractAbort {
                 contract: "MissingState".into(),
                 name: "Missing".to_owned(),
                 error_type: descriptor.identity.clone(),
                 schema_hash: descriptor.schema_hash(),
                 code: 1101,
                 message: None,
-            })), (VMError::ContractAbort { contract: __actual_contract, name: __actual_name, error_type: __actual_error_type, schema_hash: __actual_schema_hash, code: __actual_code, message: __actual_message }, VMError::ContractAbort { contract: __expected_contract, name: __expected_name, error_type: __expected_error_type, schema_hash: __expected_schema_hash, code: __expected_code, message: __expected_message }) if __actual_contract == __expected_contract && __actual_name == __expected_name && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_code == __expected_code && __actual_message == __expected_message),
+            }))), (VMError::Trap(VmTrap::ContractAbort { contract: __actual_contract, name: __actual_name, error_type: __actual_error_type, schema_hash: __actual_schema_hash, code: __actual_code, message: __actual_message }), VMError::Trap(VmTrap::ContractAbort { contract: __expected_contract, name: __expected_name, error_type: __expected_error_type, schema_hash: __expected_schema_hash, code: __expected_code, message: __expected_message })) if __actual_contract == __expected_contract && __actual_name == __expected_name && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_code == __expected_code && __actual_message == __expected_message),
             "missing {ty} must preserve the nominal error identity"
         );
     }
@@ -154,7 +155,7 @@ fn expect_evaluates_its_nominal_error_once_after_an_absent_receiver() {
     );
     assert!(matches!(
         vm.run(),
-        Err(VMError::ContractAbort { code: 1, .. })
+        Err(VMError::Trap(VmTrap::ContractAbort { code: 1, .. }))
     ));
     // The raw host retains writes for inspection before an outer transaction's rollback.
     let host = vm.host_mut_any().expect("CoreHost available");
@@ -315,14 +316,14 @@ fn concise_proposal_transition_preserves_record_state_and_nominal_rejections() {
             assert!(matches!((&(vm.run()
                     .expect_err("invalid proposal must reject")
                     .split_metered()
-                    .1), &(VMError::ContractAbort {
+                    .1), &(VMError::Trap(VmTrap::ContractAbort {
                     contract: "Proposals".into(),
                     name: name.into(),
                     error_type: descriptor.identity.clone(),
                     schema_hash: descriptor.schema_hash(),
                     code: code_value,
                     message: None,
-                })), (VMError::ContractAbort { contract: __actual_contract, name: __actual_name, error_type: __actual_error_type, schema_hash: __actual_schema_hash, code: __actual_code, message: __actual_message }, VMError::ContractAbort { contract: __expected_contract, name: __expected_name, error_type: __expected_error_type, schema_hash: __expected_schema_hash, code: __expected_code, message: __expected_message }) if __actual_contract == __expected_contract && __actual_name == __expected_name && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_code == __expected_code && __actual_message == __expected_message));
+                }))), (VMError::Trap(VmTrap::ContractAbort { contract: __actual_contract, name: __actual_name, error_type: __actual_error_type, schema_hash: __actual_schema_hash, code: __actual_code, message: __actual_message }), VMError::Trap(VmTrap::ContractAbort { contract: __expected_contract, name: __expected_name, error_type: __expected_error_type, schema_hash: __expected_schema_hash, code: __expected_code, message: __expected_message })) if __actual_contract == __expected_contract && __actual_name == __expected_name && __actual_error_type == __expected_error_type && __actual_schema_hash == __expected_schema_hash && __actual_code == __expected_code && __actual_message == __expected_message));
         } else {
             vm.run().expect("execute concise proposal lifecycle");
             assert!(matches!(vm.public_call_result_word(0), Ok(1)));

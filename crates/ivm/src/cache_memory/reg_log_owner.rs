@@ -6,6 +6,7 @@
 //! explicitly untracked by that pool; it never manufactures a replacement pool.
 
 use super::{MemoryBudget, MemoryReservation, current_budget};
+use crate::error::VmDeferral;
 use crate::{VMError, error::ExecutionDeferral, zk::RegLog};
 use iroha_allocation::{AllocationBudget, AllocationCharge, shared::Shared};
 use parking_lot::{Mutex, MutexGuard};
@@ -56,7 +57,7 @@ impl SharedRegLog {
         budget: Option<&AllocationBudget>,
     ) -> Result<Self, VMError> {
         if !log.matches_budget(budget) {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         Self::try_with_value(log, budget)
     }
@@ -75,7 +76,7 @@ impl SharedRegLog {
             .map(|budget| {
                 let mut reservation = budget
                     .try_reserve(layout)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 // The same exact layout was admitted above; this does not make
                 // a second admission and is unaffected by later pool shrink.
                 reservation.try_split(layout).map_err(|_| unavailable())
@@ -189,7 +190,9 @@ impl Drop for SharedRegLog {
 }
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! WsvHost state overlay staging and commit/rollback behaviour.
 use crate::common;
 use ivm::{IVM, Memory, MockWorldStateView, PointerType, WsvHost, host::IVMHost, syscalls};
+use ivm_abi::error::VmTrap;
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -195,7 +196,7 @@ fn checkpoint_restore_persistence_failure_is_reported_without_panicking() {
     fs::write(&store_dir, b"block parent directory creation").expect("install blocker file");
     assert!(matches!(
         host.restore(snapshot.as_ref()),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(host.wsv.sc_get("counter"), Some(b"1".to_vec()));
     assert_eq!(host.caller, original_caller);

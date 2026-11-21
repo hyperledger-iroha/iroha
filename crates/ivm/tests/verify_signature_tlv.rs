@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, Memory, PointerType, VMError, encoding};
+use ivm_abi::error::VmTrap;
 const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
@@ -388,7 +389,7 @@ fn syscall_verify_signature_rejects_norito_message_tlv() {
     let message = br#"{"amount":123,"dpn_id":"dpn-live"}"#;
     assert!(matches!(
         run_syscall_verify_signature_ed25519(PointerType::NoritoBytes, message, 6),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -396,6 +397,6 @@ fn syscall_verify_signature_rejects_json_message_tlv() {
     let message = br#"{"amount":456,"dpn_id":"dpn-json"}"#;
     assert!(matches!(
         run_syscall_verify_signature_ed25519(PointerType::Json, message, 7),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }

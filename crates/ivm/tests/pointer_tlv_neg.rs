@@ -2,6 +2,7 @@
 use crate::common;
 use iroha_crypto::PublicKey;
 use ivm::{IVM, PointerType, ProgramMetadata};
+use ivm_abi::error::VmTrap;
 fn valid_account_id_literal() -> Vec<u8> {
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -39,7 +40,7 @@ fn tlv_wrong_hash_is_rejected() {
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;
     let err = vm.memory.validate_tlv(addr).unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn tlv_unknown_type_is_rejected() {
@@ -51,7 +52,7 @@ fn tlv_unknown_type_is_rejected() {
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;
     let err = vm.memory.validate_tlv(addr).unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn tlv_wrong_version_is_rejected() {
@@ -63,7 +64,7 @@ fn tlv_wrong_version_is_rejected() {
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;
     let err = vm.memory.validate_tlv(addr).unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn tlv_out_of_bounds_is_rejected() {
@@ -81,7 +82,7 @@ fn tlv_out_of_bounds_is_rejected() {
         .expect("preload input");
     let addr = ivm::Memory::INPUT_START + pos;
     let err = vm.memory.validate_tlv(addr).unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn tlv_pointer_overflow_is_rejected() {
@@ -89,5 +90,5 @@ fn tlv_pointer_overflow_is_rejected() {
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
     let err = vm.memory.validate_tlv(u64::MAX).unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }

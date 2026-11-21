@@ -134,6 +134,33 @@ fn no_pending_exception(env: &mut Env<'_>) -> jni::errors::Result<()> {
     Ok(())
 }
 impl Platform for AndroidPlatform {
+    fn debit_confirmation_key(&self, slot: &Slot) -> std::result::Result<PublicKey, U> {
+        let (reply, bytes) = self.call(15, Some(slot), &[], 0, 65);
+        match reply.tag {
+            0 => PublicKey::from_sec1_bytes(&bytes).map_err(|_| U::KeyUnusable),
+            2 if bytes.is_empty() => Err(reason(reply)),
+            _ => Err(U::KeyUnusable),
+        }
+    }
+    #[cfg(target_os = "android")]
+    fn debit_confirmation_origin(
+        &self,
+        slot: &Slot,
+        message: &[u8; 32],
+        der: &[u8],
+    ) -> std::result::Result<(), U> {
+        if !(8..=72).contains(&der.len()) {
+            return Err(U::KeyUnusable);
+        }
+        let mut input = message.to_vec();
+        input.extend_from_slice(der);
+        let (reply, bytes) = self.call(16, Some(slot), &input, 0, 0);
+        if reply.tag == 0 && bytes.is_empty() {
+            Ok(())
+        } else {
+            Err(U::KeyUnusable)
+        }
+    }
     fn key_probe(&self, slot: &Slot) -> Probe<PublicKey> {
         let (reply, bytes) = self.call(0, Some(slot), &[], 0, 65);
         match reply.tag {

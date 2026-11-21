@@ -1,6 +1,7 @@
 //! One shared prepared shell, prepaid and reclaimed with its original owner.
 
 use super::PreparedContractInner;
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{MemoryReservation, strong_owner::StrongOwner},
@@ -34,10 +35,13 @@ impl PreparedShell {
         let layout = ChargedShared::<PreparedContractInner>::allocation_layout();
         let mut admission = budget
             .try_reserve(layout)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let retention = MemoryReservation::active(layout.size());
-        let shell = ChargedShared::reserve_from(&mut admission)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let shell = ChargedShared::reserve_from(&mut admission).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         Ok((Self::Funded(shell), retention))
     }
     pub(super) fn initialize(self, value: PreparedContractInner) -> PreparedOwner {

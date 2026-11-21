@@ -13,6 +13,7 @@
 //! pool.
 //! Allocator bookkeeping and fragmentation are not included.
 
+use crate::error::VmDeferral;
 use std::{
     ops::{Deref, DerefMut},
     sync::{
@@ -804,13 +805,13 @@ impl<T: Copy> OwnedAllocation<T> {
 
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or(VMError::ExecutionDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable,
-            ))?;
+            )))?;
         if bytes > isize::MAX as usize {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable,
-            ));
+            )));
         }
         let mut reservation = budget.reserve(bytes);
         #[cfg(test)]
@@ -825,14 +826,16 @@ impl<T: Copy> OwnedAllocation<T> {
             }
             None => false,
         }) {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable,
-            ));
+            )));
         }
         let mut values = Vec::new();
-        values
-            .try_reserve_exact(len)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        values.try_reserve_exact(len).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         let vec_bytes = values
             .capacity()
             .checked_mul(std::mem::size_of::<T>())
@@ -1199,6 +1202,7 @@ impl TestMemoryBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
 
     #[test]
     fn guard_budget_scope_charges_only_its_own_thread_to_a_private_budget() {
@@ -1260,14 +1264,18 @@ mod tests {
         assert_eq!(&*filled, &[[0xa5; 32]; 3]);
         assert!(matches!(
             OwnedAllocation::<[u8; 32]>::try_filled_copy(usize::MAX, [0; 32]),
-            Err(crate::error::VMError::ExecutionDeferred(
-                crate::error::ExecutionDeferral::AllocationUnavailable
+            Err(crate::error::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable
+                )
             ))
         ));
         assert!(matches!(
             OwnedAllocation::<[u8; 32]>::try_filled_copy(isize::MAX as usize / 32 + 1, [0; 32]),
-            Err(crate::error::VMError::ExecutionDeferred(
-                crate::error::ExecutionDeferral::AllocationUnavailable
+            Err(crate::error::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable
+                )
             ))
         ));
     }
@@ -1806,7 +1814,11 @@ mod tests {
     fn partial_construction_refunds_allocations_on_error_and_unwind() {
         let budget = MemoryBudget::new(1024);
         let build = SharedAllocation::try_from_iter_with_budget(
-            [Ok(1_u64), Err(crate::error::VMError::DecodeError)].into_iter(),
+            [
+                Ok(1_u64),
+                Err(crate::error::VMError::Trap(VmTrap::DecodeError)),
+            ]
+            .into_iter(),
             &budget,
         );
         assert!(build.is_err());
@@ -1835,8 +1847,10 @@ mod tests {
         });
         assert!(matches!(
             SharedAllocation::try_from_iter_with_budget(values, &budget),
-            Err(crate::error::VMError::ExecutionDeferred(
-                crate::error::ExecutionDeferral::AllocationUnavailable
+            Err(crate::error::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable
+                )
             ))
         ));
         assert_eq!(budget.stats().active_bytes, 0);
@@ -1865,7 +1879,7 @@ mod tests {
         let budget = MemoryBudget::new(1024);
         assert!(matches!(
             SharedAllocation::try_from_iter_with_budget(InaccurateSize(0), &budget),
-            Err(crate::error::VMError::DecodeError)
+            Err(crate::error::VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(budget.stats().active_bytes, 0);
     }

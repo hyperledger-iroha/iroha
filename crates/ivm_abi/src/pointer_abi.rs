@@ -19,6 +19,7 @@
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{SyscallPolicy, error::VMError};
 use std::{cell::Cell, collections::HashSet, marker::PhantomData, rc::Rc, sync::OnceLock};
 /// Known pointer-ABI types.
@@ -134,18 +135,21 @@ impl<'a> core::fmt::Debug for Tlv<'a> {
 /// Encode the sole canonical V1 pointer envelope over the exact payload bytes.
 ///
 /// # Errors
-/// Rejects an unrepresentable payload or total length with [`VMError::NoritoInvalid`].
+/// Rejects an unrepresentable payload or total length with [`crate::error::VmTrap::NoritoInvalid`].
 /// Native reservation failure retains the local
 /// `ExecutionDeferred::AllocationUnavailable` result.
 pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMError> {
-    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let total = 7usize
         .checked_add(payload.len())
         .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| {
-        VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::AllocationUnavailable,
+        ))
     })?;
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
@@ -154,24 +158,76 @@ pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, 
     out.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
     Ok(out)
 }
+
+/// Encode the same canonical V1 pointer envelope while retaining an original allocator refusal.
+///
+/// New explicitly selected hosts prepay the returned buffer in their original allocation pool.
+/// This utility preserves the checked physical layout and actual empty-vector reservation error;
+/// it does not acquire a pool or replace the existing installed helper's refusal contract.
+///
+/// # Errors
+/// Rejects an unrepresentable envelope and returns its original physical allocator refusal.
+pub fn encode_tlv_with_allocator_custody(
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Result<Vec<u8>, VMError> {
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    let total = payload
+        .len()
+        .checked_add(7 + iroha_crypto::Hash::LENGTH)
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
+    let layout =
+        std::alloc::Layout::array::<u8>(total).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|original| {
+        VMError::Deferred(VmDeferral::AllocatorDeferred(
+            iroha_allocation::AllocatorRefusal::from_vec_reserve(original, layout),
+        ))
+    })?;
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&payload_len.to_be_bytes());
+    out.extend_from_slice(payload);
+    out.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+    Ok(out)
+}
+
+#[cfg(test)]
+mod carrier_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn original_allocator_encoder_preserves_exact_pointer_bytes() {
+        for payload in [vec![], vec![0], vec![0, 1, 255], vec![17; 4096]] {
+            for pointer in [PointerType::NoritoBytes, PointerType::Blob] {
+                let encoded = encode_tlv_with_allocator_custody(pointer, &payload).unwrap();
+                assert_eq!(encoded, encode_tlv(pointer, &payload).unwrap());
+                let decoded = validate_tlv_bytes(&encoded).unwrap();
+                assert_eq!(decoded.type_id, pointer);
+                assert_eq!(decoded.payload, payload);
+            }
+        }
+    }
+}
 /// Validate a TLV envelope provided as a raw byte slice and return a view over
 /// its payload. The slice must contain the full header, payload, and hash.
 pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     if bytes.len() < 7 + iroha_crypto::Hash::LENGTH {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let type_id = u16::from_be_bytes([bytes[0], bytes[1]]);
     let version = bytes[2];
     if version != 1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let len = u32::from_be_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]) as usize;
     let total = 7usize
         .checked_add(len)
         .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     if bytes.len() != total {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let payload = &bytes[7..7 + len];
     let hash_bytes = &bytes[7 + len..total];
@@ -179,9 +235,9 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     expected_hash.copy_from_slice(hash_bytes);
     let computed: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
     if expected_hash != computed {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::NoritoInvalid)?;
+    let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok(Tlv {
         type_id: tlv_type,
         version,
@@ -212,12 +268,17 @@ const ABI_V1_POINTER_TYPES: &[PointerType] = &[
 /// Expose the policy allowlist for callers that need to diff surfaces.
 pub fn policy_pointer_types(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
-    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
+    static CARRIER: OnceLock<HashSet<PointerType>> = OnceLock::new();
+    if policy == SyscallPolicy::AbiV1GenericCarrier {
+        return CARRIER.get_or_init(|| [PointerType::NoritoBytes].into_iter().collect());
+    }
     ABI_V1.get_or_init(|| ABI_V1_POINTER_TYPES.iter().copied().collect())
 }
 /// Check the static pointer-ABI allowlist without allocating on first use.
 pub fn is_type_allowed_for_policy(policy: SyscallPolicy, ty: PointerType) -> bool {
-    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
+    if policy == SyscallPolicy::AbiV1GenericCarrier {
+        return ty == PointerType::NoritoBytes;
+    }
     ABI_V1_POINTER_TYPES.contains(&ty)
 }
 thread_local! {
@@ -310,6 +371,7 @@ pub fn render_pointer_types_markdown_table() -> String {
 #[cfg(test)]
 mod tests {
 
+    use crate::error::VmTrap;
     #[test]
     fn canonical_tlv_producer_preserves_exact_v1_bytes_for_all_payload_boundaries() {
         for len in [0usize, 1, 31, 32, 33, 255, 256, 4096] {
@@ -405,13 +467,13 @@ mod tests {
         truncated.pop();
         assert!(matches!(
             validate_tlv_bytes(&truncated),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let mut trailing = envelope;
         trailing.push(0);
         assert!(matches!(
             validate_tlv_bytes(&trailing),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -426,7 +488,7 @@ mod tests {
             envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
             assert!(matches!(
                 validate_tlv_bytes(&envelope),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }

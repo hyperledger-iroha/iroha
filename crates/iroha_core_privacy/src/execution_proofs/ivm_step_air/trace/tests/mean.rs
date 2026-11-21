@@ -2,6 +2,7 @@
 
 use super::div_rem::attempted;
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn single(left: u64, right: u64, gas: u64) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     attempted(
@@ -217,7 +218,7 @@ fn mean_native_cycle_policy_allows_last_crossing_and_refuses_next_attempt() {
     let mut recorder = DiagnosticStepRecorder::try_new(128, &budget).unwrap();
     assert!(matches!(
         vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-        Err(ivm::VMError::ExceededMaxCycles)
+        Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
     ));
     assert_eq!(recorder.records().len(), 1);
     let record = recorder.records()[0];
@@ -292,11 +293,14 @@ fn mean_native_gas_failure_keeps_cycles_and_cannot_follow_a_limit_crossing() {
             assert_eq!(recorder.records().len(), 1);
             let record = recorder.records()[0];
             let outcome = if gas < 2 {
-                assert!(matches!(actual, Err(ivm::VMError::OutOfGas)));
+                assert!(matches!(actual, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
                 assert_eq!(record.before, record.after);
                 SegmentOutcome::OutOfGas
             } else {
-                assert!(matches!(actual, Err(ivm::VMError::ExceededMaxCycles)));
+                assert!(matches!(
+                    actual,
+                    Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+                ));
                 assert_eq!(record.after.cycles, 3);
                 SegmentOutcome::Continue
             };

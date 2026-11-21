@@ -1,6 +1,7 @@
 //! Tests for IVM bytecode header (ProgramMetadata) validation.
 use crate::common;
 use ivm::{ProgramMetadata, VMError, ivm_mode};
+use ivm_abi::error::VmTrap;
 fn encode_with(mut meta: ProgramMetadata, f: impl FnOnce(&mut ProgramMetadata)) -> Vec<u8> {
     f(&mut meta);
     meta.encode()
@@ -160,15 +161,15 @@ fn parse_rejects_unknown_mode_bits() {
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert!(match (
         &(err),
-        &(VMError::UnsupportedProgramFeatureBits { bits: 0x80 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x80 }))
     ) {
         (
-            VMError::UnsupportedProgramFeatureBits {
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: actual_field_0,
-            },
-            VMError::UnsupportedProgramFeatureBits {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: expected_field_0,
-            },
+            }),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -180,15 +181,15 @@ fn parse_rejects_retired_transactional_memory_bit() {
     });
     assert!(match (
         &(ProgramMetadata::parse(&bytes).unwrap_err()),
-        &(VMError::UnsupportedProgramFeatureBits { bits: 0x04 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x04 }))
     ) {
         (
-            VMError::UnsupportedProgramFeatureBits {
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: actual_field_0,
-            },
-            VMError::UnsupportedProgramFeatureBits {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: expected_field_0,
-            },
+            }),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -205,17 +206,17 @@ fn parse_rejects_retired_minor_zero_without_cntr() {
     );
     assert!(match (
         &(ProgramMetadata::parse(&bytes).unwrap_err()),
-        &(VMError::UnsupportedProgramVersion { major: 1, minor: 0 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 0 }))
     ) {
         (
-            VMError::UnsupportedProgramVersion {
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: actual_field_0,
                 minor: actual_field_1,
-            },
-            VMError::UnsupportedProgramVersion {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: expected_field_0,
                 minor: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -235,10 +236,10 @@ fn parse_rejects_retired_pointer_layout_abi_hash_at_current_header() {
         .expect("fixed ABI hash field");
     assert!(matches!(
         ProgramMetadata::parse(&bytes),
-        Err(VMError::ArtifactAbiHashMismatch {
+        Err(VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
             expected: observed_expected,
             actual: observed_actual,
-        }) if observed_expected == expected && observed_actual == actual
+        })) if observed_expected == expected && observed_actual == actual
     ));
 }
 #[test]
@@ -248,14 +249,14 @@ fn parse_requires_a_cycle_bound_exactly_for_zk_headers() {
     });
     assert!(matches!(
         ProgramMetadata::parse(&missing),
-        Err(VMError::MissingMaxCycles)
+        Err(VMError::Trap(VmTrap::MissingMaxCycles))
     ));
     let unexpected = encode_with(ProgramMetadata::default(), |m| {
         m.max_cycles = 8;
     });
     assert!(matches!(
         ProgramMetadata::parse(&unexpected),
-        Err(VMError::MaxCyclesWithoutZk { max_cycles: 8 })
+        Err(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 8 }))
     ));
     let zk = encode_with(ProgramMetadata::default(), |m| {
         m.mode = ivm::ivm_mode::ZK;
@@ -270,15 +271,15 @@ fn parse_rejects_retired_vector_bit() {
     });
     assert!(match (
         &(ProgramMetadata::parse(&bytes).unwrap_err()),
-        &(VMError::UnsupportedProgramFeatureBits { bits: 0x02 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x02 }))
     ) {
         (
-            VMError::UnsupportedProgramFeatureBits {
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: actual_field_0,
-            },
-            VMError::UnsupportedProgramFeatureBits {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits {
                 bits: expected_field_0,
-            },
+            }),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -291,17 +292,17 @@ fn parse_rejects_wrong_major_version() {
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert!(match (
         &(err),
-        &(VMError::UnsupportedProgramVersion { major: 0, minor: 1 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 0, minor: 1 }))
     ) {
         (
-            VMError::UnsupportedProgramVersion {
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: actual_field_0,
                 minor: actual_field_1,
-            },
-            VMError::UnsupportedProgramVersion {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: expected_field_0,
                 minor: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -311,17 +312,17 @@ fn parse_rejects_wrong_major_version() {
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert!(match (
         &(err),
-        &(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 2, minor: 1 }))
     ) {
         (
-            VMError::UnsupportedProgramVersion {
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: actual_field_0,
                 minor: actual_field_1,
-            },
-            VMError::UnsupportedProgramVersion {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: expected_field_0,
                 minor: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -378,17 +379,17 @@ fn parse_rejects_unknown_minor_version() {
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert!(match (
         &(err),
-        &(VMError::UnsupportedProgramVersion { major: 1, minor: 2 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 2 }))
     ) {
         (
-            VMError::UnsupportedProgramVersion {
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: actual_field_0,
                 minor: actual_field_1,
-            },
-            VMError::UnsupportedProgramVersion {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: expected_field_0,
                 minor: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });

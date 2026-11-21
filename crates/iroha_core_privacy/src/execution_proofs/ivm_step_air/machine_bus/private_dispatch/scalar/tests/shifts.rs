@@ -1,6 +1,7 @@
 //! Native shifts and rotates through the original private dispatcher producers.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 const REGISTER_OPS: [u8; 5] = [
     wide::arithmetic::SLL,
@@ -400,12 +401,12 @@ fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
         // before the interpreter begins a diagnostic opcode step.
         for initial_gas in 0..root_gas {
             let (program, recorder, outcome) = capture(&[instruction], &inputs, initial_gas, 32);
-            assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             assert_root_preflight_out_of_gas(&program, &recorder, initial_gas);
         }
         for gas in 0..cost {
             let (_, recorder, outcome) = capture(&[instruction], &inputs, root_gas + gas, 32);
-            assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             assert_eq!(recorder.records().len(), 1);
             let record = &recorder.records()[0];
             assert_eq!(record.instruction, Some(instruction));
@@ -437,7 +438,10 @@ fn shift_gas_boundaries_underflow_cycle_limit_and_false_halt_reject() {
         carries(&mut underflow.0.row[CARRIES..CARRIES + 4], 0, cost, true);
         assert!(!underflow.accepts(&program));
         let (limited, recorder, outcome) = capture(&[instruction], &inputs, 16, 1);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let mut exhausted = ScalarFixture::from_record(&limited, &recorder.records()[0]);
         assert!(exhausted.accepts(&limited));
@@ -472,7 +476,7 @@ fn native_shift_requires_admitted_return_and_remains_running_before_it() {
         assert!(error.to_string().contains("reaches non-instruction pc 4"));
         assert!(matches!(
             error.into_vm_error(),
-            ivm::VMError::InvalidMetadata
+            ivm::VMError::Trap(VmTrap::InvalidMetadata)
         ));
         let program = Program::new(artifact).unwrap();
         let (program, recorder, outcome) =

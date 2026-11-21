@@ -29,6 +29,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use iroha_torii::sorafs::AdmissionRegistry;
+use ivm::error::{VmDeferral, VmTrap};
 use sorafs_car::{
     CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, FileEntry,
     FilePlan,

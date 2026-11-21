@@ -3,6 +3,7 @@
 //! Staged decoding charges bounded public work before each read, snapshots the
 //! complete envelope once, authenticates that snapshot, and then performs
 //! strict schema/canonical decoding. This ordering is consensus-visible.
+use crate::error::VmTrap;
 use crate::{
     IVM, PointerType, VMError, numeric::PointerAbiFaultV1, numeric_gas,
     syscall_metering::SyscallMeteringPhase,
@@ -23,7 +24,7 @@ use ivm_abi::numeric_tlv::encode_envelope;
 const OUTER_HEADER_BYTES: usize = 7;
 const OUTER_HASH_BYTES: usize = iroha_crypto::Hash::LENGTH;
 fn pointer_fault(fault: PointerAbiFaultV1) -> VMError {
-    VMError::PointerAbiFault(fault)
+    VMError::Trap(VmTrap::PointerAbiFault(fault))
 }
 fn decode_envelope_bytes(
     envelope: &[u8],
@@ -136,7 +137,7 @@ fn snapshot_metered(
         SyscallMeteringPhase::PayloadHash,
         numeric_gas::payload_hash_gas(frame_len)?,
     )?;
-    let total_u64 = u64::try_from(total).map_err(|_| VMError::GasCostOverflow)?;
+    let total_u64 = u64::try_from(total).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
     vm.ensure_owned_tlv_range(pointer, total_u64)
         .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?;
     // Read only the tail here: the authenticated execution snapshot reuses
@@ -148,14 +149,14 @@ fn snapshot_metered(
     let tail_len = total - OUTER_HEADER_BYTES;
     vm.ensure_public_memory(
         tail_pointer,
-        u64::try_from(tail_len).map_err(|_| VMError::GasCostOverflow)?,
+        u64::try_from(tail_len).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?,
     )
     .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?;
     let tail = vm
         .memory
         .load_region(
             tail_pointer,
-            u64::try_from(tail_len).map_err(|_| VMError::GasCostOverflow)?,
+            u64::try_from(tail_len).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?,
         )
         .map_err(|error| {
             crate::error::preserve_execution_deferral(
@@ -218,15 +219,16 @@ fn exact_int_frame_len(value: &BigInt) -> Result<usize, VMError> {
     NUMERIC_FRAME_HEADER_BYTES_V1
         .checked_add(4)
         .and_then(|bytes| bytes.checked_add(value.twos_byte_len()))
-        .ok_or(VMError::GasCostOverflow)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 fn exact_envelope_len(frame_len: usize) -> Result<usize, VMError> {
     frame_len
         .checked_add(NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1)
-        .ok_or(VMError::GasCostOverflow)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 fn charge_output_length_probe(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
-    let magnitude_bits = u64::try_from(value.bit_len()).map_err(|_| VMError::GasCostOverflow)?;
+    let magnitude_bits =
+        u64::try_from(value.bit_len()).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
     // One conservative sign bit covers every minimal two's-complement length,
     // including positive sign-extension boundaries. Negative powers of two
     // may need one limb less, which is a deliberate bounded overcharge.
@@ -355,6 +357,7 @@ pub fn allocate_quantity_metered(vm: &mut IVM, value: &Quantity) -> Result<u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use ivm_abi::numeric_tlv::{encode_decimal, encode_int, encode_quantity};
     #[test]
     fn pointer_transport_validates_numeric_frames_before_publication() {
@@ -370,7 +373,7 @@ mod tests {
                 PointerType::Int,
                 &norito::to_bytes(&17_i64).expect("retired i64 carrier")
             ),
-            Err(VMError::PointerAbiFault(_))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(_)))
         ));
         let mut oversized_body = vec![0_u8; 4 + 65];
         oversized_body[..4].copy_from_slice(&65_u32.to_le_bytes());
@@ -380,7 +383,9 @@ mod tests {
                 .expect("well-framed out-of-domain Int");
         assert!(matches!(
             validate_numeric_frame_if_needed(PointerType::Int, &oversized_frame),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::OversizedLength))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::OversizedLength
+            )))
         ));
         assert!(matches!(
             validate_numeric_frame_if_needed(PointerType::Blob, b"untyped"),
@@ -410,7 +415,9 @@ mod tests {
         );
         assert!(matches!(
             decode_decimal_bytes(&int_envelope),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::WrongType))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::WrongType
+            )))
         ));
     }
     #[test]
@@ -418,34 +425,40 @@ mod tests {
         let envelope = encode_int(&BigInt::one()).expect("envelope");
         assert!(matches!(
             decode_int_bytes(&envelope[..OUTER_HEADER_BYTES - 1]),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
-            ))
+            )))
         ));
         let mut unknown = envelope.clone();
         unknown[..2].copy_from_slice(&0xffff_u16.to_be_bytes());
         assert!(matches!(
             decode_int_bytes(&unknown),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::UnknownType
+            )))
         ));
         let mut unassigned = envelope.clone();
         unassigned[..2].copy_from_slice(&0x000C_u16.to_be_bytes());
         assert!(matches!(
             decode_int_bytes(&unassigned),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::UnknownType
+            )))
         ));
         let quantity = encode_quantity(&"1".parse().expect("quantity")).expect("quantity");
         assert!(matches!(
             decode_int_bytes(&quantity),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::WrongType))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::WrongType
+            )))
         ));
         let mut bad_version = envelope.clone();
         bad_version[2] = 2;
         assert!(matches!(
             decode_int_bytes(&bad_version),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::InvalidEnvelopeVersion
-            ))
+            )))
         ));
         let mut oversized = envelope.clone();
         oversized[3..7].copy_from_slice(
@@ -455,24 +468,26 @@ mod tests {
         );
         assert!(matches!(
             decode_int_bytes(&oversized),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::OversizedLength))
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::OversizedLength
+            )))
         ));
         let mut trailing = envelope.clone();
         trailing.push(0);
         assert!(matches!(
             decode_int_bytes(&trailing),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::TruncatedEnvelope
-            ))
+            )))
         ));
         let mut bad_hash = envelope;
         let last = bad_hash.len() - 1;
         bad_hash[last] ^= 1;
         assert!(matches!(
             decode_int_bytes(&bad_hash),
-            Err(VMError::PointerAbiFault(
+            Err(VMError::Trap(VmTrap::PointerAbiFault(
                 PointerAbiFaultV1::PayloadHashMismatch
-            ))
+            )))
         ));
     }
     #[test]

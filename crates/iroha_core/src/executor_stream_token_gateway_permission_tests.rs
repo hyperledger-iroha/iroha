@@ -227,7 +227,7 @@ mod stream_token_gateway_permission_tests {
                 panic!("expected rejected genesis output: {error:?}");
             };
             assert!(matches!(
-                rejection.reason.as_ref(),
+                rejection.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     ValidationFail::NotPermitted(message)
                 ) if message.contains("configured post-genesis scope")

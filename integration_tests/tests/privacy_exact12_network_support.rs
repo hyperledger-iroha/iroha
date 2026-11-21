@@ -69,7 +69,7 @@ fn exact_applied_transaction_visible(
         "entrypoint hash matched different transaction bytes"
     );
     ensure!(
-        committed.result().0.is_ok(),
+        committed.result().is_ok(),
         "exact-12 catch-up sentinel is visible but finalized as rejected"
     );
     Ok(true)

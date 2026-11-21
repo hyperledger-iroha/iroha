@@ -242,6 +242,7 @@ fn archive_publication_deferral(original: PublicationDeferral) -> PublicationErr
 
 /// One State publication awaiting durable archive capture and its remaining notifications.
 struct PendingCommit {
+    event_block: iroha_data_model::block::SharedSignedBlock,
     telemetry_origin: CommitTelemetryOrigin,
     native_contexts: PreparedNativeContext,
     header: iroha_sumeragi::message::BlockHeader,
@@ -3551,6 +3552,7 @@ impl<'s> Worker<'s> {
             unreachable!("original prepared owner")
         };
         self.pending_commit = Some(PendingCommit {
+            event_block: committed.shared().clone(),
             telemetry_origin: live
                 .telemetry_origin
                 .expect("original prepared telemetry origin"),
@@ -3677,6 +3679,7 @@ impl<'s> Worker<'s> {
         }
         self.admit_scheduled(height.saturating_add(1));
         self.admit_scheduled(height.saturating_add(2));
+        self.state.publish_c10_event_block(pending.event_block);
         for event in pending.events {
             let _ = self.context.events.send(event);
         }

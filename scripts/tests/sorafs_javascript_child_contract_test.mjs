@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
-import { inspectRegistration, parseSuiteSource, descendantNodes, printed } from "../../javascript/iroha_js/test/helpers/sorafsNativeSuiteContract.js";
+import { inspectRegistration, parseSuiteSource, descendantNodes } from "../../javascript/iroha_js/test/helpers/sorafsNativeSuiteContract.js";
 const require = createRequire(new URL("../../javascript/iroha_js/package.json", import.meta.url));
-const ts = require("typescript");
+const ts = require("typescript/unstable/ast");
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const contract = JSON.parse(read("../../javascript/iroha_js/test/fixtures/sorafs_native_suite_contract_v1.json"));
 const session = read("../sorafs_javascript_child_session.mjs"), bootstrap = read("../sorafs_javascript_child.mjs");
@@ -70,7 +70,7 @@ function checkBootstrap(text) {
   const options=fields(runs[0].arguments[0],source);assert.deepEqual([...options.keys()],["files","isolation","concurrency"]);
   assert.equal(options.get("files").getText(source),"[owner.entryPath]");assert.equal(options.get("isolation").text,"none");assert.equal(options.get("concurrency").kind,ts.SyntaxKind.FalseKeyword);
   const loops=descendantNodes(source,ts.isForOfStatement);assert.equal(loops.length,1);assert.ok(loops[0].awaitModifier);
-  assert.equal(loops[0].expression.getText(source),"stream");assert.equal(printed(loops[0].statement,source),"owner.accept(event);");
+  assert.equal(loops[0].expression.getText(source),"stream");assert.equal(loops[0].statement.getText(source),"owner.accept(event);");
   const calls=(name)=>descendantNodes(source,(n)=>ts.isCallExpression(n)&&n.expression.getText(source)===name);
   for(const name of ["prepareChild","owner.finishAfterEof","owner.close","process.stdout.write"])assert.equal(calls(name).length,1);
   assert.ok(calls("prepareChild")[0].pos<runs[0].pos);
@@ -83,7 +83,7 @@ test("closed actual TestsStream bootstrap consumes EOF before completion and emi
 test("fixed entry has no injected subject or second owner reconstruction",()=>{
   const entry=parse(read("../sorafs_javascript_child_entry.mjs"));assert.equal(entry.statements.length,2);
   const [imp,call]=entry.statements;assert.ok(ts.isImportDeclaration(imp));assert.equal(imp.moduleSpecifier.text,"./sorafs_javascript_child_session.mjs");
-  assert.equal(printed(call,entry),"await registerPreparedChild();");
+  assert.equal(call.getText(entry),"await registerPreparedChild();");
   const source=parse(session), exports=source.statements.filter((n)=>n.modifiers?.some((m)=>m.kind===ts.SyntaxKind.ExportKeyword));
   assert.deepEqual(exports.map((n)=>[n.name.text,n.parameters.map((p)=>p.name.getText(source))]),[["prepareChild",["expectedInputSha256"]],["registerPreparedChild",[]]]);
 });
@@ -118,7 +118,7 @@ test("namespace retention uses SameValue on each original captured export",()=>{
     const source=parse(text), rows=descendantNodes(source,(n)=>ts.isCallExpression(n)&&n.expression.getText(source)==="row.exports.every");
     assert.equal(rows.length,1);assert.equal(rows[0].arguments.length,1);
     const predicate=rows[0].arguments[0];assert.ok(ts.isArrowFunction(predicate));
-    assert.equal(printed(predicate,source),"([key, value]) => Object.is(row.module[key], value)");
+    assert.equal(predicate.getText(source),"([key, value]) => Object.is(row.module[key], value)");
   }
   check(session);const changed=session.replace("Object.is(row.module[key], value)","row.module[key] === value");
   assert.notEqual(changed,session);assert.throws(()=>check(changed));

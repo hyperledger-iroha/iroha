@@ -855,6 +855,10 @@
     "scope": "out",
     "reason": "Kernel registration and completion of runtime obligations, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_obligation.rs, specs/live_runtime_upgrades.md section 7.2). An owner commits the exact instructions that complete its obligation; it verifies no proof and carries no ZK or FHE relation."
    },
+   "ivm_c10": {
+    "scope": "out",
+    "reason": "The governed C10 host addition registers signed contract provenance and trigger descriptors. The Core handlers authenticate the selected artifact, manifest and registration authority. Registration uses native signature and identity checks."
+   },
    "runtime_deferred": {
     "scope": "out",
     "reason": "Explicit current-binding consent for a new deferred trigger registration or multisig proposal, the `iroha.runtime.deferred_consent.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_deferred.rs, crates/iroha_core/src/runtime/deferred_consent.rs). The signer opts into execution-time bindings in an ordinary signed transaction; it verifies no proof and carries no ZK or FHE relation."
@@ -954,6 +958,10 @@
    "kagemusha_wallet": {
     "scope": "out",
     "reason": "KAGEMUSHA offline monetary-authority wallet ledger and proof package are owned by the separate KAGEMUSHA design; A.1 only tests mixed KAGEMUSHA blocks."
+   },
+   "spartan": {
+    "scope": "out",
+    "reason": "KAGEMUSHA owns the governed Spartan verifier installation, wallet activation and Unload settlement in crates/iroha_core/src/kagemusha_wallet_v1/spartan.rs. These operations share the kagemusha_wallet family's scope."
    },
    "register_dataspace_asset_definition": {
     "scope": "out",
@@ -5019,7 +5027,8 @@
     }
    ],
    "kotodama": {"binding": "none"},
-   "routes": [],
+   "routes": ["governance.anonymous_parliament.credential.draft"],
+   "routes_note": "The credential draft takes RegisterParliamentCredentialV1 directly in its NoritoJson extractor and frames that typed input. The handler body contains the conversion to InstructionBox. The type name appears in its signature.",
    "sdk": {
     "rust": [],
     "kotlin_java_android": [
@@ -5060,7 +5069,8 @@
    },
    "owner_tasks": ["P.8"],
    "note": "Executes only as the sole instruction of a direct signed input under the network's candidate-testing selection; a certified test chain commits it through the executor, which arms the input's original, and refuses it beside another instruction. The credential record keeps `(C, auth)` and the locator of that input; the 160,148-byte proof stays in the input. Until a change set activates the addition the wire ID resolves as `definition_inactive`.",
-   "native_bridges": []
+   "native_bridges": [],
+   "torii": ["crates/iroha_torii/src/gov/anonymous_drafts.rs"]
   },
   {
    "id": "governance::CastZkBallot",
@@ -5424,7 +5434,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_AXT_COMMIT: u32 = 0xB2;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_commit( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/block.rs", "symbol": "pub fn validate_axt_envelopes<'block>("}
     ]
@@ -5462,7 +5472,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "AxtProofAdmission::StandaloneUnanchored,"},
      {"path": "crates/iroha_core/src/block.rs", "symbol": "fastpq_prover::verify_axt_proof_envelope_with_outer_metadata("}
@@ -5509,7 +5519,7 @@
      {"path": "crates/ivm_abi/src/syscalls.rs", "symbol": "pub const SYSCALL_AXT_STAGE_ANCHORED_SPEND: u32 = 0xB5;"},
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-      "symbol": "fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+      "symbol": "fn handle_axt_stage_anchored_spend( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
      },
      {"path": "crates/iroha_core/src/block.rs", "symbol": ".find(|envelope| !envelope.spends.is_empty())"}
     ]
@@ -7605,7 +7615,7 @@
     "kotodama_builtins": ["AxtBegin"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_begin( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_BEGIN"},
     "operation": "axt.envelope"
@@ -7618,7 +7628,7 @@
     "kotodama_builtins": ["AxtTouch"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_touch( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_TOUCH"},
     "operation": "axt.envelope"
@@ -7631,7 +7641,7 @@
     "kotodama_builtins": ["AxtCommit"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_commit( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_COMMIT"},
     "relation": "fastpq.axt",
@@ -7645,7 +7655,7 @@
     "kotodama_builtins": ["VerifyDsProof"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/VERIFY_DS_PROOF"},
     "relation": "fastpq.axt",
@@ -7659,7 +7669,7 @@
     "kotodama_builtins": ["StageAnchoredSpend"],
     "host": {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_stage_anchored_spend( &mut self, vm: &dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/AXT_STAGE_ANCHORED_SPEND"},
     "relation": "fastpq.axt",
@@ -7757,6 +7767,7 @@
    "/v1/gov/ballots/",
    "/v1/gov/parliament/",
    "/v1/gov/anonymous-ballots",
+   "/v1/gov/anonymous-parliament/",
    "/v1/gov/tally/",
    "/v1/debug/axt/",
    "/v1/debug/witness",
@@ -8910,8 +8921,12 @@
       {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "via": ["route_path"]}
      ],
      "swift": [],
-     "javascript": [],
-     "python": [],
+     "javascript": [
+      {"path": "javascript/iroha_js/src/anonymousBallot.js", "via": ["route_path"]}
+     ],
+     "python": [
+      {"path": "python/iroha_torii_client/anonymous_ballot.py", "via": ["route_path"]}
+     ],
      "csharp": []
     }
    },
@@ -8970,6 +8985,48 @@
      "python": [],
      "csharp": []
     }
+   },
+   {
+    "id": "governance.anonymous_parliament.attempt.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/attempts/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Frame one signed-attempt instruction for exact proposal content and a bounded retry sequence.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn attempt("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/attempts/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
+   },
+   {
+    "id": "governance.anonymous_parliament.credential.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/credentials/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Frame the candidate credential registration, including its public registration proof, for the binding seat.",
+    "operations": ["anonymous_ballot::RegisterParliamentCredentialV1"],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn credential("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/credentials/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
+   },
+   {
+    "id": "governance.anonymous_parliament.transition.draft",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-parliament/transitions/draft",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Validate and frame the requested signed transition against an anonymous Parliament attempt.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/gov/anonymous_drafts.rs", "symbol": "fn transition("},
+    "sdk_literal": "/v1/gov/anonymous-parliament/transitions/draft",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []}
    },
    {
     "id": "governance.tally.read",
@@ -10354,7 +10411,7 @@
     {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "pub fn set_verifying_keys("},
     {
      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-     "symbol": "fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {"
+     "symbol": "fn handle_axt_verify_ds_proof( &mut self, vm: &mut dyn ivm::host::SyscallContext, ) -> Result<u64, ivm::VMError> {"
     },
     {"path": "crates/iroha_core/src/block.rs", "symbol": "pub fn validate_axt_envelopes<'block>("}
    ],
@@ -13646,6 +13703,12 @@
    },
    {
     "family": "swift",
+    "path": "IrohaSwift/Sources/IrohaSwift/AnonymousBallotClientV1.swift",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
+   },
+   {
+    "family": "swift",
     "path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift",
     "product": "soracloud_fhe",
     "symbols": ["decryptNote", "decryptNoteWithOwnerTag"]
@@ -13907,6 +13970,12 @@
    },
    {
     "family": "javascript",
+    "path": "javascript/iroha_js/anonymous-ballot.d.ts",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
+   },
+   {
+    "family": "javascript",
     "path": "javascript/iroha_js/index.d.ts",
     "product": "axt",
     "symbols": ["buildAxtDescriptor", "computeAxtBinding", "normalizeAxtRejectContext"]
@@ -14078,6 +14147,12 @@
     "path": "javascript/iroha_js/private-settlement.d.ts",
     "product": "atomic_settlement",
     "symbols": ["createPrivateSettlementHost"]
+   },
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/anonymousBallot.js",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
    },
    {
     "family": "javascript",
@@ -15026,6 +15101,12 @@
     "path": "python/iroha_python/src/iroha_python/tx.py",
     "product": "zk_x509",
     "symbols": ["prepare_privacy_zk_x509_identity_presentation_action_v1"]
+   },
+   {
+    "family": "python",
+    "path": "python/iroha_torii_client/anonymous_ballot.py",
+    "product": "voting",
+    "symbols": ["get_anonymous_ballot_board", "get_anonymous_parliament_attempt", "submit_anonymous_ballot"]
    },
    {
     "family": "python",

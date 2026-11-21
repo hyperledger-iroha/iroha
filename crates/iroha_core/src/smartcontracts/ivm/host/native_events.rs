@@ -2,11 +2,12 @@
 
 use super::*;
 use iroha_data_model::smart_contract::event::{ContractEmissionV1, ContractEventDescriptorV1};
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn event_context<'a>(
         &'a self,
-        vm: &'a IVM,
+        vm: ivm::host::SyscallQuote<'a>,
     ) -> Result<
         (
             &'a ContractRuntimeExecutionContext,
@@ -21,53 +22,54 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             self.execution_class,
             HostExecutionClass::Contract | HostExecutionClass::LocalContractDebug
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        for register in [10, 11, 12] {
+        let ordinal = vm.public_register(10)?;
+        for register in [11, 12] {
             vm.ensure_public_register(register)?;
         }
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let authorization = self
             .current_entrypoint_authorization
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         if context.contract_address != authorization.contract_address
             || context.entrypoint != authorization.entrypoint
             || self.authority != authorization.authority
             || Hash::prehashed(vm.code_hash()) != authorization.code_hash
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         let interface = vm
             .contract_interface()
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         let (entrypoint, descriptor) = interface
             .entrypoints
             .iter()
             .enumerate()
             .find(|(_, entrypoint)| entrypoint.name == authorization.entrypoint)
-            .ok_or(ivm::VMError::InvalidMetadata)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::InvalidMetadata))?;
         if matches!(
             descriptor.kind,
             iroha_data_model::smart_contract::manifest::EntryPointKind::View
         ) {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        let event = u32::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
+        let event = u32::try_from(ordinal).map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let definition = interface
             .events
             .get(event as usize)
-            .ok_or(ivm::VMError::DecodeError)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::DecodeError))?;
         if !definition.validate() {
-            return Err(ivm::VMError::InvalidMetadata);
+            return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
         }
         Ok((
             context,
             authorization,
-            u32::try_from(entrypoint).map_err(|_| ivm::VMError::InvalidMetadata)?,
+            u32::try_from(entrypoint).map_err(|_| ivm::VMError::Trap(VmTrap::InvalidMetadata))?,
             event,
             definition,
         ))
@@ -75,20 +77,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 
     /// Preparation authenticates only signed descriptors; recursive guest data
     /// traversal runs after the interpreter reserves the available syscall gas.
-    pub(super) fn quote_contract_event(&self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn quote_contract_event(
+        &self,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         let _ = self.event_context(vm)?;
-        ivm::host::reserve_available_syscall_gas_at_least(vm, 32)
+        vm.reserve_available_syscall_gas_at_least(32)
     }
 
-    pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
-        let (_, _, _, _, definition) = self.event_context(vm)?;
-        let words = usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+    pub(super) fn emit_contract_event(
+        &mut self,
+        vm: &dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
+        let (_, _, _, _, definition) = self.event_context(vm.quote())?;
+        let words = usize::try_from(vm.public_register(12)?)
+            .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?;
         let gas = ivm::value_record::quote_value_record(
             vm,
             &definition.payload_type,
-            vm.register(11),
+            vm.public_register(11)?,
             words,
-            vm.remaining_gas(),
+            vm.quote().remaining_gas(),
         )?
         .gas;
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -96,9 +105,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             // Finish any earlier instruction batch before inserting this emission.
             self.flush_pending_fastpq_batch();
             self.queued.try_reserve(1).map_err(|_| {
-                ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
+                ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ivm::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
-            let (context, authorization, entrypoint, event, definition) = self.event_context(vm)?;
+            let (context, authorization, entrypoint, event, definition) =
+                self.event_context(vm.quote())?;
             let emission = contract_event::capture(
                 vm,
                 self.prepared_contract_cache.execution_budget(),
@@ -108,14 +120,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 event,
                 &authorization.authority,
                 definition,
-                vm.register(11),
-                usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?,
+                vm.public_register(11)?,
+                usize::try_from(vm.public_register(12)?)
+                    .map_err(|_| ivm::VMError::Trap(VmTrap::DecodeError))?,
             )?;
             if !self.try_reserve_serialized_output(&emission.value, 1) {
                 self.ensure_output_budget()?;
-                return Err(ivm::VMError::ExecutionDeferred(
+                return Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::ExecutionDeferral::LocalInvariantViolation,
-                ));
+                )));
             }
             self.queued.push(QueuedEffect {
                 payload: QueuedEffectPayload::Emission(emission),
@@ -158,24 +171,25 @@ impl HostExecutionArtifacts {
             dataspace,
             emission.code_hash,
         );
-        let manifest = world.contract_manifests().get(&artifact).ok_or_else(|| {
+        let manifest = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            world, &artifact,
+        )
+        .ok_or_else(|| {
             ValidationFail::NotPermitted("contract emission has no current signed manifest".into())
         })?;
-        let entrypoint = manifest
-            .entrypoints
-            .as_deref()
-            .and_then(|entries| entries.get(emission.entrypoint as usize))
+        let (entrypoint_name, kind) = manifest
+            .entrypoint(emission.entrypoint as usize)
             .ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "contract emission has an invalid entrypoint ordinal".into(),
                 )
             })?;
-        if entrypoint.name.as_ref() != authorization.entrypoint
+        if entrypoint_name != authorization.entrypoint
             || matches!(
-                entrypoint.kind,
+                kind,
                 iroha_data_model::smart_contract::manifest::EntryPointKind::View
             )
-            || manifest.events.get(emission.event as usize) != Some(&emission.definition)
+            || manifest.events().get(emission.event as usize) != Some(&emission.definition)
         {
             return Err(ValidationFail::NotPermitted(
                 "contract emission differs from its signed declaration".into(),

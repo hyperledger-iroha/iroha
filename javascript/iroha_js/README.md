@@ -1312,20 +1312,28 @@ rejected in the configured Torii base URL. Request and polling deadlines cover
 headers, response-body reads/cancellation, and asynchronous status callbacks.
 Requests omit ambient credentials and referrers and reject redirects.
 
-The built-in Connect path keeps session proof keys separate from transaction
-signing keys. With the native account owner, Connect verifies the approval proof and returns its
-`accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
-`walletPublicKey` authenticates the Connect session proof; it is not the
-Ed25519 transaction key. Each approval consumer receives an immutable wrapper
-with detached proof-byte copies, so one consumer cannot rewrite verified state
-seen by another. On this built-in path, `NexusAppClient.awaitApproval()` accepts
-only that exact data-only `Uint8Array` proof shape, projects `accountId` into the
-Nexus approval state, and derives the Ed25519 controller key from the canonical
-I105 account. An injected `connectTransport.awaitApproval` instead returns the
-custom `{accountId, signingPublicKey?}` approval shape and must not forward the
-browser proof's `walletPublicKey`, `signature`, or a replacement `session`.
-The facade enriches a copy of the exact caller session after binding the
-approval key to the account's Ed25519 controller. For
+The built-in browser Connect session returns a verified approval with five
+required fields and one optional field. `accountId` names the wallet account.
+`networkId` is the SDK's branded `NetworkId`. The three byte fields are the
+32-byte Ed25519 controller `signingPublicKey`, the 32-byte X25519 session
+`walletPublicKey`, and the 64-byte Ed25519 approval `signature`. Each consumer
+receives a frozen wrapper with its own `Uint8Array` copy of each byte field.
+When the session uses Torii's native account inspector, it also returns the
+inspector's opaque `nativeIdentity`.
+
+On the built-in path, `NexusAppClient.awaitApproval()` checks the exact
+data-only proof fields and binds the network to the session preview or the
+configured network when supplied. If the approval includes `nativeIdentity`,
+the facade verifies it against the approved account, network and configured
+Connect or Torii endpoint. Native account admission checks the approved Ed25519
+signing key against the canonical I105 account for the configured chain
+discriminant. The facade adds this account and signing key to a copy of the
+caller's session.
+
+An injected `connectTransport.awaitApproval` returns only the account and
+optional signing key as `{ accountId, signingPublicKey? }`. The caller's
+session owns the transport state and the native account owner checks its
+Ed25519 controller. For
 `finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
 rejected before finalization, and the signal is checked again after
 finalization and capability capture but before Torii submission. Wait-enabled

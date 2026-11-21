@@ -441,6 +441,24 @@ impl PreparedPublicKeyDecode {
         .map(|(owner, _)| owner)
     }
 
+    /// Validate one exact canonical key payload and visit its borrowed components.
+    ///
+    /// Uses the ordinary compact-key parser and validity relation with fixed stack scratch.
+    /// The callback cannot retain the temporary payload. No compact owner, alignment copy,
+    /// decode scope, or physical allocation is created; original enclosing limits stay active.
+    ///
+    /// # Errors
+    /// Returns the original framing, validity, resource, or callback error unchanged.
+    pub fn with_validated_payload<R, E>(
+        bytes: &[u8],
+        visit: impl FnOnce(crate::Algorithm, &[u8]) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<Error>,
+    {
+        public_key_decode::with_decoded_compact(bytes, true, visit).map(|(value, _)| value)
+    }
+
     /// Recheck canonical payload boundaries against an already-retained public key.
     ///
     /// The sole compact parser, validator and ordinary logical backing admission

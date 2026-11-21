@@ -97,3 +97,23 @@ def test_physical_private_tmp_root_preserves_canonical_path_guards():
             repository, alias, repository=repository)
         assert "must be outside the reviewed Iroha source tree" in evaluate(
             repository, artifact, repository=repository, local_unit=False)
+
+
+def test_private_integration_lane_is_contained_and_developer_only(workspace):
+    lanes = ROOT / "target/norito-bridge-local/lanes"
+    lanes.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=lanes) as temporary:
+        lane = Path(temporary)
+        artifacts = lane / "artifacts"
+        artifacts.mkdir()
+        assert "NoritoBridge.xcframework is required at" in evaluate(workspace, artifacts, local_unit=False)
+        refused = "must be outside the reviewed Iroha source tree"
+        assert refused in evaluate(workspace, artifacts, local_unit=False, MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT="1")
+        nested = artifacts / "nested/artifacts"
+        nested.mkdir(parents=True)
+        assert refused in evaluate(workspace, nested, local_unit=False)
+        alias = lane / "aliased-artifacts"
+        alias.symlink_to(artifacts, target_is_directory=True)
+        assert "does not traverse a symbolic link" in evaluate(workspace, alias, local_unit=False)
+        lane.chmod(0o755)
+        assert refused in evaluate(workspace, artifacts, local_unit=False)

@@ -316,7 +316,10 @@ fn check_independent_selected_receipts(
             intent(original),
             &finalized.header(),
             evidence.entrypoint(),
-            evidence.result(),
+            evidence
+                .result()
+                .baseline()
+                .expect("baseline maximum payment evidence"),
         )
         .unwrap();
         assert_eq!(
@@ -332,7 +335,10 @@ fn check_independent_selected_receipts(
                 intent(&originals[1 - index]),
                 &finalized.header(),
                 evidence.entrypoint(),
-                evidence.result()
+                evidence
+                    .result()
+                    .baseline()
+                    .expect("baseline maximum payment evidence")
             )
             .is_err()
         );

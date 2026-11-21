@@ -8,16 +8,15 @@ index before mutation, duplicate inserts do not change the count, and iteration
 visits each set bit once in ascending leaf order. Unused final-word bits are
 always zero. Clearing or copying same-geometry words cannot allocate.
 
-The funded constructor admits the image, the Merkle storage, and both complete
-bitmap layouts before allocating the image and the bitmaps; the Merkle storage's
-credit stays with the image, unspent, until its first root or path request. Each
-bitmap consumes original
-`ExecutionMemoryLease` credit into its `ExecutionBuffer`; no replacement budget
-or unchecked capacity growth exists. A local image instead uses the existing
-`OwnedAllocation` cache owner. Both variants retain and activate their original
-allocation charges, and the final backing drop releases the charge. The image's
-scratch estimate excludes bitmap bytes because their owners charge them once.
-Snapshot plans use full bitmap geometry regardless of the current set-bit count.
+The funded constructor admits the image and both bitmap layouts. Each bitmap
+consumes its original `ExecutionMemoryLease` into an `ExecutionBuffer`. The
+first root or path request admits the complete Merkle storage from the image's
+original execution pool. A refused request returns that credit and preserves the
+pending leaves for a retry. A warm runtime retains its allocated tree across a
+same-geometry reset. Dropping its final backing releases the tree's charge.
+Local images use the `OwnedAllocation` cache owner. The scratch estimate excludes
+bitmap bytes because the two backings charge them once. Snapshot plans use full
+bitmap geometry regardless of how many bits are set.
 
 The incremental memory commit passes the original bitmap directly to
 `ByteMerkleTree`. It locks the canonical cache before leaves, matching the root

@@ -160,6 +160,17 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     fenced = true; closed = true
     return selected
   }
+  /// Open the signed program owner Native preinstalled from its carrier. No program, manifest
+  /// or signature bytes are supplied: Native answers only from the originals it authenticated
+  /// at installation. An owner without them refuses and stays retained for its ordinary open.
+  /// Worker-only. Success transfers this same installed lease once.
+  public func openInstalledSpartan() throws -> KagemushaSpartanRuntimeV1 {
+    condition.lock(); defer { condition.unlock() }
+    guard !fenced, admission.canTransferToEnrollment else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
+    let selected = try runtime.openInstalledSpartan()
+    fenced = true; closed = true
+    return selected
+  }
   /// Retry ordinary refusal with the same original frames, Native Pending and exact signature.
   /// Explicit Task cancellation retires custody; successful admission transfers it once.
   public func open(originals: KagemushaWalletOpenOriginalsV1,

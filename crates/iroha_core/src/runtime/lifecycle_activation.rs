@@ -1,7 +1,7 @@
 //! Governed lifecycle upgrades and committed activation provenance.
 
 use super::*;
-use crate::state::WorldReadOnly;
+use crate::state::{StorageReadOnly, WorldReadOnly};
 use iroha_data_model::{
     NetworkId,
     runtime::{
@@ -13,7 +13,7 @@ use iroha_data_model::{
     },
 };
 
-/// Prepare an ordinary Parliament change set without changing State.
+/// Prepare an ordinary governed lifecycle change set for the authenticated root without changing State.
 ///
 /// Reads the current selection, so already-installed owner cutovers and service
 /// definitions survive. Governance notice, provenance, unanimous release support
@@ -26,14 +26,18 @@ pub fn prepare_lifecycle_change_set(
     effective_height: u64,
     qualification: [u8; 32],
 ) -> Result<ChangeSetV1, CatalogError> {
-    from_selection(
+    let change = from_selection(
         release_catalog()?.clone(),
         world.runtime_selection(),
         &super::change_set::PublishedDefinitions(world.runtime_definitions()),
         network,
         effective_height,
         qualification,
-    )
+    )?;
+    super::draft_scope::bind(world, network, change).map_err(|error| CatalogError::Addition {
+        module: "trigger_lifecycle".into(),
+        reason: error.to_string(),
+    })
 }
 
 pub(super) fn from_selection(
@@ -112,6 +116,136 @@ pub struct CommittedLifecyclePolicy {
     pub activation: Option<(ChangeSetId, std::num::NonZeroU64)>,
 }
 
+struct FoundedLineage {
+    selection: SelectionId,
+    root: RootScopeV1,
+    lifecycle_enabled: bool,
+}
+
+/// Validate the retained foundation of an already authenticated World. This does not turn an
+/// ordinary parameter into genesis authority; startup and execution own that authentication.
+/// World exposes no chain label, so its native instance remains bound by those original owners.
+/// Keep new decoder refusals typed until the existing public string-returning query boundary.
+fn founded_lineage(
+    world: &impl WorldReadOnly,
+    network: NetworkId,
+    catalog: &ReleaseCatalog,
+) -> Result<FoundedLineage, crate::execution_attempt::ExecutionAttemptError<String>> {
+    use crate::execution_attempt::{
+        ExecutionAttemptError, canonical_decode_attempt_error, json_decode_attempt_error,
+    };
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope,
+        runtime::{
+            child_admin::{ChildAdminErrorV1, foundation::ChildRuntimeFoundationV1},
+            definition::SELECTION_ID_DOMAIN,
+        },
+    };
+    let invalid = |reason: &str| ExecutionAttemptError::Rejected(reason.to_owned());
+    let model_error = |error| match error {
+        ChildAdminErrorV1::Resource(original) => {
+            canonical_decode_attempt_error(original, |error| error.to_string())
+        }
+        ChildAdminErrorV1::CryptoUnavailable(original) => ExecutionAttemptError::Deferred(
+            ivm::ExecutionDeferral::CryptoImplementationUnavailable(original).into(),
+        ),
+        ChildAdminErrorV1::Json(original) => {
+            json_decode_attempt_error(original, |error| error.to_string())
+        }
+        error => ExecutionAttemptError::Rejected(error.to_string()),
+    };
+    let scope = crate::sumeragi::lanes::routing::read_routing_root_scope(world)
+        .map_err(ExecutionAttemptError::Deferred)?;
+    let parameter = world
+        .parameters()
+        .custom()
+        .get(ChildRuntimeFoundationV1::parameter_id());
+    let authority = world.runtime_child_admin_state().as_ref();
+    let Some(SumeragiRootScope::Dataspace {
+        parent_network_id,
+        dataspace_id,
+    }) = scope
+    else {
+        if authority.is_some() {
+            return Err(invalid("child foundation lacks immutable child root scope"));
+        }
+        // An ordinary global custom value with this name is inert. The new foundation
+        // marker acquires meaning only together with the signed child root and its state.
+        return Ok(FoundedLineage {
+            selection: catalog.baseline_id,
+            root: RootScopeV1::Universal,
+            lifecycle_enabled: trigger_lifecycle_enabled(&catalog.baseline)
+                .map_err(|error| invalid(&error.to_string()))?,
+        });
+    };
+    let parameter =
+        parameter.ok_or_else(|| invalid("child root lacks its signed foundation recipe"))?;
+    let authority =
+        authority.ok_or_else(|| invalid("child root lacks its founded administrator state"))?;
+    let recipe = ChildRuntimeFoundationV1::from_custom_parameter(parameter).map_err(model_error)?;
+    authority.validate().map_err(model_error)?;
+    if authority.root.network != network
+        || authority.root.parent_network != parent_network_id
+        || authority.root.dataspace != dataspace_id
+        || authority.policy.revision < recipe.policy.revision
+        || (authority.policy.revision == recipe.policy.revision
+            && authority.policy != recipe.policy)
+        || authority.next_nonce < authority.policy.revision - recipe.policy.revision
+    {
+        return Err(invalid(
+            "child foundation and committed administrator identity disagree",
+        ));
+    }
+    let (selection, definitions) = catalog
+        .child_foundation()
+        .map_err(|error| invalid(&error.to_string()))?;
+    let bytes = norito::core::classify_decode_attempt(|| norito::encode_canonical(&selection))
+        .map_err(|original| canonical_decode_attempt_error(original, |error| error.to_string()))?;
+    let identity =
+        SelectionId(iroha_crypto::Hash::new_from_chunks(&[SELECTION_ID_DOMAIN, &bytes]).into());
+    if identity != recipe.selection
+        || definitions
+            .iter()
+            .any(|(id, expected)| world.runtime_definitions().get(id) != Some(expected))
+    {
+        return Err(invalid(
+            "child foundation differs from its compiled immutable definitions",
+        ));
+    }
+    let lifecycle_enabled =
+        trigger_lifecycle_enabled(&selection).map_err(|error| invalid(&error.to_string()))?;
+    // This foundation adds obligation/checkpoint storage and administration, not trigger
+    // lifecycle execution. Enabling that execution still needs its own governed boundary.
+    if lifecycle_enabled {
+        return Err(invalid(
+            "child foundation unexpectedly enables trigger lifecycle",
+        ));
+    }
+    Ok(FoundedLineage {
+        selection: identity,
+        root: RootScopeV1::DataSpace(dataspace_id),
+        lifecycle_enabled,
+    })
+}
+
+/// Validate retained child founding data after the caller authenticated its complete native
+/// root instance. This preserves original decoder refusals and never admits a universal root.
+pub(crate) fn validate_child_foundation(
+    world: &impl WorldReadOnly,
+    network: NetworkId,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let catalog =
+        release_catalog().map_err(|error| ExecutionAttemptError::Rejected(error.to_string()))?;
+    let foundation = founded_lineage(world, network, catalog)?;
+    if !matches!(foundation.root, RootScopeV1::DataSpace(_)) {
+        return Err(ExecutionAttemptError::Rejected(
+            "administrator authority requires an authenticated child foundation".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Read the activated change-set lineage back to the founded runtime selection.
 /// Pending, lapsed and cancelled proposals never select a boundary. A selected
 /// successor without its original committed activation record fails closed.
@@ -124,15 +258,17 @@ pub fn committed_policy(
     network: NetworkId,
     height: u64,
 ) -> Result<CommittedLifecyclePolicy, String> {
-    use crate::state::StorageReadOnly;
     let catalog = release_catalog().map_err(|error| error.to_string())?;
+    // This existing read-only public API returns diagnostic text. The private foundation
+    // reader preserves original local refusals; execution must not use this string as rejection.
+    let foundation = founded_lineage(world, network, catalog).map_err(|error| error.to_string())?;
     let selected = world.runtime_selection();
     let selection = selected.id().map_err(|error| error.to_string())?;
     let active = trigger_lifecycle_enabled(selected).map_err(|error| error.to_string())?;
     let mut cursor = selection;
     let mut visited = std::collections::BTreeSet::new();
     let mut lineage = Vec::new();
-    while cursor != catalog.baseline_id {
+    while cursor != foundation.selection {
         if !visited.insert(cursor) {
             return Err("cyclic committed runtime activation lineage".into());
         }
@@ -141,6 +277,9 @@ pub fn committed_policy(
                 && record.change_set.successor == cursor
         });
         let Some((id, record)) = candidates.next() else {
+            if foundation.root != RootScopeV1::Universal {
+                return Err("selected child runtime lacks committed activation provenance".into());
+            }
             // The certified repair boundary selected its successor in a transaction overlay. Its
             // retained certificate is the provenance of that one step, which changes no services.
             let repair =
@@ -160,7 +299,7 @@ pub fn committed_policy(
             unreachable!("filtered activated records")
         };
         if record.change_set.network != network
-            || record.change_set.root != RootScopeV1::Universal
+            || record.change_set.root != foundation.root
             || record.change_set.id().map_err(|error| error.to_string())? != *id
             || activated_height != record.change_set.effective_height
             || activated_height < 2
@@ -171,8 +310,7 @@ pub fn committed_policy(
         lineage.push((*id, activated_height, &record.change_set));
         cursor = record.change_set.predecessor;
     }
-    let mut enabled =
-        trigger_lifecycle_enabled(&catalog.baseline).map_err(|error| error.to_string())?;
+    let mut enabled = foundation.lifecycle_enabled;
     let mut activation = None;
     let mut previous_order = None;
     for (id, activated_height, change) in lineage.into_iter().rev() {

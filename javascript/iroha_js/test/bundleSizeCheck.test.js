@@ -377,6 +377,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(listExplicitBrowserExports(pkg), [
+    { target: "./dist/anonymousBallot.js", subpaths: ["./anonymous-ballot"] },
     { target: "./dist/nft.js", subpaths: ["./nft"] },
     { target: "./dist/public/address.js", subpaths: ["./address"] },
     { target: "./dist/browser.js", subpaths: ["./browser"] },
@@ -566,11 +567,11 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  // Exact observed closure includes event declarations, typed faults, durable
-  // schemas, product identities, and the two shared Norito metadata/value owners.
-  // Noble 2 removes the separate hash wrappers and shares one hashes owner
-  // with Bip39; the reviewed local module membership is unchanged.
-  assert.equal(Object.keys(result.metafile.inputs).length, 127);
+  const inputs = Object.keys(result.metafile.inputs);
+  for (const owner of ["dist/anonymousBallot.js", "dist/sccpRead.js", "dist/toriiErrorEnvelope.js"]) {
+    assert.ok(inputs.includes(owner), owner);
+  }
+  assert.equal(inputs.length, 130);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -614,9 +615,9 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 154 }],
+    ["toriiClient.js", { modules: 157 }],
     ["transactionCodec.js (browser)", { modules: 72 }],
-    ["nexusApp.js (browser)", { modules: 81 }],
+    ["nexusApp.js (browser)", { modules: 82 }],
     ["canonicalRequest.js (browser)", { modules: 45 }],
   ]);
   const { build } = await import("esbuild");
@@ -663,6 +664,9 @@ test("bundle targets retain canonical module ownership and accurate byte invento
       );
     }
     if (target.label === "toriiClient.js") {
+      for (const owner of ["src/kagemushaWalletRead.js", "src/sccpRead.js", "src/toriiErrorEnvelope.js"]) {
+        assert.ok(Object.hasOwn(result.metafile.inputs, owner), owner);
+      }
       const replicationInput = Object.keys(result.metafile.inputs).filter((input) =>
         /(?:^|[/\\])sorafsReplicationResponses\.js$/u.test(input),
       );

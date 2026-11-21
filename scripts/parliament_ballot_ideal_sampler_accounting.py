@@ -17,8 +17,8 @@ import types
 MODEL = "scripts/check_parliament_ballot_resource_accounting.py"
 # Reviewed current logical source scope. The retained earlier report remains
 # historical; this pin does not import its allocator or compiled-image claims.
-INPUT_DIGEST = "165bc9065313e3841258f35b7111c3c32cadf8dc50779aeaf8b069b93bd4f50f"
-MODEL_DIGEST = "e1b30a670c12b265170200b0fedefffcf9fbf9f0c4eb6fc171667f8c5e8c3033"
+INPUT_DIGEST = "1cfc05d5c185fb0f14b57ae07f560afff01fa4f4551b307c31a884dea161c701"
+MODEL_DIGEST = "ee1e9beef9b57bf0e578a26e1d335d670cf9157f03d84c7ece9e96b8b3a7456c"
 MAX_TRIALS = 1 << 20
 MAX_REQUESTS = 1 << 64
 ROWS = {"candidate": (33, 8, 229, 704), "comparator": (22, 6, 225, 696)}

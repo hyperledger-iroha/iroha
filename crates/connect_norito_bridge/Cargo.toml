@@ -69,6 +69,9 @@ tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 tempfile = { workspace = true }
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }

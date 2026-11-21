@@ -6,6 +6,7 @@ use iroha_data_model::smart_contract::manifest::{
     ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
 };
 use ivm::{Memory, encoding::wide as enc, instruction::wide};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use packet::Event;
 fn boolean() -> CallTypeNodeV1 {
     CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)
@@ -735,11 +736,13 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             .unwrap();
     assert!(match (
         &(vm.run_with_host_diagnostic_steps(&mut ivm::host::DefaultHost::default(), &mut recorder)),
-        &(ivm::VMError::ExecutionDeferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity))
+        &(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        )))
     ) {
         (
-            Err(ivm::VMError::ExecutionDeferred(actual_field_0)),
-            ivm::VMError::ExecutionDeferred(expected_field_0),
+            Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(actual_field_0))),
+            ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(expected_field_0)),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -1025,7 +1028,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 10000,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
                 VmTrapKind::DecodeError,
                 20,
             ),
@@ -1035,7 +1038,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 10000,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
                 VmTrapKind::DecodeError,
                 20,
             ),
@@ -1045,7 +1048,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 10000,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
                 VmTrapKind::DecodeError,
                 20,
             ),
@@ -1055,7 +1058,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 true,
                 true,
                 10000,
-                ivm::VMError::PrivacyViolation,
+                ivm::VMError::Trap(VmTrap::PrivacyViolation),
                 VmTrapKind::PrivacyViolation,
                 20,
             ),
@@ -1066,7 +1069,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 false,
                 10000,
-                ivm::VMError::ControlFlowViolation,
+                ivm::VMError::Trap(VmTrap::ControlFlowViolation),
                 VmTrapKind::ControlFlowViolation,
                 2,
             ),
@@ -1076,7 +1079,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 42,
-                ivm::VMError::OutOfGas,
+                ivm::VMError::Trap(VmTrap::OutOfGas),
                 VmTrapKind::OutOfGas,
                 12,
             ),
@@ -1086,7 +1089,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 35,
-                ivm::VMError::OutOfGas,
+                ivm::VMError::Trap(VmTrap::OutOfGas),
                 VmTrapKind::OutOfGas,
                 11,
             ),
@@ -1096,7 +1099,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 36,
-                ivm::VMError::OutOfGas,
+                ivm::VMError::Trap(VmTrap::OutOfGas),
                 VmTrapKind::OutOfGas,
                 12,
             ),
@@ -1106,7 +1109,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 43,
-                ivm::VMError::OutOfGas,
+                ivm::VMError::Trap(VmTrap::OutOfGas),
                 VmTrapKind::OutOfGas,
                 12,
             ),
@@ -1116,7 +1119,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 10000,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
                 VmTrapKind::DecodeError,
                 20,
             ),
@@ -1126,7 +1129,7 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 false,
                 true,
                 10000,
-                ivm::VMError::DecodeError,
+                ivm::VMError::Trap(VmTrap::DecodeError),
                 VmTrapKind::DecodeError,
                 20,
             ),
@@ -1167,16 +1170,21 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 matches!(
                     (&outcome, &error),
                     (
-                        Err(ivm::VMError::PrivacyViolation),
-                        ivm::VMError::PrivacyViolation
+                        Err(ivm::VMError::Trap(VmTrap::PrivacyViolation)),
+                        ivm::VMError::Trap(VmTrap::PrivacyViolation)
                     ) | (
-                        Err(ivm::VMError::AssertionFailed),
-                        ivm::VMError::AssertionFailed
+                        Err(ivm::VMError::Trap(VmTrap::AssertionFailed)),
+                        ivm::VMError::Trap(VmTrap::AssertionFailed)
                     ) | (
-                        Err(ivm::VMError::ControlFlowViolation),
-                        ivm::VMError::ControlFlowViolation
-                    ) | (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
-                        | (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+                        Err(ivm::VMError::Trap(VmTrap::ControlFlowViolation)),
+                        ivm::VMError::Trap(VmTrap::ControlFlowViolation)
+                    ) | (
+                        Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+                        ivm::VMError::Trap(VmTrap::OutOfGas)
+                    ) | (
+                        Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+                        ivm::VMError::Trap(VmTrap::DecodeError)
+                    )
                 ),
                 "jals={jals} value={value} private={private} initialized={initialized} gas={gas}: {outcome:?} != {error:?}"
             );
@@ -1519,9 +1527,12 @@ fn native_second_word_gas_failure(jals: bool, post_frame: u64) {
                 &mut ivm::host::DefaultHost::default(),
                 &mut recorder
             )),
-            &(ivm::VMError::OutOfGas)
+            &(ivm::VMError::Trap(VmTrap::OutOfGas))
         ),
-        (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+        (
+            Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+            ivm::VMError::Trap(VmTrap::OutOfGas)
+        )
     ));
     assert_eq!(recorder.records().len(), 7);
     let before_setup = initial - 8 - 9;

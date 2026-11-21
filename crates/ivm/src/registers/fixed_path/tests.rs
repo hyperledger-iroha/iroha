@@ -1,6 +1,7 @@
 //! All-register root/path parity and fixed-depth public API rejection.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::parallel::REGISTER_COUNT;
 use iroha_crypto::{Hash, MerkleProof};
 
@@ -49,11 +50,11 @@ fn fixed_register_paths_reject_outside_indices_without_changing_original_state()
     for index in [REGISTER_COUNT, usize::MAX] {
         assert!(matches!(
             registers.merkle_path(index),
-            Err(VMError::RegisterOutOfBounds)
+            Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
         ));
         assert!(matches!(
             registers.merkle_root_and_path(index),
-            Err(VMError::RegisterOutOfBounds)
+            Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
         ));
     }
     assert_eq!(registers.snapshot(), values);

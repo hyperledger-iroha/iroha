@@ -60,6 +60,15 @@ class NoritoBridgeVendoredOriginalManifestTests(unittest.TestCase):
                     seal._public_source_relative(relative)
 
 
+class NoritoBridgeAppleDebitKeyTests(unittest.TestCase):
+    def test_only_the_compiled_security_adapter_has_this_source_role(self) -> None:
+        source = "crates/connect_norito_bridge/src/kagemusha_wallet_ffi/apple_debit_key.m"
+        self.assertEqual(seal._public_source_relative(source).as_posix(), source)
+        for other in (source + ".bak", source.replace("debit_key", "secrets"), "private/" + source):
+            with self.assertRaisesRegex(RuntimeError, "not an admitted public filename|prohibited"):
+                seal._public_source_relative(other)
+
+
 class NoritoBridgeAppleFixtureDescriptorTests(unittest.TestCase):
     INPUTS = (
         "experiments/kagemusha-spartan/device/ios/NativeFixture/module.modulemap",

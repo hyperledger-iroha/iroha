@@ -29,7 +29,7 @@ OPEN_TERMS = (
 RUST_REVISION = "58cf8f9c35b355199727627d07ae34a4e2846d67"
 # Updating this pin requires reviewing the symbolic schedules against the new
 # implementation, not merely accepting changed hashes.
-REVIEWED_RUST_SOURCE_SHA256 = "b3756c955e8592372fa2d1ec8871fc5066f2a5411400ee8a5e0a924446e146ba"
+REVIEWED_RUST_SOURCE_SHA256 = "324363393751f2276632aa4c080c8872351734c74fdbd315d2942879c2cac5b4"
 PROVIDER_LAYOUT_RECEIPT = Path(
     "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout.json"
 )

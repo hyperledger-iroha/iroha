@@ -6,6 +6,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -126,5 +127,8 @@ fn create_transfer_set_nft_with_tlv() {
     vm.set_register(11, Memory::INPUT_START + key_offset);
     vm.set_register(12, Memory::INPUT_START + json_offset);
     vm.load_program(&prog_set).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

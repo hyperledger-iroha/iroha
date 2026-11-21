@@ -427,12 +427,12 @@ fn validate_registration_transaction(
         }
         let Some((_, output)) = u32::try_from(input_index)
             .ok()
-            .and_then(|index| block.network_output_at(index))
+            .and_then(|index| block.network_execution_output_at(index))
         else {
             return false;
         };
         if found
-            || output.result.is_err()
+            || output.result().is_err()
             || transaction.verify_signature().is_err()
             || transaction.network_id() != Some(&query.network_id)
             || transaction.authority() != &query.registration.registered_by

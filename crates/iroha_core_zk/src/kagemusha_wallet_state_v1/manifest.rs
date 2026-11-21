@@ -5,7 +5,7 @@ use super::*;
 #[path = "manifest/blacklists.rs"]
 mod blacklists;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_checkpoint_digest_v1 as manifest_digest;
-pub(super) use blacklists::LocalBlacklistV1;
+pub(crate) use blacklists::{LocalBlacklistV1, authenticate as authenticate_local_blacklist};
 
 #[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::Manifest")]

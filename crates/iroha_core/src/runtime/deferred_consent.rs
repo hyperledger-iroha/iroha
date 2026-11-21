@@ -202,17 +202,39 @@ pub(crate) fn prepare_trigger(
     trigger: &iroha_data_model::trigger::Trigger,
     current_bindings: bool,
 ) -> Result<Option<Record>, Error> {
-    if !enabled(tx.world.runtime_selection.canonical()).map_err(refused)? {
-        return Ok(None);
-    }
+    prepare_trigger_action(
+        tx,
+        trigger.action().executable(),
+        trigger.action().authority(),
+        current_bindings,
+    )
+}
+
+/// Resolve the exact executable reference used for consent and callback execution.
+pub(crate) fn trigger_executable_ref(
+    body: &iroha_data_model::transaction::Executable,
+) -> Result<ExecutableRef, Error> {
     use iroha_data_model::transaction::Executable;
-    let executable = match trigger.action().executable() {
+    Ok(match body {
         Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions.clone()),
         Executable::Ivm(bytecode) => ExecutableRef::Ivm(HashOf::new(bytecode)),
         Executable::ContractCall(call) => ExecutableRef::ContractCall(call.clone()),
         Executable::Batch(items) => ExecutableRef::Batch(items.clone()),
         Executable::IvmProved(_) => return Err(refused("proof-backed triggers are unavailable")),
-    };
+    })
+}
+
+/// Capture consent from the actual executable and authority of either trigger family.
+pub(crate) fn prepare_trigger_action(
+    tx: &StateTransaction<'_, '_>,
+    body: &iroha_data_model::transaction::Executable,
+    authority: &iroha_data_model::account::AccountId,
+    current_bindings: bool,
+) -> Result<Option<Record>, Error> {
+    if !enabled(tx.world.runtime_selection.canonical()).map_err(refused)? {
+        return Ok(None);
+    }
+    let executable = trigger_executable_ref(body)?;
     let (executable, wires, opaque) = executable_identity(&executable)?;
     let consent = if current_bindings {
         require_current_execution(tx)?;
@@ -221,7 +243,7 @@ pub(crate) fn prepare_trigger(
         capture(tx, wires, opaque)?
     };
     Ok(Some(Record {
-        authority: trigger.action().authority().clone(),
+        authority: authority.clone(),
         executable,
         consent,
     }))
@@ -303,6 +325,22 @@ pub(crate) fn trigger_ready(world: &impl WorldReadOnly, id: &TriggerId, height: 
     if matches!(enabled(world.runtime_selection()), Ok(false)) {
         return true;
     }
+    if let Some(stored) = world.c10_triggers().get(id) {
+        let action = &stored.trigger().action;
+        return trigger_executable_ref(action.executable())
+            .and_then(|body| {
+                let (digest, _, _) = executable_identity(&body)?;
+                checked_record(
+                    world,
+                    world.runtime_selection(),
+                    &Key::Trigger(id.clone()),
+                    action.authority(),
+                    digest,
+                    height,
+                )
+            })
+            .is_ok();
+    }
     world
         .triggers()
         .inspect_by_id(id, |action| {
@@ -326,6 +364,12 @@ pub(crate) fn trigger_ready(world: &impl WorldReadOnly, id: &TriggerId, height: 
 pub(crate) fn trigger_ready_in_transaction(tx: &StateTransaction<'_, '_>, id: &TriggerId) -> bool {
     if matches!(enabled(tx.world.runtime_selection.canonical()), Ok(false)) {
         return true;
+    }
+    if let Some(stored) = tx.world.c10_triggers.get(id) {
+        let action = &stored.trigger().action;
+        return trigger_executable_ref(action.executable())
+            .and_then(|body| trigger_expectation(tx, id, action.authority(), &body))
+            .is_ok();
     }
     tx.world
         .triggers
@@ -436,6 +480,7 @@ pub(crate) fn check_transition(
         return Ok(());
     }
     if world.triggers().ids().iter().next().is_some()
+        || world.c10_triggers().iter().next().is_some()
         || world
             .smart_contract_state()
             .iter()

@@ -5,6 +5,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::IVMHost; // bring trait into scope for `.syscall()`
 use ivm::{IVM, Memory, ProgramMetadata, syscalls};
+use ivm_abi::error::VmTrap;
 fn build_tlv<T: norito::NoritoSerialize>(type_id: u16, val: &T) -> Vec<u8> {
     use iroha_crypto::Hash;
     let payload = norito::to_bytes(val).expect("encode payload");
@@ -92,7 +93,10 @@ fn register_domain_rejects_wrong_type() {
     vm.memory.preload_input(0, &bad).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let res = host.syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }
 #[test]
 fn register_domain_rejects_corrupted_hash() {
@@ -118,5 +122,8 @@ fn register_domain_rejects_corrupted_hash() {
     vm.memory.preload_input(0, &blob).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let res = host.syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }

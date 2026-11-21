@@ -24,8 +24,19 @@ fn two_heads(
     KagemushaWalletSlotIdV1,
     [[u8; 32]; 2],
 ) {
-    let (device, f, slot, bootstrap) =
-        bootstrapped_device(KagemushaWalletAnchorPolicyV1::NotRequired, seed);
+    two_heads_with_anchor(seed, KagemushaWalletAnchorPolicyV1::NotRequired)
+}
+
+fn two_heads_with_anchor(
+    seed: u8,
+    anchor: KagemushaWalletAnchorPolicyV1,
+) -> (
+    DeviceV1,
+    WalletFixtureV1,
+    KagemushaWalletSlotIdV1,
+    [[u8; 32]; 2],
+) {
+    let (device, f, slot, bootstrap) = bootstrapped_device(anchor, seed);
     let mut provider = device.open();
     let current = provider.status(&slot).expect("status");
     let next = next_capsule(&f, &bootstrap);
@@ -44,6 +55,94 @@ fn two_heads(
         slot,
         [bootstrap.body().operation_id, next.body().operation_id],
     )
+}
+
+#[test]
+fn wallet_advance_v1_reconciling_lookup_preserves_older_output_after_current_delivery_loss() {
+    let (device, _, slot, [older, current]) =
+        two_heads_with_anchor(0x4a, KagemushaWalletAnchorPolicyV1::Keychain);
+    let mut provider = device.open();
+    provider
+        .publish_archive_checkpoint(&slot, [0; 32], b"protected test checkpoint")
+        .unwrap();
+    let archive = kagemusha_wallet_archive_dir_v1(&slot);
+    let copies = provider
+        .store()
+        .list(&archive)
+        .into_result()
+        .unwrap()
+        .unwrap();
+    assert_eq!(copies.len(), 2);
+    let expected = provider.lookup(&slot, &older).unwrap();
+    assert!(matches!(&expected, KagemushaWalletLookupV1::Retained(_)));
+
+    let directory = kagemusha_wallet_completion_dir_v1(&slot);
+    for copy in KagemushaWalletCopyV1::BOTH {
+        let name = kagemusha_wallet_completion_name_v1(&current, copy);
+        device
+            .fs
+            .place_unsynced(&directory, name.as_str(), b"unreadable completion frame");
+    }
+    drop(provider);
+    let mut provider = device.open();
+    let signed = device.platform.with(|state| state.sign_calls);
+    assert_eq!(
+        provider.lookup_reconciling(&slot, &current, Some(&TestOwnerV1)),
+        Ok(KagemushaWalletLookupV1::DeliveryDataLoss),
+    );
+    assert_eq!(
+        provider.lookup_reconciling(&slot, &older, Some(&TestOwnerV1)),
+        Ok(expected.clone()),
+    );
+    let OutputSourceV1::ReleasedWithoutCompletion(source) = provider.output_source(&slot).unwrap()
+    else {
+        panic!("completion loss cannot be an ordinary account source");
+    };
+    let marker = source.marker_file_digest();
+    assert_eq!(
+        provider.lookup_after_completion_loss(&slot, marker, &older),
+        Ok(expected)
+    );
+    assert_eq!(
+        provider.lookup_after_completion_loss(&slot, marker, &current),
+        Ok(KagemushaWalletLookupV1::DeliveryDataLoss)
+    );
+    assert!(
+        provider
+            .lookup_after_completion_loss(&slot, &[0x73; 32], &older)
+            .is_err()
+    );
+    assert!(matches!(
+        provider.status(&slot),
+        Err(KagemushaWalletProviderErrorV1::LostCustody(
+            KagemushaWalletLostCustodyV1::CompletionLost
+        ))
+    ));
+    drop(provider);
+    let missing_checkpoint = device.fork();
+    for copy in copies {
+        missing_checkpoint
+            .fs
+            .place_unsynced(&archive, &copy.name, b"corrupt protected checkpoint");
+    }
+    assert!(
+        missing_checkpoint
+            .open()
+            .lookup_after_completion_loss(&slot, marker, &older)
+            .is_err()
+    );
+    let mut provider = device.open();
+    let lagging = KagemushaWalletAnchorV1::none().encode().unwrap();
+    assert!(matches!(
+        device.platform.anchor_update(&slot, &lagging),
+        KagemushaWalletPublishOutcomeV1::Published
+    ));
+    assert!(
+        provider
+            .lookup_after_completion_loss(&slot, marker, &older)
+            .is_err()
+    );
+    assert_eq!(device.platform.with(|state| state.sign_calls), signed);
 }
 
 fn tombstone() -> KagemushaWalletTombstoneV1 {

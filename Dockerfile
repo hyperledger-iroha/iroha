@@ -26,6 +26,11 @@ ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachmen
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VERGEN_GIT_SHA=""
+# Build every requested binary, Kagami included, in one Cargo invocation. Each
+# invocation resolves its own feature graph, so a separate Kagami build compiled
+# iroha_core, iroha_data_model, ivm and about 70 other units a second time with
+# different features. A Kagami-only image still builds without the daemon
+# features, which belong to irohad.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \
@@ -43,30 +48,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do \
             test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1; \
         done; \
-        regular_bins=""; \
+        build_daemon_graph=0; \
         build_kagami=0; \
         for bin in ${BINARIES}; do \
             if [ "${bin}" = "kagami" ]; then \
                 build_kagami=1; \
             else \
-                regular_bins="${regular_bins} ${bin}"; \
+                build_daemon_graph=1; \
             fi; \
         done; \
         cargo_target_profile_dir="${PROFILE}"; \
         if [ "${PROFILE}" = "dev" ] || [ "${PROFILE}" = "test" ]; then \
             cargo_target_profile_dir="debug"; \
         fi; \
-        if [ -n "${regular_bins}" ]; then \
+        if [ "${build_daemon_graph}" = "1" ]; then \
             set -- cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" --features "${FEATURES}"; \
-            for bin in ${regular_bins}; do \
+            for bin in ${BINARIES}; do \
                 set -- "$@" --bin "${bin}"; \
             done; \
             CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run "$@"; \
-            for bin in ${regular_bins}; do \
+            for bin in ${BINARIES}; do \
                 cp "/cargo-target/${cargo_target_profile_dir}/${bin}" "/outbin/${bin}"; \
             done; \
-        fi; \
-        if [ "${build_kagami}" = "1" ]; then \
+        elif [ "${build_kagami}" = "1" ]; then \
             CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
             cp "/cargo-target/${cargo_target_profile_dir}/kagami" /outbin/kagami; \
         fi; \

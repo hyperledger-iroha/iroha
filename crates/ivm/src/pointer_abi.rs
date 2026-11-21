@@ -1,4 +1,5 @@
 //! Re-export pointer-ABI helpers from `ivm_abi`.
+use crate::error::VmTrap;
 pub use ivm_abi::pointer_abi::*;
 impl crate::memory::Memory {
     /// Validate a pointer-ABI TLV at `addr` in the INPUT region and return its view.
@@ -11,16 +12,18 @@ impl crate::memory::Memory {
         // Enforce address lies in INPUT region and that header (2+1+4) fits
         let start = Self::INPUT_START;
         let end = Self::INPUT_START + Self::INPUT_SIZE;
-        let header_end = addr.checked_add(7).ok_or(VMError::NoritoInvalid)?;
+        let header_end = addr
+            .checked_add(7)
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         if !(addr >= start && header_end <= end) {
             if crate::dev_env::decode_trace_enabled() {
                 eprintln!("TLV header OOB: addr=0x{addr:08x} INPUT=[0x{start:08x}..0x{end:08x})");
             }
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         // Read header to determine payload length before loading the full envelope
         let hdr = self.load_region(addr, 7).map_err(|error| {
-            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+            crate::error::preserve_execution_deferral(error, VMError::Trap(VmTrap::NoritoInvalid))
         })?;
         let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
         if crate::dev_env::decode_trace_enabled() {
@@ -32,17 +35,17 @@ impl crate::memory::Memory {
         let total = 7usize
             .checked_add(len)
             .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         // Bounds check entirely within INPUT
         let envelope_end = addr
             .checked_add(total as u64)
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         if envelope_end > end {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         // Load full envelope and validate header/hash/pointer type
         let envelope = self.load_region(addr, total as u64).map_err(|error| {
-            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+            crate::error::preserve_execution_deferral(error, VMError::Trap(VmTrap::NoritoInvalid))
         })?;
         match validate_tlv_bytes(envelope) {
             Ok(tlv) => {
@@ -51,10 +54,10 @@ impl crate::memory::Memory {
                 let unsupported_abi = abi_version != 1;
                 let disallowed_type = !is_type_allowed_for_policy(policy, tlv.type_id);
                 if unsupported_abi || disallowed_type {
-                    return Err(VMError::AbiTypeNotAllowed {
+                    return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                         abi: abi_version,
                         type_id: tlv.type_id as u16,
-                    });
+                    }));
                 }
                 Ok(tlv)
             }

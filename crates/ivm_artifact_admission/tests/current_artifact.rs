@@ -4,6 +4,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::prelude::{
     DecimalValueV1, IntValueV1, NUMERIC_FRAME_HEADER_BYTES_V1, NumericAbiError, QuantityValueV1,
 };
+use ivm_abi::error::VmTrap;
 use ivm_abi::{
     SyscallPolicy,
     metadata::{
@@ -266,7 +267,7 @@ fn foreign_vm_modules_cannot_enter_native_ivm_admission() {
             .expect_err("only canonical IVM artifacts may enter contract admission");
         assert!(matches!(
             error.into_vm_error(),
-            ivm_abi::VMError::InvalidMetadata
+            ivm_abi::VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
 }

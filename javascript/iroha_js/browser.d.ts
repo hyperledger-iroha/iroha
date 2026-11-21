@@ -1,3 +1,4 @@
+export { AnonymousBallotClientV1, AnonymousBallotRefusal } from "./anonymous-ballot.js";
 /** Type surface for the tree-shakeable, browser-safe aggregate entry point. */
 export type * from "./index.js";
 

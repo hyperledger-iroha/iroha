@@ -90,6 +90,20 @@ fn hash_cells(c: &mut Cells, v: Fp) -> [usize; 3] {
     [c.cell(Fp::ZERO, 255), c.cell(v, 255), c.cell(Fp::ZERO, 255)]
 }
 
+/// Receipt semantics for a fixed kind or the three-mode Control program.
+/// The semantic tag is `2 + 5r + 4u`. Field 17 is the Load digest or
+/// Unload nullifier, and field 18 is the update digest in Refresh.
+#[derive(Clone, Copy)]
+pub enum Operation {
+    Fixed(Kind),
+    Control { mode: crate::control::Modes },
+}
+impl Operation {
+    fn receive(self) -> bool {
+        matches!(self, Self::Fixed(Kind::Receive))
+    }
+}
+
 struct BodyFields {
     op_items: Vec<(Fp, Lin<Fp>)>,
     op_cells: [usize; 3],
@@ -102,7 +116,7 @@ fn append_body_fields(
     receipt: &Receipt,
     credential: &CurrentCredential,
     statement: &StatementCells,
-    kind: Kind,
+    operation: Operation,
     payment: PaymentDigest,
     c: &mut Cells,
 ) -> BodyFields {
@@ -132,26 +146,56 @@ fn append_body_fields(
         c.eq(a.linear(), b.linear());
     }
     c.eq(packed(&c, 98, 16), sf(9).linear());
-    c.eq(sf(16).linear(), constant(vec![Fp::from(kind.tag())]));
-    let mut op_sources = credential.wallet().to_vec();
-    op_sources.push(sf(16));
-    match kind {
-        Kind::Bootstrap => op_sources.extend([sf(17), sf(18)]),
-        Kind::Archive
-        | Kind::RefreshCredential
-        | Kind::RefreshSchemePolicy
-        | Kind::RefreshQuotaShare
-        | Kind::RefreshTimeAnchor => op_sources.push(sf(18)),
-        Kind::Retiring => {}
-        _ => op_sources.push(sf(17)),
-    }
-    let mut op_items: Vec<_> = op_sources
-        .iter()
-        .map(|s| (s.value(w), s.linear()))
-        .collect();
-    if kind == Kind::Retiring {
-        op_items.push((Fp::ZERO, vec![]));
-    }
+    let op_items = match operation {
+        Operation::Fixed(kind) => {
+            c.eq(sf(16).linear(), constant(vec![Fp::from(kind.tag())]));
+            let mut op_sources = credential.wallet().to_vec();
+            op_sources.push(sf(16));
+            match kind {
+                Kind::Bootstrap => op_sources.extend([sf(17), sf(18)]),
+                Kind::Archive
+                | Kind::RefreshCredential
+                | Kind::RefreshSchemePolicy
+                | Kind::RefreshQuotaShare
+                | Kind::RefreshTimeAnchor => op_sources.push(sf(18)),
+                Kind::Retiring => {}
+                _ => op_sources.push(sf(17)),
+            }
+            let mut op_items: Vec<_> = op_sources
+                .iter()
+                .map(|s| (s.value(w), s.linear()))
+                .collect();
+            if kind == Kind::Retiring {
+                op_items.push((Fp::ZERO, vec![]));
+            }
+            op_items
+        }
+        Operation::Control { mode } => {
+            assert_eq!(
+                w.arrays[mode.refresh.array].family, family,
+                "same-family mode"
+            );
+            let t = mode.refresh.linear();
+            c.eq(sf(16).linear(), mode.tag());
+            // operation_input = (1 - t)·receipt_digest + t·update.
+            let (load, update) = (sf(17).value(w), sf(18).value(w));
+            let value = load + mode.refresh.value(w) * (update - load);
+            let input = c.cell(value, 255);
+            c.a.rows.push([
+                t,
+                plus(&sf(18).linear(), &scaled(&sf(17).linear(), -Fp::ONE)),
+                plus(&own(input, 1), &scaled(&sf(17).linear(), -Fp::ONE)),
+            ]);
+            let mut op_items: Vec<_> = credential
+                .wallet()
+                .iter()
+                .chain([&sf(16)])
+                .map(|s| (s.value(w), s.linear()))
+                .collect();
+            op_items.push((value, own(input, 1)));
+            op_items
+        }
+    };
     let op = poseidon::hash_with_domain(
         u64::from_le_bytes(*b"kgwopid1"),
         &op_items.iter().map(|x| x.0).collect::<Vec<_>>(),
@@ -363,7 +407,28 @@ pub fn append_preparation(
     kind: Kind,
     payment: PaymentDigest,
 ) -> Result<PreparedBody, &'static str> {
-    if (kind == Kind::Receive) != matches!(payment, PaymentDigest::Present(_)) {
+    append_preparation_operation(
+        w,
+        family,
+        body,
+        credential,
+        statement,
+        Operation::Fixed(kind),
+        payment,
+    )
+}
+
+/// `append_preparation` for a fixed kind or the Control selected operation.
+pub fn append_preparation_operation(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    body: &[u8; BODY_BYTES],
+    credential: &CurrentCredential,
+    statement: &StatementCells,
+    operation: Operation,
+    payment: PaymentDigest,
+) -> Result<PreparedBody, &'static str> {
+    if operation.receive() != matches!(payment, PaymentDigest::Present(_)) {
         return Err("Receive alone requires full Payment digest");
     }
     install_wallet_table(w, family, credential);
@@ -384,7 +449,7 @@ pub fn append_preparation(
         proof_cell,
         capsule_indices,
     } = append_body_fields(
-        w, family, &receipt, credential, statement, kind, payment, &mut c,
+        w, family, &receipt, credential, statement, operation, payment, &mut c,
     );
     let indices: Vec<_> = (BODY_BYTES..BODY_BYTES + 32).collect();
     c.at_most(
@@ -448,7 +513,28 @@ pub fn append_own(
     kind: Kind,
     payment: PaymentDigest,
 ) -> Result<AuthenticatedReceipt, &'static str> {
-    if (kind == Kind::Receive) != matches!(payment, PaymentDigest::Present(_)) {
+    append_own_operation(
+        w,
+        family,
+        receipt,
+        credential,
+        statement,
+        Operation::Fixed(kind),
+        payment,
+    )
+}
+
+/// `append_own` for a fixed kind or the Control selected operation.
+pub fn append_own_operation(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    receipt: &Receipt,
+    credential: &CurrentCredential,
+    statement: &StatementCells,
+    operation: Operation,
+    payment: PaymentDigest,
+) -> Result<AuthenticatedReceipt, &'static str> {
+    if operation.receive() != matches!(payment, PaymentDigest::Present(_)) {
         return Err("Receive alone requires the full Payment digest");
     }
     let installed_wallet = w
@@ -491,7 +577,7 @@ pub fn append_own(
         proof_cell,
         capsule_indices,
     } = append_body_fields(
-        w, family, receipt, credential, statement, kind, payment, &mut c,
+        w, family, receipt, credential, statement, operation, payment, &mut c,
     );
     let rle: Vec<_> = (SIGNATURE..SIGNATURE + 32).rev().collect();
     let sle: Vec<_> = (SIGNATURE + 32..SIGNATURE + 64).rev().collect();
@@ -619,7 +705,33 @@ pub fn authenticate_prepared(
     kind: Kind,
     payment: PaymentDigest,
 ) -> Result<AuthenticatedReceipt, &'static str> {
-    let authenticated = append_own(w, family, receipt, credential, statement, kind, payment)?;
+    authenticate_prepared_operation(
+        w,
+        family,
+        prepared,
+        receipt,
+        credential,
+        statement,
+        Operation::Fixed(kind),
+        payment,
+    )
+}
+
+/// `authenticate_prepared` for a fixed kind or the Control selected operation.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_prepared_operation(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    prepared: &PreparedBody,
+    receipt: &Receipt,
+    credential: &CurrentCredential,
+    statement: &StatementCells,
+    operation: Operation,
+    payment: PaymentDigest,
+) -> Result<AuthenticatedReceipt, &'static str> {
+    let authenticated = append_own_operation(
+        w, family, receipt, credential, statement, operation, payment,
+    )?;
     w.push(Array {
         name: "prepared receipt exact body finalization",
         family,

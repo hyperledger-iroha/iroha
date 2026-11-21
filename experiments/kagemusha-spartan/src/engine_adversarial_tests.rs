@@ -3,6 +3,151 @@
 use super::*;
 use group::{Curve, Group};
 
+#[path = "archive_remove_successor_tests.rs"]
+mod archive_remove_successor_tests;
+#[path = "signed_receive_scalar_tests.rs"]
+mod signed_receive_scalar_tests;
+
+#[test]
+#[ignore = "requires the signed device bundle and two distinct retained Payments"]
+fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
+    use std::{path::PathBuf, time::Instant};
+    let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+    let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
+    let programs = std::fs::read(bundle.join("program-bundle.norito")).unwrap();
+    let manifest = std::fs::read(bundle.join("parameter-manifest.norito")).unwrap();
+    let signature = std::fs::read(bundle.join("parameter-signature.bin"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let install =
+        || super::super::device_fixture::install(&programs, &manifest, signature).unwrap();
+    let parameters = install();
+    let first = std::fs::read(wallet.join("complete-payment.bin")).unwrap();
+    let second = std::fs::read(wallet.join("incoming-payment.bin")).unwrap();
+    assert_ne!(first, second);
+
+    // Receive never needs a time observation, but its available memory may
+    // change between receipt-body validation and irreversible selection.
+    use iroha_data_model::kagemusha::{KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Memory(AtomicU64);
+    type TimeReading = (KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1);
+    impl TimeSource for Memory {
+        fn available_memory_bytes(&self) -> Result<u64> { Ok(self.0.load(Ordering::Relaxed)) }
+        fn prepared(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+            Err(Error::Unavailable("no Send clock in Receive fixture"))
+        }
+        fn observe(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+            Err(Error::Unavailable("no Send clock in Receive fixture"))
+        }
+    }
+    let memory = Arc::new(Memory(AtomicU64::new(u64::MAX)));
+    let engine = NativeEngine::with_time_source(memory.clone());
+    let started = Instant::now();
+    let accepted = engine.verify_payment(&first, &parameters).unwrap();
+    let cold = started.elapsed();
+    let started = Instant::now();
+    let repeated = engine.clone().verify_payment(&first, &parameters).unwrap();
+    let warm = started.elapsed();
+    assert!(Arc::ptr_eq(&accepted.bytes, &repeated.bytes));
+    let mut damaged = first.clone();
+    *damaged.last_mut().unwrap() ^= 1;
+    assert!(engine.verify_payment(&damaged, &parameters).is_err());
+    assert!(Arc::ptr_eq(
+        &accepted.bytes,
+        &engine.verify_payment(&first, &parameters).unwrap().bytes
+    ));
+    let independent = NativeEngine::default()
+        .verify_payment(&first, &parameters)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&accepted.bytes, &independent.bytes));
+    let other = engine.verify_payment(&second, &parameters).unwrap();
+    assert_eq!(other.exact_bytes(), second);
+    let replaced = engine.verify_payment(&first, &parameters).unwrap();
+    assert!(!Arc::ptr_eq(&accepted.bytes, &replaced.bytes));
+
+    // The provider has already checked this exact capsule before signing. A staged
+    // readback still has to verify its own receipt, output proof and selected wallet.
+    let capsule = RecoveryCapsule::decode(
+        &std::fs::read(wallet.join("counterparty-receive-capsule.norito")).unwrap(),
+        &parameters.inner.scheme,
+    )
+    .unwrap();
+    let record = CompletionRecord::decode(
+        &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
+        capsule.wallet(),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let prepared = engine.resume(&capsule, &parameters).unwrap();
+    let reconstruction = started.elapsed();
+    let started = Instant::now();
+    engine.clone().recheck_selection(&prepared, &parameters).unwrap();
+    let live_recheck = started.elapsed();
+    let prepared = engine.retain_reconstruction(prepared, &parameters).unwrap();
+    eprintln!("signed Receive reconstruction {reconstruction:?}, same-owner live controls {live_recheck:?}");
+    memory.0.store(1, Ordering::Relaxed);
+    assert!(matches!(
+        engine.recheck_selection(&prepared, &parameters),
+        Err(Error::NotEnoughMemory { available: 1, .. })
+    ));
+    memory.0.store(u64::MAX, Ordering::Relaxed);
+    assert!(matches!(
+        NativeEngine::default().recheck_selection(&prepared, &parameters),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
+    let genesis = parameters.genesis_commit_verifier();
+    let checkpoint = genesis.export_epoch_checkpoint(genesis.initial_commit_epoch()).unwrap();
+    let reselected = engine.with_protected_epoch(&parameters, &checkpoint).unwrap();
+    assert!(matches!(
+        reselected.recheck_selection(&prepared, &parameters),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
+    let released = engine
+        .verify_staged_completion(&prepared, &record, &parameters)
+        .unwrap();
+    assert_eq!(
+        released.completion().encode().unwrap(),
+        record.encode().unwrap()
+    );
+    let mut wrong_wallet = record.clone();
+    wrong_wallet.frame.wallet[0] ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_wallet, &parameters)
+            .is_err()
+    );
+    let mut wrong_receipt = record.clone();
+    *wrong_receipt.frame.receipt.last_mut().unwrap() ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_receipt, &parameters)
+            .is_err()
+    );
+    let mut wrong_output = record.clone();
+    *wrong_output.frame.output.last_mut().unwrap() ^= 1;
+    assert!(
+        engine
+            .verify_staged_completion(&prepared, &wrong_output, &parameters)
+            .is_err()
+    );
+
+    drop(parameters);
+    let next_installation = install();
+    assert!(matches!(
+        engine.recheck_selection(&prepared, &next_installation),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
+    assert!(engine.retain_reconstruction(prepared, &next_installation).is_none());
+    let reinstalled = engine.verify_payment(&first, &next_installation).unwrap();
+    assert!(!Arc::ptr_eq(&replaced.bytes, &reinstalled.bytes));
+    eprintln!(
+        "signed Payment {} bytes, first {cold:?}, same-owner repeat {warm:?}",
+        first.len()
+    );
+}
+
 pub(super) fn reject_wrong_program_digests(
     parameters: &AuthenticatedParameters,
     original: &[u8],
@@ -17,11 +162,7 @@ pub(super) fn reject_wrong_program_digests(
             }
             let bytes = super::super::encode(&manifest)?;
             // A correctly signed manifest still cannot select a different program.
-            let signature = bootstrap::sign(
-                crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), &bytes),
-                &BigUint::from_bytes_be(&[0x11; 32]),
-                "native wrong-program manifest fixture",
-            );
+            let signature = super::test_sign_manifest(&bytes);
             let programs = std::array::from_fn(|i| Program {
                 primary: parameters.inner.programs[i].primary.clone(),
                 secondary: parameters.inner.programs[i].secondary.clone(),
@@ -43,6 +184,122 @@ pub(super) fn reject_wrong_program_digests(
     Ok(())
 }
 
+/// G5: construction artifacts at every native accepting boundary. A template
+/// pair from the compiler's last warm-up generation verifies as linked proofs
+/// under these exact programs, but its accumulators fold toy or earlier-program
+/// claims. The head boundary (which also guards preparation, resume, finalize
+/// and completion recovery, all through `decode_head`/`verify_head`), the
+/// Payment boundary and the Receive candidate verdict each accept such a pair
+/// exactly when the caller's independent decision says its accumulators hold.
+pub(super) fn reject_template_artifacts(
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    chain: &crate::chain_fixture::Chain,
+    templates: &[(full::UniformPair, bool)],
+) -> Result<()> {
+    let verdict = |label: &str, result: Result<()>, holds: bool| -> Result<bool> {
+        match (result, holds) {
+            (Ok(()), true) => Ok(false),
+            (Err(e), false) if super::is_accumulator_refusal(&e) => Ok(true),
+            (other, _) => {
+                eprintln!("native template {label}: holds={holds}, result={other:?}");
+                Err(Error::AuthorityMismatch("template accumulator verdict"))
+            }
+        }
+    };
+    let trusted = parameters.inner.profile(full::SEND)?;
+    let payment_profile = payment_wire::Profile {
+        pair: &trusted,
+        scheme: parameters.inner.scheme,
+        relation: parameters.inner.relation,
+    };
+    let mut refused = 0;
+    for (template, holds) in templates {
+        let (credential, certificate) = if template.kind == full::RECEIVE {
+            (
+                &chain.receiver_bootstrap.credential,
+                &chain.receiver_bootstrap.certificate,
+            )
+        } else {
+            (&chain.send.credential, &chain.sender_bootstrap.certificate)
+        };
+        // The pair itself, then the retained-head boundary.
+        let label = format!("kind {} pair", template.kind);
+        let direct = decide_accumulators(&parameters.inner.generators, template);
+        refused += usize::from(verdict(&label, direct, *holds)?);
+        let head = encode_head(parameters, template, credential, certificate)?;
+        let label = format!("kind {} head", template.kind);
+        let result = engine
+            .verify_head(&head, credential, parameters)
+            .map(|_| ());
+        refused += usize::from(verdict(&label, result, *holds)?);
+        if template.kind == full::SEND {
+            let payment = payment_wire::encode(
+                &payment_profile,
+                &chain.payment_originals(),
+                &template.ip,
+                &template.is,
+                &template.pp,
+                &template.ps,
+                template.r,
+            )
+            .map_err(Error::Rejected)?;
+            let result = engine.verify_payment(&payment, parameters).map(|_| ());
+            refused += usize::from(verdict("Send Payment", result, *holds)?);
+            // At Receive, the same bytes never credit: Native derives Burn.
+            if engine.incoming_candidate(&payment, parameters)?.valid != *holds {
+                return Err(Error::AuthorityMismatch("template incoming verdict"));
+            }
+        }
+    }
+    if !templates.is_empty() && refused == 0 {
+        return Err(Error::AuthorityMismatch(
+            "no template artifact with a false accumulator was exercised",
+        ));
+    }
+    eprintln!(
+        "native template artifacts: {} pairs, {refused} accumulator refusals across pair, head and Payment boundaries",
+        templates.len()
+    );
+    Ok(())
+}
+
+/// G6 at the engine boundaries: a credential the real issuer signed, whose
+/// certified table commitment is another wallet's, is refused at original
+/// intake and inside a retained head.
+pub(super) fn reject_wrong_certified_table(
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    chain: &crate::chain_fixture::Chain,
+    load: &full::UniformPair,
+) -> Result<()> {
+    let mut wrong = chain.send.credential.clone();
+    wrong.body[195..259].copy_from_slice(&chain.receiver_bootstrap.credential.body[195..259]);
+    wrong.signature = bootstrap::sign(
+        credential::message(&wrong),
+        &BigUint::from_bytes_be(&[0x26; 32]),
+        "correctly issued wrong-table credential",
+    );
+    let certificate = &chain.sender_bootstrap.certificate;
+    let table =
+        |r: Result<()>| matches!(r, Err(Error::AuthorityMismatch("certified wallet table")));
+    let intake = engine
+        .authenticate_credential_originals(
+            &credential_bytes(&wrong),
+            &certificate_bytes(certificate),
+            parameters,
+        )
+        .map(|_| ());
+    if !table(intake) {
+        return Err(Error::AuthorityMismatch("wrong-table credential intake"));
+    }
+    let head = encode_head(parameters, load, &wrong, certificate)?;
+    if !table(engine.verify_head(&head, &wrong, parameters).map(|_| ())) {
+        return Err(Error::AuthorityMismatch("wrong-table credential head"));
+    }
+    Ok(())
+}
+
 fn finish(
     label: &str,
     engine: &NativeEngine,
@@ -54,6 +311,17 @@ fn finish(
     let started = std::time::Instant::now();
     eprintln!("native operation: preparing {label}");
     let prepared = engine.prepare(witness, head, parameters)?;
+    finish_prepared(label, engine, parameters, key, prepared, started)
+}
+
+fn finish_prepared(
+    label: &str,
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    key: &full::WalletKey,
+    prepared: PreparedOperation,
+    started: std::time::Instant,
+) -> Result<CompletedOperation> {
     let prepare_seconds = started.elapsed().as_secs_f64();
     let capsule = prepared.capsule().clone();
     let bytes = capsule.encode()?;
@@ -128,8 +396,7 @@ fn run_from_bundle(complete_validation: bool) {
             signature,
         )?;
         reject_wrong_program_digests(&parameters, &manifest)?;
-        let chain =
-            crate::chain_fixture::with_relation(&parameters.inner.generators.p, *parameters.id());
+        let chain = crate::native::device_fixture::chain(&parameters.inner.generators.p);
         let engine = NativeEngine::default();
         let bootstrap =
             |context: &bootstrap::Context, input: &bootstrap::Inputs| BootstrapWitness {
@@ -142,7 +409,7 @@ fn run_from_bundle(complete_validation: bool) {
         let receiver_bootstrap = bootstrap(&chain.receiver_context, &chain.receiver_bootstrap);
         // This host unit fixture supplies explicit test enrollment markers and
         // software signatures. Actual platform custody is a separate phone test.
-        let origin = engine.enrollment_origin(&sender_bootstrap, [0x31; 32], &parameters)?;
+        let origin = engine.enrollment_origin(&sender_bootstrap, [0x44; 32], &parameters)?;
         let sender_witness = ExactOperationWitness::Bootstrap(Box::new(sender_bootstrap));
         let sender = finish(
             "fresh sender Bootstrap",
@@ -152,7 +419,7 @@ fn run_from_bundle(complete_validation: bool) {
             &origin,
             &sender_witness,
         )?;
-        let origin = engine.enrollment_origin(&receiver_bootstrap, [0x32; 32], &parameters)?;
+        let origin = engine.enrollment_origin(&receiver_bootstrap, [0x44; 32], &parameters)?;
         let receiver = finish(
             "fresh receiver Bootstrap",
             &engine,
@@ -474,59 +741,21 @@ fn receive_and_successors(
         false,
     ));
 
-    // Isolate the receiver signature predicate from proof verification: produce
-    // a genuinely valid Send pair whose exact Request has an invalid signature.
-    // All updated statement/map/receipt bindings are proven by the real engine.
-    let mut bad_request_send = actual_send.clone();
-    bad_request_send.request.signature.fill(0);
-    let request =
-        crate::request::commitments(&bad_request_send.request).map_err(Error::Malformed)?;
-    bad_request_send.statement[23] = request.digest;
-    let pending_value = iroha_pasta::poseidon::hash_with_domain(
-        crate::send_maps::PENDING_DOMAIN,
-        &bad_request_send.statement[17..24],
-    );
-    let (pending, pending_root) = crate::indexed_map::empty_insert(request.credit, pending_value);
-    bad_request_send.maps.pending = pending;
-    bad_request_send.after_core[18] = pending_root;
-    bad_request_send.after_core[15] = iroha_pasta::poseidon::hash_with_domain(
-        crate::send_arithmetic::CHAIN_DOMAIN,
-        &[
-            bad_request_send.before_core[15],
-            request.credit,
-            bad_request_send.statement[18],
-            bad_request_send.statement[19],
-            bad_request_send.before_core[12],
-            bad_request_send.statement[21],
-            bad_request_send.statement[22],
-            request.digest,
-        ],
-    );
-    bad_request_send.statement[15] = crate::monetary_state::commitment(
-        &bad_request_send.after_core,
-        &bad_request_send.after_rest,
-    );
-    bad_request_send.receipt = crate::chain_fixture::own_receipt(
-        &chain.sender_key,
-        &bad_request_send.credential,
-        &bad_request_send.statement,
-        Fp::ZERO,
-    );
-    let signed_invalid_request = finish(
-        "valid Send proof containing invalid receiver Request signature",
-        engine,
-        parameters,
-        &chain.sender_key,
-        sender_loaded,
-        &ExactOperationWitness::Send(Box::new(bad_request_send)),
-    )?;
-    let bytes = signed_invalid_request.completion().output_part(1)?;
-    engine.verify_payment(&bytes, parameters)?;
-    cases.push((
-        "isolated Request signature with valid Send proof",
-        bytes,
-        true,
-    ));
+    // A payer with an otherwise complete private witness must refuse a Request
+    // whose receiver never authenticated the terms, before producing a review.
+    let mut unsigned = actual_send.clone();
+    unsigned.request.signature.fill(0);
+    if !matches!(
+        engine.prepare(
+            &ExactOperationWitness::Send(Box::new(unsigned)),
+            sender_loaded,
+            parameters
+        ),
+        Err(Error::AuthorityMismatch("Send Request receiver signature"))
+    ) {
+        return Err(Error::AuthorityMismatch("unauthenticated outgoing Request"));
+    }
+    eprintln!("native Send refused a Request with an invalid receiver signature before review");
 
     for (label, bytes, valid_send_proof) in cases {
         let candidate = engine.incoming_candidate(&bytes, parameters)?;
@@ -550,16 +779,27 @@ fn receive_and_successors(
             false,
         )
         .map_err(Error::Malformed)?;
-        let burned = finish(
+        let invalid = ExactOperationWitness::Receive {
+            step: Box::new(witness.clone()),
+            incoming_payment: bytes.into(),
+        };
+        let started = std::time::Instant::now();
+        if !matches!(engine.prepare(&invalid, loaded.head(), parameters), Err(Error::Rejected(_))) {
+            return Err(Error::AuthorityMismatch("fresh Receive admission must refuse Burn"));
+        }
+        // Only a historical selection reaches defensive Burn recovery. The
+        // wallet must also refuse to select an unselected restored capsule.
+        let historical = engine.prepare_retained(&invalid, loaded.head(), parameters)?;
+        if !matches!(engine.prepare_selection(historical.capsule(), parameters), Err(Error::Rejected(_))) {
+            return Err(Error::AuthorityMismatch("restored Receive admission must refuse Burn"));
+        }
+        let burned = finish_prepared(
             label,
             engine,
             parameters,
             &chain.receiver_key,
-            loaded.head(),
-            &ExactOperationWitness::Receive {
-                step: Box::new(witness.clone()),
-                incoming_payment: bytes.into(),
-            },
+            historical,
+            started,
         )?;
         if burned.head().profile()[35] != Fp::from(10)
             || witness.after_core[9] - burned.head().profile()[35] != Fp::from(100)

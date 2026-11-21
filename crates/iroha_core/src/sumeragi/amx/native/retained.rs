@@ -397,6 +397,23 @@ impl norito::NoritoSchema for RetainedNativeAmx {
         <Option<NativeAmxParticipantStateV1> as norito::NoritoSchema>::frame_name()
     }
 }
+// The codec below is exactly Option<NativeAmxParticipantStateV1>; original-pool custody and
+// `authenticated` never enter the payload. Release evidence follows that same transparent shape.
+#[cfg(test)]
+impl iroha_schema::TypeId for RetainedNativeAmx {
+    fn id() -> String {
+        <Option<NativeAmxParticipantStateV1> as iroha_schema::TypeId>::id()
+    }
+}
+#[cfg(test)]
+impl iroha_schema::IntoSchema for RetainedNativeAmx {
+    fn type_name() -> String {
+        <Option<NativeAmxParticipantStateV1> as iroha_schema::IntoSchema>::type_name()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        <Option<NativeAmxParticipantStateV1> as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
 impl SerializePayload for RetainedNativeAmx {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::Error> {
         self.canonical().map(NativeRef).serialize(writer)

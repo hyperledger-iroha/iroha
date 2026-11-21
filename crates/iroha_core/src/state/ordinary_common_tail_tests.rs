@@ -269,7 +269,7 @@ fn run_ordinary_tail_independent_batches(
         unexecuted.header().merkle_root()
     );
     let expected_count = if repeated_time { 3 } else { 1 };
-    let results = carrier.output_results().cloned().collect::<Vec<_>>();
+    let results = carrier.output_results().collect::<Vec<_>>();
     assert_eq!(results.len(), expected_count);
     for result in &results {
         assert!(result.as_ref().is_ok());
@@ -390,7 +390,7 @@ fn run_ordinary_tail_independent_batches(
     let decoded = iroha_data_model::block::decode_framed_signed_block(&encoded).unwrap();
     assert_eq!(decoded.encode_wire().unwrap(), encoded);
     assert_eq!(
-        decoded.output_results().cloned().collect::<Vec<_>>(),
+        decoded.output_results().collect::<Vec<_>>(),
         results
     );
     drop(overlay);

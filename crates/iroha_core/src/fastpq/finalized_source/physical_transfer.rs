@@ -10,7 +10,7 @@
 use super::FinalizedFastpqSource;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    block::execution_output::NetworkExecutionOutputV1,
+    block::execution_output::ExecutionOutputV1,
     fastpq::{
         FastpqOrdinarySourceStatementLeafV1, FastpqSourceEffectCoverageV1,
         FastpqSourceExecutionEntryV1, FastpqSourceExecutionKindV1, TransferDeltaTranscript,
@@ -129,7 +129,7 @@ pub struct PhysicalTransfer<'a> {
     input: &'a TransactionEntrypoint,
     entry: &'a FastpqSourceExecutionEntryV1,
     leaf: &'a FastpqOrdinarySourceStatementLeafV1,
-    output: &'a NetworkExecutionOutputV1,
+    output: &'a ExecutionOutputV1,
     transcript: &'a TransferTranscript,
     delta: &'a TransferDeltaTranscript,
 }
@@ -156,7 +156,7 @@ impl PhysicalTransfer<'_> {
         self.input
     }
     /// Actual successful Network output from the same authenticated original body.
-    pub(crate) fn output(&self) -> &NetworkExecutionOutputV1 {
+    pub(crate) fn output(&self) -> &ExecutionOutputV1 {
         self.output
     }
     /// Original selected transcript; private path material is borrowed, never copied.
@@ -228,7 +228,7 @@ impl FinalizedFastpqSource {
             .network_entrypoint_at(index)
             .ok_or_else(|| reject(Rejection::NonNetworkSource))?;
         let (output_index, output) = block
-            .network_output_at(location.network_index)
+            .network_execution_output_at(location.network_index)
             .ok_or_else(|| reject(Rejection::NonNetworkSource))?;
         // The constructor-authenticated producer retains one source record per
         // actual output, with the Network prefix in input order. Validate this
@@ -255,7 +255,7 @@ impl FinalizedFastpqSource {
         {
             return Err(reject(Rejection::DuplicateSourceCall));
         }
-        if !output.result.is_ok() {
+        if output.result().is_err() {
             return Err(reject(Rejection::RejectedExecution));
         }
         if self.manifest().coverage != FastpqSourceEffectCoverageV1::Complete {

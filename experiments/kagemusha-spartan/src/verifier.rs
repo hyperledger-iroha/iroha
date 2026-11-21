@@ -789,7 +789,7 @@ pub fn trace<C: PastaCurve>(
     claims: &[Claim<C>],
     link: &Link,
 ) -> Trace<C> {
-    trace_with(shape, gens, inst, proof, claims, link, None)
+    trace_with(shape, gens, inst, proof, claims, link, None, &[])
 }
 
 /// The trace of a circuit proof (uniform or sparse): its second phase, late io
@@ -812,6 +812,37 @@ pub fn trace_circuit<C: PastaCurve>(
         claims,
         link,
         Some((circuit, fixed)),
+        &[],
+    )
+}
+
+/// A circuit proof's trace with `extra` values written into its io after the
+/// link's and the late values (`io_full`), every later value recomputed: the
+/// verification an in-circuit verifier would perform if its io fold leaves at
+/// those slots were free. The program-authenticated link and late slots stay
+/// as the circuit gives them.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn trace_circuit_with_io<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    proof: &Proof<C>,
+    claims: &[Claim<C>],
+    link: &Link,
+    circuit: &dyn r1cs::Circuit<F<C>>,
+    fixed: &[Aff<C>],
+    extra: &[(usize, F<C>)],
+) -> Trace<C> {
+    trace_with(
+        shape,
+        gens,
+        inst,
+        proof,
+        claims,
+        link,
+        Some((circuit, fixed)),
+        extra,
     )
 }
 
@@ -824,6 +855,7 @@ fn trace_with<C: PastaCurve>(
     claims: &[Claim<C>],
     link: &Link,
     circuit: Option<(&dyn r1cs::Circuit<F<C>>, &[Aff<C>])>,
+    extra: &[(usize, F<C>)],
 ) -> Trace<C> {
     let mut t = Transcript::<C>::new(shape.label.as_bytes());
     for value in [
@@ -892,7 +924,7 @@ fn trace_with<C: PastaCurve>(
                 t.point(b"row", row);
             }
             let phase2: Vec<F<C>> = (0..c.phase2_challenges())
-                .map(|_| ch(&mut t, Kind::Raw))
+                .map(|_| ch(&mut t, Kind::Full))
                 .collect();
             rel = Some(c.instantiate(shape, &phase2, None));
             let late_digest = (!proof.late.is_empty()).then(|| io_digest(&proof.late));
@@ -904,6 +936,12 @@ fn trace_with<C: PastaCurve>(
                 &c.late_slots(),
                 &proof.late,
             );
+            for &(slot, value) in extra {
+                if io_full.len() <= slot {
+                    io_full.resize(slot + 1, F::<C>::ZERO);
+                }
+                io_full[slot] = value;
+            }
             for row in &rows[p1 + pl..] {
                 t.point(b"row", row);
             }
@@ -2112,7 +2150,8 @@ pub fn shared_values<C: PastaCurve>(
 // squeezes its phase-1 digest d, S absorbs d and its rows and squeezes rho, P
 // absorbs rho; both then absorb R. Whoever verifies the pair (the next
 // operation's circuits, or the payee natively) replays both transcripts with
-// one R. Differing copies give differing R except with probability n / q;
+// one R. Differing copies give differing R except with probability n / p
+// (rho is S's whole squeezed Fp word, embedded into Fq);
 // a rho known before the copies are committed lets a forger fix two copies
 // with a short lattice vector (shown in the tests).
 

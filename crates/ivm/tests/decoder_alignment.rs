@@ -1,4 +1,5 @@
 use ivm::{IVM, ProgramMetadata, VMError, decode, encoding};
+use ivm_abi::error::VmTrap;
 #[test]
 fn decoder_traps_on_misaligned_fetch() {
     // Minimal program: valid header + a single 32-bit HALT instruction
@@ -10,5 +11,8 @@ fn decoder_traps_on_misaligned_fetch() {
     let _op = decode(&vm.memory, 0).expect("aligned decode");
     // Misaligned PC=2 must yield a memory access violation because instructions are 4-byte aligned
     let err = decode(&vm.memory, 2).expect_err("misaligned decode must fail");
-    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+    assert!(matches!(
+        err,
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. })
+    ));
 }

@@ -230,7 +230,7 @@ environment is installed and no unsupported-entrypoint fallback is attempted.
                     'session runtime root is not canonical owner-only storage')
     for image in images.values(): image.validate()
     deadline = start_deadline(start, outer_timeout_ms)
-    environment = campaign.sanitized_environment()
+    environment = campaign.sanitized_environment(registered_release=True)
     environment.update(RAYON_NUM_THREADS=str(campaign.RAYON_WORKER_THREADS),
         IROHA_TEST_REQUIRE_NETWORK='1', IROHA_TEST_NETWORK_START_ATTEMPTS='1',
         IROHA_TEST_SKIP_BUILD='1', IROHA_TEST_BUILD_PROFILE='release',

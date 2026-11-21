@@ -16,6 +16,25 @@ pub fn declared_profile(artifact: &[u8]) -> ivm::IvmProfileId {
         .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1))
 }
 
+/// Find the next aligned INPUT allocation through read-only host preflights.
+/// Reserving all HEAP headroom prevents an envelope from falling back to HEAP.
+pub fn next_host_input_address(context: &dyn ivm::host::SyscallContext) -> u64 {
+    let heap_headroom = context.heap_limit() - context.heap_allocated_len();
+    let mut low = 0;
+    let mut high = ivm::Memory::INPUT_SIZE;
+    while low < high {
+        let len = low + (high - low).div_ceil(2);
+        match context
+            .preflight_host_tlv_allocations_with_reserved_heap(&[len as usize], heap_headroom)
+        {
+            Ok(()) => low = len,
+            Err(ivm::VMError::Trap(ivm::error::VmTrap::OutOfMemory)) => high = len - 1,
+            Err(error) => panic!("unexpected probe failure: {error}"),
+        }
+    }
+    ivm::Memory::INPUT_START + ivm::Memory::INPUT_SIZE - low
+}
+
 /// Parse a fixture's header under [`declared_profile`].
 pub fn parse_declared(
     artifact: &[u8],

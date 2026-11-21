@@ -448,3 +448,6 @@ fn an_unknown_attempt_and_an_early_close_without_permission_are_refused() {
         &driver.state
     );
 }
+
+#[path = "runtime_interface_tests.rs"]
+mod runtime_upgrade;

@@ -9,6 +9,7 @@
 //! append temporaries can leave transient copies. This is not a private-witness
 //! cleanup or custody boundary for production proving.
 
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     error::{ExecutionDeferral, VmTrapKind},
@@ -135,16 +136,22 @@ pub struct DiagnosticStepRecorder {
 
 impl DiagnosticStepRecorder {
     pub(crate) fn allocation_plan(capacity: usize) -> Result<ExecutionMemoryPlan, VMError> {
-        ExecutionMemoryPlan::array::<DiagnosticStepRecord>(capacity)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))
+        ExecutionMemoryPlan::array::<DiagnosticStepRecord>(capacity).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })
     }
 
     pub(crate) fn try_new_from_lease(
         capacity: usize,
         lease: &mut ExecutionMemoryLease,
     ) -> Result<Self, VMError> {
-        let records = ExecutionBuffer::new(capacity, lease)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let records = ExecutionBuffer::new(capacity, lease).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         Ok(Self {
             records,
             capacity,
@@ -159,8 +166,11 @@ impl DiagnosticStepRecorder {
     /// cannot fund the exact row backing.
     pub fn try_new(capacity: usize, budget: &AllocationBudget) -> Result<Self, VMError> {
         let plan = Self::allocation_plan(capacity)?;
-        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity))?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            ))
+        })?;
         Self::try_new_from_lease(capacity, &mut lease)
     }
 
@@ -179,7 +189,7 @@ impl DiagnosticStepRecorder {
     /// Reject reuse of a recorder whose prior invocation may retain private data.
     pub(crate) fn begin_run(&self) -> Result<(), VMError> {
         if !self.records().is_empty() || self.end.is_some() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         Ok(())
     }
@@ -191,9 +201,9 @@ impl DiagnosticStepRecorder {
     ) -> Result<PendingDiagnosticStep, VMError> {
         if self.records().len() >= self.capacity {
             before.scrub();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity,
-            ));
+            )));
         }
         let pending = PendingDiagnosticStep {
             instruction: None,
@@ -220,10 +230,11 @@ impl DiagnosticStepRecorder {
             outcome,
         }];
         after.scrub();
-        let result = self
-            .records
-            .append(&records)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable));
+        let result = self.records.append(&records).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        });
         records[0].scrub();
         result
     }
@@ -241,6 +252,7 @@ impl DiagnosticStepRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::{IVM, encoding, host::DefaultHost, instruction};
 
     fn budget_for_rows(count: usize) -> AllocationBudget {
@@ -293,7 +305,7 @@ mod tests {
         assert_eq!(recorder.end().unwrap().state, rows[1].after);
         assert!(matches!(
             recorder.begin_run(),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         drop(recorder);
         assert_eq!(budget.reserved_bytes(), 0);
@@ -309,7 +321,7 @@ mod tests {
         let mut host = DefaultHost::default();
         assert!(matches!(
             vm.run_with_host_diagnostic_steps(&mut host, &mut recorder),
-            Err(VMError::OutOfGas)
+            Err(VMError::Trap(VmTrap::OutOfGas))
         ));
         let row = &recorder.records()[0];
         assert_eq!(row.instruction, Some(add));
@@ -330,7 +342,7 @@ mod tests {
         vm.load_code(&code).unwrap();
         let mut host = DefaultHost::default();
         assert!(
-            matches!(vm.run_with_host_diagnostic_steps(&mut host, &mut recorder), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(vm.run_with_host_diagnostic_steps(&mut host, &mut recorder), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
@@ -341,9 +353,9 @@ mod tests {
         let too_small = AllocationBudget::new(std::mem::size_of::<DiagnosticStepRecord>() - 1);
         assert!(matches!(
             DiagnosticStepRecorder::try_new(1, &too_small),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity
-            ))
+            )))
         ));
         assert_eq!(too_small.reserved_bytes(), 0);
     }

@@ -56,16 +56,39 @@ pub(super) fn verify_initial_credential_marker(
     challenge: &KagemushaWalletEnrollmentChallengeV1,
     marker: &KagemushaWalletMarkerV1,
 ) -> Result<(), Error> {
+    // Model frame authentication against the marker's own key; the shared check below binds
+    // the authenticated fields to the same marker scope for every credential profile.
+    credential
+        .verify_enrollment(scheme, certificate, challenge, &marker.payment_key)
+        .map_err(|_| invalid())?;
+    verify_initial_fields_marker(&credential.body, scheme, certificate, challenge, marker)
+}
+
+/// Bind already authenticated initial credential fields to the Native enrollment-selected
+/// marker. The marker is the durable one this owner selected at key generation; no E6 field
+/// chooses it. The profile-specific signature check happens before this shared binding.
+pub(super) fn verify_initial_fields_marker(
+    fields: &KagemushaWalletCredentialBodyV1,
+    scheme: &KagemushaWalletSchemeV1,
+    certificate: &KagemushaWalletSignerCertificateV1,
+    challenge: &KagemushaWalletEnrollmentChallengeV1,
+    marker: &KagemushaWalletMarkerV1,
+) -> Result<(), Error> {
     if marker.scheme_id != challenge.scheme_id
         || marker.asset_digest != challenge.asset_digest
         || marker.wallet_id != challenge.wallet_id(&marker.payment_key)
-        || marker.wallet_id != credential.body.wallet_id
+        || marker.wallet_id != fields.wallet_id
     {
         return Err(invalid());
     }
-    credential
-        .verify_enrollment(scheme, certificate, challenge, &marker.payment_key)
-        .map_err(|_| invalid())
+    super::carrier::verify_initial_credential_fields_v1(
+        fields,
+        scheme,
+        certificate,
+        challenge,
+        &marker.payment_key,
+    )
+    .map_err(|_| invalid())
 }
 
 #[cfg(test)]

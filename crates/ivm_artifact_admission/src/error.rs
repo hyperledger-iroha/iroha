@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use ivm_abi::{
     VMError,
-    error::{AllocationRefusal, AllocatorRefusal, ExecutionDeferral, VerificationRefusal},
+    error::{VmDeferral, VmTrap},
 };
 
 /// Failure returned by shared artifact admission or native preparation.
@@ -21,33 +21,84 @@ pub struct ContractArtifactError {
 #[derive(Debug)]
 enum ArtifactFailure {
     Invalid(String),
+    C10Header(C10HeaderFailure),
     AbiHashMismatch {
         expected: [u8; 32],
         actual: [u8; 32],
     },
-    ExecutionDeferred {
+    Deferred {
         context: &'static str,
-        reason: ExecutionDeferral,
-    },
-    AllocationDeferred {
-        context: &'static str,
-        refusal: AllocationRefusal,
-    },
-    AllocatorDeferred {
-        context: &'static str,
-        original: AllocatorRefusal,
-    },
-    VerificationDeferred {
-        context: &'static str,
-        original: VerificationRefusal,
-    },
-    DecodeDeferred {
-        context: &'static str,
-        original: norito::core::DecodeLocalRefusal,
+        cause: VmDeferral,
     },
 }
 
+/// Deterministic failures returned by the C10 fixed-header parser.
+#[derive(Clone, Copy, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "the original 64-bit trace bound fits inline and must survive admission"
+)]
+enum C10HeaderFailure {
+    InvalidMetadata,
+    Version { major: u8, minor: u8 },
+    Features(u8),
+    Abi(u8),
+    MissingMaxCycles,
+    MaxCyclesWithoutZk(u64),
+}
+
+impl C10HeaderFailure {
+    fn vm_error(self) -> VMError {
+        match self {
+            Self::InvalidMetadata => VMError::Trap(VmTrap::InvalidMetadata),
+            Self::Version { major, minor } => {
+                VMError::Trap(VmTrap::UnsupportedProgramVersion { major, minor })
+            }
+            Self::Features(bits) => VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits }),
+            Self::Abi(version) => VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version }),
+            Self::MissingMaxCycles => VMError::Trap(VmTrap::MissingMaxCycles),
+            Self::MaxCyclesWithoutZk(max_cycles) => {
+                VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles })
+            }
+        }
+    }
+}
+
 impl ContractArtifactError {
+    /// Retain the source parser's deterministic C10 reason without boxing a general VM error.
+    pub(crate) fn c10_metadata(trap: VmTrap) -> Self {
+        let failure = match trap {
+            VmTrap::InvalidMetadata => C10HeaderFailure::InvalidMetadata,
+            VmTrap::UnsupportedProgramVersion { major, minor } => {
+                C10HeaderFailure::Version { major, minor }
+            }
+            VmTrap::UnsupportedProgramFeatureBits { bits } => C10HeaderFailure::Features(bits),
+            VmTrap::UnsupportedProgramAbiVersion { version } => C10HeaderFailure::Abi(version),
+            VmTrap::MissingMaxCycles => C10HeaderFailure::MissingMaxCycles,
+            VmTrap::MaxCyclesWithoutZk { max_cycles } => {
+                C10HeaderFailure::MaxCyclesWithoutZk(max_cycles)
+            }
+            other => return Self::invalid(format!("metadata parse failed: {other}")),
+        };
+        Self {
+            kind: ArtifactFailure::C10Header(failure),
+        }
+    }
+
+    /// Source fixed-header reason for capture by an authenticated C10 execution attempt.
+    pub fn c10_header_error(&self) -> Option<VMError> {
+        match &self.kind {
+            ArtifactFailure::C10Header(reason) => Some(reason.vm_error()),
+            ArtifactFailure::AbiHashMismatch { expected, actual } => {
+                Some(VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
+                    expected: *expected,
+                    actual: *actual,
+                }))
+            }
+            _ => None,
+        }
+    }
+
     /// Construct an ordinary admission error. Public for the native preparation
     /// adapter; artifact callers should receive errors from verification.
     #[doc(hidden)]
@@ -72,41 +123,22 @@ impl ContractArtifactError {
     ///
     /// Deterministic preparation failures remain invalid artifacts. A local
     /// deferral retains its original cause and any existing pool observation,
-    /// including through a metered wrapper; no guest gas is attached to it.
+    /// and carries no guest gas.
     /// Constructing a local deferral borrows static context and allocates nothing.
     #[doc(hidden)]
     pub fn preparation(context: &'static str, error: VMError) -> Self {
-        let kind = match error {
-            VMError::ExecutionDeferred(reason) => {
-                ArtifactFailure::ExecutionDeferred { context, reason }
-            }
-            VMError::AllocationDeferred(refusal) => {
-                ArtifactFailure::AllocationDeferred { context, refusal }
-            }
-            VMError::AllocatorDeferred(original) => {
-                ArtifactFailure::AllocatorDeferred { context, original }
-            }
-            VMError::VerificationDeferred(original) => {
-                ArtifactFailure::VerificationDeferred { context, original }
-            }
-            VMError::DecodeDeferred(original) => {
-                ArtifactFailure::DecodeDeferred { context, original }
-            }
-            VMError::Metered { source, .. } if source.execution_deferral().is_some() => {
-                return Self::preparation(context, *source);
-            }
-            error => return Self::invalid(format!("{context} failed: {error}")),
-        };
-        Self { kind }
+        match error {
+            VMError::Deferred(cause) => Self {
+                kind: ArtifactFailure::Deferred { context, cause },
+            },
+            error => Self::invalid(format!("{context} failed: {error}")),
+        }
     }
 
     /// Whether preparation stopped locally, without exporting or copying its cause.
     #[must_use]
     pub fn is_local_deferral(&self) -> bool {
-        !matches!(
-            self.kind,
-            ArtifactFailure::Invalid(_) | ArtifactFailure::AbiHashMismatch { .. }
-        )
+        matches!(self.kind, ArtifactFailure::Deferred { .. })
     }
 
     /// Export a local cause exactly once, leaving an ordinary diagnostic intact on mismatch.
@@ -116,21 +148,7 @@ impl ContractArtifactError {
     /// rather than a local preparation deferral.
     pub fn try_into_local_vm_error(self) -> Result<VMError, Self> {
         match self.kind {
-            ArtifactFailure::ExecutionDeferred { reason, .. } => {
-                Ok(VMError::ExecutionDeferred(reason))
-            }
-            ArtifactFailure::AllocationDeferred { refusal, .. } => {
-                Ok(VMError::AllocationDeferred(refusal))
-            }
-            ArtifactFailure::DecodeDeferred { original, .. } => {
-                Ok(VMError::DecodeDeferred(original))
-            }
-            ArtifactFailure::AllocatorDeferred { original, .. } => {
-                Ok(VMError::AllocatorDeferred(original))
-            }
-            ArtifactFailure::VerificationDeferred { original, .. } => {
-                Ok(VMError::VerificationDeferred(original))
-            }
+            ArtifactFailure::Deferred { cause, .. } => Ok(VMError::Deferred(cause)),
             kind => Err(Self { kind }),
         }
     }
@@ -139,21 +157,12 @@ impl ContractArtifactError {
     #[must_use]
     pub fn into_vm_error(self) -> VMError {
         match self.kind {
-            ArtifactFailure::Invalid(_) => VMError::InvalidMetadata,
+            ArtifactFailure::Invalid(_) => VMError::Trap(VmTrap::InvalidMetadata),
+            ArtifactFailure::C10Header(reason) => reason.vm_error(),
             ArtifactFailure::AbiHashMismatch { expected, actual } => {
-                VMError::ArtifactAbiHashMismatch { expected, actual }
+                VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual })
             }
-            ArtifactFailure::ExecutionDeferred { reason, .. } => VMError::ExecutionDeferred(reason),
-            ArtifactFailure::AllocationDeferred { refusal, .. } => {
-                VMError::AllocationDeferred(refusal)
-            }
-            ArtifactFailure::DecodeDeferred { original, .. } => VMError::DecodeDeferred(original),
-            ArtifactFailure::AllocatorDeferred { original, .. } => {
-                VMError::AllocatorDeferred(original)
-            }
-            ArtifactFailure::VerificationDeferred { original, .. } => {
-                VMError::VerificationDeferred(original)
-            }
+            ArtifactFailure::Deferred { cause, .. } => VMError::Deferred(cause),
         }
     }
 }
@@ -162,24 +171,17 @@ impl fmt::Display for ContractArtifactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ArtifactFailure::Invalid(message) => f.write_str(message),
+            ArtifactFailure::C10Header(reason) => write!(f, "invalid contract artifact: metadata parse failed: {}", reason.vm_error()),
             ArtifactFailure::AbiHashMismatch { .. } => f.write_str(
                 "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor",
             ),
-            ArtifactFailure::ExecutionDeferred { context, reason } => write!(
-                f, "contract preparation deferred during {context}: execution deferred: {reason}",
-            ),
-            ArtifactFailure::AllocationDeferred { context, refusal } => write!(
-                f, "contract preparation deferred during {context}: execution allocation deferred: {refusal}",
-            ),
-            ArtifactFailure::AllocatorDeferred { context, original } => write!(
-                f, "contract preparation deferred during {context}: physical allocation deferred: {original}",
-            ),
-            ArtifactFailure::VerificationDeferred { context, original } => write!(
-                f, "contract preparation deferred during {context}: execution verification deferred: {original}",
-            ),
-            ArtifactFailure::DecodeDeferred { context, original } => write!(
-                f, "contract preparation deferred during {context}: execution decode deferred: {original}",
-            ),
+            ArtifactFailure::Deferred { context, cause } => {
+                write!(f, "contract preparation deferred during {context}: ")?;
+                match cause {
+                    VmDeferral::VerificationDeferred(original) => write!(f, "execution verification deferred: {original}"),
+                    other => fmt::Display::fmt(other, f),
+                }
+            }
         }
     }
 }
@@ -187,12 +189,17 @@ impl fmt::Display for ContractArtifactError {
 impl Error for ContractArtifactError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
-            ArtifactFailure::ExecutionDeferred { reason, .. } => Some(reason),
-            ArtifactFailure::AllocationDeferred { refusal, .. } => Some(refusal),
-            ArtifactFailure::DecodeDeferred { original, .. } => Some(original),
-            ArtifactFailure::VerificationDeferred { original, .. } => Some(original),
-            ArtifactFailure::AllocatorDeferred { original, .. } => Some(original),
-            ArtifactFailure::Invalid(_) | ArtifactFailure::AbiHashMismatch { .. } => None,
+            ArtifactFailure::Deferred { cause, .. } => match cause {
+                VmDeferral::ExecutionDeferred(reason) => Some(reason),
+                VmDeferral::AllocationDeferred(owner) => Some(owner),
+                VmDeferral::AllocatorDeferred(owner) => Some(owner),
+                VmDeferral::DecodeDeferred(owner) => Some(owner),
+                VmDeferral::VerificationDeferred(owner) => Some(owner),
+                other => Some(other),
+            },
+            ArtifactFailure::Invalid(_)
+            | ArtifactFailure::C10Header(_)
+            | ArtifactFailure::AbiHashMismatch { .. } => None,
         }
     }
 }
@@ -200,6 +207,42 @@ impl Error for ContractArtifactError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ivm_abi::error::{ExecutionDeferral, VerificationRefusal};
+
+    #[test]
+    fn c10_header_failure_keeps_the_parsers_structured_trace_bound() {
+        let error =
+            ContractArtifactError::c10_metadata(VmTrap::MaxCyclesWithoutZk { max_cycles: 17 });
+        assert!(!error.is_local_deferral());
+        assert!(matches!(
+            error.c10_header_error(),
+            Some(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 17 }))
+        ));
+        assert!(matches!(
+            error.into_vm_error(),
+            VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 17 })
+        ));
+    }
+
+    #[test]
+    fn preparation_retains_structured_local_host_causes() {
+        for cause in [
+            VmDeferral::HostUnavailable,
+            VmDeferral::SyscallGasQuoteExceeded {
+                quoted: 3,
+                actual: 8,
+            },
+            VmDeferral::SyscallMeteringModeMismatch { syscall: 17 },
+        ] {
+            let expected = cause.to_string();
+            let failure = ContractArtifactError::preparation("host", VMError::Deferred(cause));
+            assert!(failure.is_local_deferral());
+            let VMError::Deferred(original) = failure.into_vm_error() else {
+                panic!("lost local host cause")
+            };
+            assert_eq!(original.to_string(), expected);
+        }
+    }
 
     #[test]
     fn admission_error_stays_below_large_result_threshold_without_boxing() {
@@ -235,17 +278,14 @@ mod tests {
                     .into_local_refusal()
                     .unwrap();
                     let source = if native {
-                        VMError::VerificationDeferred(VerificationRefusal::from_decode_refusal(
-                            original.clone(),
+                        VMError::Deferred(VmDeferral::VerificationDeferred(
+                            VerificationRefusal::from_decode_refusal(original.clone()),
                         ))
                     } else {
-                        VMError::DecodeDeferred(original.clone())
+                        VMError::Deferred(VmDeferral::DecodeDeferred(original.clone()))
                     };
                     let source = if metered {
-                        VMError::Metered {
-                            gas: 99,
-                            source: Box::new(source),
-                        }
+                        VMError::metered(99, source)
                     } else {
                         source
                     };
@@ -268,10 +308,10 @@ mod tests {
                         Some(ExecutionDeferral::ActiveMemoryCapacity)
                     );
                     let retained = match returned {
-                        VMError::VerificationDeferred(owner) if native => {
+                        VMError::Deferred(VmDeferral::VerificationDeferred(owner)) if native => {
                             owner.into_decode_refusal().unwrap()
                         }
-                        VMError::DecodeDeferred(owner) if !native => owner,
+                        VMError::Deferred(VmDeferral::DecodeDeferred(owner)) if !native => owner,
                         other => panic!("lost original owner: {other:?}"),
                     };
                     assert_eq!(retained, original);
@@ -288,10 +328,7 @@ mod tests {
     fn metered_deterministic_diagnostic_keeps_original_gas_context() {
         let error = ContractArtifactError::preparation(
             "native index",
-            VMError::Metered {
-                gas: 99,
-                source: Box::new(VMError::DecodeError),
-            },
+            VMError::metered(99, VMError::Trap(VmTrap::DecodeError)),
         );
         assert_eq!(
             error.to_string(),
@@ -299,7 +336,10 @@ mod tests {
         );
         assert!(!error.is_local_deferral());
         let error = error.try_into_local_vm_error().unwrap_err();
-        assert!(matches!(error.into_vm_error(), VMError::InvalidMetadata));
+        assert!(matches!(
+            error.into_vm_error(),
+            VMError::Trap(VmTrap::InvalidMetadata)
+        ));
     }
 
     #[test]
@@ -315,10 +355,7 @@ mod tests {
             for selective in [false, true] {
                 let error = ContractArtifactError::preparation(
                     "decoded instructions",
-                    VMError::Metered {
-                        gas: 99,
-                        source: Box::new(VMError::ExecutionDeferred(reason)),
-                    },
+                    VMError::metered(99, VMError::Deferred(VmDeferral::ExecutionDeferred(reason))),
                 );
                 assert!(error.is_local_deferral());
                 assert!(
@@ -331,7 +368,9 @@ mod tests {
                 } else {
                     error.into_vm_error()
                 };
-                assert!(matches!(error, VMError::ExecutionDeferred(actual) if actual == reason));
+                assert!(
+                    matches!(error, VMError::Deferred(VmDeferral::ExecutionDeferred(actual)) if actual == reason)
+                );
                 assert_eq!(error.metered_gas(), None);
             }
         }
@@ -340,9 +379,9 @@ mod tests {
     #[test]
     fn deterministic_preparation_failures_remain_invalid_artifacts() {
         for source in [
-            VMError::DecodeError,
-            VMError::OutOfMemory,
-            VMError::InvalidMetadata,
+            VMError::Trap(VmTrap::DecodeError),
+            VMError::Trap(VmTrap::OutOfMemory),
+            VMError::Trap(VmTrap::InvalidMetadata),
         ] {
             let error = ContractArtifactError::preparation("native index", source);
             assert!(!error.is_local_deferral());
@@ -350,7 +389,7 @@ mod tests {
             assert!(error.to_string().starts_with("invalid contract artifact:"));
             assert!(matches!(
                 error.try_into_local_vm_error().unwrap_err().into_vm_error(),
-                VMError::InvalidMetadata
+                VMError::Trap(VmTrap::InvalidMetadata)
             ));
         }
         let ordinary = ContractArtifactError::invalid("missing interface");
@@ -358,7 +397,10 @@ mod tests {
             ordinary.to_string(),
             "invalid contract artifact: missing interface"
         );
-        assert!(matches!(ordinary.into_vm_error(), VMError::InvalidMetadata));
+        assert!(matches!(
+            ordinary.into_vm_error(),
+            VMError::Trap(VmTrap::InvalidMetadata)
+        ));
     }
 
     #[test]
@@ -370,7 +412,7 @@ mod tests {
         assert!(error.to_string().contains("abi_hash does not match"));
         let error = error.try_into_local_vm_error().unwrap_err();
         assert!(
-            matches!(error.into_vm_error(), VMError::ArtifactAbiHashMismatch { expected:e, actual:a } if e == expected && a == actual)
+            matches!(error.into_vm_error(), VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected:e, actual:a }) if e == expected && a == actual)
         );
     }
 }

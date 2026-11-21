@@ -3,6 +3,7 @@
 use super::super::tests as dispatch_tests;
 use super::*;
 use ivm::{Memory, encoding::wide as enc};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use packet::{
     AFTER, AFTER_TAG, BEFORE_TAG, CLOCK, ENABLED, Event, GENERATION, INDEX, KEY, SPACE, Space, VM,
     WRITE,
@@ -580,11 +581,13 @@ fn actual_prepared_call_preserves_relative_descriptor_identity_and_joins_native_
                 &mut ivm::host::DefaultHost::default(),
                 &mut recorder
             )),
-            &(ivm::VMError::ExecutionDeferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity))
+            &(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+            )))
         ) {
             (
-                Err(ivm::VMError::ExecutionDeferred(actual_field_0)),
-                ivm::VMError::ExecutionDeferred(expected_field_0),
+                Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(actual_field_0))),
+                ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(expected_field_0)),
             ) => actual_field_0 == expected_field_0,
             _ => false,
         });
@@ -879,9 +882,12 @@ fn actual_native_frame_work_oog_retains_opcode_debit_without_completing_or_writi
                     &mut ivm::host::DefaultHost::default(),
                     &mut recorder
                 )),
-                &(ivm::VMError::OutOfGas)
+                &(ivm::VMError::Trap(VmTrap::OutOfGas))
             ),
-            (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+            (
+                Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+                ivm::VMError::Trap(VmTrap::OutOfGas)
+            )
         ));
         assert_eq!(recorder.records().len(), 3);
         assert!(

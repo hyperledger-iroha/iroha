@@ -1,6 +1,7 @@
 //! Exact funded nested-return copying and authenticated direct argument installation.
 use super::*;
 use crate::VMError;
+use crate::error::{VmDeferral, VmErrorRef, VmTrap};
 use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
 
 pub(crate) fn complete_test_result(source: &mut IVM, words: &[u64]) -> u64 {
@@ -70,6 +71,7 @@ fn transfer_return(
 mod tests {
     use super::*;
     use crate::PointerType;
+    use crate::error::VmTrap;
     use iroha_primitives::numeric_abi::IntValueV1;
     use ivm_abi::entrypoint::EntrypointListTypeNodeV1;
     use ivm_abi::entrypoint::{EntrypointValueKindV1 as Kind, EntrypointValueTypeNodeV1 as Node};
@@ -200,7 +202,7 @@ mod tests {
             source.store_u64(source_table, word).unwrap();
             assert!(matches!(
                 transfer_return(&source, &mut destination, &schema, 1, result_table),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
             assert_eq!(destination.load_u64(result_table).unwrap(), 7);
         }
@@ -292,7 +294,10 @@ fn funded_arguments_install_once_without_public_input_transport_or_record_decode
     let budget = iroha_allocation::AllocationBudget::new(8 * 1024 * 1024);
     let quote = quote_argument_record(&source, schema, base, 1, source.remaining_gas()).unwrap();
     let insufficient = quote_argument_record(&source, schema, base, 1, quote.gas - 1).unwrap_err();
-    assert!(matches!(insufficient.as_unmetered(), VMError::OutOfGas));
+    assert!(matches!(
+        insufficient.as_unmetered(),
+        VmErrorRef::Trap(VmTrap::OutOfGas)
+    ));
     assert_eq!(insufficient.split_metered().0, Some(quote.gas - 1));
     let captured = capture_argument_record_funded(&source, schema, base, 1, &budget).unwrap();
     let mut child = IVM::new(1_000_000);
@@ -334,7 +339,7 @@ fn captured_argument_local_refusal_and_gas_exhaustion_leave_child_unprepared() {
     let heap = child.memory.heap_allocated_len();
     assert!(matches!(
         install_captured_arguments(&captured, schema, &mut child, 1, &budget),
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     ));
     assert_eq!(child.memory.heap_allocated_len(), heap);
     assert!(child.captured_root_tables.is_none());
@@ -342,7 +347,7 @@ fn captured_argument_local_refusal_and_gas_exhaustion_leave_child_unprepared() {
     budget.set_limit_bytes(retained);
     assert!(matches!(
         install_captured_arguments(&captured, schema, &mut child, 1, &budget),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(child.memory.heap_allocated_len(), heap);
     assert!(child.captured_root_tables.is_none());
@@ -368,7 +373,7 @@ fn funded_return_transfer_uses_explicit_escrow_and_preserves_call_descriptors() 
     parent.set_register(11, 92);
     assert!(matches!(
         transfer_return_record_funded(&captured, &schema, &mut parent, table, 1, 0, &budget),
-        Err(VMError::OutOfGas)
+        Err(VMError::Trap(VmTrap::OutOfGas))
     ));
     assert!(matches!(parent.load_u64(table), Ok(77)));
     assert_eq!(budget.reserved_bytes(), retained);
@@ -390,9 +395,9 @@ fn funded_return_transfer_uses_explicit_escrow_and_preserves_call_descriptors() 
     let other = iroha_allocation::AllocationBudget::new(1024 * 1024);
     assert!(matches!(
         transfer_return_record_funded(&captured, &schema, &mut parent, table, 1, 1_000_000, &other),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::ExecutionDeferral::LocalInvariantViolation
-        ))
+        )))
     ));
     drop(captured);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -448,7 +453,10 @@ fn funded_return_copy_retries_original_record_after_pool_shrink_and_guest_capaci
         &budget,
     )
     .unwrap_err();
-    assert!(matches!(error, VMError::AllocationDeferred(_)));
+    assert!(matches!(
+        error,
+        VMError::Deferred(VmDeferral::AllocationDeferred(_))
+    ));
     assert!(matches!(parent.load_u64(table), Ok(77)));
     assert_eq!(parent.memory.heap_allocated_len(), heap);
     assert_eq!(budget.reserved_bytes(), retained);
@@ -466,7 +474,7 @@ fn funded_return_copy_retries_original_record_after_pool_shrink_and_guest_capaci
             1_000_000,
             &budget
         ),
-        Err(VMError::OutOfMemory)
+        Err(VMError::Trap(VmTrap::OutOfMemory))
     ));
     assert!(matches!(parent.load_u64(table), Ok(77)));
     assert_eq!(parent.memory.heap_allocated_len(), heap);

@@ -104,7 +104,7 @@ pub struct LedgerFinalityBindingsV1 {
     pub qc_block_hash: [u8; 32],
     /// Whether the joined Network row carries an applied result.
     pub accepted: bool,
-    /// Input index shared by the row, the entry leaf and the output leaf.
+    /// Signed input index committed by both the row and the entry leaf.
     pub input_index: u32,
 }
 
@@ -121,7 +121,7 @@ impl KagemushaWalletLedgerFinalityV1 {
         {
             return Err(invalid_v1("ledger_finality.inclusion.path"));
         }
-        if self.inclusion.output.network().is_none() {
+        if self.inclusion.output.network_index().is_none() {
             return Err(invalid_v1("ledger_finality.inclusion.output"));
         }
         self.certificate
@@ -167,19 +167,20 @@ impl KagemushaWalletLedgerFinalityV1 {
     }
 
     /// Unauthenticated recheck projection of a retained original: the decoded header height,
-    /// the decoded `CommitQC` block hash, the joined row's outcome and the shared leaf index.
+    /// the decoded `CommitQC` block hash, the joined row's outcome and the original signed input index.
     /// No BLS signature is verified; callers compare it with their authenticated record.
     ///
     /// # Errors
-    /// Rejects malformed certificate components, a non-Network row or a leaf index that
-    /// differs from the row's input index.
+    /// Rejects malformed originals, an internal row or impossible input/output coordinates.
     pub fn custody_bindings(&self) -> Result<LedgerFinalityBindingsV1, FinalityReadError> {
-        let output = self.inclusion.joined_network_output()?;
+        let (height, qc_block_hash) = self
+            .certificate
+            .retained_inclusion_coordinates(&self.inclusion)?;
         Ok(LedgerFinalityBindingsV1 {
-            height: self.certificate.height()?,
-            qc_block_hash: self.certificate.qc_block_hash()?.0,
-            accepted: output.result.is_ok(),
-            input_index: output.input_index,
+            height,
+            qc_block_hash: qc_block_hash.0,
+            accepted: self.inclusion.output.result().is_ok(),
+            input_index: self.inclusion.entry_proof.leaf_index(),
         })
     }
 
@@ -213,8 +214,11 @@ impl KagemushaWalletLedgerFinalityV1 {
         let mut reader = selected.clone();
         let verified = reader.verify(&self.certificate)?;
         verified.verify_global_scope(reader.network(), chain)?;
-        let result =
-            verified.verify_external_execution(&reader.network(), signed, &self.inclusion)?;
+        let result = verified.verify_profiled_external_execution(
+            &reader.network(),
+            signed,
+            &self.inclusion,
+        )?;
         Ok(VerifiedKagemushaLedgerOutcomeV1 {
             entrypoint: *entrypoint.as_ref(),
             height: verified.height(),

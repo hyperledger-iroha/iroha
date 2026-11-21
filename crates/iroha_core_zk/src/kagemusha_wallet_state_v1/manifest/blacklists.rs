@@ -13,7 +13,7 @@ use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v
 /// Manifest selection of the installed list and its exact archived original.
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::LocalBlacklistV1")]
-pub(in crate::kagemusha_wallet_state_v1) struct LocalBlacklistV1 {
+pub(crate) struct LocalBlacklistV1 {
     version: u16,
     list_version: u64,
     digest: [u8; 32],
@@ -22,10 +22,42 @@ pub(in crate::kagemusha_wallet_state_v1) struct LocalBlacklistV1 {
 }
 
 impl LocalBlacklistV1 {
+    pub(crate) fn select(
+        list: &KagemushaWalletBlacklistV1,
+        original: &[u8],
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            version: 1,
+            list_version: list.body.list_version,
+            digest: list.blacklist_digest(),
+            original: object_digest(original),
+            original_bytes: u32::try_from(original.len())
+                .map_err(|_| Error::Invalid("blacklist original size"))?,
+        })
+    }
+    pub(crate) fn original(&self) -> [u8; 32] {
+        self.original
+    }
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+    pub(crate) fn reinstall(&self, candidate: &Self) -> Result<bool, Error> {
+        if self == candidate {
+            return Ok(true);
+        }
+        if self.digest == candidate.digest {
+            return Err(Error::WitnessLost("local blacklist selection"));
+        }
+        if candidate.list_version <= self.list_version {
+            return Err(Error::Invalid("blacklist list_version"));
+        }
+        Ok(false)
+    }
+
     /// Read the selected list back. Install authenticated these exact bytes and the protected
     /// manifest names them by archive digest, so this decode does not recompute the signed
     /// entries root: enforcement stays fast for a full list.
-    pub(in crate::kagemusha_wallet_state_v1) fn read(
+    pub(crate) fn read(
         &self,
         store: &mut dyn ObjectWorkspace,
         scheme_id: &[u8; 32],
@@ -57,7 +89,7 @@ impl LocalBlacklistV1 {
 
 // Authenticate a complete list natively: certificate set under the scheme, the list's
 // RegulatoryPolicy signer and signature, scheme, entry order, count and entries root.
-fn authenticate(
+pub(crate) fn authenticate(
     scheme: &KagemushaWalletSchemeV1,
     original: &[u8],
     certificates: &[u8],
@@ -120,13 +152,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::NoHead);
         }
         // The protected manifest authenticates the held selection; its original is not read.
-        let reinstall = match &manifest.blacklist {
-            Some(held) if held.digest == digest => true,
-            Some(held) if installed.body.list_version <= held.list_version => {
-                return Err(Error::Invalid("blacklist list_version"));
-            }
-            _ => false,
-        };
+        let entry = LocalBlacklistV1::select(&installed, original)?;
+        let reinstall = manifest
+            .blacklist
+            .as_ref()
+            .map(|held| held.reinstall(&entry))
+            .transpose()?
+            .unwrap_or(false);
         if !reinstall {
             self.require_blacklist_capacity(original.len())?;
         }
@@ -136,14 +168,6 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if address != object_digest(original) {
             return Err(Error::WitnessLost("local blacklist publication"));
         }
-        let entry = LocalBlacklistV1 {
-            version: 1,
-            list_version: installed.body.list_version,
-            digest,
-            original: address,
-            original_bytes: u32::try_from(original.len())
-                .map_err(|_| Error::Invalid("blacklist original size"))?,
-        };
         if entry.read(&mut self.archive, &self.scheme_id)? != installed {
             return Err(Error::WitnessLost("local blacklist readback"));
         }

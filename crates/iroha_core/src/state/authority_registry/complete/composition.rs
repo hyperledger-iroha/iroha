@@ -84,6 +84,7 @@ fn schema_digest(field: &'static str, schema: Schema) -> Result<Hash, Compositio
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => (0, nominal_name(), "", layout),
         Schema::Semantic {
             identity,

@@ -1,3 +1,4 @@
+use ivm::error::VmErrorRef;
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
 
 #[test]
@@ -91,35 +92,44 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
         "update",
         sample_mailbox_message(&bundle, "update", b"retry-me".to_vec()),
     );
-    let active = VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity);
-    let allocation =
-        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow);
+    let active = VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::ActiveMemoryCapacity,
+    ));
+    let allocation = VMError::Deferred(VmDeferral::AllocationDeferred(
+        iroha_allocation::AllocationRefusal::DemandOverflow,
+    ));
     for (error, label) in [
         (active, "execution_deferred"),
         (
-            VMError::ExecutionDeferred(ExecutionDeferral::VerificationCancelled),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::VerificationCancelled,
+            )),
             "execution_deferred",
         ),
         (
-            VMError::ExecutionDeferred(ExecutionDeferral::NativeVerificationMemoryUnavailable),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::NativeVerificationMemoryUnavailable,
+            )),
             "execution_deferred",
         ),
         (
-            VMError::ExecutionDeferred(ExecutionDeferral::VerifierInitializationUnavailable),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::VerifierInitializationUnavailable,
+            )),
             "execution_deferred",
         ),
         (allocation, "allocation_deferred"),
         // Typed boundary control; actual allocator refusal is exercised by Core's
         // existing global allocator in the native World-cut publication tests.
         (
-            VMError::AllocatorDeferred(
+            VMError::Deferred(VmDeferral::AllocatorDeferred(
                 iroha_allocation::AllocatorRefusal::try_from(
                     iroha_allocation::ChargedBufferError::Allocator {
                         requested_bytes: 73,
                     },
                 )
                 .unwrap(),
-            ),
+            )),
             "allocator_deferred",
         ),
     ] {
@@ -132,12 +142,15 @@ fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result
             .expect_err("local deferral must not produce a durable mailbox result");
         assert_eq!(result.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     }
-    assert_eq!(vm_error_label(&VMError::OutOfGas), "out_of_gas");
     assert_eq!(
-        vm_error_kind(&VMError::OutOfGas),
+        vm_error_label(&VMError::Trap(VmTrap::OutOfGas)),
+        "out_of_gas"
+    );
+    assert_eq!(
+        vm_error_kind(&VMError::Trap(VmTrap::OutOfGas)),
         SoracloudRuntimeExecutionErrorKind::Internal,
     );
-    let deterministic = ordered_mailbox_vm_failure(&request, &VMError::OutOfGas)
+    let deterministic = ordered_mailbox_vm_failure(&request, &VMError::Trap(VmTrap::OutOfGas))
         .expect("guest gas exhaustion is a deterministic runtime result");
     assert_eq!(
         deterministic
@@ -173,14 +186,14 @@ fn vm_decode_deferral_retains_original_owner_and_refuses_durable_mailbox_results
         "update",
         sample_mailbox_message(&bundle, "update", b"decode-retry".to_vec()),
     );
-    let direct = VMError::DecodeDeferred(original.clone());
-    let nested = VMError::Metered {
-        gas: 41,
-        source: Box::new(VMError::Metered {
-            gas: 19,
-            source: Box::new(VMError::DecodeDeferred(original.clone())),
-        }),
-    };
+    let direct = VMError::Deferred(VmDeferral::DecodeDeferred(original.clone()));
+    let nested = VMError::metered(
+        41,
+        VMError::metered(
+            19,
+            VMError::Deferred(VmDeferral::DecodeDeferred(original.clone())),
+        ),
+    );
     for error in [direct, nested] {
         assert_eq!(vm_error_label(&error), "decode_deferred");
         assert_eq!(
@@ -195,13 +208,14 @@ fn vm_decode_deferral_retains_original_owner_and_refuses_durable_mailbox_results
             failure.kind,
             SoracloudRuntimeExecutionErrorKind::Unavailable
         );
-        let VMError::DecodeDeferred(retained) = error.as_unmetered() else {
+        let VmErrorRef::Deferred(VmDeferral::DecodeDeferred(retained)) = error.as_unmetered()
+        else {
             panic!("daemon inspection must preserve the original decoder owner");
         };
         assert_eq!(retained, &original);
         let (gas, unmetered) = error.split_metered();
         assert_eq!(gas, None);
-        let VMError::DecodeDeferred(retained) = unmetered else {
+        let VMError::Deferred(VmDeferral::DecodeDeferred(retained)) = unmetered else {
             panic!("consuming split must move the original decoder owner");
         };
         assert_eq!(retained, original);
@@ -242,17 +256,11 @@ fn vm_verification_deferral_moves_original_owner_and_refuses_mailbox_results() -
         .into_local_refusal()
         .unwrap();
         let expected = original.clone();
-        let mut error = VMError::VerificationDeferred(
+        let mut error = VMError::Deferred(VmDeferral::VerificationDeferred(
             iroha_core_zk::VerificationRefusal::from_decode_refusal(original),
-        );
+        ));
         if nested {
-            error = VMError::Metered {
-                gas: 17,
-                source: Box::new(VMError::Metered {
-                    gas: 29,
-                    source: Box::new(error),
-                }),
-            };
+            error = VMError::metered(17, VMError::metered(29, error));
         }
         assert_eq!(vm_error_label(&error), "verification_deferred");
         assert_eq!(
@@ -273,7 +281,7 @@ fn vm_verification_deferral_moves_original_owner_and_refuses_mailbox_results() -
         );
         let (gas, moved) = error.split_metered();
         assert_eq!(gas, None);
-        let VMError::VerificationDeferred(owner) = moved else {
+        let VMError::Deferred(VmDeferral::VerificationDeferred(owner)) = moved else {
             panic!("lost original verification cause");
         };
         assert_eq!(owner.decode_refusal(), Some(&expected));
@@ -307,8 +315,11 @@ fn vm_nested_call_faults_keep_distinct_deterministic_mailbox_labels_when_metered
     );
     let mut commitments = Vec::new();
     let cases: [(ErrorFactory, &str); 2] = [
-        (|| VMError::ReentrantCall, "reentrant_call"),
-        (|| VMError::CallDepthExceeded, "call_depth_exceeded"),
+        (|| VMError::Trap(VmTrap::ReentrantCall), "reentrant_call"),
+        (
+            || VMError::Trap(VmTrap::CallDepthExceeded),
+            "call_depth_exceeded",
+        ),
     ];
     for (make_error, label) in cases {
         let expected = deterministic_mailbox_failure_result(

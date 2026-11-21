@@ -13,17 +13,18 @@ use iroha_data_model::{
         },
     },
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::num::NonZeroU64;
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_lock_key(
-        vm: &IVM,
+        vm: &dyn ivm::host::SyscallContext,
         pointer: u64,
         controller: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<(EscrowId, Vec<u8>), ivm::VMError> {
         let key = Self::decode_pointer_tlv(vm, pointer, PointerType::Blob)?;
         if key.payload.is_empty() || key.payload.len() > MAX_CONTROLLED_ASSET_LOCK_KEY_BYTES_V1 {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::Trap(VmTrap::DecodeError));
         }
         Ok((
             controlled_asset_lock_id(controller, key.payload),
@@ -33,25 +34,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 
     pub(super) fn controlled_asset_lock(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         number: u32,
     ) -> Result<u64, ivm::VMError> {
         // Never accept a controller supplied by the guest, an account alias, or metadata.
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let controller = context.contract_address.clone();
         if context.contract_subject != controller.subject_id() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
-        vm.ensure_public_register(10)?;
+        vm.quote().ensure_public_register(10)?;
         let mut custody_return = None;
         let instruction = match number {
             ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN => {
-                let base = vm.register(10);
+                let base = vm.public_register(10)?;
                 if !base.is_multiple_of(8) {
-                    return Err(ivm::VMError::DecodeError);
+                    return Err(ivm::VMError::Trap(VmTrap::DecodeError));
                 }
                 // This validates both allocation provenance and public memory tags.
                 vm.ensure_owned_heap_range(base, 64)?;
@@ -72,7 +73,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 let network = self
                     .network_id
                     .as_ref()
-                    .ok_or(ivm::VMError::PermissionDenied)?;
+                    .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
                 let custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
                     network,
                     &escrow_id,
@@ -102,50 +103,54 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN => {
-                vm.ensure_public_register(11)?;
-                vm.ensure_public_register(12)?;
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                vm.quote().ensure_public_register(11)?;
+                vm.quote().ensure_public_register(12)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(DrawdownControlledAssetLockV1 {
                     drawdown: DrawdownAssetLock::new(
                         escrow_id,
-                        Self::decode_quantity(vm, vm.register(11))?,
-                        Self::decode_quantity(vm, vm.register(12))?,
+                        Self::decode_quantity(vm, vm.public_register(11)?)?,
+                        Self::decode_quantity(vm, vm.public_register(12)?)?,
                     ),
                     waterfall: None,
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL => {
-                vm.ensure_public_register(11)?;
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                vm.quote().ensure_public_register(11)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(CancelControlledAssetLockV1 {
                     cancel: CancelAssetLock::new(
                         escrow_id,
-                        Self::decode_quantity(vm, vm.register(11))?,
+                        Self::decode_quantity(vm, vm.public_register(11)?)?,
                     ),
                     waterfall: None,
                 })
             }
             ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE => {
-                let (escrow_id, _) = Self::controlled_lock_key(vm, vm.register(10), &controller)?;
+                let (escrow_id, _) =
+                    Self::controlled_lock_key(vm, vm.public_register(10)?, &controller)?;
                 InstructionBox::from(ExpireControlledAssetLockV1 {
                     expiry: ExpireAssetLock::new(escrow_id),
                     waterfall: None,
                 })
             }
-            _ => return Err(ivm::VMError::UnknownSyscall(number)),
+            _ => return Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(number))),
         };
         if let Some(encoded_custody) = custody_return {
             self.ensure_instruction_queue_allowed(&instruction)?;
             let instruction_gas =
-                crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-                    .map_err(ivm::VMError::VerificationDeferred)?;
+                crate::gas::meter_instruction(&instruction, &self.confidential_gas).map_err(
+                    |cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)),
+                )?;
             let output_gas = u64::try_from(encoded_custody.len())
-                .map_err(|_| ivm::VMError::GasCostOverflow)?
+                .map_err(|_| ivm::VMError::Trap(VmTrap::GasCostOverflow))?
                 .checked_mul(ivm::gas::SYSCALL_GAS_PER_BYTE)
-                .ok_or(ivm::VMError::GasCostOverflow)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
             let gas = instruction_gas
                 .checked_add(output_gas)
-                .ok_or(ivm::VMError::GasCostOverflow)?;
+                .ok_or(ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
             // Complete gas, VM allocation, and retained-effect capacity checks before
             // allocating a return or publishing any queue entry or result register.
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -153,14 +158,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             if !self.try_reserve_serialized_output(&instruction, 1) {
                 return self.ensure_output_budget().map(|()| gas);
             }
-            let pointer = vm.alloc_host_tlv(&encoded_custody)?;
+            let pointer = vm.alloc_encoded_host_tlv(&encoded_custody)?;
             self.queued.push(QueuedEffect {
                 payload: QueuedEffectPayload::Instruction(instruction),
                 authority: self.effect_authority(),
                 contract_runtime_context: self.current_contract_runtime_context.clone(),
                 entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             });
-            vm.set_register(10, pointer);
+            vm.write_register(10, pointer)?;
             return Ok(gas);
         }
         // Other operations retain their original gas and effect-only behavior.
@@ -175,6 +180,7 @@ mod tests {
     use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::host::IVMHost;
+    use ivm_abi::error::{VmErrorRef, VmTrap};
 
     fn host() -> CoreHost {
         let caller = ALICE_ID.clone();
@@ -602,7 +608,7 @@ seiyaku ControlledLock {
             let before = vm.register(10);
             assert!(matches!(
                 host.syscall(ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN, &mut vm),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert_eq!(vm.register(10), before);
             assert!(host.queued.is_empty());
@@ -627,7 +633,7 @@ seiyaku ControlledLock {
         let argument_table = vm.register(10);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN, &mut vm),
-            Err(ivm::VMError::OutOfMemory)
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.register(10), argument_table);
         assert_eq!(
@@ -680,13 +686,21 @@ seiyaku ControlledLock {
         fn allows_syscall(&self, policy: ivm::SyscallPolicy, number: u32) -> bool {
             self.inner.allows_syscall(policy, number)
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN {
                 assert!(self.before.replace(Some(vm.remaining_gas())).is_none());
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
@@ -784,7 +798,7 @@ seiyaku ControlledLock {
         let (result, refused_vm, refused) = run_open_probe(&program, setup + actual - 1);
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
-            ivm::VMError::OutOfGas
+            VmErrorRef::Trap(VmTrap::OutOfGas)
         ));
         assert_eq!(refused.before.get(), Some(actual - 1));
         if let Some(reserved) = refused.reserve {

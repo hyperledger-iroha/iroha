@@ -263,7 +263,8 @@ pub(super) fn validation_failure(
                 | EvidencePreparationError::DecodeResource(_),
             )
             | StateStorageAdmissionError::AmxDecode(_)
-            | StateStorageAdmissionError::RootScopeDecode(_) => {
+            | StateStorageAdmissionError::RootScopeDecode(_)
+            | StateStorageAdmissionError::RuntimeSupportDecode(_) => {
                 PublicationDeferral::StateStorage(original)
             }
         },
