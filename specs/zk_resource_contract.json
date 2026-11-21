@@ -12247,10 +12247,16 @@
           "contains": "check_size(self, MAX_CHILD_ADMIN_POLICY_BYTES_V1)"
         }
       ],
-      "test_gap": {
-        "owner": "V.3",
-        "summary": "Check canonical size accounting for the policy at its configured bound. Document the largest reachable canonical policy if stricter roster and algorithm shapes make an exact-size valid policy impossible."
-      }
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/runtime/child_admin/tests.rs",
+          "name": "policy_size_and_signed_rotation_envelope_have_independent_bounds",
+          "features": [
+            "sm"
+          ]
+        }
+      ],
+      "test_note": "Policy identification accepts exactly 65,536 canonical bytes and refuses a valid sorted 65,537-byte shape. A current administrator threshold signs the exact policy\u2019s rotation plan. Its enclosing transaction exceeds the independent 64 KiB native External ceiling, so direct capture declines it. A smaller rotation with the same ten validated SM2 points executes and consumes one nonce."
     },
     {
       "id": "transaction.child_admin_certificate_frame_bytes",
@@ -12455,10 +12461,17 @@
           "contains": "if length > MAX_RUNTIME_REQUEST_BYTES {"
         }
       ],
-      "test_gap": {
-        "owner": "V.3",
-        "summary": "Exercise the length check at the boundary on a variable-size, authorized initial request and the independently bounded retry form, whose payload is a fixed predecessor identity. Preserve the original enclosing Norito refusal."
-      }
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/governance/parliament_anonymous/runtime_interface_tests.rs",
+          "name": "original_runtime_request_accepts_one_mib_and_refuses_the_next_byte"
+        },
+        {
+          "path": "crates/iroha_core/src/governance/parliament_anonymous/runtime_interface_tests.rs",
+          "name": "runtime_retry_reuses_exact_terminal_proposal_metadata_at_the_later_clock"
+        }
+      ],
+      "test_note": "The original authorized global-root creator signs one complete initial request at 1 MiB and another one byte longer. Each carries distinct valid bounded cell definitions. Retry carries one fixed-width predecessor identity and retains the original operator and terminal proposal metadata."
     },
     {
       "id": "storage.runtime_carrier_artifact_restore_bytes",
