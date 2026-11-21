@@ -12444,7 +12444,7 @@ def test_execution_prefix_mutation_pins_actual_retained_charge_and_native_cause(
     ), "original unresolved or applied custody must refuse a fresh signature after journal reset"),
     ("HC490", "pending_custody.rs", "pending_custody/tests.rs", (
         "amx_relay::pending_custody::tests::cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group",
-    ), "a full ordinary pool must not strand its prerequisite handoff"),
+    ), "a full ordinary pool must not strand its prerequisite handoff: Capacity"),
 ])
 def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control_owner, selectors, cause):
     rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
@@ -12458,8 +12458,26 @@ def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control
         if mid == "HC488":
             assert "exercise_pair(" in body
             assert cause in named_rust_function(controls, "exercise_pair")
+        elif mid == "HC490":
+            assertion, error = cause.rsplit(": ", 1)
+            assert f'.expect("{assertion}")' in body
+            assert error == "Capacity"
+            assert "return Err(CustodyError::Capacity);" in (
+                ROOT / "crates/irohad/src/amx_relay" / owner
+            ).read_text()
         else:
             assert cause in body
+
+
+def test_pending_handoff_mutation_requires_the_capacity_error_from_its_exact_call():
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)["HC490"]
+    name, = rule.tests
+    expected, = rule.causes
+    assertion = "a full ordinary pool must not strand its prerequisite handoff"
+    panic = {"thread": name, "source": expected.source, "message": assertion + ": Capacity"}
+    assert gate.expected_test_failure(name, expected, [panic])
+    for message in (assertion, assertion + ": Storage"):
+        assert not gate.expected_test_failure(name, expected, [{**panic, "message": message}])
 
 
 @pytest.mark.parametrize("mid", ["HC488", "HC489", "HC490"])

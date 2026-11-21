@@ -2925,7 +2925,7 @@ DAEMON_MUTATIONS = [
           "crates/irohad/src/amx_relay/ledger_tests.rs"),)),
     m("HC490", "AMX handoff custody: charge authority recovery against a full ordinary pool",
       ["amx_relay::pending_custody::tests::cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group"],
-      causes=(ExpectedFailure("a full ordinary pool must not strand its prerequisite handoff",
+      causes=(ExpectedFailure("a full ordinary pool must not strand its prerequisite handoff: Capacity",
           "crates/irohad/src/amx_relay/pending_custody/tests.rs"),)),
     m("HC340", "AMX expiry recovery: treat decoded terminal journal state as fresh exact-carrier proof",
       ["amx_relay::ledger::expiry_recovery_tests::independently_decided_expiry_recovers_only_the_existing_exact_carrier_without_dispatch"],
