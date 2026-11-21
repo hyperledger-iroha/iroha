@@ -1773,6 +1773,20 @@ class RepositoryTest(unittest.TestCase):
     def test_committed_inventory_matches_the_repository(self) -> None:
         self.assertEqual(CHECKER.MapChecker(self.tree, copy.deepcopy(self.document), self.scan).run(), [])
 
+    def test_baseline_storage_layout_records_ram_lfe_policy_table(self) -> None:
+        path = "specs/runtime_baseline_storage_layouts.tsv"
+        group = next(group for group in self.document["file_groups"] if group["id"] == "runtime.baseline_catalog")
+        self.assertEqual(group["role"], "generated_artifact")
+        self.assertEqual(self.scan[path], ["ram_lfe"])
+        self.assertIn({"path": path, "patterns": self.scan[path]}, group["files"])
+
+        layouts = (CHECKER.ROOT / path).read_text(encoding="utf-8").splitlines()
+        positions = [row.split("\t")[1:3] for row in layouts if row.startswith("world.ram_lfe_program_policies\t")]
+        self.assertEqual(positions, [
+            ["key", "norito:iroha_data_model::ram_lfe::RamLfeProgramId@0.0.2"],
+            ["value", "norito:iroha_data_model::ram_lfe::RamLfeProgramPolicy@0.0.2"],
+        ])
+
     def test_committed_inventory_is_what_refresh_writes(self) -> None:
         refreshed = CHECKER.refresh(self.tree, self.document, self.scan)
         self.assertEqual(CHECKER.render(refreshed) + "\n", self.text)
