@@ -381,7 +381,7 @@ fn scan_ironwood_request_key(
                     "receipt_identity": {"transaction_hash_hex": (hex::encode(hash.as_ref())), "action_index": (note.action_index())},
                     "height": (block.header().height().get()),
                     "transaction_hash_hex": (hex::encode(hash.as_ref())),
-                    "input_index": (execution.input_index),
+                    "input_index": (input_index),
                     "direct_instruction_index": direct_index,
                     "action_index": (note.action_index()),
                     "note_commitment_hex": (hex::encode(note.commitment())),

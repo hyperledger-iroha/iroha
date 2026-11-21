@@ -98,11 +98,18 @@ fn signed_scope(block: &SignedBlock) -> Result<SumeragiRootScope, BlockValidatio
 fn selection_identity(selection: &RootSelectionV1) -> Result<SelectionId, BlockValidationError> {
     // Use the frozen selection preimage/domain while preserving the original local refusal;
     // RootSelectionV1::id's public SelectionError::Encoding stores only a diagnostic string.
-    let bytes = norito::core::classify_decode_attempt(|| norito::encode_canonical(selection))
-        .map_err(decoding)?;
-    Ok(SelectionId(
-        iroha_crypto::Hash::new_from_chunks(&[SELECTION_ID_DOMAIN, &bytes]).into(),
-    ))
+    norito::core::classify_decode_attempt(|| {
+        let mut encoded = Ok(());
+        let hash = iroha_crypto::Hash::new_from_writer(|writer| {
+            writer.write_all(SELECTION_ID_DOMAIN)?;
+            encoded = norito::core::write_canonical_to_writer(selection, writer);
+            Ok(())
+        })
+        .map_err(norito::Error::Io)?;
+        encoded?;
+        Ok(SelectionId(hash.into()))
+    })
+    .map_err(decoding)
 }
 
 impl AuthenticatedGenesisOutputSource {

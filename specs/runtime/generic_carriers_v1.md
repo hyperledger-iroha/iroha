@@ -191,6 +191,25 @@ same ordered queue. Neither prepared bytes nor a serialized storage definition
 identifier grants access: the invocation owns bounded read/write capability
 positions resolved from its authenticated selected implementation.
 
+Fresh carrier execution and artifact validation construct the VM with the original
+allocation pool and no built-in `DefaultHost` or boxed syscall dispatcher. The
+shared constructor retains ordinary guest-memory, register and program admission.
+Execution supplies its admitted `CoreHost` through `run_with_host`; calling `run`
+without an explicitly installed host preserves the existing `HostUnavailable`
+refusal. It never creates a fallback host. Ordinary VM constructors retain their
+current default-host behavior.
+
+The restricted `CoreHost` likewise omits native-only host facilities, including
+native codec hosts, crypto configuration and shared account/ZK caches. Its ordered
+queue is reserved from the original execution pool before allocation and remains
+attached through artifact disposal. Syscall dispatch rejects unavailable
+capabilities before accessing those facilities. ALLOC and INPUT publication use
+the existing shared kernels; a literal
+TLV copy retains its original VM-pool reservation until the host-arena copy
+finishes. These constructor changes do not replace the invocation's input,
+capability, queued-value or persistent-storage owners, and their focused tests
+remain part of the qualification work below.
+
 TODO(N14): qualify the current execution, snapshot, retained storage, keyed
 capture and signed fee paths together; qualify governed selection transition and
 replay coverage for the new commitment profile, including exact original-pool

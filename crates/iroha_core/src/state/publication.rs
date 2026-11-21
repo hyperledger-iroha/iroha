@@ -68,6 +68,11 @@ pub(super) struct StatePublication<'state> {
     lifecycle_index_releases: LaneLifecycleReleases<'state>,
     publication_notice: StateViewPublication<'state>,
     world_effects: Option<world_commit::PreparedWorldEffects>,
+    // Only the exact successful tail may enter mutable barrier suspension.
+    // Non-World fields are already final and use their ordinary immutable freeze.
+    non_world_frozen: bool,
+    world_suspended: bool,
+    barrier_progress: crate::runtime::migration::BarrierProgress,
     world_cut: Option<
         iroha_allocation::ChargedShared<
             world_projection::world_state_accumulator::world_state_cut::CutCapsule,
@@ -124,6 +129,9 @@ impl<'state> StatePublication<'state> {
             lifecycle_index_releases: LaneLifecycleReleases::new(state),
             publication_notice: state.state_view_publication(),
             world_effects: None,
+            non_world_frozen: false,
+            world_suspended: false,
+            barrier_progress: crate::runtime::migration::BarrierProgress::default(),
             world_cut: None,
             world_cut_pending: None,
             world_cut_prepared: false,
@@ -218,6 +226,18 @@ impl<'state> StateBlock<'state> {
                 membership.with_scope(|_| {
                     hashes.with_scope(|_| {
                         let mut result = self.attempt_original_publication(&mut original);
+                        if original.world_suspended && !original.irreversible {
+                            // Attempt guards are gone. Recover all partial reacquisitions
+                            // before retiring any actual original release notification.
+                            let fields = self.fields.as_mut().expect("original completed tail");
+                            fields.world.recover_resumption();
+                            fields.world.retire_suspension_cleanup();
+                            fields.canonical_runtime.retire_frozen_cleanup();
+                            fields.native_execution_tip.retire_frozen_cleanup();
+                            fields.prev_commit_topology.retire_frozen_cleanup();
+                            fields.commit_topology.retire_frozen_cleanup();
+                            fields.transactions.retire_frozen_cleanup();
+                        }
                         if original.fields_frozen && !original.irreversible {
                             // The attempt has returned: every State/effect fence is free.
                             // Recover all original cursors before retiring any notice.
@@ -239,7 +259,7 @@ impl<'state> StateBlock<'state> {
         let result = match result {
             Ok(Ok(())) => StatePublicationOutcome::Published,
             Ok(Err(error)) => {
-                let retryable = original.fields_frozen
+                let retryable = (original.fields_frozen || original.world_suspended)
                     && !original.irreversible
                     && matches!(
                         &error,
@@ -251,6 +271,13 @@ impl<'state> StateBlock<'state> {
                             | TransactionsBlockError::PublicationBusy(_)
                             | TransactionsBlockError::MembershipAdmission(
                                 storage_transactions::MembershipAdmissionError::Busy(_)
+                            )
+                            | TransactionsBlockError::LocalStateStorage(
+                                StateStorageAdmissionError::World(
+                                    mv::storage::AdmittedStorageError::Busy { .. }
+                                        | mv::storage::AdmittedStorageError::Allocation(_)
+                                        | mv::storage::AdmittedStorageError::Allocator { .. }
+                                )
                             )
                     );
                 if retryable {
@@ -325,6 +352,26 @@ impl<'state> StateBlock<'state> {
     ) -> Result<(), TransactionsBlockError> {
         self.require_storage_admission()
             .map_err(TransactionsBlockError::LocalStateStorage)?;
+        if original.world_suspended {
+            let _commit = original.commit_fence.lock();
+            let generation = self.state_ref.state_view_generation();
+            if !generation.is_multiple_of(2) || original.predecessor_generation != Some(generation)
+            {
+                return Err(TransactionsBlockError::SnapshotObservationChanged);
+            }
+            let fields = self.fields.as_mut().expect("original suspended tail");
+            fields
+                .world
+                .install_suspended_resumption(&fields.state_ref.world);
+            fields
+                .world
+                .try_resume()
+                .map_err(original_preparation_error)?;
+            // No callback or execution read is allowed before the complete
+            // inventory has reacquired its actual original predecessor pairs.
+            fields.world.finish_resumption();
+            original.world_suspended = false;
+        }
         let StatePublication {
             capture_policy,
             geometry_cleanup,
@@ -332,6 +379,9 @@ impl<'state> StateBlock<'state> {
             lifecycle_index_releases,
             publication_notice,
             world_effects,
+            non_world_frozen,
+            world_suspended,
+            barrier_progress,
             world_cut,
             world_cut_pending,
             world_cut_prepared,
@@ -545,6 +595,8 @@ impl<'state> StateBlock<'state> {
                 nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
                 nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
             }
+            #[cfg(test)]
+            migration_tests::observe_tail();
             let effects = world_commit::PreparedWorldCommit::prepare_overlay_mutations(
                 world,
                 block_height,
@@ -568,13 +620,60 @@ impl<'state> StateBlock<'state> {
                     }
                 }
             })?;
-            // Mirror what the block wrote to storage a migration is staging, whichever code
-            // wrote it, before the block's change set is folded
-            // (`specs/live_runtime_upgrades.md` §5.4).
-            crate::runtime::migration::barrier(world, block_height);
-            // The last World write: fold the block's complete change set, including every
-            // deterministic tail write above, into the stored World state accumulator, the
-            // parent World state root of the next execution result (§4.1, Appendix E, E51).
+            // Retain the exact completed tail before a barrier can refuse. Its
+            // cache records and private World writes are never regenerated.
+            *world_effects = Some(effects);
+        }
+        if !*fields_frozen {
+            if !*non_world_frozen {
+                canonical_runtime.begin_freeze();
+                native_execution_tip.begin_freeze();
+                prev_committed_topology.begin_freeze();
+                committed_topology.begin_freeze();
+                transactions.finish_freeze()?;
+                canonical_runtime.finish_freeze();
+                native_execution_tip.finish_freeze();
+                prev_committed_topology.finish_freeze();
+                committed_topology.finish_freeze();
+                *non_world_frozen = true;
+            }
+            if let Err(error) =
+                crate::runtime::migration::resume_barrier(world, block_height, barrier_progress)
+            {
+                let retryable = match &error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(_),
+                    ) => true,
+                    crate::runtime::migration::MigrationBoundaryError::Storage(
+                        StateStorageAdmissionError::World(
+                            mv::storage::AdmittedStorageError::Busy { .. }
+                            | mv::storage::AdmittedStorageError::Allocation(_)
+                            | mv::storage::AdmittedStorageError::Allocator { .. },
+                        ),
+                    ) => true,
+                    _ => false,
+                };
+                if retryable {
+                    // Every inert slot is installed before releasing any World
+                    // writer. The outer attempt retires notices after all fences.
+                    world.begin_suspension();
+                    world.finish_suspension();
+                    *world_suspended = true;
+                }
+                return Err(match error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                    ) => TransactionsBlockError::ExecutionDeferred(original),
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(_),
+                    ) => TransactionsBlockError::WorldCommitPreparation,
+                    crate::runtime::migration::MigrationBoundaryError::Storage(original) => {
+                        TransactionsBlockError::LocalStateStorage(original)
+                    }
+                });
+            }
+            // Only the barrier's exact completed prefix can reach this final
+            // write. Accumulator failures retain their prior terminal behavior.
             if !crate::runtime::keyed_state::selected(world.runtime_selection.get()) {
                 world
                     .advance_state_accumulator(_curr_block.is_genesis())
@@ -587,22 +686,8 @@ impl<'state> StateBlock<'state> {
                         TransactionsBlockError::WorldCommitPreparation
                     })?;
             }
-            *world_effects = Some(effects);
-        }
-        if !*fields_frozen {
-            // All final private writes completed once above. Install every original
-            // capture slot before releasing any physical execution writer.
             world.begin_freeze();
-            canonical_runtime.begin_freeze();
-            native_execution_tip.begin_freeze();
-            prev_committed_topology.begin_freeze();
-            committed_topology.begin_freeze();
-            transactions.finish_freeze()?;
             world.finish_freeze();
-            canonical_runtime.finish_freeze();
-            native_execution_tip.finish_freeze();
-            prev_committed_topology.finish_freeze();
-            committed_topology.finish_freeze();
             *fields_frozen = true;
         }
         // Serialize while every original is still in its immutable captured phase.
@@ -1399,3 +1484,7 @@ pub(in crate::state) mod musubi_materializer_test_support {
         staged_block, retained_musubi_group_tests::{pending, start},
     };
 }
+
+#[cfg(test)]
+#[path = "publication/migration_tests.rs"]
+mod migration_tests;

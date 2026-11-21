@@ -24,8 +24,19 @@ pub(crate) fn table(
     writes: bool,
     effects: u32,
 ) -> DefinitionId {
+    let id = install_table(state, "test.carrier.host.table.v1".into());
+    select_access(
+        state,
+        if reads { vec![id] } else { vec![] },
+        if writes { vec![id] } else { vec![] },
+        effects,
+    );
+    id
+}
+
+fn install_table(state: &mut StateTransaction<'_, '_>, namespace: String) -> DefinitionId {
     let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
-        namespace: "test.carrier.host.table.v1".into(),
+        namespace,
         shape: StorageShapeV1::Table {
             key: SchemaV1::Carrier(schema()),
         },
@@ -39,6 +50,16 @@ pub(crate) fn table(
     let selection = state.world.runtime_selection.get_mut();
     selection.installed_storage.push(id);
     selection.installed_storage.sort();
+    id
+}
+
+fn select_access(
+    state: &mut StateTransaction<'_, '_>,
+    reads: Vec<DefinitionId>,
+    writes: Vec<DefinitionId>,
+    effects: u32,
+) {
+    let selection = state.world.runtime_selection.get_mut();
     let binding = selection
         .bindings
         .iter_mut()
@@ -49,8 +70,8 @@ pub(crate) fn table(
     let DefinitionDescriptorV1::Implementation(inner) = &mut implementation else {
         panic!("implementation");
     };
-    inner.reads = if reads { vec![id] } else { vec![] };
-    inner.writes = if writes { vec![id] } else { vec![] };
+    inner.reads = reads;
+    inner.writes = writes;
     inner.limits.max_effects = effects;
     let replacement = implementation.id().unwrap();
     binding.implementation = replacement;
@@ -61,7 +82,6 @@ pub(crate) fn table(
         .world
         .runtime_definitions
         .insert(replacement, implementation);
-    id
 }
 
 fn vm() -> IVM {
@@ -120,6 +140,29 @@ fn original_carrier_read_views_keep_host_send_sync_without_copying_state() {
     drop(original);
     assert_eq!(budget.reserved_bytes(), reserved);
     budget.set_limit_bytes(limit);
+}
+
+#[test]
+fn captures_all_sixteen_owners_per_class_and_refuses_the_next_index() {
+    let (state, instruction, candidate) =
+        fixture::fixture(fixture::program(&[ivm_abi::encoding::wide::encode_halt()]));
+    let mut block = state.block(fixture::header());
+    candidate.install(&mut block);
+    let mut transaction = block.transaction();
+    let mut owners: Vec<_> = (0..16)
+        .map(|index| install_table(&mut transaction, format!("test.carrier.host.bound.{index}")))
+        .collect();
+    owners.sort();
+    select_access(&mut transaction, owners.clone(), owners.clone(), 1);
+    let signed = fixture::source(&transaction, &instruction);
+    fixture::bind_source(&mut transaction, &signed);
+    let invocation = Invocation::capture(&transaction, &instruction).unwrap();
+    for write in [false, true] {
+        for (index, expected) in owners.iter().enumerate() {
+            assert_eq!(invocation.owner(index as u64, write).unwrap(), *expected);
+        }
+        assert!(invocation.owner(16, write).is_err());
+    }
 }
 
 #[test]
@@ -327,4 +370,121 @@ fn retained_artifacts_cannot_move_to_another_signed_source_with_the_same_selecti
             .is_err()
     );
     assert_eq!(transaction.world.runtime_generic_values.iter().count(), 0);
+}
+
+#[test]
+fn carrier_constructor_refuses_original_budget_before_native_shell_or_queue_allocation() {
+    let (state, instruction, candidate) =
+        fixture::fixture(fixture::program(&[ivm_abi::encoding::wide::encode_halt()]));
+    let mut block = state.block(fixture::header());
+    candidate.install(&mut block);
+    let mut transaction = block.transaction();
+    table(&mut transaction, true, true, 2);
+    let signed = fixture::source(&transaction, &instruction);
+    fixture::bind_source(&mut transaction, &signed);
+    Invocation::capture(&transaction, &instruction).unwrap();
+    let budget = transaction.execution_budget();
+    let before = budget.reserved_bytes();
+    let limit = budget.limit_bytes();
+    let authority = ALICE_ID.clone();
+    budget.set_limit_bytes(before);
+    let mut result = None;
+    let allocations = crate::test_allocations::allocations_during(|| {
+        result = Some(CoreHostImpl::<'_, '_, NoQueryState>::for_carrier(
+            authority,
+            &transaction,
+            &instruction,
+        ));
+    });
+    assert_eq!(
+        allocations, 0,
+        "refused carrier host created native shells or a replacement budget"
+    );
+    assert!(matches!(
+        result.unwrap(),
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
+    assert_eq!(budget.reserved_bytes(), before);
+    budget.set_limit_bytes(limit);
+}
+
+#[test]
+fn carrier_constructor_owns_only_its_prepaid_queue_and_releases_it_on_drop() {
+    let (state, instruction, candidate) =
+        fixture::fixture(fixture::program(&[ivm_abi::encoding::wide::encode_halt()]));
+    let mut block = state.block(fixture::header());
+    candidate.install(&mut block);
+    let mut transaction = block.transaction();
+    table(&mut transaction, true, true, 2);
+    let signed = fixture::source(&transaction, &instruction);
+    fixture::bind_source(&mut transaction, &signed);
+    Invocation::capture(&transaction, &instruction).unwrap();
+    let budget = transaction.execution_budget();
+    let before = budget.reserved_bytes();
+    let authority = ALICE_ID.clone();
+    let mut result = None;
+    let allocations = crate::test_allocations::allocations_during(|| {
+        result = Some(CoreHostImpl::<'_, '_, NoQueryState>::for_carrier(
+            authority,
+            &transaction,
+            &instruction,
+        ));
+    });
+    let mut host = result.unwrap().unwrap();
+    assert_eq!(
+        allocations, 1,
+        "only the exactly reserved ordered-effect Vec is constructed"
+    );
+    assert!(!host.default.is_present());
+    assert!(!host.codec_host.is_present());
+    assert!(!host.crypto.is_present());
+    assert!(!host.accounts_snapshot.is_present());
+    assert!(!host.prepared_contract_cache.is_present());
+    assert!(!host.zk_verified_ballot.is_present());
+    assert!(!host.zk_verified_tally.is_present());
+    assert!(!host.zk_roots.is_present());
+    assert!(!host.zk_elections.is_present());
+    assert!(!host.axt_policy.is_present());
+    assert!(!host.zk_last_env_hash_ballot.is_present());
+    assert!(!host.zk_last_env_hash_tally.is_present());
+    assert!(!host.axt_issuer_keys.is_present());
+    assert!(!host.axt_proof_cache.is_present());
+    assert!(budget.reserved_bytes() > before);
+    host.begin_tx(&Default::default()).unwrap();
+    let mut vm = vm();
+    assert!(
+        host.prepare_syscall(ivm::syscalls::SYSCALL_GET_AUTHORITY, vm.syscall_quote())
+            .is_err()
+    );
+    assert!(
+        host.syscall(ivm::syscalls::SYSCALL_GET_AUTHORITY, &mut vm)
+            .is_err()
+    );
+    drop(host);
+    assert_eq!(budget.reserved_bytes(), before);
+}
+
+#[test]
+fn carrier_queue_allocator_refusal_preserves_original_cause_and_returns_all_credit() {
+    let (state, instruction, candidate) =
+        fixture::fixture(fixture::program(&[ivm_abi::encoding::wide::encode_halt()]));
+    let mut block = state.block(fixture::header());
+    candidate.install(&mut block);
+    let mut transaction = block.transaction();
+    table(&mut transaction, true, true, 2);
+    let signed = fixture::source(&transaction, &instruction);
+    fixture::bind_source(&mut transaction, &signed);
+    let budget = transaction.execution_budget();
+    let before = budget.reserved_bytes();
+    let authority = ALICE_ID.clone();
+    let layout = std::alloc::Layout::array::<QueuedEffect>(2).unwrap();
+    let (result, refused) = crate::test_allocations::refuse_one_layout_during(layout, || {
+        CoreHostImpl::<'_, '_, NoQueryState>::for_carrier(authority, &transaction, &instruction)
+    });
+    assert!(refused);
+    assert!(matches!(
+        result,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(_)))
+    ));
+    assert_eq!(budget.reserved_bytes(), before);
 }

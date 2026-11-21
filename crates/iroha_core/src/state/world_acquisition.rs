@@ -237,6 +237,55 @@ macro_rules! declare_world_acquisition {
 
         impl<'world> WorldBlock<'world> {
             /// Install every original field before any physical writer releases.
+            /// Retain mutable journals without granting ordinary Frozen any execution authority.
+            pub(super) fn begin_suspension(&mut self) {
+                self.publication.begin_suspension();
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.begin_suspension();)*
+                $(fields.$privacy.begin_suspension();)*
+                $(fields.$suffix.begin_suspension();)*
+            }
+            pub(super) fn finish_suspension(&mut self) {
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.finish_suspension();)*
+                $(fields.$privacy.finish_suspension();)*
+                $(fields.$suffix.finish_suspension();)*
+                self.publication.finish_suspension();
+            }
+            pub(super) fn install_suspended_resumption(&mut self, target: &'world super::World) {
+                self.publication.begin_resumption();
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.install_suspended_resumption(&target.$prefix);)*
+                $(fields.$privacy.install_suspended_resumption(&target.$privacy);)*
+                $(fields.$suffix.install_suspended_resumption(&target.$suffix);)*
+            }
+            pub(super) fn try_resume(&mut self) -> Result<(), mv::PublicationPreparationError<core::convert::Infallible>> {
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.try_resume()?;)*
+                $(fields.$privacy.try_resume()?;)*
+                $(fields.$suffix.try_resume()?;)*
+                Ok(())
+            }
+            pub(super) fn finish_resumption(&mut self) {
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.finish_resumption();)*
+                $(fields.$privacy.finish_resumption();)*
+                $(fields.$suffix.finish_resumption();)*
+                self.publication.finish_resumption();
+            }
+            pub(super) fn recover_resumption(&mut self) {
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.recover_resumption();)*
+                $(fields.$privacy.recover_resumption();)*
+                $(fields.$suffix.recover_resumption();)*
+                self.publication.recover_resumption();
+            }
+            pub(super) fn retire_suspension_cleanup(&mut self) {
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.retire_suspension_cleanup();)*
+                $(fields.$privacy.retire_suspension_cleanup();)*
+                $(fields.$suffix.retire_suspension_cleanup();)*
+            }
             pub(super) fn begin_freeze(&mut self) {
                 self.publication.begin_freeze();
                 let fields = self.fields.as_mut().expect("original World block fields");

@@ -29,7 +29,10 @@ class ReturnedLaunchTests(unittest.TestCase):
         for i, directory in enumerate(self.launches):
             directory.mkdir()
             phases = [(op, "execute") for op in (funded, ["Receive"], [])[i]]
-            phases += [("Send", "confirmation_wait")] if i == 0 else [("Receive", "credit_check_drill")]
+            if i == 0:
+                phases.insert(2, ("Send", "confirmation_wait"))
+            else:
+                phases.append(("Receive", "credit_check_drill"))
             self.metrics.append({
                 "schema": "kagemusha.experimental.device-observations.v2",
                 "succeeded": True, "program_bundle_sha256": hashlib.sha256(b"unit-test programs").hexdigest(),
@@ -44,8 +47,10 @@ class ReturnedLaunchTests(unittest.TestCase):
                 "manifest_sha256": hashlib.sha256(b"unit-test manifest").hexdigest(),
                 "result": "PASS: " + ("stage 1 of 2: " if i == 0 else "") + "device hardware keys."})
 
-    def write_copies(self):
+    def write_copies(self, attempts=()):
         history = b'{"earlier":"interrupted observation"}\n'
+        for attempt in attempts:
+            history += json.dumps(attempt).encode() + b"\n"
         for directory, report, metrics in zip(self.launches, self.reports, self.metrics):
             line = json.dumps(metrics)
             history += line.encode() + b"\n"
@@ -57,6 +62,50 @@ class ReturnedLaunchTests(unittest.TestCase):
         result = verify(self.app, self.launches)
         self.assertEqual(result["receive"], {"normal_flow_us": 100, "process_lifetime_peak_rss_bytes": 1200})
         self.assertEqual(result["payments"]["incoming"]["bytes"], 23)
+
+    def test_resumes_funding_after_interrupted_send_review(self):
+        funded = self.metrics[0]
+        previous = dict(funded, succeeded=False, events=[
+            {"operation": "Bootstrap", "phase": "execute", "returned_ok": True},
+            {"operation": "Load", "phase": "execute", "returned_ok": True},
+            {"operation": "Send", "phase": "confirmation_wait", "returned_ok": False},
+        ])
+        funded["retained_operations"] = ["Bootstrap", "Load"]
+        funded["events"] = [
+            {"operation": "Send", "phase": "confirmation_wait", "returned_ok": True},
+            {"operation": "Send", "phase": "execute", "returned_ok": True},
+        ]
+        self.write_copies([previous])
+        self.assertIn("receive", verify(self.app, self.launches))
+        for change in [{"events": previous["events"][1:]},
+                       {"program_bundle_sha256": "00" * 32}, {"succeeded": True}]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.write_copies([dict(previous, **change)])
+                verify(self.app, self.launches)
+
+    def test_send_cannot_precede_confirmation(self):
+        self.metrics[0]["events"][-2:] = self.metrics[0]["events"][-2:][::-1]
+        self.write_copies()
+        with self.assertRaisesRegex(ValueError, "confirmation"):
+            verify(self.app, self.launches)
+
+    def test_resumed_send_requires_recorded_hardware_confirmation(self):
+        funded = self.metrics[0]
+        confirmed = {"operation": "Send", "phase": "confirmation_wait", "returned_ok": True}
+        debited = {"operation": "Send", "phase": "execute", "returned_ok": True}
+        prior = dict(funded, succeeded=False, events=[
+            {"operation": op, "phase": "execute", "returned_ok": True} for op in ("Bootstrap", "Load")
+        ])
+        retry = dict(funded, succeeded=False, retained_operations=["Bootstrap", "Load"],
+                     events=[confirmed, debited])
+        funded["retained_operations"] = ["Bootstrap", "Load", "Send"]
+        funded["events"] = []
+        self.write_copies([prior, retry])
+        self.assertIn("receive", verify(self.app, self.launches))
+        for wrong in [[debited], [debited, confirmed], [dict(confirmed, returned_ok=False), debited]]:
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                self.write_copies([prior, dict(retry, events=wrong)])
+                verify(self.app, self.launches)
 
     def test_out_of_sequence_history(self):
         self.write_copies()

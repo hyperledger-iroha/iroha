@@ -1383,6 +1383,73 @@ fn check_vm_error_producers(files: &[String], read: &dyn Fn(&str) -> String) -> 
 }
 
 #[test]
+fn carrier_origins_keep_post_run_verdicts_and_local_refusals_out_of_execution_traps() {
+    let origins = |path, variant| {
+        VM_ERROR_PRODUCERS
+            .iter()
+            .find(|file| file.path == path)
+            .expect("carrier error path has an explicit owner")
+            .groups
+            .iter()
+            .filter(|group| group.variants.contains(&variant))
+            .map(|group| group.origin)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        origins(
+            "crates/iroha_core/src/runtime/generic_carriers/execution.rs",
+            "PermissionDenied",
+        ),
+        vec![TrapOrigin::OutsideInvocation],
+    );
+    assert_eq!(
+        origins(
+            "crates/iroha_core/src/state/generic_carrier_storage.rs",
+            "PermissionDenied",
+        ),
+        vec![TrapOrigin::OutsideInvocation],
+    );
+    assert_eq!(
+        origins("crates/ivm/src/ivm/program_load.rs", "UnknownSyscall"),
+        vec![TrapOrigin::PrepareRejection],
+    );
+    assert_eq!(
+        origins("crates/ivm_abi/src/pointer_abi.rs", "AllocatorDeferred"),
+        vec![TrapOrigin::LocalDeferral],
+    );
+    for path in [
+        "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+        "crates/ivm/src/host/stateless_memory.rs",
+    ] {
+        for variant in ["AllocationDeferred", "AllocatorDeferred"] {
+            assert_eq!(origins(path, variant), vec![TrapOrigin::LocalDeferral]);
+        }
+    }
+    for variant in ["NoritoInvalid", "PermissionDenied"] {
+        assert_eq!(
+            origins(
+                "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+                variant,
+            ),
+            vec![
+                TrapOrigin::PrepareRejection,
+                TrapOrigin::SyscallTrap,
+                TrapOrigin::OutsideInvocation,
+            ],
+        );
+    }
+    for path in [
+        "crates/ivm/src/host/stateless_memory.rs",
+        "crates/ivm/src/ivm.rs",
+    ] {
+        assert_eq!(
+            origins(path, "PermissionDenied"),
+            vec![TrapOrigin::HostInvariant]
+        );
+    }
+}
+
+#[test]
 fn diagnostic_nested_call_faults_and_local_refusals_have_distinct_origins() {
     let file = VM_ERROR_PRODUCERS
         .iter()

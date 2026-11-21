@@ -277,7 +277,7 @@ fn zk_root_snapshot_reads_trees_in_place_like_the_owned_projection() {
     owned
         .set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), zk_state.clone())])))
         .expect("owned root snapshot");
-    assert_eq!(borrowed.zk_roots, owned.zk_roots);
+    assert_eq!(*borrowed.zk_roots, *owned.zk_roots);
     let snapshot = &borrowed.zk_roots[&asset];
     assert_eq!(snapshot.root_history, zk_state.root_history);
     assert_eq!(snapshot.commitment_count, zk_state.commitments.len());
@@ -982,7 +982,7 @@ fn shared_election_hydration_preserves_tally_bytes_and_gas() {
         .set_zk_snapshots_from_state(&view)
         .expect("shared projection");
     assert!(Arc::ptr_eq(&cached.zk_elections, &sibling.zk_elections));
-    assert_eq!(eager.zk_elections, cached.zk_elections);
+    assert_eq!(*eager.zk_elections, *cached.zk_elections);
 
     for id in ["election-1", "missing"] {
         let read = |host: &mut CoreHost| {
@@ -1094,7 +1094,7 @@ fn shared_root_hydration_preserves_root_bytes_and_gas() {
         .set_zk_snapshots_from_state(&view)
         .expect("shared projection");
     assert!(Arc::ptr_eq(&cached.zk_roots, &sibling.zk_roots));
-    assert_eq!(eager.zk_roots, cached.zk_roots);
+    assert_eq!(*eager.zk_roots, *cached.zk_roots);
     assert_identical_root_reads(&mut eager, &mut cached);
     assert_identical_root_reads(&mut eager, &mut sibling);
     drop(view);
@@ -1130,7 +1130,7 @@ fn shared_root_hydration_preserves_root_bytes_and_gas() {
             .set_zk_snapshots_from_state(&transaction)
             .expect("edited projection");
         assert!(!Arc::ptr_eq(&baseline.zk_roots, &cached_edit.zk_roots));
-        assert_eq!(eager_edit.zk_roots, cached_edit.zk_roots);
+        assert_eq!(*eager_edit.zk_roots, *cached_edit.zk_roots);
         assert_identical_root_reads(&mut eager_edit, &mut cached_edit);
 
         // An invalid edit is rejected without replacing the installed snapshot.

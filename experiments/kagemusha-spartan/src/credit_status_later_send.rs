@@ -68,7 +68,8 @@ fn pack_opening(out: &mut Vec<u8>, path: &Opening, mask: u32) {
         }
     }
 }
-fn credit_root(b: &mut &[u8], credit: Fp, payment: Fp, burned: bool, dense: bool) -> Result<Fp> {
+// The exact opening original. The caller checks it under the credit and Payment digest.
+fn read_opening(b: &mut &[u8], dense: bool) -> Result<Opening> {
     let next = read_word(b, 32)?;
     let index = u32::from_le_bytes(take(b, 4)?.try_into().unwrap());
     let mask = if dense {
@@ -91,19 +92,10 @@ fn credit_root(b: &mut &[u8], credit: Fp, payment: Fp, burned: bool, dense: bool
         }
     }
 
-    Opening {
+    Ok(Opening {
         next,
         path: Path { index, siblings },
-    }
-    .root(
-        credit,
-        payment,
-        if burned {
-            VerifiedCreditStatus::Burned
-        } else {
-            VerifiedCreditStatus::Credited
-        },
-    )
+    })
 }
 
 fn restore_receipt(s: &[Fp; 26], quote: &Credential, extra: &[u8]) -> Result<bootstrap::Receipt> {
@@ -146,6 +138,8 @@ pub(super) struct Accepted {
     pair_digest: [u8; 32],
     pub(super) outcome: VerifiedCreditStatus,
     statement: [Fp; 26],
+    // The later head's authenticated receiver originals and the proven credit opening.
+    pub(super) evidence: crate::native::sent_delivery::ReceiverEvidence,
 }
 
 pub(super) fn verify(
@@ -162,6 +156,11 @@ pub(super) fn verify(
         return Err(Error::Malformed("later status profile"));
     }
     let burned = flags & 1 != 0;
+    let outcome = if burned {
+        VerifiedCreditStatus::Burned
+    } else {
+        VerifiedCreditStatus::Credited
+    };
     let peer = engine.authenticate_open_request_peer(request, parameters)?;
     let quote = bind_request(&peer, original)?;
     let mut s = [Fp::ZERO; 26];
@@ -183,13 +182,8 @@ pub(super) fn verify(
             &quote.body[195 + 16 * i..211 + 16 * i],
         ))
     });
-    let root = credit_root(
-        &mut b,
-        original.statement()[17],
-        original.digest(),
-        burned,
-        flags & 0x10 != 0,
-    )?;
+    let opening = read_opening(&mut b, flags & 0x10 != 0)?;
+    let root = opening.root(original.statement()[17], original.digest(), outcome)?;
     let mut context = [Fp::ZERO; bc::FIELDS];
     context[..2].copy_from_slice(&s[3..5]);
     context[2..4].copy_from_slice(&s[1..3]);
@@ -220,14 +214,27 @@ pub(super) fn verify(
     let decoded =
         carrier::decode_projected_pair(&profile, &pair, &projection).map_err(Error::Rejected)?;
     verify_pair(&parameters.inner, full::SEND, decoded)?;
+    // Every evidence word was an input of the decided pair or of the checked receipt.
+    let words: [Fp; 64] = projection
+        .primary()
+        .io
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Malformed("later status projected profile"))?;
     Ok(Accepted {
         pair_digest,
-        outcome: if burned {
-            VerifiedCreditStatus::Burned
-        } else {
-            VerifiedCreditStatus::Credited
-        },
+        outcome,
         statement: s,
+        evidence: crate::native::sent_delivery::ReceiverEvidence {
+            credential: quote,
+            receipt: r,
+            statement: s,
+            profile: words,
+            exact_pair: pair,
+            next: opening.next,
+            slot: opening.path.index,
+            siblings: opening.path.siblings,
+        },
     })
 }
 
@@ -429,13 +436,8 @@ mod opening_tests {
                 assert_eq!(earlier.is_ok(), valid);
                 let mut later = Vec::new();
                 pack_opening(&mut later, &opening, sibling_mask(&opening));
-                let result = credit_root(
-                    &mut later.as_slice(),
-                    key,
-                    digest,
-                    status == VerifiedCreditStatus::Burned,
-                    false,
-                );
+                let result = read_opening(&mut later.as_slice(), false)
+                    .and_then(|opening| opening.root(key, digest, status));
                 assert_eq!(result.is_ok(), valid);
                 assert_eq!(result.ok(), earlier.ok());
             }

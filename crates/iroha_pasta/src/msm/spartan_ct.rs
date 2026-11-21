@@ -12,10 +12,10 @@
 //! A fixed-window Straus sum over complete projective formulas:
 //!
 //! - every base `P` of a chunk gets the table `[0, P, 2P, ..., (2^w - 1) P]`,
-//!   built from the public base with complete additions;
+//!   built from the public base with complete doublings and mixed additions;
 //! - each scalar is read in unsigned `w`-bit windows of its canonical limbs,
 //!   by shifts and masks at public bit positions;
-//! - a digit selects its entry by a scan over the whole table with
+//! - a digit selects its entry by scanning every possible nonzero digit with
 //!   constant-time conditional selection, and the entry (the identity for a
 //!   zero digit) is added with the complete addition formula;
 //! - windows run from the most significant, and each window's `w` complete
@@ -451,11 +451,13 @@ fn add_chunk<C: PastaCurve>(
     let limbs = &mut chunk.limbs[..bases.len()];
     // Public multiples of public bases: entry `k` of a base's table is `k P`.
     for (table, base) in tables.chunks_exact_mut(entries).zip(bases) {
-        let point = base.to_curve();
-        let mut multiple = C::identity();
-        for entry in table {
-            *entry = multiple;
-            multiple += point;
+        table[0] = C::identity();
+        table[1] = base.to_curve();
+        // (2i)P by doubling, (2i+1)P by complete mixed addition.
+        for i in 1..entries / 2 {
+            let even = table[i].double();
+            table[2 * i] = even;
+            table[2 * i + 1] = even + *base;
         }
     }
     let tables = &*tables;
@@ -480,10 +482,14 @@ fn add_chunk<C: PastaCurve>(
                     *column = column.double();
                 }
             }
+            // The public bound fixes the range of the top digit. A zero
+            // digit retains the identity through the same scan.
+            let digit_bits = window.min(bits - w * window);
+            let candidates = 1 << digit_bits;
             for (limb, table) in limbs.iter().zip(tables.chunks_exact(entries)) {
-                let digit = window_bits(limb, w * window, window);
+                let digit = window_bits(limb, w * window, digit_bits);
                 *entry = C::identity();
-                for (index, candidate) in (0_u64..).zip(table) {
+                for (index, candidate) in (1_u64..).zip(&table[1..candidates]) {
                     *entry = C::conditional_select(&*entry, candidate, index.ct_eq(&digit));
                 }
                 *column += *entry;

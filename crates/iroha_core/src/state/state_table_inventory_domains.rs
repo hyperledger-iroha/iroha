@@ -55,6 +55,77 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Name,
+        reason: "Canonical codec name for a definition-owned carrier table and the immutable names of its selected kernel, host, commitment profile and catalog services.",
+        literals: &[
+            r"carrier:compact-v1:",
+            r"iroha.kernel.generic_carriers.v1",
+            r"iroha.keyed-state.carrier-radix-blake3.v1",
+            r"iroha.runtime.child_admin.v1",
+            r"iroha.runtime.generic_carrier_artifacts.v1",
+            r"iroha.runtime.generic_carriers.v1",
+            r"ivm.generic_carriers.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Instruction wire identifiers bound by the child administration and generic artifact catalog interfaces.",
+        literals: &[
+            r"iroha.runtime.child_admin.attest.v1",
+            r"iroha.runtime.child_admin.authorize.v1",
+            r"iroha.runtime.generic_carrier.stage_artifact.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Immutable definition closures for carrier kernel execution, physical backing invariants, the selected keyed commitment profile and child administration.",
+        literals: &[
+            r"iroha carrier keyed State commitment profile v1",
+            r"iroha:kernel:generic-carriers:v1:compact-schema-bound-record:strict-byte-key-order:descriptor-ivm:sole-original-external-instructions:public-methods-no-caller-identity:original-signed-fee-and-actual-gas-including-semantic-rejection:no-captured-deferred-reveal-or-contract-relay:capability-storage:existing-corehost-ordered-rollback:keyed-state",
+            r"iroha:runtime:carrier-backing:v1:definition-id:bare-key:canonical-record",
+            r"iroha:runtime:child-admin:v1:genesis-root-explicit-threshold-policy-nonce-sole-native-signed-source-schedule-cancel-rotate",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Canonical identity of a compact carrier schema used to name its virtual table codec.",
+        literals: &[r"iroha:runtime:carrier-schema:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Digest of the recursive storage codec graph in the baseline structural evidence fixture.",
+        literals: &[r"iroha:runtime:structural-storage-evidence:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Fingerprint of the sole original external child-administration instruction and the policy, plan and signing preimages checked for its authorization.",
+        literals: &[
+            r"iroha:runtime:child-admin:direct-instruction:v1\0",
+            r"iroha:runtime:child-admin:plan:v1\0",
+            r"iroha:runtime:child-admin:policy:v1\0",
+            r"iroha:runtime:child-admin:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Pins the reviewed offline inventory of implementation source units and their owners for a retirement candidate.",
+        literals: &[r"iroha:runtime:reviewed-source-ownership:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Source-access contract bytes of the sealed point lookup and ordered scan capabilities included in a migration adapter identity.",
+        literals: &[
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-point",
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-point-and-scan",
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-scan",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Unknown semantic projection name passed to the storage-layout refusal test.",
+        literals: &[r"iroha:state:unowned-test-projection:v1"],
+    },
+    OtherDomains {
         usage: Use::Record,
         reason: "Exact canonical request of the one-use original signed anonymous runtime creator; transient source binding, never a commitment over World content or a governance authority",
         literals: &[r"iroha:parliament:runtime-creator:v1\0"],

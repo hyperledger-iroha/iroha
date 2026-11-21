@@ -15,9 +15,10 @@
 //! **Outputs.** The pass owns the governance-start partition of its block
 //! ([`GovernanceStartOutputBudgetV1`]), reserved before anything mutates. The owner asks the
 //! partition whether an item's rows fit before the item is charged, and an item that does
-//! not fit stays due ([`GovernanceOccurrenceV1::NoOutputCapacity`]). An item's rows enter
-//! the partition before its World transaction is applied: its compact receipt
-//! ([`LifecycleAppliedV1`]), then at most one ballot output.
+//! not fit stays due ([`GovernanceOccurrenceV1::NoOutputCapacity`]). Native G1–G2c rows enter
+//! the partition before their World transaction is applied: a compact receipt
+//! ([`LifecycleAppliedV1`]), then at most one ballot output. G3 runtime enactment has no
+//! native receipt variant and cannot publish through this partition.
 //!
 //! An item whose attempt ended or whose occurrence passed lapses, uncharged. Every other
 //! refusal of a listed item is an error of the pass: the caller abandons the block. A
@@ -25,9 +26,11 @@
 //! block and is never a verdict.
 //!
 //! Listing uses the derived due index, bounded by committed `K`. Runtime-upgrade certificates
-//! have a G3 effect owner; candidate certificates never list an enactment.
-//! TODO(design §12.3, slice 5): qualify production ballot authority and implement the remaining
-//! proposal effects. The qualification constant remains `None`.
+//! list their exact due G3 work; actual application refuses as unsupported before effects until
+//! a distinct selected result owner can commit the standalone receipt. Candidate certificates
+//! never list an enactment.
+//! TODO(design §12.3, slice 5; N14): implement that immutable result profile, qualify production
+//! ballot authority and implement the remaining proposal effects. Qualification remains `None`.
 
 use core::cell::RefCell;
 
@@ -607,10 +610,12 @@ fn height_progress_ticket(
     AdvanceToNativeSlotV1::derive_v1(parent_height, target)
 }
 
-/// The rows `item` may emit, known before it mutates anything: every Parliament item emits
-/// its receipt, and a binding jury's seal, a closure and an opening one ballot output more.
-fn output_ceiling(item: GovernancePassItemV1) -> GovernanceStartItemCeilingV1 {
-    match item {
+/// The native rows `item` may emit, known before it mutates anything. G3 has no native
+/// receipt: its selected result owner must refuse before any effects, independently of
+/// native partition capacity. The common work budget still applies to that item.
+fn output_ceiling(item: GovernancePassItemV1) -> Option<GovernanceStartItemCeilingV1> {
+    Some(match item {
+        GovernancePassItemV1::EnactParliament { .. } => return None,
         GovernancePassItemV1::Lifecycle(AnonymousDueItemV1 {
             item: AnonymousLifecycleItemV1::CloseInvitations { body, .. },
             ..
@@ -619,7 +624,7 @@ fn output_ceiling(item: GovernancePassItemV1) -> GovernanceStartItemCeilingV1 {
             GovernanceStartItemCeilingV1::ReceiptAndOutput
         }
         _ => GovernanceStartItemCeilingV1::Receipt,
-    }
+    })
 }
 
 /// The receipt of a positioned Parliament `item` of `attempt` at `at`: the attempt's status,
@@ -683,13 +688,24 @@ fn inspect(
     rows: &GovernanceStartOutputBudgetV1,
 ) -> Result<GovernanceOccurrenceV1, PassError> {
     let occurrence = occurrence(state, item, casting_limit)?;
-    // SPEC: §13.4 HC801 — an item is charged only if its rows fit the reserved partition.
-    let fits = rows.fits(output_ceiling(item)) || cfg!(all(test, sumeragi_core_mutation = "HC801"));
-    Ok(if occurrence == GovernanceOccurrenceV1::Live && !fits {
+    Ok(inspect_native_capacity(item, occurrence, rows))
+}
+
+/// Apply only the native output policy after the original owner observed the occurrence.
+/// This grants no liveness or execution authority, and never suppresses an owner error.
+fn inspect_native_capacity(
+    item: GovernancePassItemV1,
+    occurrence: GovernanceOccurrenceV1,
+    rows: &GovernanceStartOutputBudgetV1,
+) -> GovernanceOccurrenceV1 {
+    // SPEC: §13.4 HC801 — a native item is charged only if its rows fit the partition.
+    let fits = output_ceiling(item).is_none_or(|ceiling| rows.fits(ceiling))
+        || cfg!(all(test, sumeragi_core_mutation = "HC801"));
+    if occurrence == GovernanceOccurrenceV1::Live && !fits {
         GovernanceOccurrenceV1::NoOutputCapacity
     } else {
         occurrence
-    })
+    }
 }
 
 /// Whether the occurrence of `item` still exists and, for an opening, has a casting slot.
@@ -870,7 +886,9 @@ fn apply_lifecycle(
     )?];
     outputs.extend(published);
     rows.admit_item(
-        output_ceiling(GovernancePassItemV1::Lifecycle(due)),
+        output_ceiling(GovernancePassItemV1::Lifecycle(due)).ok_or(PassError::World(
+            "a lifecycle item has no native output ceiling",
+        ))?,
         outputs,
     )
     .map_err(PassError::Output)?;

@@ -252,6 +252,51 @@ fn wrong_host_and_undeclared_effect_families_never_reach_the_decoder() {
 }
 
 #[test]
+fn descriptor_accepts_profile_maxima_and_bounds_reads_and_writes_independently() {
+    let mut fixture = fixture();
+    let mut owners = Vec::new();
+    for index in 0..17 {
+        let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+            namespace: format!("test.generic.bound.{index}"),
+            shape: StorageShapeV1::Table {
+                key: SchemaV1::Carrier(payload_schema()),
+            },
+            value: SchemaV1::Carrier(payload_schema()),
+            initial: None,
+            invariants: iroha_crypto::Hash::new(b"fixture table").into(),
+            projection: ProjectionV1::BareNorito,
+        });
+        let id = storage.id().unwrap();
+        fixture.published.insert(id, storage);
+        fixture.selection.installed_storage.push(id);
+        owners.push(id);
+    }
+    fixture.selection.installed_storage.sort();
+    owners.sort();
+    replace_implementation(&mut fixture, |descriptor| {
+        descriptor.reads = owners[..16].to_vec();
+        descriptor.writes = owners[..16].to_vec();
+        descriptor.limits.max_gas = 10_000_000;
+        descriptor.limits.max_effects = 64;
+    });
+    fixture.selection.check_closure(&fixture.published).unwrap();
+    assert!(decode(&fixture).unwrap().is_some());
+
+    for (read_count, write_count) in [(17, 16), (16, 17)] {
+        replace_implementation(&mut fixture, |descriptor| {
+            descriptor.reads = owners[..read_count].to_vec();
+            descriptor.writes = owners[..write_count].to_vec();
+        });
+        assert!(matches!(
+            decode(&fixture),
+            Err(Error::Contract(
+                "carrier storage dependencies exceed the canonical bounded list"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn storage_dependencies_require_installed_carrier_tables_and_no_semantic_projection() {
     let mut fixture = fixture();
     let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
@@ -336,12 +381,25 @@ fn malformed_and_dense_frames_are_stable_rejections_but_local_refusals_stay_orig
         )))
     ));
     fixture.instruction = original;
-    // Borrowed validation does not materialize a value or schema frame. Exercise
-    // its actual enclosing field bound, rather than demanding an allocation.
+    // Borrowing avoids materializing a value graph, but Norito's framed-field reads
+    // still debit the original cumulative allocation counter. A zero counter must
+    // therefore retain the original refusal for the first 32-byte schema-hash field.
+    let schema = payload_schema();
+    let frame = fixture.instruction.as_opaque().unwrap().frame();
+    assert_eq!(
+        validated_carrier_payload_v1(&schema, frame).unwrap(),
+        [0, 1]
+    );
     let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
-    norito::with_decode_limits_scope(no_allocation, || {
-        assert!(decode(&fixture).unwrap().is_some());
-    });
+    let result = norito::with_decode_limits_scope(no_allocation, || decode(&fixture));
+    let Err(Error::Codec(original)) = result else {
+        panic!("borrowed field validation must keep its original counter refusal");
+    };
+    assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert!(matches!(
+        original.into_local_refusal().unwrap().resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. }
+    ));
     let limits = norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 64);
     norito::with_decode_limits_scope(limits, || {
         assert!(

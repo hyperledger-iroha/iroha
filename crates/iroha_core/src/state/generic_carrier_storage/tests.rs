@@ -141,6 +141,60 @@ fn artifact_payload_uses_separate_native_key_and_exact_funded_envelope() {
 }
 
 #[test]
+fn artifact_snapshot_bounds_each_current_and_undo_image_independently() {
+    use iroha_data_model::{
+        isi::runtime_carrier::MAX_CARRIER_ARTIFACT_BYTES_V1, smart_contract::ContractArtifactId,
+    };
+
+    let id = ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::new(0),
+        iroha_crypto::Hash::new(b"snapshot artifact"),
+    );
+    let budget = AllocationBudget::new(16 << 20);
+    let mut storage = ArtifactStorage::try_new_admitted(budget).unwrap();
+    let undo = vec![0xa3_u8; MAX_CARRIER_ARTIFACT_BYTES_V1];
+    let current = vec![0xb4_u8; MAX_CARRIER_ARTIFACT_BYTES_V1];
+    storage.insert(id, undo.clone());
+    storage.insert(id, current.clone());
+    let mut raw = String::new();
+    artifact_snapshot_json::serialize(&storage, &mut raw);
+    let other = AllocationBudget::new(16 << 20);
+    let restore = crate::state::snapshot_storage::carrier::restore_artifacts;
+    {
+        let restored = restore(&raw, &other).unwrap();
+        let snapshot = restored.snapshot();
+        assert_eq!(snapshot.current().get(&id).unwrap().as_slice(), current);
+        assert_eq!(
+            snapshot
+                .revert_map()
+                .get(&id)
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .as_slice(),
+            undo
+        );
+    }
+    assert_eq!(other.reserved_bytes(), 0);
+
+    for mut image in [undo, current] {
+        let original = hex::encode(image.encode());
+        assert_eq!(raw.matches(&original).count(), 1);
+        image.push(0);
+        let oversized = raw.replacen(&original, &hex::encode(image.encode()), 1);
+        let Err(error) = restore(&oversized, &other) else {
+            panic!("oversized artifact record restored");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("noncanonical or oversized binary snapshot field")
+        );
+        assert_eq!(other.reserved_bytes(), 0);
+    }
+}
+
+#[test]
 fn prepared_payload_must_belong_to_the_actual_persistent_state_pool() {
     use crate::{
         kura::Kura,

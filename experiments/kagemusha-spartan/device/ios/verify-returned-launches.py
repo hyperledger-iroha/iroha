@@ -39,6 +39,53 @@ def history_digests(path, measurement):
     return before, prefix.hexdigest()
 
 
+def check_retained_funding(history, bundle, retained):
+    """Account for funding retained after an interrupted first stage."""
+    funded = ["Bootstrap", "Load", "Send"]
+    if retained != funded[:len(retained)] or len(retained) > len(funded):
+        raise ValueError("invalid retained first-stage operation order")
+    if not retained:
+        return
+
+    # The last line is the successful launch being checked. Look only at the
+    # preceding attempts recorded in that same app-private append-only history.
+    completed = []
+    with history.open("rb") as stream:
+        previous = stream.readline()
+        for following in stream:
+            try:
+                attempt = json.loads(previous)
+            except (UnicodeDecodeError, ValueError):
+                attempt = None
+            previous = following
+            if (not isinstance(attempt, dict)
+                    or attempt.get("schema") != "kagemusha.experimental.device-observations.v2"
+                    or attempt.get("program_bundle_sha256") != bundle
+                    or attempt.get("succeeded") is not False):
+                completed = []
+                continue
+
+            replayed = attempt.get("retained_operations")
+            if not isinstance(replayed, list) or replayed != completed[:len(replayed)]:
+                completed = []
+                continue
+            confirmed = False
+            for event in attempt["events"]:
+                if event["phase"] == "confirmation_wait":
+                    confirmed = event["operation"] == "Send" and event["returned_ok"] is True
+                if event["phase"] != "execute" or event["returned_ok"] is not True:
+                    continue
+                operation = event["operation"]
+                if (replayed != completed or len(completed) == len(funded)
+                        or funded[len(completed)] != operation
+                        or (operation == "Send" and not confirmed)):
+                    raise ValueError("inconsistent first-stage execution or Send confirmation")
+                completed.append(operation)
+                replayed = completed.copy()
+    if completed != retained:
+        raise ValueError("missing evidence for retained first-stage operations")
+
+
 def verify(app, launches):
     with (app / "Info.plist").open("rb") as stream:
         if plistlib.load(stream).get("CFBundleIdentifier") != "jp.co.soramitsu.kagemusha.spartanfixture":
@@ -52,9 +99,6 @@ def verify(app, launches):
     originals = None
     results = []
     funded = ["Bootstrap", "Load", "Send"]
-    expected_retained = ([], funded, [*funded, "Receive"])
-    expected_executions = (funded, ["Receive"], [])
-    expected_confirmations = (["Send"], [], [])
     for index, folder in enumerate(launches):
         report = json.loads((folder / "result.json").read_bytes())
         if (report["schema"] != "kagemusha-spartan-device-runtime-v1"
@@ -89,9 +133,24 @@ def verify(app, launches):
         def operations(phase):
             return [e["operation"] for e in events if e["phase"] == phase]
 
-        if (metrics["retained_operations"] != expected_retained[index]
-                or operations("execute") != expected_executions[index]
-                or operations("confirmation_wait") != expected_confirmations[index]
+        retained = metrics["retained_operations"]
+        if not isinstance(retained, list):
+            raise ValueError("invalid retained operations")
+        if index == 0:
+            check_retained_funding(folder / "device-measurements.jsonl", bundle, retained)
+            expected_events = []
+            for operation in funded[len(retained):]:
+                if operation == "Send":
+                    expected_events.append(("Send", "confirmation_wait"))
+                expected_events.append((operation, "execute"))
+        else:
+            if retained != (funded if index == 1 else [*funded, "Receive"]):
+                raise ValueError(f"unexpected retained operations in launch {index + 1}")
+            expected_events = [("Receive", "execute")] if index == 1 else []
+
+        observed_events = [(e["operation"], e["phase"]) for e in events
+                           if e["phase"] in ("execute", "confirmation_wait")]
+        if (observed_events != expected_events
                 or operations("credit_check_drill") != ([] if index == 0 else ["Receive"])):
             raise ValueError(f"unexpected execution, debit confirmation or credit check in launch {index + 1}")
         if index == 1:

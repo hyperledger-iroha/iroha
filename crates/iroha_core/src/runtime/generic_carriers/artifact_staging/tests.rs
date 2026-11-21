@@ -112,6 +112,38 @@ fn selected_staging_registers_exact_code_idempotently_before_carrier_kernel_sele
 }
 
 #[test]
+fn complete_image_size_precedes_hash_validation_and_preserves_artifact_state() {
+    let state = state();
+    let mut block = state.block(super::super::execution::tests::header());
+    select(&mut block);
+    let mut transaction = block.transaction();
+    scope(&mut transaction);
+    let mut staged = request();
+    // The original hash belongs to the shorter program. At the exact size the
+    // identity check should still run; an extra byte must hit the size check first.
+    staged.code.resize(MAX_CARRIER_ARTIFACT_BYTES_V1, 0);
+    assert!(matches!(
+        execute_original(&staged, &ALICE_ID, &mut transaction),
+        Err(Error::InvariantViolation(message))
+            if message.to_string() == "carrier artifact hash differs from its complete bytes"
+    ));
+    staged.code.push(0);
+    assert!(matches!(
+        execute_original(&staged, &ALICE_ID, &mut transaction),
+        Err(Error::InvariantViolation(message))
+            if message.to_string() == "carrier artifact exceeds its complete-image byte bound"
+    ));
+    assert!(
+        transaction
+            .world
+            .runtime_generic_artifacts
+            .iter()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
 fn absent_selection_unknown_account_foreign_scope_hash_and_profile_are_refused() {
     let absent = state();
     let mut block = absent.block(super::super::execution::tests::header());

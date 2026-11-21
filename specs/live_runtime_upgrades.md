@@ -817,7 +817,9 @@ not a date: it happens once everything its first selection needs is implemented 
 4. **Governance.** Qualify Parliament's committed governance-clock and anonymous-ballot
    integration. The dormant family implements a distinct original-signed runtime creator,
    frozen admission metadata, exact retry content and runtime-only G3 certificate/head-checked
-   enactment with atomic refusal handling. Its production qualification remains `None`;
+   effect preparation with atomic refusal handling. Native block outputs remain closed; G3
+   application refuses before effects until a new selected immutable result profile commits its
+   distinct receipt. Implement and qualify that result owner. Production qualification remains `None`;
    candidate certificates never enact, and other proposal effects remain open. Neither this
    corridor nor the runtime emergency panel gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound

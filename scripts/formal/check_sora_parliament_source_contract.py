@@ -1589,7 +1589,7 @@ def require_block_start_construction(state: str) -> None:
     # its invocation binds exactly the original four State Cell sources.
     owners = (
         (path, "pub(super) fn construct_acquired_block<'state, R>(", "impl State", (lint,),
-         "original writers and armed continuation", "36d2a42e18c4d4e0c5a124f1cad40b1690b2d596040811faf202c4ae619bfd2d"),
+         "original writers and armed continuation", "b75e1add31aafeb3f6afc4b6cfbd44ae44d94bc65c71377ba051b9c2e6958a74"),
         (path, "fn finish_state_block_construction<R>(", None, ("#[inline(never)]",),
          "bounded borrowed finish", "aa4f6e7dd39969dd98751ac40f7f1b87bd4664a960a937cd8ccadc99487831b1"),
         (acquisition_path, "macro_rules! runtime_cells", None, (),
@@ -1611,7 +1611,7 @@ def require_block_start_construction(state: str) -> None:
         (state_path, "pub struct StateBlock<'state>", None, (),
          "original armed State owner", "ee7a37d3566f8a3fad4f005953b388cb00aeb4324a49d8243cfb5c0e755b3cd9"),
         (state_path, "pub struct StateBlockFields<'state>", None, (fields_lint,),
-         "original armed State owner fields and paired cfg", "3daab44a8e81091a260aad5b4b843b14903e4929e40bf883996425bc71247f54"),
+         "original armed State owner fields and paired cfg", "bca75572b944299dd5c5bae8e9d13b768594d1b318d39f8660d83ffeca646bfe"),
         (state_path, "fn from_fields(", "impl<'state> StateBlock<'state>", (),
          "original armed State owner", "098683d5a1eef932becc2dc383c875f30a3bea4b6f2dcebb15bc3022b8cd21ce"),
         (state_path, "impl mv::BlockRetirement for StateBlock<'_>", None, (),
@@ -1634,7 +1634,7 @@ def require_block_start_construction(state: str) -> None:
     # This still trusts the surrounding Rust crate/dependency resolver/compiler;
     # it is not a complete semantic proof of arbitrary Rust programs.
     for location, expected in (
-        (path, "cabcd14a5126e6496321ffc104ddf98e18c3b7bf45554e32100cdd594a1a56c2"),
+        (path, "f229b4d21acd99b6c349a6a10bc709d20d49c0e206db9d0cb20b9363ff886a68"),
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
@@ -3042,7 +3042,7 @@ impl<'state> StateBlock<'state> {
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "0151c2d761e7d12ae7cce57ea9d3cf5c34eb1eebbbb44595e27d284449b3fd65":
+    if rust_token_digest(original_attempt) != "1ba45a2addd1248c8e87ae288ba237aa02f31111928efe5641d80ebe08307011":
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
 
 
@@ -5399,7 +5399,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "bf50f2241f9b843f938b734426fc60aed2e9877588201e5231986fb684a34a82":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "4b9974d3930ed01fce14630a8bcda376a63204aab8e8f2867917762549843f15":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):

@@ -59,10 +59,7 @@ fn checkpoint_policy() -> Parameter {
     )
 }
 
-fn parent_config() -> TestChainConfig {
-    let mut world = World::new();
-    crate::runtime::activate_additions_for_testing(&world, additions::RUNTIME_LIFECYCLE.module)
-        .unwrap();
+fn seed_parent_alias(world: &mut World) {
     let owner = AccountId::new(payer().public_key().clone());
     let lease = NameRecordV1::new(
         crate::sns::selector_for_dataspace_alias(ALIAS).unwrap(),
@@ -81,6 +78,13 @@ fn parent_config() -> TestChainConfig {
         crate::sns::record_storage_key(&lease.selector),
         lease.encode(),
     );
+}
+
+fn parent_config(seed_world: impl FnOnce(&mut World)) -> TestChainConfig {
+    let mut world = World::new();
+    crate::runtime::activate_additions_for_testing(&world, additions::RUNTIME_LIFECYCLE.module)
+        .unwrap();
+    seed_world(&mut world);
     let mut config = TestChainConfig::new(world, 1_000);
     config.clock_bootstrap_in_genesis = true;
     config.genesis_parameters.extend([
@@ -378,7 +382,7 @@ fn original_parent_and_registered_child_receipts_join_every_reviewed_native_alia
 
 fn verify_certified_join() {
     let (owner, aliases) = reviewed_aliases();
-    let mut parent = CertifiedTestChain::start(parent_config()).unwrap();
+    let mut parent = CertifiedTestChain::start(parent_config(seed_parent_alias)).unwrap();
     let home = crate::sns::dataspace_id_for_sns_alias(ALIAS).unwrap();
     let mut config = child_fixture::config_for_root(parent.network_id(), home);
     config.genesis_parameters.push(checkpoint_policy());

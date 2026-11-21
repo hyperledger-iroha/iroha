@@ -322,7 +322,14 @@ pub fn prove<C: PastaCurve>(
 
 /// `s_i = prod_j u_j^{bit_j(i)}`, round 1 the most significant bit.
 pub fn s_vector<S: Field>(us: &[S]) -> Vec<S> {
-    let mut s = Vec::with_capacity(1 << us.len());
+    let mut s = Vec::new();
+    fill_s_vector(&mut s, us);
+    s
+}
+
+fn fill_s_vector<S: Field>(s: &mut Vec<S>, us: &[S]) {
+    s.clear();
+    s.reserve_exact(1 << us.len());
     s.push(S::ONE);
     // Add one more significant index bit at a time. The old prefix is the
     // low half and remains in place; only the new high half is written.
@@ -331,7 +338,6 @@ pub fn s_vector<S: Field>(us: &[S]) -> Vec<S> {
             s.push(s[i] * u);
         }
     }
-    s
 }
 
 pub fn verify<C: PastaCurve>(
@@ -344,7 +350,7 @@ pub fn verify<C: PastaCurve>(
     claims: &[Claim<C>],
 ) -> Result<(Vec<F<C>>, F<C>), String> {
     let n = b.len();
-    if proof.lr.len() != n.trailing_zeros() as usize || gens.g.len() != n {
+    if !n.is_power_of_two() || proof.lr.len() != n.trailing_zeros() as usize || gens.g.len() != n {
         return Err("ipa: round count".into());
     }
     let (p, kappa, _) = fold_claims(t, p, &b, kappa, claims);
@@ -366,8 +372,11 @@ pub fn verify<C: PastaCurve>(
         us.push(u);
         len = half;
     }
-    // Own generator claim, decided natively here (accumulated in recursion).
-    let g_final = msm_public::<C>(&s_vector(&us), &gens.g, MemoryBudget::DEFAULT)
+    // Only the final folded scalar survives. Reuse its full-length backing
+    // allocation for the public coefficients of the generator decision.
+    let b_final = b[0];
+    fill_s_vector(&mut b, &us);
+    let g_final = msm_public::<C>(&b, &gens.g, MemoryBudget::DEFAULT)
         .map_err(|e| format!("ipa: msm {e:?}"))?;
     if g_final.to_affine() != proof.g_final {
         return Err("ipa: folded generator".into());
@@ -375,7 +384,7 @@ pub fn verify<C: PastaCurve>(
     t.point(b"ipa/G", &proof.g_final);
     t.point(b"ipa/A", &proof.a);
     let c: F<C> = t.endo_challenge(b"ipa/c");
-    let lhs = (C::from(proof.g_final) + u_point * b[0]) * proof.z1 + C::from(gens.h) * proof.z2;
+    let lhs = (C::from(proof.g_final) + u_point * b_final) * proof.z1 + C::from(gens.h) * proof.z2;
     let rhs = C::from(proof.a) + folded * c;
     if lhs != rhs {
         return Err("ipa: final opening".into());
@@ -383,7 +392,7 @@ pub fn verify<C: PastaCurve>(
     if bool::from(C::from(proof.a).is_identity()) {
         return Err("ipa: identity commitment".into());
     }
-    Ok((us, b[0]))
+    Ok((us, b_final))
 }
 
 #[cfg(test)]
@@ -391,6 +400,28 @@ mod generator_tests {
     use super::*;
     use group::{Curve, GroupEncoding};
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    #[test]
+    fn generator_weights_reuse_the_folded_buffer() {
+        fn check<S: Field>(two: S) {
+            let mut buffer = vec![S::ZERO; 8];
+            let allocation = buffer.as_ptr();
+            buffer.truncate(1);
+            for u in [&[two, S::ZERO, two][..], &[]] {
+                fill_s_vector(&mut buffer, u);
+                assert_eq!(buffer.as_ptr(), allocation);
+                for (index, &value) in buffer.iter().enumerate() {
+                    let expected = u.iter().rev().enumerate().fold(S::ONE, |v, (bit, x)| {
+                        if index & (1 << bit) == 0 { v } else { v * x }
+                    });
+                    assert_eq!(value, expected);
+                }
+                assert_eq!(buffer.len(), 1 << u.len());
+            }
+        }
+        check(iroha_pasta::Fp::from(2));
+        check(iroha_pasta::Fq::from(2));
+    }
 
     #[test]
     fn round_profile_labels_cover_every_pointer_width() {

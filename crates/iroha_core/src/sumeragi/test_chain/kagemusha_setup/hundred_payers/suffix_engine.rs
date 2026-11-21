@@ -4,6 +4,9 @@
 //! explicit engineering issuer and software FakePlatform. No phone/attestation/live capacity
 //! claim. Existing merchant corpus custody is never opened or rewritten. Only its immutable
 //! signed catalog is admitted, with the original keys and exact genesis binding.
+
+#![cfg(test)]
+
 use super::*;
 use iroha_core_zk::kagemusha_wallet_advance_v1::KagemushaWalletFsV1 as EngineFs;
 

@@ -156,6 +156,7 @@ closed.
 |---|---|
 | ABI v1 | 7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7 |
 | iroha.ivm.runtime_lifecycle.v1 | 76f057f25a3ba9a1525dc9b066de73c982f49c2ffd8180e65ddaeeb64d3515af |
+| iroha.ivm.generic_carrier.v1 | 38889ce907d4b14738330e40bbe7d4e9d3ddce95b7869ca0bb5b65da410e4023 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI V1 is the sole first-release version. Each engine fixes its own instruction

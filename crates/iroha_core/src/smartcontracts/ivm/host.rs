@@ -28,7 +28,18 @@ type SyscallOutcome = (Result<u64, ivm::VMError>, IVM, DurableStateOverlay);
 type ContractCallOutcome = (Result<(), ivm::VMError>, IVM, DurableStateOverlay, u64);
 
 mod attachment_lifecycle;
+
+// Administrative replacement never creates a missing carrier facility. Evaluating the
+// replacement comes only after the existing native owner has been checked.
+macro_rules! native_assign {
+    ($field:expr, $value:expr) => {{
+        let original = $field.require_mut();
+        *original = $value;
+    }};
+}
 pub(crate) mod generic_carrier;
+mod native_only;
+use native_only::{NativeFacilities, NativeOnly};
 mod x509_attachment;
 pub use x509_attachment::ExecutedHostInstructions;
 mod contract_calls;
@@ -897,8 +908,8 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     nested_contract_call_depth: usize,
     // Fixed V1 call-stack capacity; identity checks include every active ancestor.
     nested_contract_ancestors: [Option<ContractAddress>; MAX_NESTED_CONTRACT_CALL_DEPTH],
-    default: ivm::host::DefaultHost,
-    codec_host: IvmCodecHost,
+    default: NativeOnly<ivm::host::DefaultHost>,
+    codec_host: NativeOnly<IvmCodecHost>,
     access_log_enabled: bool,
     zk_verify_limits: ivm::host::ZkVerifyLimits,
     zk_gas_schedule: ivm::gas::ZkGasScheduleV1,
@@ -908,7 +919,7 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     confidential_gas: iroha_config::parameters::actual::ConfidentialGas,
     stark_config: iroha_config::parameters::actual::Stark,
     pipa_r_config: iroha_config::parameters::actual::PipaR,
-    crypto: Arc<iroha_config::parameters::actual::Crypto>,
+    crypto: NativeOnly<Arc<iroha_config::parameters::actual::Crypto>>,
     queued: Vec<QueuedEffect>,
     carrier: Option<generic_carrier::CarrierContext<'run>>,
     carrier_queue_backing: Option<generic_carrier::QueueBacking>,
@@ -925,12 +936,12 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     // Canonically ordered account ids walked by `CREATE_NFTS_FOR_ALL_USERS`; state
     // owners supply only the prefix it can observe
     // (`create_nfts_for_all_recipient_snapshot`).
-    accounts_snapshot: Arc<Vec<AccountId>>,
+    accounts_snapshot: NativeOnly<Arc<Vec<AccountId>>>,
     // Optional owned contract registry snapshot for nested resolution without a live query view.
     bound_contract_records_by_subject:
         BTreeMap<AccountId, crate::smartcontracts::code::BoundContractRecord>,
     // Bounded immutable artifact cache shared with the outer runtime pool.
-    prepared_contract_cache: PreparedContractCache,
+    prepared_contract_cache: NativeOnly<PreparedContractCache>,
     // Live read-only state view used to execute queries during IVM runs.
     query_state: QS,
     // Optional counters enabled only by typed-query performance validation.
@@ -967,11 +978,11 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
     // ZK-proof verification state (gates ISI mutations)
-    zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
-    zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
+    zk_verified_ballot: NativeOnly<Arc<VecDeque<[u8; 32]>>>,
+    zk_verified_tally: NativeOnly<Arc<VecDeque<[u8; 32]>>>,
     // Snapshots for state-read syscalls
-    zk_roots: Arc<crate::state::IvmZkRootsSnapshot>,
-    zk_elections: Arc<crate::state::IvmElectionsSnapshot>,
+    zk_roots: NativeOnly<Arc<crate::state::IvmZkRootsSnapshot>>,
+    zk_elections: NativeOnly<Arc<crate::state::IvmElectionsSnapshot>>,
     // `VRF_EPOCH_SEED` projection; signatures and deferred scans resolve on first use.
     vrf_epoch_seeds: VrfEpochSeedSource,
     // Validated verifying-key registry indexed by commitment for proof dispatch.
@@ -983,7 +994,7 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     // Exact genesis-derived security domain for AXT issuer authentication.
     network_id: Option<NetworkId>,
     // Mandatory snapshot-derived policy for AXT validation.
-    axt_policy: Arc<dyn ivm_abi::axt::AxtPolicy>,
+    axt_policy: NativeOnly<Arc<dyn ivm_abi::axt::AxtPolicy>>,
     // Optional supplemental policy hook. This can only restrict the mandatory
     // authenticated snapshot policy; either denial wins.
     axt_policy_hook: Option<Arc<dyn ivm_abi::axt::AxtPolicy>>,
@@ -994,16 +1005,16 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     // Non-zero retained-root bound for ZK root reads.
     zk_tree_roots_history_len: NonZeroUsize,
     // Last seen verify envelope hashes per ZK op type (from pointer‑ABI TLVs)
-    zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
+    zk_last_env_hash_ballot: NativeOnly<Arc<VecDeque<[u8; 32]>>>,
+    zk_last_env_hash_tally: NativeOnly<Arc<VecDeque<[u8; 32]>>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
     // Issuer keys resolved only from committed Space Directory/UAID state.
-    axt_issuer_keys: Arc<BTreeMap<DataSpaceId, AxtIssuerKeyBinding>>,
+    axt_issuer_keys: NativeOnly<Arc<BTreeMap<DataSpaceId, AxtIssuerKeyBinding>>>,
     // Slot for which cached AXT proofs were verified.
     axt_proof_cache_slot: Option<u64>,
     // Cache of per-dataspace proofs validated in the current slot.
-    axt_proof_cache: Arc<BTreeMap<DataSpaceId, CachedProofEntry>>,
+    axt_proof_cache: NativeOnly<Arc<BTreeMap<DataSpaceId, CachedProofEntry>>>,
     // Last observed AXT rejection for structured error reporting.
     last_axt_reject: Option<AxtRejectContext>,
     // Static analysis of the currently executing program for AMX budgeting.
@@ -3789,13 +3800,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     /// Create a new host for the given authority.
     pub fn new(authority: AccountId) -> Self {
-        let default_crypto = iroha_config::parameters::actual::Crypto::default();
-        let default = ivm::host::DefaultHost::new();
-        apply_sm_openssl_preview(default_crypto.enable_sm_openssl_preview);
-        let crypto = Arc::new(default_crypto);
+        Self::with_native_facilities(authority, NativeFacilities::Available)
+    }
+
+    // Only the original descriptor/instruction capability constructor calls this after capture.
+    // Missing facilities never initialize lazily and cannot grant native host authority.
+    fn new_carrier_without_native_facilities(authority: AccountId) -> Self {
+        Self::with_native_facilities(authority, NativeFacilities::UnavailableForCarrier)
+    }
+
+    fn with_native_facilities(authority: AccountId, facilities: NativeFacilities) -> Self {
+        let (default, crypto) = match facilities {
+            NativeFacilities::Available => {
+                // Preserve the original native construction and allocation order.
+                let default_crypto = iroha_config::parameters::actual::Crypto::default();
+                let default = ivm::host::DefaultHost::new();
+                apply_sm_openssl_preview(default_crypto.enable_sm_openssl_preview);
+                let crypto = Arc::new(default_crypto);
+                (NativeOnly::present(default), NativeOnly::present(crypto))
+            }
+            NativeFacilities::UnavailableForCarrier => (NativeOnly::absent(), NativeOnly::absent()),
+        };
         Self {
             authority,
-            execution_class: HostExecutionClass::Generic,
+            execution_class: match facilities {
+                NativeFacilities::Available => HostExecutionClass::Generic,
+                NativeFacilities::UnavailableForCarrier => HostExecutionClass::Carrier,
+            },
             local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
@@ -3803,7 +3834,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             nested_contract_call_depth: 0,
             nested_contract_ancestors: std::array::from_fn(|_| None),
             default,
-            codec_host: IvmCodecHost::new(),
+            codec_host: NativeOnly::construct(facilities, || IvmCodecHost::new()),
             access_log_enabled: false,
             zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
@@ -3821,9 +3852,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_violation: None,
             output_measurement_failure: None,
             fastpq_batch_entries: None,
-            accounts_snapshot: Arc::new(Vec::new()),
+            accounts_snapshot: NativeOnly::construct(facilities, || Arc::new(Vec::new())),
             bound_contract_records_by_subject: BTreeMap::new(),
-            prepared_contract_cache: PreparedContractCache::default(),
+            prepared_contract_cache: NativeOnly::construct(facilities, || {
+                PreparedContractCache::default()
+            }),
             query_state: QS::default(),
             core_query_page_metrics: None,
             nft_seq: 0,
@@ -3841,27 +3874,35 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_ballot: Arc::new(VecDeque::new()),
-            zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: Arc::default(),
-            zk_elections: Arc::default(),
+            zk_verified_ballot: NativeOnly::construct(facilities, || Arc::new(VecDeque::new())),
+            zk_verified_tally: NativeOnly::construct(facilities, || Arc::new(VecDeque::new())),
+            zk_roots: NativeOnly::construct(facilities, || Arc::default()),
+            zk_elections: NativeOnly::construct(facilities, || Arc::default()),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
+            axt_policy: NativeOnly::construct(
+                facilities,
+                || -> Arc<dyn ivm_abi::axt::AxtPolicy> {
+                    Arc::new(ivm_abi::axt::AllowAllAxtPolicy)
+                },
+            ),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
-            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: NativeOnly::construct(
+                facilities,
+                || Arc::new(VecDeque::new()),
+            ),
+            zk_last_env_hash_tally: NativeOnly::construct(facilities, || Arc::new(VecDeque::new())),
             axt_policy_snapshot: None,
-            axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_issuer_keys: NativeOnly::construct(facilities, || Arc::new(BTreeMap::new())),
             axt_proof_cache_slot: None,
-            axt_proof_cache: Arc::new(BTreeMap::new()),
+            axt_proof_cache: NativeOnly::construct(facilities, || Arc::new(BTreeMap::new())),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -3935,15 +3976,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             attachment_custody: None,
             nested_contract_call_depth: 0,
             nested_contract_ancestors: std::array::from_fn(|_| None),
-            default,
-            codec_host: IvmCodecHost::new(),
+            default: NativeOnly::present(default),
+            codec_host: NativeOnly::present(IvmCodecHost::new()),
             access_log_enabled: false,
             zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             confidential_gas: crate::gas::DEFAULT_ZK_GAS,
             stark_config: iroha_config::parameters::actual::Stark::default(),
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
-            crypto,
+            crypto: NativeOnly::present(crypto),
             queued: Vec::new(),
             carrier: None,
             carrier_queue_backing: None,
@@ -3954,9 +3995,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_violation: None,
             output_measurement_failure: None,
             fastpq_batch_entries: None,
-            accounts_snapshot: accounts,
+            accounts_snapshot: NativeOnly::present(accounts),
             bound_contract_records_by_subject: BTreeMap::new(),
-            prepared_contract_cache: PreparedContractCache::default(),
+            prepared_contract_cache: NativeOnly::present(PreparedContractCache::default()),
             query_state: QS::default(),
             core_query_page_metrics: None,
             nft_seq: 0,
@@ -3974,27 +4015,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_ballot: Arc::new(VecDeque::new()),
-            zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: Arc::default(),
-            zk_elections: Arc::default(),
+            zk_verified_ballot: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_verified_tally: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_roots: NativeOnly::present(Arc::default()),
+            zk_elections: NativeOnly::present(Arc::default()),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
+            axt_policy: NativeOnly::present(Arc::new(ivm_abi::axt::AllowAllAxtPolicy)),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
-            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_last_env_hash_tally: NativeOnly::present(Arc::new(VecDeque::new())),
             axt_policy_snapshot: None,
-            axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_issuer_keys: NativeOnly::present(Arc::new(BTreeMap::new())),
             axt_proof_cache_slot: None,
-            axt_proof_cache: Arc::new(BTreeMap::new()),
+            axt_proof_cache: NativeOnly::present(Arc::new(BTreeMap::new())),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -4022,15 +4063,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             attachment_custody: None,
             nested_contract_call_depth: 0,
             nested_contract_ancestors: std::array::from_fn(|_| None),
-            default,
-            codec_host: IvmCodecHost::new(),
+            default: NativeOnly::present(default),
+            codec_host: NativeOnly::present(IvmCodecHost::new()),
             access_log_enabled: false,
             zk_verify_limits: ivm::host::ZkVerifyLimits::default(),
             zk_gas_schedule: ivm::gas::ZkGasScheduleV1::default(),
             confidential_gas: crate::gas::DEFAULT_ZK_GAS,
             stark_config: iroha_config::parameters::actual::Stark::default(),
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
-            crypto,
+            crypto: NativeOnly::present(crypto),
             queued: Vec::new(),
             carrier: None,
             carrier_queue_backing: None,
@@ -4041,9 +4082,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_violation: None,
             output_measurement_failure: None,
             fastpq_batch_entries: None,
-            accounts_snapshot: accounts,
+            accounts_snapshot: NativeOnly::present(accounts),
             bound_contract_records_by_subject: BTreeMap::new(),
-            prepared_contract_cache: PreparedContractCache::default(),
+            prepared_contract_cache: NativeOnly::present(PreparedContractCache::default()),
             query_state: QS::default(),
             core_query_page_metrics: None,
             nft_seq: 0,
@@ -4061,27 +4102,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_ballot: Arc::new(VecDeque::new()),
-            zk_verified_tally: Arc::new(VecDeque::new()),
-            zk_roots: Arc::default(),
-            zk_elections: Arc::default(),
+            zk_verified_ballot: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_verified_tally: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_roots: NativeOnly::present(Arc::default()),
+            zk_elections: NativeOnly::present(Arc::default()),
             vrf_epoch_seeds: VrfEpochSeedSource::default(),
             prepared_verifying_keys: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
+            axt_policy: NativeOnly::present(Arc::new(ivm_abi::axt::AllowAllAxtPolicy)),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
-            zk_last_env_hash_tally: Arc::new(VecDeque::new()),
+            zk_last_env_hash_ballot: NativeOnly::present(Arc::new(VecDeque::new())),
+            zk_last_env_hash_tally: NativeOnly::present(Arc::new(VecDeque::new())),
             axt_policy_snapshot: None,
-            axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_issuer_keys: NativeOnly::present(Arc::new(BTreeMap::new())),
             axt_proof_cache_slot: None,
-            axt_proof_cache: Arc::new(BTreeMap::new()),
+            axt_proof_cache: NativeOnly::present(Arc::new(BTreeMap::new())),
             last_axt_reject: None,
             amx_analysis: None,
             amx_limits: AmxLimits::default(),
@@ -4367,7 +4408,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     /// Share the outer runtime's bounded immutable contract-artifact cache.
     pub fn set_prepared_contract_cache(&mut self, cache: PreparedContractCache) {
-        self.prepared_contract_cache = cache;
+        native_assign!(self.prepared_contract_cache, cache);
     }
     /// Enable access logging for prepass execution.
     #[must_use]
@@ -4423,7 +4464,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     /// Update local implementation selection and cryptography telemetry.
     pub fn set_crypto_config(&mut self, crypto: Arc<iroha_config::parameters::actual::Crypto>) {
-        self.crypto = crypto;
+        native_assign!(self.crypto, crypto);
         apply_sm_openssl_preview(self.crypto.enable_sm_openssl_preview);
         self.notify_telemetry_crypto_config();
     }
@@ -4521,9 +4562,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         policy: ivm_abi::axt::SnapshotAxtPolicy,
     ) {
         self.abort_active_axt_envelope_for_policy_change();
-        self.axt_policy = Arc::new(policy);
+        native_assign!(self.axt_policy, Arc::new(policy));
         self.axt_policy_snapshot = Some(snapshot.clone());
-        self.axt_issuer_keys = Arc::new(BTreeMap::new());
+        native_assign!(self.axt_issuer_keys, Arc::new(BTreeMap::new()));
         self.clear_axt_proof_cache();
         self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
     }
@@ -5095,8 +5136,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         &mut self,
         map: &BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
     ) -> Result<(), ivm::VMError> {
-        self.zk_roots = crate::state::ivm_zk_roots::project(map)
-            .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?;
+        native_assign!(
+            self.zk_roots,
+            crate::state::ivm_zk_roots::project(map)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::NoritoInvalid))?
+        );
         Ok(())
     }
     /// Hydrate the ABI-V1 `VRF_EPOCH_SEED` projection from finalized global pulses.
@@ -5195,8 +5239,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             Self::prepared_verifying_key_index(world.verifying_keys().iter())?;
         self.prepared_verifying_keys = prepared_verifying_keys;
         self.set_zk_tree_roots_history_len(zk_cfg.tree_roots_history_len);
-        self.zk_roots = roots;
-        self.zk_elections = elections;
+        native_assign!(self.zk_roots, roots);
+        native_assign!(self.zk_elections, elections);
         Ok(())
     }
     /// Snapshot durable smart-contract state from the provided world view.
@@ -5646,7 +5690,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         map: BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
         Self::validate_zk_elections_snapshot(&map)?;
-        self.zk_elections = Arc::new(map);
+        native_assign!(self.zk_elections, Arc::new(map));
         Ok(())
     }
     /// Production hydration validates elections in [`crate::state::ivm_elections::project`].
@@ -7244,7 +7288,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.axt_timing = timing;
         self.set_network_id(*state.network_id());
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
-        self.axt_issuer_keys = Arc::new(issuer_keys);
+        native_assign!(self.axt_issuer_keys, Arc::new(issuer_keys));
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
@@ -7736,12 +7780,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         self.axt_state = axt_state;
         self.completed_axt.truncate(completed_axt_len);
-        self.zk_verified_ballot = zk_verified_ballot;
-        self.zk_verified_tally = zk_verified_tally;
-        self.zk_last_env_hash_ballot = zk_last_env_hash_ballot;
-        self.zk_last_env_hash_tally = zk_last_env_hash_tally;
+        native_assign!(self.zk_verified_ballot, zk_verified_ballot);
+        native_assign!(self.zk_verified_tally, zk_verified_tally);
+        native_assign!(self.zk_last_env_hash_ballot, zk_last_env_hash_ballot);
+        native_assign!(self.zk_last_env_hash_tally, zk_last_env_hash_tally);
         self.axt_proof_cache_slot = axt_proof_cache_slot;
-        self.axt_proof_cache = axt_proof_cache;
+        native_assign!(self.axt_proof_cache, axt_proof_cache);
         self.last_axt_reject = last_axt_reject;
         self.amx_budget_violation = amx_budget_violation;
         self.instruction_queue_count = output_count_before;
@@ -10282,6 +10326,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
         if let Some(quote) = self.carrier_quote(number, vm)? {
             return Ok(quote);
         }
+        if matches!(self.execution_class, HostExecutionClass::Carrier) {
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
+        }
         self.execution_class.ensure_syscall_allowed(number)?;
         // Consensus hosts never receive raw private witnesses. Keep this
         // defense-in-depth boundary independent of entrypoint admission so a
@@ -10535,6 +10582,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             ivm::host::require_host_syscall_metering_spec(vm.quote().syscall_policy(), number)?;
             if let Some(gas) = self.carrier_syscall(number, vm)? {
                 return Ok(gas);
+            }
+            if matches!(self.execution_class, HostExecutionClass::Carrier) {
+                return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
             }
             self.execution_class.ensure_syscall_allowed(number)?;
             // See `prepare_syscall`: production consensus execution has no raw
@@ -12203,6 +12253,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             durable_read_paths_complete: true,
             ..ivm::host::AccessLog::default()
         };
+        if matches!(self.execution_class, HostExecutionClass::Carrier) {
+            if self.carrier.is_none() || self.codec_host.is_present() {
+                return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
+            }
+            // The ordinary codec journal is empty at construction and this profile cannot
+            // execute any codec-host state operation. The common CoreHost journal reset
+            // above is the only active transaction owner.
+            return Ok(());
+        }
         self.codec_host.begin_tx(declared)
     }
     fn finish_tx(&mut self) -> Result<ivm::host::AccessLog, ivm::VMError> {

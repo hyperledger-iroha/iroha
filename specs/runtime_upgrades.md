@@ -498,6 +498,11 @@ are refused as before.
   (`runtime::catalog::migrations`): the old and successor World fields, the cursor's codec, the
   rows a stage moves, and four handlers. A sealed engine adapter binds the declared fields before
   calling a handler; handlers receive storage capabilities, never the World or an MV writer.
+  Their fixed scratch capability admits exact backing from the original World execution pool;
+  the engine uses the same pool for its ordered stage census and barrier cursor arena. These
+  charges remain with the actual buffers until destruction. Persistent cursor and map storage,
+  child context/catalog copies and nested callback codec graphs still require separate ownership;
+  fixed scratch does not establish complete migration funding or qualification.
   The first adapter supports one source table and one successor table. Source point lookup and
   scans have distinct static rights, the stage writes only its successor, the barrier reads the
   original source journal and updates the successor, and the drain can only remove source rows.
@@ -518,10 +523,24 @@ are refused as before.
   instructions, hooks and the block's tail writes. When no old row lies after the cursor the
   record is `Complete`, and the barrier keeps holding.
 - **Suspension and faults.** Closing a migration's admission suspends its stages and lifting the
-  restriction resumes them; the cursor and the barrier stay in place. A stage that fails writes
-  nothing and faults the migration: no further stage runs, the barrier keeps holding, and a
-  change set that deactivates it and activates a replacement over the same storage and cursor
-  hands the cursor over.
+  restriction resumes them; the cursor and the barrier stay in place. A deterministic copying
+  stage rejection discards that stage's World child before a fresh child records `Faulted`,
+  preserving the prior cursor and counts. No further stage runs, the barrier keeps holding, and
+  a change set that deactivates it and activates a replacement over the same storage and cursor
+  hands the cursor over. A local codec, allocation or storage refusal retains its original typed
+  cause instead of recording `Faulted`. At block start it discards the enclosing unpublished
+  State block, including earlier migration children; successful children alone contribute their
+  quantity observations.
+- **Publication retry.** Each barrier mutates an existing successor transaction while borrowing
+  the original source Block journal. Refusal rolls back that child. The publisher retains the
+  exact completed tail and successful barrier prefix, freezes final non-World fields once, and
+  suspends the original mutable World journals before returning a retryable local refusal.
+  All physical writers and enclosing publication fences are released. Retry reacquires the same
+  owners and checks their original predecessors before resuming the unfinished barrier; it
+  repeats neither the tail nor successful sibling barriers. Ordinary frozen journals never
+  regain mutation authority. Changed predecessors require recovery, and other pre-freeze failures
+  retain their terminal behavior. Only a completed barrier advances the accumulator and reaches
+  final World freeze and publication.
 - **Cutover.** A change set restricts the migration to completion only, with the transitions
   that move the release's readers and writers to the successor (including the execution services
   profile, when a block hook writes the old storage). It activates only once the record is
@@ -542,6 +561,11 @@ are refused as before.
   `POST /v1/runtime/migrations/draft` (`iroha ops runtime migration draft --migration <module>
   --step start|cut-over|retire --effective-height <height> --qualification <hex>`), and endorses,
   proposes and attests it like any change set.
+
+The typed migration and mutable-suspension paths are now one source candidate; their combined
+compiled execution tests remain pending. No production migration is declared. TODO: qualify the
+combined MV and State retry owners and fund each concrete adapter's callback and scratch graph
+before claiming migration readiness.
 
 A storage definition names the definition a release founded or added the field with. A field
 whose definition an identity cutover replaced is migrated by a migration compiled against the
@@ -1115,11 +1139,13 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
 
 The dormant anonymous Parliament family now has a distinct original-signed runtime creator:
 Core derives the operator, notice, provenance verdict and proposal time from the admitted action
-and committed policy; retries retain the exact predecessor content. Its runtime-only G3 item
-uses the shared governance clock, budget and output partition, checks the production certificate
-and compare-and-set head, and rolls back rejected effects before recording failure. Checked
-identity/policy adapters retain original local refusals. This source candidate still needs
-same-candidate validation and the governance-clock/ballot qualification owned by
+and committed policy; retries retain the exact predecessor content. Runtime-only G3 effect
+preparation checks the production certificate and compare-and-set head, and rolls back rejected
+effects before preparing failure. Its receipt is a distinct standalone type: native block outputs
+remain closed, and G3 application refuses as unsupported before effects until a new selected
+immutable result profile can authenticate and commit that receipt. Checked identity/policy
+adapters retain original local refusals. This source candidate still needs the result-profile
+implementation, same-candidate validation and the governance-clock/ballot qualification owned by
 [`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
 `PARLIAMENT_BALLOT_QUALIFICATION_V1` remains `None`: candidate certificates never enact, other
 proposal effects remain open, and the frozen baseline handlers are unchanged.

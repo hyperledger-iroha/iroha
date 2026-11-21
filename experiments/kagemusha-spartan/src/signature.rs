@@ -524,12 +524,12 @@ pub fn append_signature_total(
     let u2 = a.mul(&scalars[0], &inverse, 1);
     let b1 = a.digits(&u1);
     let b2 = a.digits(&u2);
-    let gt = crate::operation::comb_tables(&p256::generator(), 16);
+    let gt = crate::operation::g_comb_tables(16);
     let qt = crate::operation::comb_tables(&q, 16);
     let mut acc = a.identity();
     for step in (0..16).rev() {
         acc = a.add(&acc, &acc);
-        for (table, entries, digits) in [(key.table, &qt, &b2), (nonnative::POINT_TABLE, &gt, &b1)]
+        for (table, entries, digits) in [(key.table, &qt, &b2), (nonnative::POINT_TABLE, &*gt, &b1)]
         {
             for half in 0..2 {
                 let selected = a.selected(table, entries, digits, half, step);

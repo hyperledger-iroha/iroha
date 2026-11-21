@@ -113,6 +113,19 @@ fn fixture(suffix: usize) -> Fixture {
     copy_fixture(&chain.kura().store_root(), source_dir.path());
     let configuration = config(source_dir.path());
     let nexus = chain.state().nexus_snapshot();
+    // The copy deliberately excludes the producer's OS lock. Establish this
+    // private store through the same Strict constructor that creates and binds
+    // its own lock, then close it before the stopped-source Fast admission.
+    // Fast remains read-only and must never create or repair a missing lock.
+    let mut strict = configuration.clone();
+    strict.init_mode = InitMode::Strict;
+    let (initialized, _) = Kura::new_with_configured_lane_catalog(
+        &strict,
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .unwrap();
+    drop(initialized);
     let (source, _) = Kura::new_with_configured_lane_catalog(
         &configuration,
         &nexus.lane_config,

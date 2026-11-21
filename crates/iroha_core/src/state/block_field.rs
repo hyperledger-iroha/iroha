@@ -28,6 +28,14 @@ pub trait OriginalPublicationBlock: BlockRetirement + sealed::Sealed + Sized {
     type Frozen;
     /// Same original frozen fields while independent structural readers retain them.
     type FrozenRead;
+    /// Distinct mutable suspension owner; ordinary frozen fields never grant it.
+    type Suspension: mv::BlockSuspension<Block = Self, Suspended = Self::Suspended>;
+    /// Exact mutable journal while every physical execution writer is free.
+    type Suspended;
+    /// Original-owner reacquisition and its actual deferred release notices.
+    type Resumption: mv::BlockResumption<Block = Self, Suspended = Self::Suspended>;
+    /// Move only this original executing block into a mutable suspension slot.
+    fn into_suspension(self) -> Self::Suspension;
     /// Move the original block into its capture slot without allocation.
     fn into_freeze_capture(self) -> Self::FreezeCapture;
     /// Consume execution authority without releasing any physical writer.
@@ -41,6 +49,12 @@ impl<'a, V: mv::CellValue, C: Send + Sync + 'static> OriginalPublicationBlock
     type FreezeCapture = mv::cell::BlockCaptureSlot<'a, V, (), C>;
     type Frozen = mv::cell::Detached<V, (), C>;
     type FrozenRead = mv::cell::FrozenDetached<V, (), C>;
+    type Suspension = mv::cell::BlockSuspensionSlot<'a, V, C>;
+    type Suspended = mv::cell::SuspendedBlock<V, C>;
+    type Resumption = mv::cell::BlockResumptionSlot<'a, V, C>;
+    fn into_suspension(self) -> Self::Suspension {
+        self.suspension_slot()
+    }
     fn into_freeze_capture(self) -> Self::FreezeCapture {
         self.capture_slot()
     }
@@ -56,6 +70,12 @@ impl<'a, K: Key, V: Value, M: mv::storage::StorageMode<K, V>> OriginalPublicatio
     type FreezeCapture = mv::storage::BlockCaptureSlot<'a, K, V, (), M>;
     type Frozen = mv::storage::Detached<K, V, (), M>;
     type FrozenRead = mv::storage::FrozenDetached<K, V, (), M>;
+    type Suspension = mv::storage::BlockSuspensionSlot<'a, K, V, M>;
+    type Suspended = mv::storage::SuspendedBlock<'a, K, V, M>;
+    type Resumption = mv::storage::BlockResumptionSlot<'a, K, V, M>;
+    fn into_suspension(self) -> Self::Suspension {
+        self.suspension_slot()
+    }
     fn into_freeze_capture(self) -> Self::FreezeCapture {
         self.capture_slot()
     }
@@ -72,6 +92,9 @@ pub type CellField<'a, V, C = concread::ebrcell::Untracked> = BlockField<
     mv::cell::BlockCaptureSlot<'a, V, (), C>,
     mv::cell::Detached<V, (), C>,
     mv::cell::FrozenDetached<V, (), C>,
+    mv::cell::BlockSuspensionSlot<'a, V, C>,
+    mv::cell::SuspendedBlock<V, C>,
+    mv::cell::BlockResumptionSlot<'a, V, C>,
 >;
 
 /// Exact Storage phases retain both original map generations and covariance.
@@ -81,9 +104,15 @@ pub type StorageField<'a, K, V, M = concread::bptree::Untracked> = BlockField<
     mv::storage::BlockCaptureSlot<'a, K, V, (), M>,
     mv::storage::Detached<K, V, (), M>,
     mv::storage::FrozenDetached<K, V, (), M>,
+    mv::storage::BlockSuspensionSlot<'a, K, V, M>,
+    mv::storage::SuspendedBlock<'a, K, V, M>,
+    mv::storage::BlockResumptionSlot<'a, K, V, M>,
 >;
 
-enum Phase<B, P, C, F, R> {
+enum Phase<B, P, C, F, R, S, T, U> {
+    Suspending(S),
+    Suspended(T),
+    Resuming(U),
     Executing(B),
     Capturing(C),
     Frozen(F),
@@ -103,12 +132,25 @@ pub struct BlockField<
     C = <B as OriginalPublicationBlock>::FreezeCapture,
     F = <B as OriginalPublicationBlock>::Frozen,
     R = <B as OriginalPublicationBlock>::FrozenRead,
+    S = <B as OriginalPublicationBlock>::Suspension,
+    T = <B as OriginalPublicationBlock>::Suspended,
+    U = <B as OriginalPublicationBlock>::Resumption,
 > where
-    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F, FrozenRead = R>,
+    B: OriginalPublicationBlock<
+            Publication = P,
+            FreezeCapture = C,
+            Frozen = F,
+            FrozenRead = R,
+            Suspension = S,
+            Suspended = T,
+            Resumption = U,
+        >,
     P: BlockPublication,
     C: BlockCapture<(), Block = B, Detached = F>,
+    S: mv::BlockSuspension<Block = B, Suspended = T>,
+    U: mv::BlockResumption<Block = B, Suspended = T>,
 {
-    phase: Option<Phase<B, P, C, F, R>>,
+    phase: Option<Phase<B, P, C, F, R, S, T, U>>,
     released: bool,
     // Normal recovery restores Frozen above while retaining the actual attempt
     // cleanup here until every sibling and enclosing fence has unlocked.
@@ -116,6 +158,10 @@ pub struct BlockField<
     // After original payload custody: never notify while a sibling still owns
     // its writer. The enclosing aggregate retires these only after all release.
     freeze_cleanup: CaptureCleanup,
+    suspension_cleanup: CaptureCleanup,
+    // A resumed Block may still hold every writer; keep its emptied slot until
+    // the aggregate next suspends/freezes/releases all siblings and fences.
+    resumption_cleanup: Option<U>,
 }
 
 impl<B: OriginalPublicationBlock> BlockField<B> {
@@ -125,6 +171,8 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
             released: false,
             retry_cleanup: None,
             freeze_cleanup: CaptureCleanup::default(),
+            suspension_cleanup: CaptureCleanup::default(),
+            resumption_cleanup: None,
         }
     }
 
@@ -201,32 +249,57 @@ impl<B: OriginalPublicationBlock> DerefMut for BlockField<B> {
         }
     }
 }
-impl<B, P, C, F, R> BlockRetirement for BlockField<B, P, C, F, R>
+impl<B, P, C, F, R, S, T, U> BlockRetirement for BlockField<B, P, C, F, R, S, T, U>
 where
-    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F, FrozenRead = R>,
+    B: OriginalPublicationBlock<
+            Publication = P,
+            FreezeCapture = C,
+            Frozen = F,
+            FrozenRead = R,
+            Suspension = S,
+            Suspended = T,
+            Resumption = U,
+        >,
     P: BlockPublication,
     C: BlockCapture<(), Block = B, Detached = F>,
+    S: mv::BlockSuspension<Block = B, Suspended = T>,
+    U: mv::BlockResumption<Block = B, Suspended = T>,
 {
     fn release_writers(&mut self) {
         self.released = true;
         match self.phase.as_mut() {
             Some(Phase::Executing(block)) => block.release_writers(),
+            Some(Phase::Suspending(slot)) => slot.release_writers(),
+            Some(Phase::Resuming(slot)) => slot.release_writers(),
             Some(Phase::Capturing(slot)) => slot.release(),
             Some(Phase::Publishing(slot)) => slot.release_writers(),
-            Some(Phase::Frozen(_) | Phase::Reading(_)) | None => {}
+            Some(Phase::Frozen(_) | Phase::Reading(_) | Phase::Suspended(_)) | None => {}
         }
     }
 }
-impl<B, P, C, F, R> Drop for BlockField<B, P, C, F, R>
+impl<B, P, C, F, R, S, T, U> Drop for BlockField<B, P, C, F, R, S, T, U>
 where
-    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F, FrozenRead = R>,
+    B: OriginalPublicationBlock<
+            Publication = P,
+            FreezeCapture = C,
+            Frozen = F,
+            FrozenRead = R,
+            Suspension = S,
+            Suspended = T,
+            Resumption = U,
+        >,
     P: BlockPublication,
     C: BlockCapture<(), Block = B, Detached = F>,
+    S: mv::BlockSuspension<Block = B, Suspended = T>,
+    U: mv::BlockResumption<Block = B, Suspended = T>,
 {
     fn drop(&mut self) {
         self.release_writers();
     }
 }
+
+#[path = "block_field/suspended.rs"]
+mod suspended;
 
 #[path = "block_field/frozen.rs"]
 mod frozen;
@@ -246,6 +319,9 @@ mod tests;
 #[derive(Debug, PartialEq, Eq)]
 pub enum AggregatePublication {
     Executing,
+    Suspending,
+    Suspended,
+    Resuming,
     Capturing,
     Frozen,
     Reacquiring,
@@ -256,6 +332,27 @@ pub enum AggregatePublication {
     Released,
 }
 impl AggregatePublication {
+    pub(crate) fn begin_suspension(&mut self) {
+        self.assert_executing();
+        *self = Self::Suspending;
+    }
+    pub(crate) fn finish_suspension(&mut self) {
+        assert_eq!(*self, Self::Suspending);
+        *self = Self::Suspended;
+    }
+    pub(crate) fn begin_resumption(&mut self) {
+        assert_eq!(*self, Self::Suspended);
+        *self = Self::Resuming;
+    }
+    pub(crate) fn finish_resumption(&mut self) {
+        assert_eq!(*self, Self::Resuming);
+        *self = Self::Executing;
+    }
+    pub(crate) fn recover_resumption(&mut self) {
+        assert!(matches!(*self, Self::Suspended | Self::Resuming));
+        *self = Self::Suspended;
+    }
+
     pub(crate) fn assert_executing(&self) {
         assert_eq!(*self, Self::Executing, "aggregate no longer executes");
     }

@@ -120,10 +120,9 @@ pub(super) fn rehearse() {
     .unwrap();
     let archive = directory.join("reviewed-originals");
     archive_sources(&root, &archive);
-    let mut parent = CertifiedTestChain::start(parent_config()).unwrap();
+    let mut parent = CertifiedTestChain::start(daemon::parent_configuration()).unwrap();
     let home = crate::sns::dataspace_id_for_sns_alias(ALIAS).unwrap();
-    let mut child_config = child_fixture::config_for_root(parent.network_id(), home);
-    child_config.genesis_parameters.push(checkpoint_policy());
+    let child_config = daemon::child_configuration(parent.network_id(), home);
     let mut child = CertifiedTestChain::start(child_config).unwrap();
     let parent_change = retirement_change(&parent, &aliases);
     let child_change = retirement_change(&child, &aliases);
@@ -179,11 +178,11 @@ pub(super) fn rehearse() {
     let root_input_file = iroha_fs::RetainedBuildInput::open(directory.join("roots.json")).unwrap();
     let root_input_snapshot = root_input_file.snapshot().unwrap();
     for (name, chain) in [("parent", &parent), ("child", &child)] {
-        copy_store_files(
-            &chain.kura().store_root(),
-            &directory.join(name).join("kura"),
-        );
+        let copied = directory.join(name).join("kura");
+        copy_store_files(&chain.kura().store_root(), &copied);
+        initialize_copied_store(chain, &copied);
     }
+    let daemon_inputs = daemon::export(&directory, &parent, &child, &inputs);
     let parent_state = parent.state().clone();
     let child_state = child.state().clone();
     let parent_cut = parent_state.runtime_retirement_cut().unwrap();
@@ -317,5 +316,68 @@ pub(super) fn rehearse() {
         status.success(),
         "candidate-linked oldest-floor replay failed"
     );
+    let daemon_binary = build_daemon(&candidate, &target, &directory);
+    evidence.recheck_sources().unwrap();
+    recheck_inputs();
+    invoke(&root, &candidate, &request_path, "verify");
+    daemon::start_originals(&daemon_binary, daemon_inputs);
+    evidence.recheck_sources().unwrap();
+    recheck_inputs();
+    invoke(&root, &candidate, &request_path, "verify");
     // No persisted report, support flag or deletion permission is minted by this test.
+}
+
+fn build_daemon(
+    candidate: &Path,
+    target: &Path,
+    directory: &Path,
+) -> Arc<iroha_fs::RetainedBuildInput> {
+    let log = directory.join("candidate-daemon-build.jsonl");
+    let status = Command::new(candidate.join("scripts/cargo_fast.sh"))
+        .current_dir(candidate)
+        .args(["--stable-local-metadata", "--incremental", "--target-dir"])
+        .arg(target)
+        .args([
+            "--",
+            "build",
+            "--locked",
+            "-p",
+            "irohad",
+            "--bin",
+            "iroha3d",
+            "--message-format=json",
+        ])
+        .stdout(File::create(&log).unwrap())
+        .stderr(File::create(directory.join("candidate-daemon-build.stderr")).unwrap())
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "actual removed-source daemon compilation failed"
+    );
+    let mut executables = BTreeSet::new();
+    for line in BufReader::new(File::open(log).unwrap()).lines() {
+        let line = line.unwrap();
+        let Ok(value) = norito::json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("reason").and_then(Value::as_str) == Some("compiler-artifact")
+            && value
+                .get("target")
+                .and_then(|v| v.get("name"))
+                .and_then(Value::as_str)
+                == Some("iroha3d")
+            && let Some(path) = value.get("executable").and_then(Value::as_str)
+        {
+            executables.insert(PathBuf::from(path));
+        }
+    }
+    assert_eq!(
+        executables.len(),
+        1,
+        "Cargo must name exactly the current daemon artifact"
+    );
+    let executable = executables.into_iter().next().unwrap();
+    assert!(executable.starts_with(target));
+    Arc::new(iroha_fs::RetainedBuildInput::open(executable).unwrap())
 }

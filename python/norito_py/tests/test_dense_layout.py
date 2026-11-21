@@ -14,7 +14,10 @@ from norito import (
     map_adapter, option, result, seq, string, try_decode, tuple_adapter,
     u8, u16, u32, u64, u128,
 )
-from norito.codec import NoritoDecoder, NoritoEncoder
+from norito.codec import (
+    DecodeFlagsGuard, NoritoDecoder, NoritoEncoder, effective_decode_flags,
+    payload_root_bytes,
+)
 from norito.compression import compress_zstd, decompress_zstd
 from norito.crc64 import crc64
 from norito.errors import DecodeError, NoritoError, UnsupportedVersionError
@@ -118,6 +121,22 @@ class DenseLayoutTests(unittest.TestCase):
                     value = decode_adaptive(payload, adapter, layout=layout, flags=flags)
                     self.assertEqual(value, expected)
                     self.assertEqual(encode_adaptive(value, adapter, layout=layout, flags=flags), payload)
+
+    def test_nested_record_refusal_and_success_restore_the_callers_decode_scope(self):
+        row = next(row for row in VECTORS["bare"] if row["name"] == "record")
+        adapter, expected = CASES["record"]
+        for layout, key, flags in ((CURRENT, "compact", COMPACT_LEN), (DENSE, "dense", 0)):
+            with self.subTest(layout=layout):
+                payload = bytes.fromhex(row[key])
+                outer_flags = 0 if flags == COMPACT_LEN else COMPACT_LEN
+                with DecodeFlagsGuard.enter(outer_flags):
+                    with self.assertRaises(DecodeError):
+                        decode_adaptive(payload[:-1], adapter, layout=layout, flags=flags)
+                    self.assertIsNone(payload_root_bytes())
+                    self.assertEqual(effective_decode_flags(), outer_flags)
+                    self.assertEqual(decode_adaptive(payload, adapter, layout=layout, flags=flags), expected)
+                    self.assertIsNone(payload_root_bytes())
+                    self.assertEqual(effective_decode_flags(), outer_flags)
 
     def test_every_framed_vector_and_current_twin(self):
         self.assertEqual([row["name"] for row in VECTORS["frames"]], ["wide"])
