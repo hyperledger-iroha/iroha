@@ -130,6 +130,16 @@ impl IntoWorldField for super::TriggerSetBlock<'_> {
 // Only the admitted table needs a scope argument. The entire aggregate retains
 // that original scope until every ordinary and prepaid sibling has released.
 macro_rules! install_frozen_world_field {
+    ($fields:ident, $target:ident, $scope:expr, runtime_generic_artifacts) => {
+        $fields
+            .runtime_generic_artifacts
+            .install_frozen_publication_owned(&$target.runtime_generic_artifacts, $scope)
+    };
+    ($fields:ident, $target:ident, $scope:expr, runtime_generic_values) => {
+        $fields
+            .runtime_generic_values
+            .install_frozen_publication_owned(&$target.runtime_generic_values, $scope)
+    };
     ($fields:ident, $target:ident, $scope:expr, sccp_light_client_sets) => {
         $fields
             .sccp_light_client_sets

@@ -235,6 +235,84 @@ pub fn decide<C: PastaCurve>(gens: &Gens<C>, claim: &Claim<C>) -> bool {
             .is_ok_and(|g| g == C::from(claim.g))
 }
 
+/// Evaluate a private lineage challenge vector on the public generator prefix.
+fn private_source_point<C: PastaCurve>(
+    gens: &Gens<C>,
+    us: &[F<C>],
+) -> Result<Aff<C>, &'static str> {
+    if us.is_empty() || us.len() >= usize::BITS as usize {
+        return Err("generator source dimension");
+    }
+    let bases = gens
+        .g
+        .get(..1usize << us.len())
+        .ok_or("generator source dimension")?;
+    let weights = Zeroizing::new(s_vector(us));
+    iroha_pasta::msm::msm_secret_ct_cancellable::<C>(
+        &weights,
+        bases,
+        MemoryBudget::DEFAULT,
+        &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+        None,
+    )
+    .map(|point| point.to_affine())
+    .map_err(|_| "generator source resource bound")
+}
+
+fn check_private_sources<C: PastaCurve>(
+    gens: &Gens<C>,
+    k: usize,
+    sources: &[Claim<C>],
+) -> Result<(), &'static str> {
+    for claim in sources {
+        if claim.us.len() != k || private_source_point(gens, &claim.us)? != claim.g {
+            return Err("wallet predecessor generator claim");
+        }
+    }
+    Ok(())
+}
+
+/// Construct the four sources from the public operation shape. A single-parent
+/// operation repeats its two checked slots. Receive derives both incoming points
+/// locally, including when its total verifier must record a Burn.
+pub(crate) fn prove_predecessors<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    parents: [Claim<C>; 2],
+    incoming: Option<[&[F<C>]; 2]>,
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    if !gens.g.len().is_power_of_two() || gens.g.len() < 2 {
+        return Err("generator source dimension");
+    }
+    let k = gens.g.len().ilog2() as usize;
+    check_private_sources(gens, k, &parents)?;
+    let [own, inherited] = parents;
+    let corrected = |us: &[F<C>]| -> Result<Claim<C>, &'static str> {
+        if us.len() != k {
+            return Err("generator source dimension");
+        }
+        Ok(Claim {
+            g: private_source_point(gens, us)?,
+            us: us.to_vec(),
+        })
+    };
+    let [peer, peer_inherited] = match incoming {
+        Some([own, inherited]) => [corrected(own)?, corrected(inherited)?],
+        None => [own.clone(), inherited.clone()],
+    };
+    prove_checked_with_rng(
+        gens,
+        relation,
+        vec![own, inherited, peer, peer_inherited],
+        &mut entropy.stream(purpose),
+    )
+}
+
 /// Fresh operation entropy is mandatory at production call sites.
 pub fn prove<C: PastaCurve>(
     gens: &Gens<C>,
@@ -264,17 +342,21 @@ where
     if k == 0 || k >= usize::BITS as usize || (1usize << k) > gens.g.len() {
         return Err("generator source dimension");
     }
+    check_private_sources(gens, k, &sources)?;
+    prove_checked_with_rng(gens, relation, sources, rng)
+}
+
+fn prove_checked_with_rng<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    sources: Vec<Claim<C>>,
+    rng: &mut SpikeRng,
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    let k = sources[0].us.len();
     let n = 1usize << k;
-    // Single-predecessor operations repeat their two exact claims in slots
-    // 2 and 3. A previous decision in this invocation uses the same generators.
-    for (index, claim) in sources.iter().enumerate() {
-        let already_decided = sources[..index]
-            .iter()
-            .any(|prior| prior.g == claim.g && prior.us == claim.us);
-        if claim.us.len() != k || (!already_decided && !decide(gens, claim)) {
-            return Err("wallet predecessor generator claim");
-        }
-    }
     let masks = (0..1 + 2 * k).map(|_| rng.scalar()).collect::<Vec<_>>();
     let digest = input_digest::<C>(&relation, &sources, &masks);
     let d = d_open(gens, digest, masks[0]).to_affine();
@@ -290,8 +372,9 @@ where
     let mut weight = F::<C>::ONE;
     for s in &sources {
         commitment += C::from(s.g) * weight;
-        for (x, v) in coeff.iter_mut().zip(s_vector(&s.us)) {
-            *x += weight * v;
+        let weights = Zeroizing::new(s_vector(&s.us));
+        for (x, v) in coeff.iter_mut().zip(weights.iter()) {
+            *x += weight * *v;
         }
         weight *= mu;
     }

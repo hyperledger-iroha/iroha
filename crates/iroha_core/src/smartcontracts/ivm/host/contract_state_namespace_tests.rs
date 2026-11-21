@@ -156,6 +156,7 @@ fn reserve_namespace_retained_host_artifacts_refuse_before_any_effect() {
                 (path.clone(), replacement),
             ]);
             let artifacts = HostExecutionArtifacts {
+                carrier_queue_backing: None,
                 x509_queue_backing: None,
                 queued: vec![QueuedEffect {
                     payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
@@ -202,6 +203,7 @@ fn reserve_namespace_retained_host_artifacts_refuse_before_any_effect() {
         tx.world.smart_contract_state.insert(path.clone(), vec![7]);
         bind_artifact_test_signed_root(&mut tx, &authority);
         let artifacts = HostExecutionArtifacts {
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             queued: Vec::new(),
             entrypoint_authorization: None,

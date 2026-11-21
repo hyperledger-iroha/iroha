@@ -5,8 +5,39 @@
 #import <TargetConditionals.h>
 
 #if !TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST
-static NSData *keyTag(NSString *prefix, const uint8_t slot[32], const uint8_t *nonce) {
-    NSMutableString *name = [prefix mutableCopy];
+#ifdef IROHA_SPARTAN_DEVICE_FIXTURE
+#import <CommonCrypto/CommonDigest.h>
+
+static NSString *fixtureManifestDigest(NSData *manifest) {
+    // InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES.
+    if (!manifest.length || manifest.length > 16 * 1024) return nil;
+    uint8_t hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(manifest.bytes, (CC_LONG)manifest.length, hash);
+    NSMutableString *digest = [NSMutableString stringWithCapacity:2 * sizeof(hash)];
+    for (size_t i = 0; i < sizeof(hash); i++) [digest appendFormat:@"%02x", hash[i]];
+    return digest;
+}
+
+static NSString *fixtureNamespace(void) {
+    static NSString *digest;
+    static dispatch_once_t load;
+    dispatch_once(&load, ^{
+        NSURL *url = [NSBundle.mainBundle URLForResource:@"parameter-manifest" withExtension:@"norito"
+                                            subdirectory:@"native-device"];
+        if (url) digest = fixtureManifestDigest([NSData dataWithContentsOfURL:url]);
+    });
+    return digest;
+}
+#endif
+
+static NSData *keyTag(const uint8_t slot[32], const uint8_t *nonce, NSString *scope) {
+#ifdef IROHA_SPARTAN_DEVICE_FIXTURE
+    if (!scope) return nil;
+    NSMutableString *name = [NSMutableString stringWithFormat:
+        (nonce ? @"kgm-ns-debit1-%@-" : @"kgm-ns-w1-%@-"), scope];
+#else
+    NSMutableString *name = [(nonce ? @"kgm-debit1-" : @"kgm-w1-") mutableCopy];
+#endif
     for (size_t i = 0; i < 32; i++) [name appendFormat:@"%02x", slot[i]];
     if (nonce) {
         [name appendString:@"-"];
@@ -58,10 +89,15 @@ static OSStatus uniqueEnclaveItem(NSData *tag, NSString *group, LAContext *conte
 static OSStatus approvalKey(const uint8_t slot[32], const uint8_t nonce[32],
                             BOOL create, LAContext *context, SecKeyRef *result) {
     if (NSProcessInfo.processInfo.isiOSAppOnMac) return errSecNotAvailable;
+    NSString *scope = nil;
+#ifdef IROHA_SPARTAN_DEVICE_FIXTURE
+    scope = fixtureNamespace();
+    if (!scope) return errSecDecode;
+#endif
     LAContext *probe = [[LAContext alloc] init];
     probe.interactionNotAllowed = YES;
     NSDictionary *payment = nil;
-    OSStatus status = uniqueEnclaveItem(keyTag(@"kgm-w1-", slot, NULL), nil, probe, NO, &payment);
+    OSStatus status = uniqueEnclaveItem(keyTag(slot, NULL, scope), nil, probe, NO, &payment);
     [probe invalidate];
     if (status != errSecSuccess) return status;
     NSString *group = payment[(__bridge id)kSecAttrAccessGroup];
@@ -74,7 +110,7 @@ static OSStatus approvalKey(const uint8_t slot[32], const uint8_t nonce[32],
         unichar c = [group characterAtIndex:i];
         if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return errSecMissingEntitlement;
     }
-    NSData *tag = keyTag(@"kgm-debit1-", slot, nonce);
+    NSData *tag = keyTag(slot, nonce, scope);
     NSDictionary *approval = nil;
     status = uniqueEnclaveItem(tag, group, context, !create, &approval);
     if (!create) {

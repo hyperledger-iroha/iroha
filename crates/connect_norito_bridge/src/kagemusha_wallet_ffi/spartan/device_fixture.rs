@@ -484,6 +484,12 @@ impl SessionAdapter {
         })
     }
 
+    /// Registry owner for the Android SDK confirmation of this live fixture review.
+    #[cfg(target_os = "android")]
+    pub fn android_confirmation_handle(&self) -> u64 {
+        self.handle
+    }
+
     /// Obtain the asset digest of this exact prepared review for iOS presentation.
     #[cfg(target_os = "ios")]
     pub fn apple_debit_asset(&mut self, token: u64) -> Result<[u8; 33]> {

@@ -33,7 +33,7 @@ pub mod upgrade;
 pub use error::{HostOutputResource, Perm, VMError, VmDeferral, VmErrorRef, VmTrap};
 pub use profile::{HeaderLayout, IvmEngine, IvmProfileId};
 /// Named host policy authenticated by the fixed program header's exact ABI hash.
-/// Both policies use first-release ABI version 1. [`IvmProfileId::of_policy`] binds each policy
+/// Every policy uses first-release ABI version 1. [`IvmProfileId::of_policy`] binds each policy
 /// to the engine that executes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SyscallPolicy {
@@ -42,6 +42,9 @@ pub enum SyscallPolicy {
     /// ABI V1 with authenticated contract calls to the runtime obligation kernel.
     /// The baseline profile and its descriptor remain unchanged.
     AbiV1RuntimeLifecycle,
+    /// Descriptor-selected carrier instructions with invocation-owned indexed storage access.
+    /// This closed surface is never an ordinary raw-program or deployed-contract interface.
+    AbiV1GenericCarrier,
 }
 
 #[cfg(test)]

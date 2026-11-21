@@ -609,6 +609,49 @@ fn a_binding_jury_below_three_credentials_ends_without_a_roster() {
 }
 
 #[test]
+fn credential_seal_codec_refusal_cannot_become_a_planned_or_committed_outcome() {
+    let mut driver = drawn_small_jury();
+    let mut records = Vec::new();
+    register(&mut driver, &mut records, 0..3);
+    answer_public_bodies(&mut driver);
+    let close_ms = close_ms(&driver);
+    let jury_close = driver.state.lifecycle_items().unwrap().into_iter()
+        .map(|due| due.item)
+        .find(|item| matches!(item, AnonymousLifecycleItemV1::CloseInvitations { body, .. } if *body == JURY))
+        .unwrap();
+    let before = driver.state.clone();
+    let limits = || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let error = norito::core::with_decode_limits_scope(limits(), || {
+        driver.state.apply_item_with_credentials(
+            &network(),
+            jury_close,
+            anchor(driver.height + 1, 0, close_ms),
+            |_, _| records.clone(),
+        )
+    })
+    .unwrap_err();
+    assert!(error.original_codec_refusal().is_some());
+    assert!(error.is_local());
+    assert_eq!(driver.state, before);
+    let error = norito::core::with_decode_limits_scope(limits(), || {
+        driver
+            .state
+            .plan_due_items(&network(), driver.height + 1, close_ms, 0, |_, _| {
+                records.clone()
+            })
+    })
+    .unwrap_err();
+    assert!(error.original_codec_refusal().is_some());
+    assert!(error.is_local());
+    assert_eq!(driver.state, before);
+    let outcomes = close_invitations(&mut driver, &records);
+    assert_eq!(
+        jury_effect(&outcomes).close,
+        Some(AnonymousInvitationCloseV1::Sealed)
+    );
+}
+
+#[test]
 fn incomplete_credentials_refuse_the_seal_and_the_plan_reports_the_refusal() {
     let mut driver = drawn_small_jury();
     let mut records = Vec::new();

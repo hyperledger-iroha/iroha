@@ -302,8 +302,8 @@ impl SealedCredentialListV1 {
             return Err(BallotContextErrorV1::UnknownProfile);
         }
         validate_commitments(self.seats, &self.commitments)?;
-        let actual = norito::canonical_frame_len(self)
-            .map_err(|error| AnonymousBallotCodecErrorV1::codec(&error))?;
+        let actual = norito::core::classify_decode_attempt(|| norito::canonical_frame_len(self))
+            .map_err(AnonymousBallotCodecErrorV1::from_attempt)?;
         if actual > BALLOT_CONTEXT_MAX_BYTES_V1 {
             return Err(AnonymousBallotCodecErrorV1::TooLarge {
                 kind: SealedCredentialListBytesV1::KIND,
@@ -317,8 +317,12 @@ impl SealedCredentialListV1 {
 
     /// Norito decode hook: no invalid list survives a decode.
     fn checked(self) -> Result<Self, norito::Error> {
-        self.validate()
-            .map_err(|error| norito::Error::Message(error.to_string()))?;
+        self.validate().map_err(|error| match error {
+            BallotContextErrorV1::Codec(AnonymousBallotCodecErrorV1::DecodeUnavailable(
+                original,
+            )) => original.into_error(),
+            error => norito::Error::Message(error.to_string()),
+        })?;
         Ok(self)
     }
 }
@@ -340,8 +344,12 @@ impl JsonDeserialize for SealedCredentialListV1 {
             seats: fields.seats,
             commitments: fields.commitments,
         };
-        list.validate()
-            .map_err(|error| json::Error::Message(error.to_string()))?;
+        list.validate().map_err(|error| match error {
+            BallotContextErrorV1::Codec(AnonymousBallotCodecErrorV1::DecodeUnavailable(
+                original,
+            )) => json::Error::from_decode_resource(original.into_error()),
+            error => json::Error::Message(error.to_string()),
+        })?;
         Ok(list)
     }
 }
@@ -713,8 +721,8 @@ impl AuthenticatedBallotContextV1 {
                 target_seats,
             });
         }
-        let actual = norito::canonical_frame_len(self)
-            .map_err(|error| AnonymousBallotCodecErrorV1::codec(&error))?;
+        let actual = norito::core::classify_decode_attempt(|| norito::canonical_frame_len(self))
+            .map_err(AnonymousBallotCodecErrorV1::from_attempt)?;
         if actual > BALLOT_CONTEXT_MAX_BYTES_V1 {
             return Err(AnonymousBallotCodecErrorV1::TooLarge {
                 kind: Self::KIND,

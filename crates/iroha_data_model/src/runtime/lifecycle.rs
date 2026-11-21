@@ -22,6 +22,9 @@ use super::definition::{
 };
 use crate::NetworkId;
 
+mod checked;
+pub use checked::{CheckedChangeSetErrorV1, checked_change_set_id_v1, checked_selection_id_v1};
+
 /// Domain separator of [`ChangeSetId`].
 pub const CHANGE_SET_ID_DOMAIN: &[u8] = b"iroha:runtime:change-set:v1\0";
 /// Domain separator of a support attestation signature.
@@ -299,13 +302,32 @@ impl ChangeSetV1 {
         predecessor: &RootSelectionV1,
         published: &impl DefinitionLookup,
     ) -> Result<AppliedChangeSet, ChangeSetError> {
-        if predecessor.id()? != self.predecessor {
+        self.apply_with_identities(
+            predecessor,
+            published,
+            |selection| selection.id().map_err(ChangeSetError::from),
+            |definition| definition.id().map_err(ChangeSetError::from),
+            |change, kernel| Ok(super::keyed_state::imports_existing_storage(change, kernel)),
+        )
+    }
+
+    // Both entrypoints share the exact transition engine. The installed API above retains
+    // its identity encoders and errors; only the new checked owner keeps original refusals.
+    fn apply_with_identities(
+        &self,
+        predecessor: &RootSelectionV1,
+        published: &impl DefinitionLookup,
+        selection_id: impl Fn(&RootSelectionV1) -> Result<SelectionId, ChangeSetError>,
+        definition_id: impl Fn(&DefinitionDescriptorV1) -> Result<DefinitionId, ChangeSetError>,
+        import_source: impl Fn(&ChangeSetV1, DefinitionId) -> Result<bool, ChangeSetError>,
+    ) -> Result<AppliedChangeSet, ChangeSetError> {
+        if selection_id(predecessor)? != self.predecessor {
             return Err(ChangeSetError::PredecessorMismatch);
         }
         let mut added = BTreeMap::new();
         let mut previous = None;
         for descriptor in &self.publish {
-            let id = descriptor.id()?;
+            let id = definition_id(descriptor)?;
             if previous.is_some_and(|previous| previous >= id)
                 || published.definition(&id).is_some()
             {
@@ -357,9 +379,10 @@ impl ChangeSetV1 {
                     };
                     if matches!(storage.shape, StorageShapeV1::Cell)
                         && storage.initial.is_none()
-                        && !*import_existing.get_or_init(|| {
-                            super::keyed_state::imports_existing_storage(self, predecessor.kernel)
-                        })
+                        && !*import_existing
+                            .get_or_init(|| import_source(self, predecessor.kernel))
+                            .as_ref()
+                            .map_err(Clone::clone)?
                     {
                         return Err(fail(
                             "a cell without initial bytes is installed only by the act that founds its root",
@@ -458,7 +481,7 @@ impl ChangeSetV1 {
             completion_closures: closures.into_values().collect(),
         };
         selection.check_closure(&lookup)?;
-        if selection.id()? != self.successor {
+        if selection_id(&selection)? != self.successor {
             return Err(ChangeSetError::SuccessorMismatch);
         }
         Ok(AppliedChangeSet {

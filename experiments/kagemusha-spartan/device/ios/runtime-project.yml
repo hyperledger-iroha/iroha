@@ -46,6 +46,7 @@ targets:
     platform: iOS
     sources:
       - RuntimeFixture.swift
+      - FixtureCustody.swift
       - path: ${SPARTAN_DEVICE_ARTIFACTS}
         type: folder
         buildPhase: resources

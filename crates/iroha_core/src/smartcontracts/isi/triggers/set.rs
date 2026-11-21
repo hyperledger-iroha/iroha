@@ -1842,6 +1842,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
 }
 // Norito DTOs for Set serialization
 #[derive(norito::NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::ExecutableRefDto")]
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
@@ -1907,6 +1908,7 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
     }
 }
 #[derive(norito::NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::LoadedActionDto")]
 #[derive(Encode, Decode, Clone)]
 struct LoadedActionDto<F> {
@@ -1917,6 +1919,31 @@ struct LoadedActionDto<F> {
     retry_policy: Option<TimeTriggerRetryPolicy>,
     retry_state: Option<TimeTriggerRetryState>,
     metadata: Metadata,
+}
+
+/// Owned counterpart of the contract projection, shared by byte conformance and schema evidence.
+#[cfg(test)]
+#[derive(Encode, iroha_schema::IntoSchema)]
+struct WorldContractDto {
+    original_contract: IvmBytecode,
+}
+
+/// Exact owned DTO shapes implemented by the borrowed World projections.
+#[cfg(test)]
+pub(crate) fn world_authority_structure(identity: &str) -> Option<iroha_schema::MetaMap> {
+    use iroha_schema::IntoSchema as _;
+    match identity {
+        "iroha:state:trigger-data-action:v1" => Some(LoadedActionDto::<DataEventFilter>::schema()),
+        "iroha:state:trigger-pipeline-action:v1" => {
+            Some(LoadedActionDto::<PipelineEventFilterBox>::schema())
+        }
+        "iroha:state:trigger-time-action:v1" => Some(LoadedActionDto::<TimeEventFilter>::schema()),
+        "iroha:state:trigger-by-call-action:v1" => {
+            Some(LoadedActionDto::<ExecuteTriggerEventFilter>::schema())
+        }
+        "iroha:state:trigger-contract-bytecode:v1" => Some(WorldContractDto::schema()),
+        _ => None,
+    }
 }
 impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
     fn from(a: &LoadedAction<F>) -> Self {

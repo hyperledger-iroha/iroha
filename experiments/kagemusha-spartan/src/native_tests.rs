@@ -587,6 +587,7 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
         enrollment_marker: None,
     };
     let mut prepared = PreparedOperation {
+        resumed_under: None,
         manifest_digest: [8; 32],
         parameters_id: chain.sender_context.relation,
         capsule,

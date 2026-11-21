@@ -345,31 +345,8 @@ class KagemushaSpartanWalletV1 internal constructor(
 
     internal fun debitPrompt(token: Long, terms: (Int) -> String): KagemushaSpartanDebitPromptV1 {
         val platform = platformOwner as? KagemushaWalletAndroidPlatformV1 ?: invalidSpartanOutput()
-        platform.requireDebitAuthenticator()
-        try { KagemushaSpartanAndroidConfirmationV1.provision(slot, platform.preferStrongBox) }
-        catch (error: Exception) { throw KagemushaSpartanDebitUnavailableV1(
-            KagemushaSpartanDebitUnavailableReasonV1.HARDWARE_CONFIRMATION_KEY_UNAVAILABLE, cause = error) }
-        fun confirm(message: ByteArray, der: ByteArray) =
+        return createSpartanDebitPromptV1(platform, slot, terms) { message, der ->
             call { NativeSpartanBridge.confirm(owner.exchangeHandle(), token, message, der) }
-        val empty = byteArrayOf()
-        val asset = confirm(empty, byteArrayOf(2))
-        asset.requireShape(94, 33)
-        val scope = asset.bytes()
-        val scale = scope[32].toInt() and 255
-        if (scale > 28) invalidSpartanOutput()
-        val display = "Asset ID ${spartanId(scope.copyOfRange(0, 32))}\n\n" + terms(scale)
-        val begin = confirm(empty, empty)
-        begin.requireShape(88, 32)
-        val message = begin.bytes()
-        val cancel = { original: ByteArray -> confirm(original, empty).requireShape(84, 0) }
-        return try {
-            val (operation, allowed) = KagemushaSpartanAndroidConfirmationV1.operation(slot)
-            KagemushaSpartanDebitPromptV1(operation, message, display,
-                { original, der -> platform.retainSpartanSignature(slot, original, der) { confirm(original, der).requireShape(89, 0) } },
-                cancel, allowed)
-        } catch (error: Exception) {
-            try { cancel(message) } catch (cleanup: Exception) { error.addSuppressed(cleanup) }
-            throw error
         }
     }
 
@@ -438,6 +415,39 @@ class KagemushaSpartanWalletV1 internal constructor(
         internal const val MAX_RECORD = 4 * 1024 * 1024
         internal fun call(action: () -> KagemushaSpartanReplyV1?): KagemushaSpartanReplyV1 =
             checkedSpartanReply(KagemushaWalletNativeWorkerV1.shared.run { action() })
+    }
+}
+
+/** Prepare one SDK-owned CryptoObject operation for an exact, live Native review. */
+internal fun createSpartanDebitPromptV1(
+    platform: KagemushaWalletAndroidPlatformV1,
+    slot: ByteArray,
+    terms: (Int) -> String,
+    confirm: (ByteArray, ByteArray) -> KagemushaSpartanReplyV1,
+): KagemushaSpartanDebitPromptV1 {
+    platform.requireDebitAuthenticator()
+    try { KagemushaSpartanAndroidConfirmationV1.provision(slot, platform.preferStrongBox) }
+    catch (error: Exception) { throw KagemushaSpartanDebitUnavailableV1(
+        KagemushaSpartanDebitUnavailableReasonV1.HARDWARE_CONFIRMATION_KEY_UNAVAILABLE, cause = error) }
+    val empty = byteArrayOf()
+    val asset = confirm(empty, byteArrayOf(2))
+    asset.requireShape(94, 33)
+    val scope = asset.bytes()
+    val scale = scope[32].toInt() and 255
+    if (scale > 28) invalidSpartanOutput()
+    val display = "Asset ID ${spartanId(scope.copyOfRange(0, 32))}\n\n" + terms(scale)
+    val begin = confirm(empty, empty)
+    begin.requireShape(88, 32)
+    val message = begin.bytes()
+    val cancel = { original: ByteArray -> confirm(original, empty).requireShape(84, 0) }
+    return try {
+        val (operation, allowed) = KagemushaSpartanAndroidConfirmationV1.operation(slot)
+        KagemushaSpartanDebitPromptV1(operation, message, display,
+            { original, der -> platform.retainSpartanSignature(slot, original, der) { confirm(original, der).requireShape(89, 0) } },
+            cancel, allowed)
+    } catch (error: Exception) {
+        try { cancel(message) } catch (cleanup: Exception) { error.addSuppressed(cleanup) }
+        throw error
     }
 }
 
@@ -679,17 +689,21 @@ class KagemushaSpartanReviewV1 internal constructor(
     owner: KagemushaSpartanWalletV1, token: Long, val projection: KagemushaSpartanReviewProjectionV1,
 ) : KagemushaSpartanPreparedReviewV1(owner, token) {
     fun beginDebitConfirmation(): KagemushaSpartanDebitPromptV1 {
-        require(projection.operation == KagemushaSpartanOperationV1.SEND)
-        val amount = spartanAtoms(projection.amount)
-        val fee = spartanAtoms(projection.fee)
-        val total = amount + fee
-        require(total.bitLength() <= 128)
-        return debitPrompt { scale ->
-            "Send ${spartanScaledAmount(amount, scale)} asset units\nFee  ${spartanScaledAmount(fee, scale)}" +
-                "\nTotal debit  ${spartanScaledAmount(total, scale)}" +
-                "\n\nReceiving wallet ID\n${spartanId(projection.receiverWalletId())}" +
-                "\n\nReceiving account ID\n${spartanId(projection.receiverAccountId())}"
-        }
+        return debitPrompt(projection.sendDebitTerms())
+    }
+}
+
+internal fun KagemushaSpartanReviewProjectionV1.sendDebitTerms(): (Int) -> String {
+    require(operation == KagemushaSpartanOperationV1.SEND)
+    val atoms = spartanAtoms(amount)
+    val feeAtoms = spartanAtoms(fee)
+    val total = atoms + feeAtoms
+    require(total.bitLength() <= 128)
+    return { scale ->
+        "Send ${spartanScaledAmount(atoms, scale)} asset units\nFee  ${spartanScaledAmount(feeAtoms, scale)}" +
+        "\nTotal debit  ${spartanScaledAmount(total, scale)}" +
+        "\n\nReceiving wallet ID\n${spartanId(receiverWalletId())}" +
+        "\n\nReceiving account ID\n${spartanId(receiverAccountId())}"
     }
 }
 

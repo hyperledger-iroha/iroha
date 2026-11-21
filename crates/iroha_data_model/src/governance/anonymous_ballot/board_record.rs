@@ -215,8 +215,8 @@ impl ParliamentBallotBoardRecordV1 {
                 seats: self.context.seats,
             });
         }
-        let actual = norito::canonical_frame_len(self)
-            .map_err(|error| AnonymousBallotCodecErrorV1::codec(&error))?;
+        let actual = norito::core::classify_decode_attempt(|| norito::canonical_frame_len(self))
+            .map_err(AnonymousBallotCodecErrorV1::from_attempt)?;
         if actual > BALLOT_BOARD_RECORD_MAX_BYTES_V1 {
             return Err(AnonymousBallotCodecErrorV1::TooLarge {
                 kind: Self::KIND,

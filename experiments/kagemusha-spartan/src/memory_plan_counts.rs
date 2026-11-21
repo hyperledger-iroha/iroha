@@ -89,9 +89,6 @@ pub(super) struct PlanCounts {
     pub m_plan_group: u128,
     pub matrix_scratch: u128,
     pub helpers: u128,
-    /// Witness rows the prover copies: those holding product masks, the link
-    /// phase's and the second phase's.
-    pub owned_rows: u128,
     /// Pages of `M(r_x, .)`'s dense half its plans write ([`M_PAGE`] bytes
     /// each); the inner rounds never touch another.
     pub m_pages: u128,
@@ -107,6 +104,14 @@ pub(super) struct PlanCounts {
 /// 16 KiB pages of the supported platforms.
 pub(super) const M_PAGE: usize = 16 << 10;
 
+#[derive(Clone, Copy)]
+pub(super) enum PlanScope {
+    Preparation,
+    FullProof,
+    #[cfg(test)]
+    CountMatrixEntries,
+}
+
 enum Replacement {
     Lookup(usize, usize),
     Table(usize),
@@ -115,15 +120,17 @@ enum Replacement {
 }
 
 impl<F: Scalar> UniformCircuit<F> {
-    pub(super) fn memory_plan_counts(&self) -> PlanCounts {
+    pub(super) fn memory_plan_counts(&self, scope: PlanScope) -> PlanCounts {
         let field = size_of::<F>() as u128;
         let workers = rayon::current_num_threads() as u128;
         let mut counts = PlanCounts::default();
-        let mut blocks: Vec<Vec<BlockCounts>> = self
-            .arrays
-            .iter()
-            .map(|a| (0..a.cells()).map(|_| BlockCounts::default()).collect())
-            .collect();
+        let mut matrix_blocks: Option<Vec<Vec<BlockCounts>>> =
+            (!matches!(scope, PlanScope::Preparation)).then(|| {
+                self.arrays
+                    .iter()
+                    .map(|a| (0..a.cells()).map(|_| BlockCounts::default()).collect())
+                    .collect()
+            });
         let mut one_readers = 0u128;
         let mut jobs = 0u128;
         // The longest rows: at most two jobs per worker hold their resolved
@@ -225,6 +232,14 @@ impl<F: Scalar> UniformCircuit<F> {
                     if longest.len() > resident_jobs {
                         longest.pop();
                     }
+                    let Some(blocks) = matrix_blocks.as_mut() else {
+                        let sums = lin
+                            .iter()
+                            .filter(|term| matches!(term.source, Source::All(..)))
+                            .count();
+                        max_sums = max_sums.max(sums as u128);
+                        continue;
+                    };
                     let mut sums = 0u128;
                     for &term in lin {
                         let target = match term.source {
@@ -245,21 +260,23 @@ impl<F: Scalar> UniformCircuit<F> {
                             block.readers += 1;
                             block.reads += term.len() as u128;
                             #[cfg(test)]
-                            for r in 0..term.len() {
-                                if matches!(term.source, Source::Link(_, _, map) if map[r].is_none())
-                                {
-                                    continue;
-                                }
-                                if !self.r_present(a, r) {
-                                    continue;
-                                }
-                                let value = term.at(r);
-                                if bool::from(value.is_zero()) {
-                                    continue;
-                                }
-                                block.entries += 1;
-                                if value != F::ONE && value != -F::ONE {
-                                    block.coefficients += 1;
+                            if matches!(scope, PlanScope::CountMatrixEntries) {
+                                for r in 0..term.len() {
+                                    if matches!(term.source, Source::Link(_, _, map) if map[r].is_none())
+                                    {
+                                        continue;
+                                    }
+                                    if !self.r_present(a, r) {
+                                        continue;
+                                    }
+                                    let value = term.at(r);
+                                    if bool::from(value.is_zero()) {
+                                        continue;
+                                    }
+                                    block.entries += 1;
+                                    if value != F::ONE && value != -F::ONE {
+                                        block.coefficients += 1;
+                                    }
                                 }
                             }
                         }
@@ -278,6 +295,40 @@ impl<F: Scalar> UniformCircuit<F> {
             + size_of::<usize>()) as u128;
         counts.gather_scratch = longest.iter().map(|len| len.0).sum::<u128>() * per_term
             + workers * (growing::<usize>(max_sums) + max_present * size_of::<u32>() as u128);
+        // The job index: each job in every chunk of rows its block spans.
+        let bits = crate::kern::CHUNK.trailing_zeros();
+        let chunks = (1u128 << self.shape.sx).div_ceil(1 << bits);
+        let mut spans = 0u128;
+        let mut summed = 0u128;
+        for (a, arr) in self.arrays.iter().enumerate() {
+            let len = (self.counts[arr.family] as u128) << arr.rho;
+            for j in 0..arr.rows.len() {
+                let base = self.row_base[a][j] as u128;
+                if len > 0 {
+                    spans += 3 * (((base + len - 1) >> bits) - (base >> bits) + 1);
+                }
+                let sums = match replacements.get(&(a, j)) {
+                    None => arr.rows[j]
+                        .iter()
+                        .filter(|lin| lin.iter().any(|t| matches!(t.src, Src::All { .. })))
+                        .count(),
+                    Some(Replacement::Challenge(index)) => self.ch_rows[*index]
+                        .2
+                        .iter()
+                        .filter(|lin| lin.iter().any(|(t, _)| matches!(t.src, Src::All { .. })))
+                        .count(),
+                    Some(_) => 0,
+                };
+                summed += sums as u128;
+            }
+        }
+        counts.gather_index = chunks * (size_of::<Vec<u32>>() as u128 + 16)
+            + 2 * spans * size_of::<u32>() as u128
+            + 2 * summed * (size_of::<u32>() + size_of::<F>() + size_of::<u64>()) as u128;
+        counts.helpers = self.helper_batch_capacity() as u128 * size_of::<HelperSlot<F>>() as u128;
+        let Some(blocks) = matrix_blocks else {
+            return counts;
+        };
         counts.readers += self.arrays.len() as u128 * 2 * size_of::<Vec<Vec<Reader>>>() as u128
             + growing::<Reader>(one_readers);
         let mut plans = 0u128;
@@ -318,37 +369,6 @@ impl<F: Scalar> UniformCircuit<F> {
             + plans * size_of::<Vec<F>>() as u128
             + weight_count * field
             + plans * field;
-        let helper_slots = self
-            .lookup_arrays
-            .iter()
-            .map(|(a, _, _)| self.instances(*a) as u128 * self.arrays[*a].lookups.len() as u128)
-            .sum::<u128>()
-            + self
-                .tables
-                .iter()
-                .map(|(va, _, _)| self.instances(*va) as u128)
-                .sum::<u128>()
-            + self
-                .exports
-                .iter()
-                .map(|(_, wa, _, _)| self.instances(*wa) as u128)
-                .sum::<u128>();
-        // Rows the prover writes: masks, the link phase, the second phase.
-        let cols = 1usize << self.shape.col_bits;
-        let mut owned = vec![false; self.shape.rows()];
-        let written_rows = self.p1_rows..(self.p1_rows + self.pl_rows + self.p2_rows);
-        for row in owned
-            [written_rows.start.min(self.shape.rows())..written_rows.end.min(self.shape.rows())]
-            .iter_mut()
-        {
-            *row = true;
-        }
-        for &(array, cells, instance) in &self.product_masks {
-            for cell in cells {
-                owned[self.cell_index(array, cell, instance) / cols] = true;
-            }
-        }
-        counts.owned_rows = owned.iter().filter(|x| **x).count() as u128;
         // Pages of M(r_x, .)'s dense half that the flat plans write.
         let half = 1usize << self.shape.sw();
         let per_page = (M_PAGE / size_of::<F>()).max(1);
@@ -369,39 +389,6 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         }
         counts.m_pages = pages.iter().map(|w| w.count_ones() as u128).sum();
-        // The job index: each job in every chunk of rows its block spans.
-        let bits = crate::kern::CHUNK.trailing_zeros();
-        let chunks = (1u128 << self.shape.sx).div_ceil(1 << bits);
-        let mut spans = 0u128;
-        let mut summed = 0u128;
-        for (a, arr) in self.arrays.iter().enumerate() {
-            let len = (self.counts[arr.family] as u128) << arr.rho;
-            for j in 0..arr.rows.len() {
-                let base = self.row_base[a][j] as u128;
-                if len > 0 {
-                    spans += 3 * (((base + len - 1) >> bits) - (base >> bits) + 1);
-                }
-                let sums = match replacements.get(&(a, j)) {
-                    None => arr.rows[j]
-                        .iter()
-                        .filter(|lin| lin.iter().any(|t| matches!(t.src, Src::All { .. })))
-                        .count(),
-                    Some(Replacement::Challenge(index)) => self.ch_rows[*index]
-                        .2
-                        .iter()
-                        .filter(|lin| lin.iter().any(|(t, _)| matches!(t.src, Src::All { .. })))
-                        .count(),
-                    Some(_) => 0,
-                };
-                summed += sums as u128;
-            }
-        }
-        counts.gather_index = chunks * (size_of::<Vec<u32>>() as u128 + 16)
-            + 2 * spans * size_of::<u32>() as u128
-            + 2 * summed * (size_of::<u32>() + size_of::<F>() + size_of::<u64>()) as u128;
-        counts.helpers = growing::<(usize, F, F)>(helper_slots)
-            + helper_slots * field
-            + helper_slots.min(workers * 4096) * field;
         counts
     }
 }

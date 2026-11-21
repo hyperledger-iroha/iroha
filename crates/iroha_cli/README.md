@@ -14,6 +14,25 @@ always includes its runtime dependencies; its optional flags control bridge
 commands, visual offline codecs and test hooks. The executable owns the `cli`
 and `dev-tools` target-selection flags.
 
+`iroha ops runtime child-admin` provides `prepare`, `sign`, and `assemble` without
+a client configuration or network access. They consume explicit JSON review files
+for the child administrator State and exact plan, and bind the complete child root,
+policy, next nonce and certified-height validity. `prepare` supports `schedule`,
+`cancel` and `rotate`; `sign` reads an explicit runtime-only administrator key file;
+`assemble` verifies every signature and the reviewed threshold. The State file is
+unauthenticated review input: obtain it through an independently verified committed
+State export, not by inventing administrators. No node State-fetch helper is supplied.
+
+`child-admin submit --state <PATH> --certificate <PATH> --at-height <HEIGHT>` checks
+the complete certificate against that review input and the configured child network
+and native instance, then uses the ordinary fee-paying signed submission path.
+`--emit-instructions` emits its sole instruction; `--stdin-instructions` is forbidden.
+Core checks the actual committed authority, current nonce and execution height.
+Keep private key files outside the repository; only the public signature is printed.
+Universal root proposals continue through `runtime upgrade propose`; child changes
+require the certificate workflow. See the source contract in
+[`specs/runtime/child_admin_v1.md`](../../specs/runtime/child_admin_v1.md).
+
 ## Installation
 
 **Requirements:** install

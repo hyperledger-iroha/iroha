@@ -1793,3 +1793,7 @@ mod batch_tests;
 #[cfg(test)]
 #[path = "archive_batch_crash_tests.rs"]
 mod batch_crash_tests;
+
+#[cfg(test)]
+#[path = "archive_sent_delivery_tests.rs"]
+mod sent_delivery_tests;

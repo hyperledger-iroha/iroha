@@ -292,3 +292,61 @@ fn invalid_multisig_policies_reject_inside_ordinary_and_funded_complete_uid_bind
         assert_eq!(pool.reserved_bytes(), 0);
     }
 }
+
+#[test]
+fn borrowed_account_payload_matches_native_policy_rules_and_original_refusals() {
+    use crate::amx_prepare_streaming_allocations::measured;
+    use norito::core::{DecodeBudgetContext, DecodeLimits, WireLayout, WireLayoutGuard};
+    let _layout = WireLayoutGuard::enter(WireLayout::Compact);
+    let mut accounts = vec![AccountId::new(policy().members()[0].public_key().clone())];
+    accounts.push(AccountId::new_multisig(policy()));
+    for malformed in invalid_policies() {
+        accounts.push(AccountId::new_multisig(malformed));
+    }
+    for (index, account) in accounts.into_iter().enumerate() {
+        let bytes = norito::codec::encode_bare_with_layout(&account, WireLayout::Compact).unwrap();
+        let owned = norito::core::decode_field_canonical::<AccountId>(&bytes);
+        let pool = iroha_allocation::AllocationBudget::new(
+            DecodeBudgetContext::allocation_layout().size(),
+        );
+        let mut grant = pool
+            .try_reserve(DecodeBudgetContext::allocation_layout())
+            .unwrap();
+        let context = DecodeBudgetContext::from_reservation(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX),
+            &mut grant,
+        )
+        .unwrap();
+        pool.set_limit_bytes(0);
+        let (borrowed, allocations) =
+            measured(|| context.with(|| crate::account::borrowed_decode::validate(&bytes)));
+        assert_eq!(allocations, [0; 3], "account case {index}");
+        assert_eq!(borrowed.is_ok(), owned.is_ok(), "account case {index}");
+        assert_eq!(
+            borrowed.is_ok(),
+            index < 2,
+            "complete original controller acceptance"
+        );
+        for cut in 0..bytes.len() {
+            assert!(crate::account::borrowed_decode::validate(&bytes[..cut]).is_err());
+        }
+        let mut suffix = bytes.clone();
+        suffix.push(0);
+        assert!(crate::account::borrowed_decode::validate(&suffix).is_err());
+    }
+    let bytes = norito::codec::encode_bare_with_layout(
+        &AccountId::new_multisig(policy()),
+        WireLayout::Compact,
+    )
+    .unwrap();
+    for limits in [
+        DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, usize::MAX),
+        DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX),
+        DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+    ] {
+        norito::with_decode_limits_scope(limits, || {
+            let error = crate::account::borrowed_decode::validate(&bytes).unwrap_err();
+            assert!(error.decode_resource_error().is_some());
+        });
+    }
+}

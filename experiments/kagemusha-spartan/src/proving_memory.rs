@@ -5,6 +5,7 @@
 
 use super::*;
 use core::mem::size_of;
+use memory_plan_counts::{PlanCounts, PlanScope};
 
 #[path = "memory_plan_counts.rs"]
 mod memory_plan_counts;
@@ -35,9 +36,11 @@ mod tests {
     use super::*;
 
     fn check_plans<F: Scalar>(c: UniformCircuit<F>) {
-        let counts = c.memory_plan_counts();
+        let counts = c.memory_plan_counts(PlanScope::CountMatrixEntries);
         let before = c.proving_memory_accounting();
         let phases = c.phase_memory_accounting();
+        assert_eq!(c.first_phase_memory_bytes(), phases.phase1_bytes);
+        assert_eq!(c.preparation_memory_bytes(), phases.preparation_bytes);
         let tasks = rayon::current_num_threads() as u64;
         let rows = (PREPARATION_CHECK_ROWS as u64).min(1 << c.shape.sx);
         assert!(phases.preparation_bytes >= tasks * 3 * rows * size_of::<F>() as u64);
@@ -126,7 +129,7 @@ mod tests {
         );
         assert_eq!(
             prepared_phase.phase1_bytes,
-            c.phase_memory_accounting().phase1_bytes,
+            c.first_phase_memory_bytes(),
             "prefix commitments never charge matrix plans"
         );
         // A proof builds its own gather, readers and block plans whatever
@@ -395,6 +398,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let (mut terms, mut coef_cap, mut coef_len, mut map_cap, mut map_len) =
             (0u128, 0u128, 0u128, 0u128, 0u128);
         let (mut lin_cap, mut lin_len, mut ones) = (0u128, 0u128, 0u128);
+        let mut single_one = 0u128;
         let mut count = |lin: &Lin<F>| {
             lin_cap += bytes(lin);
             lin_len += (lin.len() * size_of::<Term<F>>()) as u128;
@@ -404,6 +408,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 coef_len += (t.coef.len() * size_of::<F>()) as u128;
                 if t.coef.iter().all(|c| *c == F::ONE) {
                     ones += 1;
+                    if t.coef.len() == 1 {
+                        single_one += 1;
+                    }
                 }
                 if let Src::Link { map, .. } = &t.src {
                     map_cap += bytes(map);
@@ -425,7 +432,7 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         let mb = |b: u128| b as f64 / 1e6;
         format!(
-            "templates: {terms} terms ({ones} all-one), coefficients {:.0} MB (length {:.0}), maps {:.0} MB (length {:.0}), term vectors {:.0} MB (length {:.0})",
+            "templates: {terms} terms ({ones} all-one, {single_one} single-one), coefficients {:.0} MB (length {:.0}), maps {:.0} MB (length {:.0}), term vectors {:.0} MB (length {:.0})",
             mb(coef_cap),
             mb(coef_len),
             mb(map_cap),
@@ -440,12 +447,59 @@ impl<F: Scalar> UniformCircuit<F> {
     /// [`PREPARATION_CHECK_ROWS`] rows at a time (no `z` copy, no whole
     /// tables). This path does not build a reader, M-table or matrix tape.
     pub fn preparation_memory_bytes(&self) -> u64 {
-        self.phase_memory_accounting().preparation_bytes
+        let plans = self.memory_plan_counts(PlanScope::Preparation);
+        let (owned, _) = self.witness_and_first_phase_bytes();
+        cap(self.preparation_workspace(owned, &plans))
+    }
+
+    fn preparation_workspace(&self, owned: u128, plans: &PlanCounts) -> u128 {
+        let symbolic = if self.symbolic.get().is_none() {
+            plans.symbolic
+        } else {
+            0
+        };
+        let rows = 1u128.checked_shl(self.shape.sx as u32).unwrap_or(u128::MAX);
+        let task_rows = (PREPARATION_CHECK_ROWS as u128).min(rows);
+        let workers = rayon::current_num_threads() as u128;
+        let check = plans.gather_index
+            + plans.gather_scratch
+            + workers * 3 * task_rows * size_of::<F>() as u128;
+        owned + symbolic + plans.gather + plans.helpers.max(check)
+    }
+
+    fn witness_and_first_phase_bytes(&self) -> (u128, u128) {
+        // Rows the prover writes: masks, the link phase, the second phase.
+        let cols = 1usize << self.shape.col_bits;
+        let mut owned = vec![false; self.shape.rows()];
+        let written_rows = self.p1_rows..(self.p1_rows + self.pl_rows + self.p2_rows);
+        for row in owned
+            [written_rows.start.min(self.shape.rows())..written_rows.end.min(self.shape.rows())]
+            .iter_mut()
+        {
+            *row = true;
+        }
+        for &(array, cells, instance) in &self.product_masks {
+            for cell in cells {
+                owned[self.cell_index(array, cell, instance) / cols] = true;
+            }
+        }
+        let field = size_of::<F>() as u128;
+        let owned_bytes = owned.iter().filter(|x| **x).count() as u128 * cols as u128 * field;
+        let phase1 = owned_bytes
+            + self.bounds.len() as u128 * size_of::<usize>() as u128
+            + self.shape.rows() as u128 * field;
+        (owned_bytes, phase1)
+    }
+
+    /// Bound the first commitment phase from its row layout before querying
+    /// available memory. Later phases perform their own full admission check.
+    pub(crate) fn first_phase_memory_bytes(&self) -> u64 {
+        cap(self.witness_and_first_phase_bytes().1)
     }
 
     /// Count phase workspaces without building lazy plans or changing a witness.
     pub fn phase_memory_accounting(&self) -> PhaseMemoryAccounting {
-        let p = self.memory_plan_counts();
+        let p = self.memory_plan_counts(PlanScope::FullProof);
         let field = size_of::<F>() as u128;
         let w = 1u128
             .checked_shl(self.shape.sw() as u32)
@@ -469,20 +523,8 @@ impl<F: Scalar> UniformCircuit<F> {
         // The prover reads its caller's witness in place and copies only the
         // rows it writes (`kern::Rows`): product masks, the link phase, the
         // second phase.
-        let owned = p.owned_rows * cols * field;
-        // Preparation (the engine's relation check): the second phase's own
-        // rows and the gather plan, then either the helpers' fill or the
-        // job index with each worker's three tables of a task's rows.
-        let check_rows = (PREPARATION_CHECK_ROWS as u128).min(x);
-        let workers = rayon::current_num_threads() as u128;
-        let preparation = owned
-            + symbolic
-            + gather
-            + p.helpers
-                .max(p.gather_index + p.gather_scratch + workers * 3 * check_rows * field);
-        let phase1 = owned
-            + self.bounds.len() as u128 * size_of::<usize>() as u128
-            + self.shape.rows() as u128 * field;
+        let (owned, phase1) = self.witness_and_first_phase_bytes();
+        let preparation = self.preparation_workspace(owned, &p);
         let helper = phase1 + p.helpers + symbolic;
         // Outer: the first round and its fold stream Az, Bz, Cz a chunk of
         // rows at a time (per worker: three tables of 2^k corners of a

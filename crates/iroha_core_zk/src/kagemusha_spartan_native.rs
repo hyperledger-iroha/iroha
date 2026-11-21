@@ -321,7 +321,13 @@ impl<E: Engine> KagemushaWalletTransitionOwnerV1<RecoveryCapsule, CompletionReco
     for TransitionOwner<'_, E>
 {
     fn before_selection(&self, capsule: &RecoveryCapsule) -> Result<(), ProviderError> {
-        let prepared = self.engine.prepare_selection(capsule, self.parameters).map_err(provider_error)?;
+        let prepared = match self.prepared.take() {
+            Some(prepared) if prepared.capsule() == capsule => {
+                self.engine.recheck_selection(&prepared, self.parameters).map_err(provider_error)?;
+                prepared
+            }
+            _ => self.engine.prepare_selection(capsule, self.parameters).map_err(provider_error)?,
+        };
         self.prepared.replace(Some(prepared));
         Ok(())
     }
@@ -593,6 +599,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let incumbent_engine = self.current_reconciliation_engine(slot)?;
         let incumbent = TransitionOwner::new(&incumbent_engine, &self.parameters);
         let owner = TransitionOwner::new(&engine, &self.parameters);
+        let counterparties = prepared.policy_counterparties();
+        owner.prepared.replace(engine.retain_reconstruction(prepared, &self.parameters));
         let expected = if let Some(marker_digest) = capsule.enrollment_marker() {
             KagemushaWalletExpectedHeadV1::Enrollment { marker_digest }
         } else {
@@ -627,7 +635,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                         slot,
                         *self.parameters.manifest_digest(),
                         *request.capsule.wallet(),
-                        prepared.policy_counterparties(),
+                        counterparties,
                     )
                 })?;
         if !matches!(

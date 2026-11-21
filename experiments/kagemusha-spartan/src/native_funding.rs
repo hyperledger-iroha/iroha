@@ -800,6 +800,7 @@ mod tests {
         };
         (
             PreparedOperation {
+                resumed_under: None,
                 manifest_digest: *installed.manifest_digest,
                 parameters_id: *installed.id,
                 capsule,

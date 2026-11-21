@@ -3488,10 +3488,42 @@ impl<F: Scalar> UniformCircuit<F> {
             .sum()
     }
 
+    fn helper_batch_capacity(&self) -> usize {
+        let present = self
+            .lookup_arrays
+            .iter()
+            .map(|(a, _, _)| self.instances(*a) as u128 * self.arrays[*a].lookups.len() as u128)
+            .sum::<u128>()
+            + self
+                .tables
+                .iter()
+                .map(|(va, _, _)| self.instances(*va) as u128)
+                .sum::<u128>()
+            + self
+                .exports
+                .iter()
+                .map(|(_, wa, _, _)| self.instances(*wa) as u128)
+                .sum::<u128>();
+        present.min(MAX_HELPER_BATCH as u128) as usize
+    }
+
     /// The prover's LogUp helpers: `h = 1/(alpha - f)`, `g = m/(alpha - t)`.
     fn fill_helpers<W: Cells<F> + ?Sized>(&self, ch: &[F], w: &mut W) {
         let (alpha, beta) = (ch[0], ch[1]);
-        let mut slots: Vec<(usize, F, F)> = Vec::new();
+        // Every tuple and multiplicity reads first-phase cells. A completed
+        // batch can publish its second-phase cells before we visit the rest.
+        let mut slots = zeroize::Zeroizing::new(Vec::with_capacity(self.helper_batch_capacity()));
+        let mut add = |index, denominator, numerator, witness: &mut W| {
+            slots.push(HelperSlot {
+                index,
+                denominator,
+                numerator,
+                prefix: F::ZERO,
+            });
+            if slots.len() == MAX_HELPER_BATCH {
+                write_helper_batch(&mut slots, witness);
+            }
+        };
         for &(a, first_cell, _) in &self.lookup_arrays {
             let arr = &self.arrays[a];
             let rmask = (1usize << arr.rho) - 1;
@@ -3510,7 +3542,7 @@ impl<F: Scalar> UniformCircuit<F> {
                             .get(&(a, j))
                             .map_or(F::ONE, |on| on[i & rmask]),
                     };
-                    slots.push((self.blocks[a][first_cell + j].index(i), alpha - f, rhs));
+                    add(self.blocks[a][first_cell + j].index(i), alpha - f, rhs, w);
                 }
             }
         }
@@ -3522,11 +3554,12 @@ impl<F: Scalar> UniformCircuit<F> {
                     t += power * w.cell(self.blocks[va][k].index(i));
                     power *= beta;
                 }
-                slots.push((
+                add(
                     self.blocks[wa][1].index(i),
                     alpha - t,
                     w.cell(self.blocks[wa][0].index(i)),
-                ));
+                    w,
+                );
             }
         }
         for (_, wa, tid, tuple) in &self.exports {
@@ -3537,18 +3570,15 @@ impl<F: Scalar> UniformCircuit<F> {
                     t += power * self.eval_w(w, *wa, lin, i);
                     power *= beta;
                 }
-                slots.push((
+                add(
                     self.blocks[*wa][1].index(i),
                     alpha - t,
                     w.cell(self.blocks[*wa][0].index(i)),
-                ));
+                    w,
+                );
             }
         }
-        let mut dens: Vec<F> = slots.iter().map(|s| s.1).collect();
-        crate::uniform::batch_invert(&mut dens);
-        for ((idx, _, m), inv) in slots.iter().zip(dens) {
-            w.set_cell(*idx, *m * inv);
-        }
+        write_helper_batch(&mut slots, w);
     }
 
     /// The flat plan of `M(r_x, .)`: per placed block and target r', the
@@ -3754,34 +3784,30 @@ impl<F: Scalar> UniformCircuit<F> {
         self.readers.get_or_init(|| self.build_readers())
     }
 
-    /// A term with its coefficients zeroed where array `a` has no instance.
-    fn masked(&self, t: &Term<F>, a: usize) -> Term<F> {
-        if matches!(t.src, Src::All { .. }) {
-            return t.clone();
+    /// Zero a row's absent instances in its owned public coefficient buffer.
+    fn masked(&self, mut term: Term<F>, a: usize) -> Term<F> {
+        if !matches!(term.src, Src::All { .. }) {
+            for (r, coefficient) in term.coef.iter_mut().enumerate() {
+                if !self.r_present(a, r) {
+                    *coefficient = F::ZERO;
+                }
+            }
         }
-        Term {
-            src: t.src.clone(),
-            coef: t
-                .coef
-                .iter()
-                .enumerate()
-                .map(|(r, c)| if self.r_present(a, r) { *c } else { F::ZERO })
-                .collect(),
-        }
+        term
     }
 
     /// A term as structured pieces: itself when its coefficients are
     /// constant, geometric or split into slot x step fields; otherwise its
     /// most common coefficient on the active r plus the remainder (e.g. a
     /// constant with corrections at step 0).
-    fn pieces(&self, term: &Term<F>, a: usize) -> Vec<Term<F>> {
+    fn pieces(&self, term: Term<F>, a: usize) -> (Term<F>, Option<Term<F>>) {
         let arr = &self.arrays[a];
         let rho = arr.rho;
         let (map, rho_t): (Option<&Vec<Option<usize>>>, usize) = match &term.src {
             Src::One => (None, 0),
             Src::Own(_) => (None, rho),
             Src::Link { array, map, .. } => (Some(map), self.arrays[*array].rho),
-            Src::All { .. } => return vec![term.clone()],
+            Src::All { .. } => return (term, None),
         };
         let one = matches!(term.src, Src::One);
         let map_at = |r: usize| -> Option<usize> {
@@ -3796,13 +3822,13 @@ impl<F: Scalar> UniformCircuit<F> {
             .collect();
         let constant_coef = active.iter().all(|r| term.coef[*r] == term.coef[active[0]]);
         if active.len() <= 1 || constant_coef {
-            return vec![term.clone()];
+            return (term, None);
         }
         if coef_pattern(&term.coef, &active).is_some() {
-            return vec![term.clone()];
+            return (term, None);
         }
         if split_term(rho, rho_t, &active, &term.coef, &map_at).is_some() {
-            return vec![term.clone()];
+            return (term, None);
         }
         // The most common coefficient, the first seen on a tie (the compiled
         // program is the same on every build).
@@ -3818,23 +3844,17 @@ impl<F: Scalar> UniformCircuit<F> {
             .copied()
             .fold((0, F::ZERO), |best, e| if e.0 > best.0 { e } else { best });
         if count < 2 {
-            return vec![term.clone()];
+            return (term, None);
         }
         let mut base = term.clone();
-        let mut rest = term.clone();
-        for r in 0..term.coef.len() {
-            if active.contains(&r) {
-                base.coef[r] = mode;
-                rest.coef[r] = term.coef[r] - mode;
-            } else {
-                base.coef[r] = F::ZERO;
-            }
+        let mut rest = term;
+        base.coef.fill(F::ZERO);
+        for r in active {
+            base.coef[r] = mode;
+            rest.coef[r] -= mode;
         }
-        let mut out = vec![base];
-        if rest.coef.iter().any(|c| !bool::from(c.is_zero())) {
-            out.push(rest);
-        }
-        out
+        let nonzero = rest.coef.iter().any(|c| !bool::from(c.is_zero()));
+        (base, nonzero.then_some(rest))
     }
 
     /// The compiled matrix evaluation.
@@ -4116,16 +4136,12 @@ impl<F: Scalar> UniformCircuit<F> {
                     (usize, usize, usize, Factor, Slot),
                     (V<'_, F>, V<'_, F>),
                 > = BTreeMap::new();
-                for (mat, lin) in row.iter().enumerate() {
-                    let lin: Vec<(Term<F>, Factor)> = lin
-                        .iter()
-                        .flat_map(|(t, f)| {
-                            self.pieces(&self.masked(t, a), a)
-                                .into_iter()
-                                .map(move |p| (p, *f))
-                        })
-                        .collect();
-                    for (term, fac) in &lin {
+                for (mat, lin) in row.into_iter().enumerate() {
+                    let pieces = lin.into_iter().flat_map(|(term, factor)| {
+                        let (base, rest) = self.pieces(self.masked(term, a), a);
+                        std::iter::once(base).chain(rest).map(move |piece| (piece, factor))
+                    });
+                    for (term, fac) in pieces {
                         let (a2, map): (Option<(usize, usize)>, Option<&Vec<Option<usize>>>) =
                             match &term.src {
                                 Src::One => (None, None),
@@ -4175,7 +4191,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                     cat[2] += muls() - m0;
                                     let m0 = muls();
                                     row_all[mat] =
-                                        row_all[mat] + fy * side * factor_of(*fac) * term.coef[0];
+                                        row_all[mat] + fy * side * factor_of(fac) * term.coef[0];
                                     cat[3] += muls() - m0;
                                     continue;
                                 }
@@ -4450,12 +4466,12 @@ impl<F: Scalar> UniformCircuit<F> {
                         let m0 = muls();
                         match a2 {
                             None => {
-                                let e = ones.entry((mat, *fac)).or_insert(zero);
+                                let e = ones.entry((mat, fac)).or_insert(zero);
                                 *e = *e + fx * s * high * sc;
                             }
                             Some((a2, k2)) => {
                                 let e =
-                                    grouped.entry((mat, a2, k2, *fac, s.s)).or_insert((s, zero));
+                                    grouped.entry((mat, a2, k2, fac, s.s)).or_insert((s, zero));
                                 e.1 = e.1 + high * sc;
                             }
                         }
@@ -5447,22 +5463,52 @@ impl<F> SplitOut<F> {
     }
 }
 
-/// Montgomery batch inversion in parallel chunks.
-pub(crate) fn batch_invert<F: Field>(v: &mut [F]) {
-    v.par_chunks_mut(4096).for_each(|chunk| {
-        let mut prefix = Vec::with_capacity(chunk.len());
-        let mut acc = F::ONE;
-        for x in chunk.iter() {
-            prefix.push(acc);
-            acc *= x;
+// Four independent Montgomery inversions per full batch. This bound
+// depends only on the public layout and retains parallel work for phones.
+const INVERSION_CHUNK: usize = 4096;
+const MAX_HELPER_BATCH: usize = 4 * INVERSION_CHUNK;
+
+#[derive(Clone, Copy)]
+struct HelperSlot<F> {
+    index: usize,
+    denominator: F,
+    numerator: F,
+    prefix: F,
+}
+impl<F: Field> Default for HelperSlot<F> {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            denominator: F::ZERO,
+            numerator: F::ZERO,
+            prefix: F::ZERO,
         }
-        let mut inv = acc.invert().expect("no zero denominators");
-        for (x, p) in chunk.iter_mut().zip(prefix).rev() {
-            let next = inv * *x;
-            *x = inv * p;
-            inv = next;
+    }
+}
+impl<F: Field> zeroize::DefaultIsZeroes for HelperSlot<F> {}
+
+fn write_helper_batch<F: Field, W: Cells<F> + ?Sized>(
+    slots: &mut Vec<HelperSlot<F>>,
+    witness: &mut W,
+) {
+    use zeroize::Zeroize;
+    slots.par_chunks_mut(INVERSION_CHUNK).for_each(|chunk| {
+        let mut product = F::ONE;
+        for slot in chunk.iter_mut() {
+            slot.prefix = product;
+            product *= slot.denominator;
+        }
+        let mut inverse = product.invert().expect("no zero denominators");
+        for slot in chunk.iter_mut().rev() {
+            slot.numerator *= inverse * slot.prefix;
+            inverse *= slot.denominator;
         }
     });
+    for slot in slots.iter() {
+        witness.set_cell(slot.index, slot.numerator);
+    }
+    slots.as_mut_slice().zeroize();
+    slots.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -8437,6 +8483,34 @@ pub(crate) mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn helper_batches_cover_full_inversion_chunks_and_the_tail() {
+        fn check<F: Scalar>() {
+            let count = MAX_HELPER_BATCH * 2 + 19;
+            let mut witness = vec![F::ZERO; count];
+            let mut batch = Vec::with_capacity(MAX_HELPER_BATCH);
+            for i in 0..count {
+                let denominator = F::from(i as u64 + 1);
+                let expected = F::from((i % 311) as u64);
+                batch.push(HelperSlot {
+                    index: count - 1 - i,
+                    numerator: expected * denominator,
+                    denominator,
+                    prefix: F::ZERO,
+                });
+                if batch.len() == MAX_HELPER_BATCH {
+                    write_helper_batch(&mut batch, witness.as_mut_slice());
+                }
+            }
+            write_helper_batch(&mut batch, witness.as_mut_slice());
+            for (i, value) in witness.iter().rev().enumerate() {
+                assert_eq!(*value, F::from((i % 311) as u64));
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
     }
 
     /// The build's row account is exact for its witness, and a prover given

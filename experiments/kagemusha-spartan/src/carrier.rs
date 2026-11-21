@@ -489,7 +489,7 @@ pub(crate) struct ProjectedRanges {
     pub(crate) total: usize,
 }
 
-fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String> {
+pub(crate) fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String> {
     profile.p.check(&profile.p_shape)?;
     profile.s.check(&profile.s_shape)?;
     let count = |shape: &Shape, layout: &Layout| {

@@ -211,6 +211,86 @@ fn spartan_typed_wire_roundtrips_and_unknown_profile_is_inactive() {
     }
 }
 
+fn world_for_spartan_size_limits() -> (Memory, State) {
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let active = selected(&state);
+    transact(&mut state, 2, |tx| {
+        select_published(tx, active);
+        Ok(())
+    })
+    .unwrap();
+    (memory, state)
+}
+
+#[test]
+fn governed_spartan_installation_checks_the_exact_framed_limit() {
+    let (memory, mut state) = world_for_spartan_size_limits();
+    let mut installation = specimen(&memory);
+    let encoded_len = |original: &Install| {
+        let _layout = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Fixed);
+        norito::core::encoded_frame_len(original).unwrap()
+    };
+    installation.programs.resize(Install::MAX_BYTES, 1);
+    let overhead = encoded_len(&installation) - Install::MAX_BYTES;
+    installation
+        .programs
+        .truncate(Install::MAX_BYTES - overhead);
+    assert_eq!(encoded_len(&installation), Install::MAX_BYTES);
+    let mut submit = |original: &Install| {
+        transact(&mut state, 3, |tx| {
+            spartan::install(tx, &memory.registration.reserve, original)
+        })
+    };
+    // At the ceiling, the intentionally unsigned specimen reaches authentication.
+    assert!(matches!(submit(&installation), Err(Error::Proof)));
+    installation.programs.push(1);
+    assert_eq!(encoded_len(&installation), Install::MAX_BYTES + 1);
+    assert!(matches!(submit(&installation), Err(Error::Binding)));
+}
+
+#[test]
+fn governed_spartan_installation_checks_the_exact_manifest_limit() {
+    let (memory, mut state) = world_for_spartan_size_limits();
+    let mut installation = specimen(&memory);
+    installation.manifest.resize(Install::MAX_MANIFEST_BYTES, 1);
+    let mut submit = |original: &mut Install| {
+        original.manifest_digest = kagemusha_wallet_poseidon_bytes_v1(
+            u64::from_le_bytes(*b"kgwparm1"),
+            &original.manifest,
+        );
+        transact(&mut state, 3, |tx| {
+            spartan::install(tx, &memory.registration.reserve, original)
+        })
+    };
+    assert!(matches!(submit(&mut installation), Err(Error::Proof)));
+    installation.manifest.push(1);
+    assert!(matches!(submit(&mut installation), Err(Error::Binding)));
+}
+
+#[test]
+fn governed_spartan_activation_checks_the_exact_claim_limit() {
+    let (memory, mut state) = world_for_spartan_size_limits();
+    let registration = specimen(&memory);
+    let mut request = Activate {
+        scheme: registration.scheme,
+        asset: registration.asset,
+        manifest_digest: registration.manifest_digest,
+        wallet: [4; 32],
+        activation: vec![1; Activate::MAX_ACTIVATION_BYTES],
+    };
+    let mut submit = |original: &Activate| {
+        transact(&mut state, 3, |tx| {
+            spartan::activate(tx, &memory.authority, original)
+        })
+    };
+    // The registered scheme has no installed program. That lookup follows size admission.
+    assert!(matches!(submit(&request), Err(Error::Unavailable)));
+    request.activation.push(1);
+    assert!(matches!(submit(&request), Err(Error::Proof)));
+}
+
 fn published_install() -> Install {
     let wire = std::fs::read(std::env::var_os("KAGEMUSHA_SPARTAN_WORLD_INSTALL").unwrap()).unwrap();
     assert!(wire.len() <= Install::MAX_BYTES);

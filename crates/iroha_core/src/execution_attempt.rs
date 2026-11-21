@@ -744,6 +744,14 @@ pub(crate) fn vm_attempt_error(
     error: VMError,
     deterministic: impl FnOnce(VMError) -> ValidationFail,
 ) -> ExecutionAttemptError<ValidationFail> {
+    vm_attempt_error_with_rejection(error, deterministic)
+}
+
+/// Keep the same original VM retry owner across an instruction or restore rejection boundary.
+pub(crate) fn vm_attempt_error_with_rejection<E>(
+    error: VMError,
+    deterministic: impl FnOnce(VMError) -> E,
+) -> ExecutionAttemptError<E> {
     match ExecutionDeferred::try_from_vm_error(error) {
         Ok(reason) => ExecutionAttemptError::Deferred(reason),
         Err(error) => ExecutionAttemptError::Rejected(deterministic(error)),
@@ -895,6 +903,30 @@ mod tests {
     use ivm::error::VMError;
     use ivm_abi::error::{VmDeferral, VmTrap};
     include!("execution_attempt/json_scoped_tests.rs");
+
+    #[test]
+    fn vm_failure_classification_preserves_custody_for_each_rejection_type() {
+        let unfinished: super::ExecutionAttemptError<String> =
+            super::vm_attempt_error_with_rejection(
+                VMError::Deferred(VmDeferral::HostUnavailable),
+                |_| panic!("an unfinished attempt cannot enter the rejection mapper"),
+            );
+        let super::ExecutionAttemptError::Deferred(original) = unfinished else {
+            panic!("original host refusal must remain deferred");
+        };
+        assert!(matches!(
+            original.into_vm_error(),
+            VMError::Deferred(VmDeferral::HostUnavailable)
+        ));
+        let rejected = super::vm_attempt_error_with_rejection(
+            VMError::Trap(VmTrap::PermissionDenied),
+            |error| error.to_string(),
+        );
+        assert!(matches!(
+            rejected,
+            super::ExecutionAttemptError::Rejected(message) if !message.is_empty()
+        ));
+    }
     #[test]
     fn structured_local_host_causes_survive_vm_and_core_custody() {
         use super::{ExecutionAttemptState, ExecutionDeferred};
@@ -1875,7 +1907,7 @@ mod tests {
         let original = ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(reason));
         let wrapped = ivm::VMError::metered(91, original);
         assert_eq!(wrapped.metered_gas(), None);
-        let attempt = super::vm_attempt_error(wrapped, |_| {
+        let attempt = super::vm_attempt_error(wrapped, |_| -> iroha_data_model::ValidationFail {
             panic!("trace custody refusal must not enter the rejection mapper")
         });
         let ExecutionAttemptError::Deferred(retained) = attempt else {

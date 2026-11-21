@@ -55,6 +55,11 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Record,
+        reason: "Exact canonical request of the one-use original signed anonymous runtime creator; transient source binding, never a commitment over World content or a governance authority",
+        literals: &[r"iroha:parliament:runtime-creator:v1\0"],
+    },
+    OtherDomains {
         usage: Use::LocalArtifact,
         reason: "Original portable checkpoint proof-file custody: the ordered file digest binds canonical certificates, proposal prefix rows and parent DA bundles, not serialized State; every frame still requires the signed-genesis-rooted finality verifier before admitting omitted bodies",
         literals: &[r"iroha-checkpoint-prefix-files-v1"],
@@ -161,6 +166,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         reason: "Exact wire identities of the anonymous Parliament family's three interfaces (attempt creation, transition submission and credential registration), including their built-in dispatch entries and the addition that claims them. Each selects an instruction layout; neither an identifier nor its registration computes a digest or grants the instruction authority",
         literals: &[
             r"iroha.governance.parliament.anonymous.attempt.create.v1",
+            r"iroha.governance.parliament.anonymous.runtime_upgrade.create.v1",
             r"iroha.governance.parliament.anonymous.transition.submit.v1",
             r"iroha.governance.parliament.credential.register.v1",
         ],

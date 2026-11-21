@@ -100,6 +100,7 @@ mod executable_source;
 #[path = "executor_execution_fee.rs"]
 mod execution_fee;
 mod fee_sponsor_multisig;
+mod generic_carrier;
 mod settlement_replay;
 /// Test-only observations of the original signed executor input.
 #[cfg(test)]
@@ -4749,13 +4750,14 @@ fn fee_bound_for_admission_payload(
     Ok((tx_bytes_len, instruction_count, gas_used))
 }
 fn fee_bound_for_admission(
+    world: &impl WorldReadOnly,
     transaction: &SignedTransaction,
     zk_gas: &ConfidentialGas,
 ) -> Result<
     (usize, usize, u64),
     crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
 > {
-    fee_bound_for_admission_payload(transaction.payload(), zk_gas)
+    generic_carrier::fee_bound(world, transaction.payload(), zk_gas)
 }
 fn pipeline_gas_component_enabled(fees: &RootFeePolicy, pipeline: &Pipeline) -> bool {
     !pipeline.gas.accepted_assets.is_empty() && fees.per_gas_unit_fee.is_zero()
@@ -4928,7 +4930,7 @@ fn evaluate_nexus_fee_admission_payload(
         .into());
     }
     let (tx_bytes_len, instruction_count, gas_used) =
-        fee_bound_for_admission_payload(payload, zk_gas)?;
+        generic_carrier::fee_bound(world, payload, zk_gas)?;
     let mut charges = Vec::with_capacity(2);
     let fee = compute_nexus_fee_amount(fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
@@ -5483,13 +5485,17 @@ fn charge_fees_for_applied_overlay(
         .iter()
         .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
         .map(|limit| limit.asset_definition_id.canonical_address());
-    let pipeline_gas_bound = fee_bound_for_admission(transaction, &state_transaction.zk.gas)
-        .map_err(|attempt| {
-            state_transaction.attempt_error_to_validation_fail(
-                attempt.map_rejection(nexus_fee_admission_error_to_validation_fail),
-            )
-        })?
-        .2;
+    let pipeline_gas_bound = fee_bound_for_admission(
+        &state_transaction.world,
+        transaction,
+        &state_transaction.zk.gas,
+    )
+    .map_err(|attempt| {
+        state_transaction.attempt_error_to_validation_fail(
+            attempt.map_rejection(nexus_fee_admission_error_to_validation_fail),
+        )
+    })?
+    .2;
     let pipeline_gas = &state_transaction.pipeline.gas;
     if !skip_nexus_fee
         && pipeline_gas_component_enabled(
@@ -6544,6 +6550,7 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
+        state_transaction.child_runtime_admin_entrypoint = None;
         state_transaction.current_direct_sccp_forgery = false;
         state_transaction.clear_direct_sccp_pause();
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
@@ -6770,6 +6777,9 @@ impl Executor {
                                     .into(),
                             ));
                         }
+                        crate::smartcontracts::ivm::host::QueuedEffectPayload::CarrierWrite(_) => {
+                            return Err(ValidationFail::NotPermitted("generic carrier effects require their original native instruction invocation".into()));
+                        }
                         crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                             instruction,
                         ) => {
@@ -6933,7 +6943,24 @@ impl Executor {
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
+                    state_transaction.child_runtime_admin_entrypoint =
+                        crate::runtime::child_admin::capture_direct(
+                            state_transaction,
+                            transaction,
+                            authority,
+                            isi,
+                            index,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        )?;
                     state_transaction.arm_direct_parliament_candidate_testing(
+                        transaction,
+                        authority,
+                        isi,
+                        index,
+                        contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
+                    );
+                    state_transaction.arm_direct_parliament_runtime(
                         transaction,
                         authority,
                         isi,
@@ -6998,6 +7025,7 @@ impl Executor {
                     );
                     state_transaction.current_direct_privacy_instruction_index = None;
                     state_transaction.clear_direct_parliament_candidate_testing();
+                    state_transaction.child_runtime_admin_entrypoint = None;
                     state_transaction.current_direct_sccp_forgery = false;
                     state_transaction.clear_direct_sccp_pause();
                     state_transaction.current_direct_kagemusha_load_instruction_index = None;
@@ -7183,6 +7211,7 @@ impl Executor {
         // A contract frame cannot inherit a native instruction's signed ordinal.
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
+        state_transaction.child_runtime_admin_entrypoint = None;
         state_transaction.current_direct_sccp_forgery = false;
         state_transaction.clear_direct_sccp_pause();
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
@@ -7222,6 +7251,7 @@ impl Executor {
         }
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
+        state_transaction.child_runtime_admin_entrypoint = None;
         state_transaction.current_direct_sccp_forgery = false;
         state_transaction.clear_direct_sccp_pause();
         state_transaction.current_direct_kagemusha_load_instruction_index = None;
@@ -7781,7 +7811,13 @@ impl Executor {
         // guarantee for every caller of the executor.
         crate::runtime::sorafs_repair::prepare_signed_boundary(state_transaction, transaction)?;
         crate::runtime::taira_activation::prepare_signed_boundary(state_transaction, transaction)?;
-        if state_transaction.taira_activation_entrypoint.is_none() {
+        let generic_carrier = crate::runtime::generic_carriers::admission::admit(
+            &state_transaction.world,
+            state_transaction.block_height(),
+            transaction.instructions(),
+        )
+        .map_err(|attempt| state_transaction.attempt_error_to_validation_fail(attempt))?;
+        if state_transaction.taira_activation_entrypoint.is_none() && !generic_carrier {
             crate::runtime::envelope::admit_envelopes(
                 state_transaction.world.runtime_selection.get(),
                 state_transaction.block_height(),
@@ -7812,11 +7848,34 @@ impl Executor {
         let governance_ballot_binding =
             crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
                 .map_err(|message| ValidationFail::NotPermitted(message.to_owned()))?;
-        let call_hash = transaction.hash_as_entrypoint();
+        let call_hash = if generic_carrier {
+            transaction.try_hash_as_entrypoint().map_err(|original| {
+                state_transaction.attempt_error_to_validation_fail(
+                    crate::execution_attempt::norito_decode_attempt_error(original, |_| {
+                        ValidationFail::NotPermitted("invalid original carrier encoding".into())
+                    }),
+                )
+            })?
+        } else {
+            transaction.hash_as_entrypoint()
+        };
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
-        let tx_hash = transaction.hash();
+        let tx_hash = if generic_carrier {
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(call_hash))
+        } else {
+            transaction.hash()
+        };
         state_transaction.current_tx_hash = Some(tx_hash);
         let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).map_err(|err| {
+            if generic_carrier {
+                return state_transaction.attempt_error_to_validation_fail(
+                    crate::execution_attempt::norito_decode_attempt_error(err, |err| {
+                        ValidationFail::InternalError(format!(
+                            "failed to encode carrier transaction for fee metering: {err}"
+                        ))
+                    }),
+                );
+            }
             ValidationFail::InternalError(format!(
                 "failed to encode transaction for fee metering: {err}"
             ))
@@ -7902,13 +7961,17 @@ impl Executor {
         let quarantine_cap = quarantine_gas_cap(state_transaction, transaction);
         let gas_limit_md =
             transaction_gas_limit(transaction).map(|limit| cap_gas_limit(limit, quarantine_cap));
-        let pipeline_gas_bound = fee_bound_for_admission(transaction, &state_transaction.zk.gas)
-            .map_err(|attempt| {
-                state_transaction.attempt_error_to_validation_fail(
-                    attempt.map_rejection(nexus_fee_admission_error_to_validation_fail),
-                )
-            })?
-            .2;
+        let pipeline_gas_bound = fee_bound_for_admission(
+            &state_transaction.world,
+            transaction,
+            &state_transaction.zk.gas,
+        )
+        .map_err(|attempt| {
+            state_transaction.attempt_error_to_validation_fail(
+                attempt.map_rejection(nexus_fee_admission_error_to_validation_fail),
+            )
+        })?
+        .2;
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !skip_nexus_fee
             && pipeline_gas_component_enabled(
@@ -8097,22 +8160,34 @@ impl Executor {
             (
                 Self::Initial | Self::UserProvided(_),
                 executable_source::Body::Instructions(instructions),
-            ) => self.execute_metered_instructions(
-                state_transaction,
-                authority,
-                transaction,
-                instructions,
-                (None, None, None),
-                InstructionFeeContext {
+            ) => {
+                let fee_context = InstructionFeeContext {
                     tx_bytes_len,
                     gas_limit_md,
                     require_gas_limit: false,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
-                },
-                attachment_custody.as_mut(),
-            ),
+                };
+                if generic_carrier {
+                    Self::execute_generic_carrier_transaction(
+                        state_transaction,
+                        authority,
+                        transaction,
+                        fee_context,
+                    )
+                } else {
+                    self.execute_metered_instructions(
+                        state_transaction,
+                        authority,
+                        transaction,
+                        instructions,
+                        (None, None, None),
+                        fee_context,
+                        attachment_custody.as_mut(),
+                    )
+                }
+            }
             (Self::Initial | Self::UserProvided(_), executable_source::Body::IvmProved) => {
                 let replay = ivm_proved_replay
                     .expect("proved execution must retain the deterministic replay verified above");
@@ -8887,6 +8962,7 @@ impl Executor {
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         state_transaction.clear_direct_parliament_candidate_testing();
+        state_transaction.child_runtime_admin_entrypoint = None;
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
@@ -8948,6 +9024,14 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         // An attachment invocation carries no original parliament genesis authority.
         state_transaction.clear_direct_parliament_candidate_testing();
+        if contract_runtime_context.is_some()
+            || matches!(
+                attachment_invocation,
+                Some(attachment_direct::AttachmentExecution::QueuedX509 { .. })
+            )
+        {
+            state_transaction.child_runtime_admin_entrypoint = None;
+        }
         self.execute_instruction_with_policy_context(
             state_transaction,
             authority,
@@ -9015,6 +9099,9 @@ impl Executor {
         // A user executor/contract cannot inherit original native genesis authority.
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
             state_transaction.clear_direct_parliament_candidate_testing();
+        }
+        if contract_runtime_context.is_some() {
+            state_transaction.child_runtime_admin_entrypoint = None;
         }
         // Resolution comes before any check that depends on what the instruction is: an
         // envelope execution can never apply (an unbound wire ID, or one this release kept
@@ -10848,10 +10935,16 @@ pub mod executor_norito {
     use super::*;
     /// Local DTO used for Norito encoding of `Executor`.
     #[derive(Encode, Decode, norito::NoritoSchema)]
+    #[cfg_attr(test, derive(iroha_schema::IntoSchema))]
     #[norito_schema(name = "iroha_core::executor::executor_norito::ExecutorDto")]
     enum ExecutorDto {
         Initial,
         UserProvided(iroha_data_model::executor::Executor),
+    }
+    /// Exact DTO shape implemented by the borrowed canonical State encoder.
+    #[cfg(test)]
+    pub(crate) fn state_authority_structure() -> iroha_schema::MetaMap {
+        <ExecutorDto as iroha_schema::IntoSchema>::schema()
     }
     /// Serialize the given `Executor` to Norito bytes.
     /// Serialize an [`Executor`] into Norito-encoded bytes.

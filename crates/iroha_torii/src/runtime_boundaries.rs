@@ -7,7 +7,8 @@
 //! certified history (`iroha_core::runtime::checkpoint`). The statements are the authority of a
 //! record, so the operator collects one from every validator and any account relays them in
 //! `RatifyRuntimeAdoptionAnchorV1` or `RaiseRuntimeStartupFloorV1`. The validator key never
-//! leaves the node.
+//! leaves the node. Floor signing currently refuses until a sealed exact-checkpoint restore and
+//! certified catch-up owner supplies evidence; retained artifact inventory is insufficient.
 
 use std::sync::Arc;
 
@@ -249,13 +250,15 @@ pub struct RuntimeFloorStatementResponse {
 }
 
 /// POST /v1/runtime/boundaries/floor/attest — this node states the startup floor at the height
-/// in the body from its own history (the block and committed time it stores there) and signs its
-/// statement, only while it holds a checkpoint at exactly that height
+/// in the body from its own history (the block and committed time it stores there). Signing
+/// remains refused until a sealed exact-checkpoint restore and certified catch-up owner is
+/// connected; authenticated artifact custody alone cannot satisfy that requirement
 /// (`specs/live_runtime_upgrades.md` §7.3, "Advancing the floor").
 ///
 /// # Errors
 /// The node holds no validator key, its key is not a member of the current committee, it stores
-/// no certified block at the height, or it holds no checkpoint there.
+/// no certified block at the height, or it holds no checkpoint there. Even matching history and
+/// artifacts currently return the explicit restore/replay-evidence refusal without signing.
 pub fn handle_runtime_attest_floor(
     state: &iroha_core::state::State,
     signer: Option<&KeyPair>,
@@ -284,14 +287,14 @@ pub fn handle_runtime_attest_floor(
         block_hash,
         committed_ms,
     };
-    let holds = checkpoints.is_some_and(|checkpoints| {
+    let holds_artifacts = checkpoints.is_some_and(|checkpoints| {
         checkpoints.holds(view.chain_id(), network, request.height, &block_hash)
     });
     let attestation = attest_floor(
         &history,
         &network,
         &current_committee(&view),
-        holds,
+        holds_artifacts,
         &floor,
         signer,
     )

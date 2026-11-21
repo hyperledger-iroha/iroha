@@ -368,6 +368,7 @@ mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_anonymous_tables;
 pub(crate) mod parliament_candidate_testing;
 pub(crate) mod parliament_registration;
+mod parliament_runtime;
 pub use parliament_registration::{CredentialHistoryErrorV1, resolve_credential_registration_v1};
 mod privacy_transaction_intent;
 mod sccp_forgery_entrypoint;
@@ -1286,6 +1287,8 @@ macro_rules! with_world_overlay_fields {
             c10_trigger_candidates,
             kagemusha_spartan_programs,
             runtime_retirements,
+            runtime_generic_values,
+            runtime_generic_artifacts,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -1330,6 +1333,7 @@ macro_rules! with_world_overlay_fields {
             runtime_containments,
             runtime_definitions,
             runtime_selection,
+            runtime_child_admin_state,
             privacy_consensus_policy,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
@@ -1551,6 +1555,12 @@ mod publication_lock_tests;
 )]
 pub(crate) mod authority_registry;
 pub(crate) mod keyed_state;
+#[expect(
+    dead_code,
+    reason = "TODO(N14): offline source candidate awaits the source-removed oldest-floor release rehearsal"
+)]
+mod runtime_retirement_cut;
+pub(crate) use runtime_retirement_cut::{OriginalRetirementCut, RetirementCutError};
 mod world_commit;
 #[cfg_attr(
     not(test),
@@ -1616,6 +1626,12 @@ use scalar_cell_custody::ScalarCellFixtureBlock;
 
 // Execution-pool cells reserve their original capacity; other fields start empty.
 macro_rules! initial_world_field {
+    (runtime_generic_artifacts, $execution:ident) => {
+        ArtifactStorage::try_new_admitted($execution.clone())?
+    };
+    (runtime_generic_values, $execution:ident) => {
+        CarrierStorage::try_new_admitted($execution.clone())?
+    };
     (parameters, $execution:ident) => {{
         let controls =
             mv::cell::CellInitialization::<RetainedStateParameters>::try_reserve($execution)?;
@@ -1712,6 +1728,12 @@ impl Default for WorldData {
 
 // Quantity storages wrap their child checkpoints; other fields open ordinary ones.
 macro_rules! world_field_transaction {
+    ($field:expr, runtime_generic_artifacts) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, runtime_generic_values) => {
+        $field.try_transaction_admitted()?
+    };
     ($field:expr, runtime_selection) => {
         crate::runtime::execution::SelectionTransaction::new($field.transaction())
     };
@@ -3519,7 +3541,9 @@ pub enum BlockProofError {
 /// Consensus key identifying one authority-owned pending contract-code upload.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::SmartContractCodeUploadKey")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
 pub struct SmartContractCodeUploadKey {
     /// Account that owns and may finalize or cancel the upload.
     pub authority: AccountId,
@@ -3622,7 +3646,9 @@ impl SmartContractCodeUploadKey {
 /// Consensus key identifying one chunk within an authority-owned pending upload.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::SmartContractCodeUploadChunkKey")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
 pub struct SmartContractCodeUploadChunkKey {
     /// Pending upload that owns the chunk.
     pub upload: SmartContractCodeUploadKey,
@@ -3694,6 +3720,7 @@ impl norito::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct SmartContractCodeUploadDescriptor {
     /// Declared byte length of the complete artifact.
@@ -3727,6 +3754,7 @@ pub struct SmartContractCodeUploadProgress {
     JsonDeserialize,
 )]
 #[repr(transparent)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct MusubiResolverIndexRevisionV1(u64);
 impl MusubiResolverIndexRevisionV1 {
     /// Construct a non-zero resolver-index revision.
@@ -4400,6 +4428,12 @@ pub struct WorldData {
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    #[norito(json = "generic_carrier_storage::snapshot_json")]
+    pub(crate) runtime_generic_values: CarrierStorage,
+    /// Originally admitted immutable code owned by the selected carrier staging service.
+    #[norito(json = "generic_carrier_storage::artifact_snapshot_json")]
+    pub(crate) runtime_generic_artifacts: ArtifactStorage,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures:
         Storage<EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>,
@@ -4560,6 +4594,9 @@ pub struct WorldData {
     >,
     /// The one selection the universal root executes.
     pub(crate) runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Explicit child-root administrator authority and replay cursor; absent before foundation.
+    pub(crate) runtime_child_admin_state:
+        Cell<Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy and pending update.
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
@@ -5517,6 +5554,18 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    #[norito(json = "generic_carrier_storage::snapshot_block_json")]
+    pub(crate) runtime_generic_values:
+        StorageField<'world, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code with exact current and undo custody.
+    #[norito(json = "generic_carrier_storage::artifact_snapshot_block_json")]
+    pub(crate) runtime_generic_artifacts: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
+    >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageField<
         'world,
@@ -5660,6 +5709,9 @@ pub struct WorldBlockFields<'world> {
     /// The root's selection for this block scope.
     pub(crate) runtime_selection:
         CellField<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Selected child-root administrator authority for this block.
+    pub(crate) runtime_child_admin_state:
+        CellField<'world, Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy for this block scope.
     pub(crate) privacy_consensus_policy:
         CellField<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -6691,6 +6743,7 @@ impl WorldBlock<'_> {
             governance_unlock_stats,
             parliament_attempt_counts,
             privacy_consensus_policy,
+            runtime_child_admin_state,
             runtime_selection,
             musubi_registry_policy,
             musubi_resolver_index_revision,
@@ -6794,6 +6847,8 @@ impl WorldBlock<'_> {
             c10_trigger_candidates,
             kagemusha_spartan_programs,
             runtime_retirements,
+            runtime_generic_values,
+            runtime_generic_artifacts,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -7419,6 +7474,16 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    pub(crate) runtime_generic_values:
+        StorageTransaction<'block, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code.
+    pub(crate) runtime_generic_artifacts: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
+    >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageTransaction<
         'block,
@@ -7556,6 +7621,12 @@ pub struct WorldTransaction<'block, 'world> {
     >,
     /// The root's selection for this transaction.
     pub(crate) runtime_selection: crate::runtime::execution::SelectionTransaction<'block, 'world>,
+    /// Selected child-root administrator authority for this transaction.
+    pub(crate) runtime_child_admin_state: CellTransaction<
+        'block,
+        'world,
+        Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>,
+    >,
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -9783,6 +9854,16 @@ pub struct WorldView<'world> {
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    pub(crate) runtime_generic_values:
+        StorageView<'world, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code.
+    pub(crate) runtime_generic_artifacts: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
+    >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageView<
         'world,
@@ -9944,6 +10025,9 @@ pub struct WorldView<'world> {
     /// The root's selection.
     pub(crate) runtime_selection:
         CellView<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Selected child-root administrator authority in this immutable World cut.
+    pub(crate) runtime_child_admin_state:
+        CellView<'world, Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy view.
     pub(crate) privacy_consensus_policy:
         CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -10934,7 +11018,15 @@ mod private_settlement_ledger_evidence_tests {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ZkAssetVerifierBinding")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ZkAssetVerifierBinding {
     /// Verifying key identifier recorded in the registry.
@@ -10967,6 +11059,7 @@ pub struct ZkAssetVerifierBinding {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum ConfidentialTreeProfile {
     /// Fixed depth-16 Pasta Poseidon tree used by all confidential V1 circuits.
     #[default]
@@ -11122,6 +11215,7 @@ pub(crate) const MAX_STANDALONE_ELECTION_BALLOTS_V1: usize = 1_000;
     NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct StandaloneBallotCorpusEntryV1 {
     /// Nullifier presented by the accepted operation; credential linkage is not inferred here.
     pub nullifier: [u8; 32],
@@ -11136,6 +11230,7 @@ pub struct StandaloneBallotCorpusEntryV1 {
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct ElectionState {
     /// Number of options (K).
     pub options: u32,
@@ -11323,6 +11418,7 @@ fn validate_election_state_for_restore_v1(
 #[norito_schema(name = "iroha_core::state::GovernanceProposalRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceProposalRecord {
     /// Account that submitted the proposal.
     pub proposer: iroha_data_model::account::AccountId,
@@ -11535,7 +11631,9 @@ impl GovernanceProposalRecord {
 /// Lifecycle status of a governance proposal.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceProposalStatus")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+)]
 pub enum GovernanceProposalStatus {
     /// Proposal has been submitted and its latest attempt is active or certified.
     Proposed,
@@ -11743,6 +11841,7 @@ fn update_oracle_change_pipeline(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceReferendumRecord {
     /// Enactment window start height (inclusive)
     pub h_start: u64,
@@ -11847,7 +11946,9 @@ pub fn plain_governance_tally(
 /// Lifecycle status of a referendum
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceReferendumStatus")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+)]
 pub enum GovernanceReferendumStatus {
     /// Referendum proposed but not yet open for voting
     Proposed,
@@ -11893,7 +11994,17 @@ impl json::JsonDeserialize for GovernanceReferendumStatus {
 /// Voting mode for a referendum
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceReferendumMode")]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub enum GovernanceReferendumMode {
     /// Zero-knowledge verified (ZK) voting mode
     #[default]
@@ -11939,6 +12050,7 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceLockCustody {
     /// Whether the lock amount was actually transferred into escrow.
     pub escrowed: bool,
@@ -11954,6 +12066,7 @@ pub struct GovernanceLockCustody {
 #[norito_schema(name = "iroha_core::state::GovernanceLockRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
     pub owner: iroha_data_model::account::AccountId,
@@ -12016,7 +12129,14 @@ impl GovernanceLockRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceLocksForReferendum")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceLocksForReferendum {
     /// Map of voter account -> lock record for this referendum.
@@ -12037,6 +12157,7 @@ pub struct GovernanceLocksForReferendum {
     JsonDeserialize,
     NoritoSerialize,
     NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceUnlockStatsSnapshot {
     /// Block height whose start-of-block sweep produced this snapshot.
@@ -12104,7 +12225,15 @@ pub enum AssetDefinitionAliasLeaseStatus {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AssetDefinitionAliasBindingRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct AssetDefinitionAliasBindingRecord {
     /// Bound alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
@@ -12167,7 +12296,15 @@ pub enum ContractAliasLeaseStatus {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ContractAliasBindingRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ContractAliasBindingRecord {
     /// Bound alias literal (`<name>::<domain>.<dataspace>` or `<name>::<dataspace>`).
@@ -12218,7 +12355,15 @@ impl ContractAliasBindingRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::CitizenshipRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct CitizenshipRecord {
     /// Citizen account id.
@@ -12248,7 +12393,14 @@ impl CitizenshipRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceSlashEntry")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceSlashEntry {
     /// Exact total amount slashed so far.
@@ -12264,7 +12416,14 @@ pub struct GovernanceSlashEntry {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceSlashLedger")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceSlashLedger {
     /// Map of voter account -> slashing ledger entry.
@@ -13540,6 +13699,9 @@ pub struct StateBlockFields<'state> {
     /// Original signed staking instruction, retained through unpublished execution.
     pub(crate) genesis_staking_policy:
         Option<crate::block::genesis_staking_policy::GenesisStakingPolicy>,
+    /// Exact signed fresh-child foundation retained only through its original genesis overlay.
+    pub(crate) genesis_child_runtime:
+        Option<crate::block::genesis_child_runtime::GenesisChildRuntime>,
     /// First local storage refusal, sticky across every child rollback and error handler.
     local_storage_refusal: Option<StateStorageAdmissionError>,
     /// Immutable policy inputs captured with this scope's actual predecessor.
@@ -14950,6 +15112,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Borrow the original authenticated staking source through the whole child attempt.
     genesis_staking_policy:
         Option<&'block crate::block::genesis_staking_policy::GenesisStakingPolicy>,
+    /// Borrowed original signed child recipe; no live instruction can manufacture this owner.
+    pub(crate) genesis_child_runtime:
+        Option<&'block crate::block::genesis_child_runtime::GenesisChildRuntime>,
     /// Original signed genesis committee, borrowed from the pristine native schedule owner.
     pub(crate) native_genesis_context:
         Option<&'block iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1>,
@@ -14972,6 +15137,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) taira_activation_entrypoint:
         Option<crate::runtime::taira_activation::AdmittedSchedule>,
+    /// One-use exact sole child-admin instruction from the original signed external input.
+    pub(crate) child_runtime_admin_entrypoint:
+        Option<crate::runtime::child_admin::DirectInstruction>,
     /// Captured call graph of the registered obligation's terminal effect being executed
     /// (`specs/live_runtime_upgrades.md` §7.2). Admission closure and completion-only permit
     /// only the bindings this capture reaches; unrelated callback instructions retain ordinary
@@ -15181,6 +15349,8 @@ pub struct StateTransaction<'block, 'state> {
         Option<parliament_candidate_testing::DirectCandidateTesting>,
     /// One-use original anonymous credential instruction; absent in nested execution.
     direct_parliament_registration: Option<parliament_registration::DirectRegistrationCapture>,
+    /// One-use original signed anonymous runtime proposal instruction.
+    direct_parliament_runtime: Option<parliament_runtime::DirectRuntimeCapture>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -22163,6 +22333,10 @@ macro_rules! world_ro_accessors {
             storage runtime_retirements:
                 iroha_data_model::runtime::definition::DefinitionId
                     => iroha_data_model::runtime::retirement::RuntimeRetirementStateV1;
+            /// Exact generic storage positions and canonical carrier frames (read-only).
+            storage runtime_generic_values: RetainedCarrierKey => RetainedCarrierBytes;
+            /// Exact scoped artifacts of the selected carrier staging service.
+            storage runtime_generic_artifacts: iroha_data_model::smart_contract::ContractArtifactId => RetainedCarrierBytes;
             /// Original native escrow completion captures (read-only).
             storage runtime_escrow_captures:
                 EscrowId
@@ -22285,6 +22459,8 @@ macro_rules! world_ro_accessors {
                 iroha_data_model::runtime::definition::DefinitionDescriptorV1;
             /// The selection the universal root executes.
             cell_ref runtime_selection: iroha_data_model::runtime::definition::RootSelectionV1;
+            /// Selected child-root administrator authority and replay cursor (read-only).
+            cell_ref runtime_child_admin_state: Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>;
             /// Retained canonical merge-hint values.
             cell_ref merge_hint_roots: Vec<Hash>;
             /// Retained canonical reduced merge-root value; not the World state root.
@@ -24204,6 +24380,8 @@ impl WorldTransaction<'_, '_> {
                 .parameters
                 .try_retain_authoring(|parameter| {
                     !is_consensus_owned_custom_parameter(parameter.id())
+                        && !(self.runtime_child_admin_state.get().is_some()
+                            && parameter.id() == iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id())
                         && !crate::runtime::committed_policy::consensus_owned(
                             self.runtime_selection.get(),
                             parameter.id(),
@@ -24480,6 +24658,8 @@ impl WorldTransaction<'_, '_> {
         let selection = self.runtime_selection.get();
         let owned = |id| {
             is_consensus_owned_custom_parameter(id)
+                || (self.runtime_child_admin_state.get().is_some()
+                    && id == iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id())
                 || crate::runtime::committed_policy::consensus_owned(selection, id)
         };
         // Walk the existing maps by reference: no cloned model, ID set, or
@@ -26100,6 +26280,8 @@ impl WorldTransaction<'_, '_> {
             c10_trigger_candidates: _,
             kagemusha_spartan_programs: _,
             runtime_retirements: _,
+            runtime_generic_values: _,
+            runtime_generic_artifacts: _,
             runtime_escrow_captures: _,
             runtime_migrations: _,
             runtime_boundaries: _,
@@ -26150,6 +26332,7 @@ impl WorldTransaction<'_, '_> {
             runtime_containments: _,
             runtime_definitions: _,
             runtime_selection: _,
+            runtime_child_admin_state: _,
             privacy_consensus_policy: _,
             privacy_protocol_policies: _,
             kagemusha_wallet_ledger: _,
@@ -26380,6 +26563,7 @@ impl WorldTransaction<'_, '_> {
         self.runtime_containments.apply();
         self.runtime_definitions.apply();
         self.runtime_selection.apply();
+        self.runtime_child_admin_state.apply();
         self.privacy_consensus_policy.apply();
         self.privacy_protocol_policies.apply();
         self.kagemusha_wallet_ledger.apply();
@@ -26576,6 +26760,8 @@ impl WorldTransaction<'_, '_> {
         self.c10_trigger_candidates.apply();
         self.kagemusha_spartan_programs.apply();
         self.runtime_retirements.apply();
+        self.runtime_generic_values.apply();
+        self.runtime_generic_artifacts.apply();
         self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();
         self.runtime_boundaries.apply();
@@ -27399,6 +27585,7 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
     }
 }
 include!("state/runtime_configuration.rs");
+include!("state/restored_replay_configuration.rs");
 include!("state/lifecycle_configuration.rs");
 mod authorization_read;
 pub use authorization_read::{AuthorizationDataSpaceCatalog, AuthorizationRead};
@@ -29114,7 +29301,17 @@ impl State {
         let catalog = crate::runtime::release_catalog().map_err(|error| {
             MergeLedgerCommitError::ExecutionStatePublication(error.to_string())
         })?;
-        if let Some(definition) = catalog.unsupported(world.runtime_selection.view().get()) {
+        let support =
+            crate::runtime::attestation::committed_release_support(catalog, &world.view())
+                .map_err(|original| match original.into_attempt() {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                        MergeLedgerCommitError::ExecutionDeferred(original)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
+                        MergeLedgerCommitError::ExecutionStatePublication(original.to_string())
+                    }
+                })?;
+        if let crate::runtime::attestation::ReleaseSupport::Missing(definition) = support {
             return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
                 "this release cannot execute the restored runtime selection: definition {definition} is not implemented"
             )));
@@ -40587,6 +40784,7 @@ impl<'state> StateBlock<'state> {
             c10_execution: None,
             genesis_crypto_policy: fields.genesis_crypto_policy.as_ref(),
             genesis_staking_policy: fields.genesis_staking_policy.as_ref(),
+            genesis_child_runtime: fields.genesis_child_runtime.as_ref(),
             native_epoch_boundary: fields.sumeragi_schedule.frozen_boundary(),
             native_genesis_context: fields.sumeragi_schedule.original_genesis_context(),
             local_storage_refusal: &mut fields.local_storage_refusal,
@@ -40596,6 +40794,7 @@ impl<'state> StateBlock<'state> {
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
             taira_activation_entrypoint: None,
+            child_runtime_admin_entrypoint: None,
             completing_obligation: None,
             native_execution: None,
             deferred_expectations: Vec::new(),
@@ -40693,6 +40892,7 @@ impl<'state> StateBlock<'state> {
             genesis_execution_scope: None,
             direct_parliament_candidate_testing: None,
             direct_parliament_registration: None,
+            direct_parliament_runtime: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,
@@ -44719,6 +44919,7 @@ impl StateTransaction<'_, '_> {
             native_execution_tip: _,
             sorafs_repair_entrypoint: _,
             taira_activation_entrypoint: _,
+            child_runtime_admin_entrypoint: _,
             completing_obligation: _,
             native_execution: _,
             deferred_expectations: _,
@@ -46954,8 +47155,15 @@ mod proof_status_restore;
 mod sccp_delta;
 pub(crate) mod sccp_snapshot_state;
 pub use sccp_snapshot_state::SccpRestoreError;
+pub(crate) mod generic_carrier_storage;
 pub(crate) mod snapshot_service_state;
 pub(crate) mod snapshot_storage;
+#[cfg(test)]
+use generic_carrier_storage::CarrierFixtureStorage;
+use generic_carrier_storage::{
+    ArtifactStorage, ArtifactStorageMode, CarrierStorage, CarrierStorageMode, RetainedCarrierBytes,
+    RetainedCarrierKey,
+};
 mod verifying_key_index_validation;
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotNoritoBlob {

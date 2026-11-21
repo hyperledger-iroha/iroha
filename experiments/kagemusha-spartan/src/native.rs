@@ -29,6 +29,9 @@ pub mod device_fixture;
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;
+#[path = "native_sent_delivery.rs"]
+mod sent_delivery;
+pub use sent_delivery::VerifiedSentDelivery;
 #[path = "native_open_request.rs"]
 mod open_request;
 #[path = "native_witness.rs"]
@@ -282,7 +285,7 @@ pub struct AuthenticatedParameters {
     id: [u8; 32],
     manifest_digest: [u8; 32],
     confirmation: ConfirmationScope,
-    inner: engine::ParameterSet,
+    inner: Arc<engine::ParameterSet>,
 }
 /// Production installation never gains debit authority from a prepared review alone.
 #[derive(Clone, Copy)]
@@ -501,6 +504,9 @@ struct PreparedReceive {
 /// Preparation is not publication. Only the engine can construct it after
 /// checking every monetary/admission predicate under authenticated inputs.
 pub struct PreparedOperation {
+    // Present only after a cold reconstruction checked the captured predecessor and
+    // reproduced the exact capsule. Neither identity is part of the wallet wire.
+    resumed_under: Option<(Arc<()>, Arc<()>)>,
     manifest_digest: [u8; 32],
     parameters_id: [u8; 32],
     capsule: RecoveryCapsule,
@@ -792,6 +798,13 @@ pub trait Engine: sealed::Engine {
         capsule: &RecoveryCapsule,
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation>;
+    /// Repeat all live controls with a witness this same owner has already
+    /// reconstructed under the current installation and finality reader.
+    fn recheck_selection(
+        &self,
+        prepared: &PreparedOperation,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<()>;
     fn prepare(
         &self,
         witness: &ExactOperationWitness,

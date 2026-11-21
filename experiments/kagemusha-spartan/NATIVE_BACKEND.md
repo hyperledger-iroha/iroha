@@ -257,6 +257,29 @@ unfolded Receive proof or ArchiveSent selector. Wallets retain the exact Payment
 redelivery. Transport qualification includes a full NFC or Nearby exchange using this
 evidence on two physical phones.
 
+Spartan IPM1 profile `0x8001`, schema `3`, kind `4` carries two folded-head
+projections of `Credited::Status`. `KGSCST3` followed by a zero byte selects the
+Receive projection. A first byte with bits 7–5 equal to `101` selects a folded
+receiver Send. Bit 0 carries Burned, bit 1 carries lifecycle minus one, bits 3–2
+carry the two enabled Send controls, and bit 4 denotes all 32 non-default siblings.
+The dense form omits the sibling bitmap. The installed Send program and generator
+geometry fix all proof offsets. The receiver-Send projection reconstructs both own
+IPA generator endpoints from their transcript challenges. In both forms the payer
+checks the signed receiver head and the canonical membership opening under that head.
+A decoder supporting only `KGSCST3` rejects the Send prefix. A receiver can supply
+the original released Receive to produce the `KGSCST3` form.
+
+The Native `credit_status_for_payment` entry accepts the issued Request ID, the
+released receiver head's operation ID and the complete original Payment. When
+the head is a Send, Native reads the protected credit map at the root of that
+Send and verifies the resulting evidence before returning it. Payer verification
+uses the original locally released Send and its retained Request. For a raw Send
+whose capsule predates a stored peer action, Native reconstructs the Request from
+the capsule and the supplied canonical account companion. The signed destination
+binds that companion and the entire reconstructed wire must match. Without the
+action or a supplied companion, Native reports unavailable custody data. Both
+forms are read-only. [Wallet wire §3.4 and §6](../../specs/kagemusha_wallet_wire_v1.md)
+
 The canonical PIPA-R ordinary Receive proof has one public statement digest and a
 3,360-byte descriptor at its one-lane k12 shape. Its state commitment absorbs 29 core
 fields and the rest digest. Spartan adds the prior-credential root as the thirtieth
@@ -334,6 +357,10 @@ The pair's first-phase preview commits the actual masked primary rows to obtain
 the linking digest. It does not generate a discarded full proof. After the secondary
 proof, Native drops its private circuit and witness before proving the primary.
 Both paths replay the same first-phase entropy schedule.
+
+The prover fills lookup inverses in batches of at most 16,384 slots. It clears transient denominators and inverses after each batch. The memory planner charges the in-flight slots for that stage. A private helper cell created as a zero by the builder is materialized when the prover fills it. Wiring-supplied values retain their original handling.
+
+A prepared operation recovered and verified by a live engine can be reused at selection only with that engine, the same authenticated installation and the exact capsule. Selection still checks available memory, hardware debit approval and operation-specific admission. A fresh engine or installation performs full recovery. The Mac control preserved both original Payments across process restarts. [Control measurements](output/production-20261119/signed-v4-cold-control-and-restart.json)
 
 ## Scope and validation
 

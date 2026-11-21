@@ -1778,6 +1778,8 @@ fn prove_rows<C: PastaCurve>(
     let mut m_first = Some(crate::prof::time("i.mtable", || {
         rel.m_table_split_at(shape, &rx.concat(), rabc[0], rabc[1], rabc[2])
     }));
+    // The opening uses the folded matrix value from here on.
+    drop(rel);
     mark("mtable");
     let (mut m, mut z): (Vec<F<C>>, Vec<F<C>>) = (Vec::new(), Vec::new());
     if old_kernels {
@@ -1880,6 +1882,11 @@ fn prove_rows<C: PastaCurve>(
         .for_each(|(col, value)| {
             *value = read.iter().map(|(e, row)| *e * row[col]).sum();
         });
+    // The opening scalar vector now holds the last contribution from the
+    // masked witness rows. Erase owned rows before allocating IPA scratch.
+    let owned_rows = zw.owned();
+    zw.zeroize_owned();
+    drop(zw);
     x[0] += unit;
     crate::prof::add("p.xrow", x_clock.elapsed().as_secs_f64());
     for ((offset, values), power) in outer_off
@@ -1911,7 +1918,6 @@ fn prove_rows<C: PastaCurve>(
     });
     timings.open = clock.elapsed().as_secs_f64();
     mark("open");
-    zw.zeroize_owned();
     if crate::prof::enabled() {
         println!(
             "prover time {} sx {} rows {}: {:.3} s",
@@ -1938,7 +1944,7 @@ fn prove_rows<C: PastaCurve>(
             shape.label,
             shape.sx,
             circuit.memory_note(),
-            zw.owned(),
+            owned_rows,
             rows_n
         );
     }

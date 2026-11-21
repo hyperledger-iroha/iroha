@@ -155,6 +155,29 @@ impl Codec {
         })
     }
 
+    pub(super) fn exception_bitmap_bytes(&self) -> usize {
+        self.positions.len().div_ceil(8)
+    }
+
+    /// Translate a retained full-width proof word into its position after projection.
+    pub(super) fn encoded_word_offset(&self, raw: usize) -> Result<usize, String> {
+        let mut stripped = 0usize;
+        for keep in &self.keeps {
+            if keep.contains(&raw) {
+                if raw.checked_add(32).is_none_or(|end| end > keep.end) {
+                    return Err("partial retained proof word".into());
+                }
+                stripped += raw - keep.start;
+                let left = self.positions.partition_point(|&(at, _)| at < stripped);
+                let before =
+                    carrier::payment_words::all_short_size(stripped, &self.positions[..left])?;
+                return Ok(before - left.div_ceil(8) + self.exception_bitmap_bytes());
+            }
+            stripped += keep.len();
+        }
+        Err("projected proof word omitted by installed layout".into())
+    }
+
     pub(super) fn encoded_len(&self) -> Result<usize, String> {
         carrier::payment_words::all_short_size(self.stripped_len, &self.positions)
     }

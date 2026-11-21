@@ -60,6 +60,24 @@ pub fn anonymous_governance_attempt_id_v1(
     ))
 }
 
+/// Derive the existing anonymous attempt identifier while retaining codec refusals.
+///
+/// # Errors
+/// The original bare Norito payload encoder error.
+pub fn checked_anonymous_governance_attempt_id_v1(
+    proposal_content_id: ProposalContentId,
+    sequence: u32,
+) -> Result<GovernanceAttemptId, norito::core::DecodeAttemptError> {
+    crate::governance_fingerprint::checked_fingerprint(
+        ANONYMOUS_GOVERNANCE_ATTEMPT_ID_V1,
+        &AnonymousGovernanceAttemptIdPreimageV1 {
+            proposal_content_id,
+            sequence,
+        },
+    )
+    .map(GovernanceAttemptId::new)
+}
+
 /// The snapshot of one retryable attempt of the anonymous family.
 ///
 /// It is the family's own record. The baseline snapshot (`GovernanceAttemptV1`) checks its
@@ -118,6 +136,25 @@ impl AnonymousGovernanceAttemptV1 {
         }
     }
 
+    /// Create the same initial snapshot as [`Self::new_v1`] with a checked identity.
+    ///
+    /// # Errors
+    /// The original attempt identity payload encoder error.
+    pub fn try_new_v1(
+        proposal_content_id: ProposalContentId,
+        sequence: u32,
+        risk_tier: RiskTierV1,
+    ) -> Result<Self, norito::core::DecodeAttemptError> {
+        Ok(Self {
+            id: checked_anonymous_governance_attempt_id_v1(proposal_content_id, sequence)?,
+            proposal_content_id,
+            sequence,
+            risk_tier,
+            stage: GovernanceStageV1::Qualification,
+            status: GovernanceAttemptStatusV1::Active,
+        })
+    }
+
     /// Whether the stored identifier is the family's derivation for this retry.
     #[must_use]
     pub fn has_canonical_id(&self) -> bool {
@@ -141,6 +178,24 @@ pub fn anonymous_body_instance_id_v1(
     ))
 }
 
+/// Derive the existing anonymous body identity while retaining original codec refusals.
+///
+/// # Errors
+/// The original bare body-identity payload encoder error.
+pub fn checked_anonymous_body_instance_id_v1(
+    election_attempt_id: BodyElectionAttemptId,
+    roster_root: &Digest512,
+) -> Result<BodyInstanceId, norito::core::DecodeAttemptError> {
+    crate::governance_fingerprint::checked_fingerprint(
+        ANONYMOUS_BODY_INSTANCE_ID_V1,
+        &AnonymousBodyInstanceIdPreimageV1 {
+            election_attempt_id,
+            roster_root: *roster_root,
+        },
+    )
+    .map(BodyInstanceId::new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +216,14 @@ mod tests {
     #[test]
     fn an_attempt_snapshot_is_canonical_only_under_the_family_derivation() {
         let attempt = AnonymousGovernanceAttemptV1::new_v1(proposal(), 2, RiskTierV1::Standard);
+        assert_eq!(
+            AnonymousGovernanceAttemptV1::try_new_v1(proposal(), 2, RiskTierV1::Standard).unwrap(),
+            attempt
+        );
+        assert_eq!(
+            checked_anonymous_governance_attempt_id_v1(proposal(), 2).unwrap(),
+            attempt.id
+        );
         assert!(attempt.has_canonical_id());
         assert_eq!(
             attempt.id,
@@ -168,6 +231,11 @@ mod tests {
         );
         assert_eq!(attempt.stage, GovernanceStageV1::Qualification);
         assert_eq!(attempt.status, GovernanceAttemptStatusV1::Active);
+        let roster = Digest512::new([0x33; 64]);
+        assert_eq!(
+            checked_anonymous_body_instance_id_v1(election(), &roster).unwrap(),
+            anonymous_body_instance_id_v1(election(), &roster)
+        );
 
         // The baseline identifier of the same proposal and retry, and another retry's.
         let mut baseline = attempt;

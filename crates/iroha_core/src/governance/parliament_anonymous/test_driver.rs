@@ -344,6 +344,33 @@ impl Driver {
         }
     }
 
+    /// The same lifecycle driver with an exact alternate proposal, used by runtime G3 tests.
+    pub(super) fn for_proposal(proposal: ProposalKind, risk: RiskTierV1) -> Self {
+        let snapshot =
+            AnonymousGovernanceAttemptV1::new_v1(ProposalContentId::derive_v1(&proposal), 0, risk);
+        let expected = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: proposal.governed_subject_id_v1().expect("proposal subject"),
+        });
+        let state = AnonymousParliamentAttemptStateV1::try_new(
+            candidate(),
+            snapshot,
+            policy(),
+            proposal,
+            expected,
+            AnonymousAttemptOriginV1 {
+                created_at_ms: CREATED_MS,
+                randomness_redraws_before_attempt: 0,
+            },
+        )
+        .expect("new attempt");
+        Self {
+            state,
+            height: CREATED_HEIGHT,
+            now_ms: CREATED_MS,
+            citizens: citizens(40),
+        }
+    }
+
     /// The attempt identifier.
     pub(super) fn id(&self) -> iroha_data_model::governance::types::GovernanceAttemptId {
         self.state.attempt().id
@@ -588,7 +615,12 @@ impl Driver {
     /// Run a fresh attempt to its Policy Jury in Reflection: qualification, one initial
     /// generation where every primary accepts, and every public finding.
     pub(super) fn at_policy_reflection(risk_tier: RiskTierV1) -> Self {
-        let mut driver = Self::new(risk_tier, 40);
+        Self::new(risk_tier, 40).drive_to_policy_reflection()
+    }
+
+    /// Run this newly created exact proposal to Policy Jury Reflection.
+    pub(super) fn drive_to_policy_reflection(self) -> Self {
+        let mut driver = self;
         driver.qualify();
         driver.register_initial();
         driver.advance_to_slot();
@@ -644,8 +676,8 @@ impl Driver {
         self.block(closing_ms - self.now_ms);
         BallotClosureRecordV1 {
             network_id: network(),
-            proposal_content_id: content(),
-            proposal_digest: proposal_digest(),
+            proposal_content_id: self.state.attempt().proposal_content_id,
+            proposal_digest: *self.state.proposal_digest(),
             governance_attempt_id: self.id(),
             election_attempt_id: sealed.election_attempt_id,
             body_instance_id: sealed.body_instance_id,

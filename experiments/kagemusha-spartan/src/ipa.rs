@@ -68,19 +68,29 @@ impl<C: PastaCurve> Gens<C> {
     /// and `u` at `n + 1`. The full capacity therefore identifies the
     /// blinding bases, even when only a prefix of `g` is used.
     pub fn new(n: usize) -> Self {
-        let points: Vec<C> = (0..n + 2)
-            .into_par_iter()
-            .map(|i| {
-                C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
-                    .expect("hash to curve")
-            })
-            .collect();
-        let affine = iroha_pasta::curve::batch_normalize(&points);
-        Self {
-            g: affine[..n].to_vec(),
-            h: affine[n],
-            u: affine[n + 1],
-        }
+        // Normalize each public hash-to-curve batch directly into its final slots.
+        const MAX_BATCH: usize = 2048;
+        let mut affine = vec![C::AffineExt::default(); n + 2];
+        let batch_size = affine
+            .len()
+            .div_ceil(rayon::current_num_threads())
+            .min(MAX_BATCH);
+        affine
+            .par_chunks_mut(batch_size)
+            .enumerate()
+            .for_each(|(batch, out)| {
+                let first = batch * batch_size;
+                let points: Vec<C> = (first..first + out.len())
+                    .map(|i| {
+                        C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
+                            .expect("hash to curve")
+                    })
+                    .collect();
+                C::batch_normalize(&points, out);
+            });
+        let u = affine.pop().expect("U generator");
+        let h = affine.pop().expect("H generator");
+        Self { g: affine, h, u }
     }
 
     /// The first `n` generators. Preserve the parent set's `h` and `u`:
@@ -438,6 +448,23 @@ mod generator_tests {
                 "Pallas {index}"
             );
             assert_eq!(encoded::<Vesta>(v.to_affine()), expected_v, "Vesta {index}");
+        }
+    }
+
+    #[test]
+    fn batches_keep_the_public_indices_and_both_final_bases() {
+        fn check<C: PastaCurve>(n: usize) {
+            let gens = Gens::<C>::new(n);
+            assert_eq!(gens.g.len(), n);
+            for (i, point) in gens.g.iter().chain([&gens.h, &gens.u]).enumerate() {
+                let expected =
+                    C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes()).unwrap();
+                assert_eq!(*point, expected.to_affine());
+            }
+        }
+        for n in [0, 2051] {
+            check::<Pallas>(n);
+            check::<Vesta>(n);
         }
     }
 

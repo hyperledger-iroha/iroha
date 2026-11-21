@@ -201,7 +201,7 @@ fn a_node_derives_the_adoption_record_from_its_own_store() {
 }
 
 #[test]
-fn a_node_signs_a_floor_only_for_a_checkpoint_it_holds() {
+fn a_node_never_signs_a_floor_from_artifact_custody_alone() {
     let keys = keys();
     let committee = committee(&keys);
     let (_, store, _) = adoption(&keys);
@@ -214,8 +214,11 @@ fn a_node_signs_a_floor_only_for_a_checkpoint_it_holds() {
     let sign = |floor: &StartupFloorV1, holds: bool| {
         attest_floor(&store, &network(), &committee, holds, floor, &keys[1])
     };
-    let signed = sign(&floor, true).expect("the store agrees and holds the checkpoint");
-    assert!(signed.verify_for(&floor).is_ok());
+    assert_eq!(
+        sign(&floor, true),
+        Err(RecordAttestationError::CheckpointRehearsalRequired),
+        "matching certified history and retained bytes are not a successful restore/replay"
+    );
     assert!(matches!(
         sign(&floor, false),
         Err(RecordAttestationError::History(_))

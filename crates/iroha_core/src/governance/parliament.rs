@@ -420,6 +420,7 @@ impl std::error::Error for ParliamentReducerErrorV1 {}
     JsonDeserialize,
 )]
 #[norito(tag = "mode", content = "details", deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub enum ParliamentDecisionModeV1 {
     /// Public evidence and deliberation end in a nonbinding finding.
     PublicFinding,
@@ -442,6 +443,7 @@ pub enum ParliamentDecisionModeV1 {
     Decode,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct RequiredParliamentBodyV1 {
     /// Body role that must be completed.
@@ -567,6 +569,7 @@ pub(crate) fn sorafs_authority_attempt_policy_v1() -> (RiskTierV1, Vec<RequiredP
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, JsonSerialize, JsonDeserialize,
 )]
 #[norito(tag = "consumer", content = "bindings", deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 enum ParliamentPulseConsumerV1 {
     /// A canonical simultaneous future-pulse sortition batch.
     SortitionBatch(Vec<SortitionRequestId>),
@@ -577,7 +580,9 @@ enum ParliamentPulseConsumerV1 {
 /// One globally unique threshold-beacon output slot.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentPulseSlotV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
 struct ParliamentPulseSlotV1 {
     beacon_session_id: BeaconSessionId,
     height: u64,
@@ -672,6 +677,7 @@ impl norito::json::JsonObjectKeyOwned for ParliamentPulseSlotV1 {
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentElectionFailureKindV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "failure", content = "details", deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub enum ParliamentElectionFailureKindV1 {
     /// The invitation window closed without one accepted eligible assignment.
     EmptyAcceptedRoster,
@@ -688,7 +694,17 @@ pub enum ParliamentElectionFailureKindV1 {
 /// is reserved or consumed.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentSortitionCapacityFailureV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub struct ParliamentSortitionCapacityFailureV1 {
     body_election_attempt_id: BodyElectionAttemptId,
     body: ParliamentBody,
@@ -745,7 +761,17 @@ impl ParliamentSortitionCapacityFailureV1 {
 /// Reducer-owned state for one body-election attempt.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentElectionStateV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub struct ParliamentElectionStateV1 {
     attempt: iroha_data_model::governance::types::BodyElectionAttemptV1,
     candidate_snapshot_index: u32,
@@ -828,7 +854,17 @@ impl ParliamentElectionStateV1 {
 /// Reducer-owned state for one sealed body instance.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentBodyStateV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub struct ParliamentBodyStateV1 {
     instance: ParliamentBodyInstanceV1,
     roster_root: [u8; 32],
@@ -923,7 +959,18 @@ impl ParliamentBodyStateV1 {
 /// Reducer-owned transcript bindings for one private ballot attempt.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentBallotStateV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub struct ParliamentBallotStateV1 {
     attempt: ParliamentBallotAttemptV1,
     registration_root: Option<[u8; 32]>,
@@ -1076,6 +1123,7 @@ impl ParliamentBallotStateV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentAttemptStateV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct ParliamentAttemptStateV1 {
     attempt: GovernanceAttemptV1,
     /// Proposal-wide redraw units consumed before this attempt was created.
@@ -1149,6 +1197,40 @@ pub const fn aligned_sortition_pulse_height_v1(
 
 fn root_is_zero(root: &[u8; 32]) -> bool {
     root.iter().all(|byte| *byte == 0)
+}
+
+/// Check the existing snapshot bounds without erasing an original account codec refusal.
+/// The anonymous definition family uses this checked owner; the installed boolean API below
+/// retains its original contract.
+pub(crate) fn candidate_snapshot_fits_resource_bounds_checked_v1(
+    candidate_snapshot: &[AccountId],
+) -> Result<bool, norito::core::DecodeAttemptError> {
+    if candidate_snapshot.len()
+        > usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+            .expect("the V1 Parliament citizen cap fits usize")
+    {
+        return Ok(false);
+    }
+    let flags = norito::core::default_encode_flags();
+    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+    norito::core::classify_decode_attempt(|| {
+        let mut bytes = norito::core::seq_len_prefix_len(0);
+        for candidate in candidate_snapshot {
+            let candidate_bytes = norito::core::encoded_payload_len(candidate)?;
+            let Some(next) = bytes
+                .checked_add(norito::core::len_prefix_len_with_flags(
+                    candidate_bytes,
+                    flags,
+                ))
+                .and_then(|bytes| bytes.checked_add(candidate_bytes))
+                .filter(|next| *next <= MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1)
+            else {
+                return Ok(false);
+            };
+            bytes = next;
+        }
+        Ok(true)
+    })
 }
 
 /// Whether `candidate_snapshot` fits the V1 citizen and snapshot-byte bounds.

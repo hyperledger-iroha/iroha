@@ -44,6 +44,7 @@ use thiserror::Error;
     norito::derive::JsonDeserialize,
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ContractSubjectBinding {
     /// Exact account authority used while this contract executes.

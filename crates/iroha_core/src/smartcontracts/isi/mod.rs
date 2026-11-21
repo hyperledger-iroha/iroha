@@ -134,6 +134,36 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .downcast_ref::<T>()
         .map(|isi| isi.clone().execute(authority, state_transaction))
 }
+
+/// The carrier staging boundary borrows its original bounded artifact instead of cloning it.
+trait ExecuteOriginalCarrierArtifact {
+    fn execute_original(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error>;
+}
+impl ExecuteOriginalCarrierArtifact
+    for iroha_data_model::isi::runtime_carrier::StageRuntimeCarrierArtifactV1
+{
+    fn execute_original(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::runtime::generic_carriers::artifact_staging::execute_original(self, authority, state)
+    }
+}
+fn dispatch_original_carrier_artifact<T: ExecuteOriginalCarrierArtifact + 'static>(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    instruction
+        .as_any()
+        .downcast_ref::<T>()
+        .map(|instruction| instruction.execute_original(authority, state))
+}
 /// The three retained AMX instructions share their exact registered fields with execution.
 /// Their owned Execute implementations delegate to the same body for ordinary owned callers.
 trait ExecuteOriginalAmx {
@@ -398,6 +428,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::taira_activation::ScheduleTairaTimeIronwoodV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::taira_read_scope::ScheduleTairaReadScopeV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::child_runtime::AuthorizeChildRuntimeActionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::child_runtime::AttestChildRuntimeSupportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_original_carrier_artifact::<iroha_data_model::isi::runtime_carrier::StageRuntimeCarrierArtifactV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -441,6 +474,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // The anonymous Parliament family records facts, intents and credentials; it moves no
     // asset. Core derives every authority its reducer needs (design §8.1).
+    dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -1300,8 +1334,12 @@ mod registry_dispatch_tests {
             family,
             4,
             &(BTreeSet::from([
-                core::any::type_name::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(),
-                core::any::type_name::<iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1>(),
+                core::any::type_name::<
+                    iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+                >(),
+                core::any::type_name::<
+                    iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1,
+                >(),
             ])),
         );
     }

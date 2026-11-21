@@ -519,6 +519,7 @@ mod tests {
         };
         (
             PreparedOperation {
+                resumed_under: None,
                 manifest_digest: MANIFEST,
                 parameters_id: b.ctx.relation,
                 capsule,

@@ -93,6 +93,8 @@ macro_rules! impl_aos_decode_from_slice {
 }
 pub(crate) use impl_aos_decode_from_slice;
 
+/// Explicit threshold administration of independently founded child roots.
+pub mod child_runtime;
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -101,6 +103,7 @@ pub mod endorsement;
 pub mod governance;
 /// Ministry agenda intake instructions.
 pub mod ministry;
+pub mod runtime_carrier;
 /// Typed one-time SoraFS successor repair instruction.
 pub mod sorafs_repair;
 pub mod taira_activation;
@@ -300,6 +303,7 @@ impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovem
 impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
 impl_direct_instruction_box!(
     crate::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1,
+    crate::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1,
     crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1,
     crate::governance::anonymous_ballot::RegisterParliamentCredentialV1,
 );
@@ -445,6 +449,9 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 impl_direct_instruction_box!(crate::isi::sorafs_repair::ApplySorafsRepairV1);
 impl_direct_instruction_box!(crate::isi::taira_activation::ScheduleTairaTimeIronwoodV1);
 impl_direct_instruction_box!(crate::isi::taira_read_scope::ScheduleTairaReadScopeV1);
+impl_direct_instruction_box!(crate::isi::child_runtime::AuthorizeChildRuntimeActionV1);
+impl_direct_instruction_box!(crate::isi::child_runtime::AttestChildRuntimeSupportV1);
+impl_direct_instruction_box!(crate::isi::runtime_carrier::StageRuntimeCarrierArtifactV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);

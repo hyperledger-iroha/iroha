@@ -60,6 +60,8 @@ mod selected_epoch;
 
 #[derive(Clone, Default)]
 pub struct NativeEngine {
+    // Shared by clones until the protected finality reader changes.
+    selection_owner: Arc<()>,
     verified_payment: Arc<std::sync::Mutex<Option<AcceptedPayment>>>,
     selected_epoch: Option<SumeragiCommitVerifierV1>,
     time: Option<Arc<dyn TimeSource>>,
@@ -689,14 +691,14 @@ impl ParameterSet {
             id: manifest.relation,
             manifest_digest,
             confirmation: ConfirmationScope::Installed,
-            inner: Self {
+            inner: Arc::new(Self {
                 programs,
                 generators,
                 scheme: manifest.scheme,
                 relation: manifest.relation,
                 root,
                 finality,
-            },
+            }),
         };
         let receive = authenticated.inner.profile(full::RECEIVE)?;
         credit_status_wire::admit_profile(&receive, &authenticated.inner.generators).map_err(Error::Rejected)?;
@@ -1424,6 +1426,28 @@ impl NativeEngine {
         }
         Ok(())
     }
+    /// Reuse an Execute caller's reconstructed witness only while this installation
+    /// and its protected finality reader still match. The provider checks the exact
+    /// capsule and every live control again at the irreversible boundary.
+    pub fn retain_reconstruction(
+        &self,
+        prepared: PreparedOperation,
+        parameters: &AuthenticatedParameters,
+    ) -> Option<PreparedOperation> {
+        self.resumed_here(&prepared, parameters).then_some(prepared)
+    }
+
+    fn resumed_here(
+        &self,
+        prepared: &PreparedOperation,
+        parameters: &AuthenticatedParameters,
+    ) -> bool {
+        prepared.resumed_under.as_ref().is_some_and(|(owner, installation)| {
+            Arc::ptr_eq(owner, &self.selection_owner)
+                && Arc::ptr_eq(installation, &parameters.installation)
+        })
+    }
+
     fn require_minimum_memory(
         &self,
         parameters: &AuthenticatedParameters,
@@ -1926,6 +1950,7 @@ impl NativeEngine {
         stage.finish(&format!("prepare {}", kind_name(kind(&frozen))));
         let body = receipt_mut(&mut frozen).body;
         Ok(PreparedOperation {
+            resumed_under: None,
             manifest_digest: parameters.manifest_digest,
             parameters_id: parameters.id,
             capsule,
@@ -1987,13 +2012,25 @@ impl Engine for NativeEngine {
         };
         self.require_minimum_memory(parameters, kind)?;
         let prepared = self.resume(capsule, parameters)?;
+        self.recheck_selection(&prepared, parameters)?;
+        Ok(prepared)
+    }
+
+    fn recheck_selection(
+        &self,
+        prepared: &PreparedOperation,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<()> {
+        if !self.resumed_here(prepared, parameters) {
+            return Err(Error::AuthorityMismatch("resumed selection authority"));
+        }
+        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
         prepared.require_receive_admission()?;
         // A resumed preparation must bind its frozen interval to the operation's actual
         // capture before fresh policy checking and selection. Selected recovery bypasses both.
         self.check_send_time(&prepared.witness, false)?;
         self.check_send_time(&prepared.witness, true)?;
-        self.authorize_debit(DebitBoundary::BeforeSelection, &prepared, parameters)?;
-        Ok(prepared)
+        self.authorize_debit(DebitBoundary::BeforeSelection, prepared, parameters)
     }
 
     fn verify_head(
@@ -2125,10 +2162,14 @@ impl Engine for NativeEngine {
             return Err(Error::AuthorityMismatch("recovered predecessor"));
         }
         head.custody_digest = r.previous_capsule;
-        let prepared = self.prepare_retained(&witness, &head, parameters)?;
+        let mut prepared = self.prepare_retained(&witness, &head, parameters)?;
         if prepared.capsule.encode()? != capsule.encode()? {
             return Err(Error::AuthorityMismatch("recovered frozen capsule"));
         }
+        prepared.resumed_under = Some((
+            Arc::clone(&self.selection_owner),
+            Arc::clone(&parameters.installation),
+        ));
         Ok(prepared)
     }
     fn finalize_selected(
@@ -2261,7 +2302,7 @@ impl Engine for NativeEngine {
         // witness. Its first-phase row commitments are kept for the primary
         // proof below, which regenerates the masks and blinds from the same
         // stream and does not commit those rows again.
-        self.require_stage_memory(cp.phase_memory_accounting().phase1_bytes)?;
+        self.require_stage_memory(cp.first_phase_memory_bytes())?;
         let primary = spartan::prepare_linked_phase1_retained(
             &cp.shape,
             &p.generators.p,
@@ -2433,9 +2474,15 @@ impl Engine for NativeEngine {
         record: &CompletionRecord,
         parameters: &AuthenticatedParameters,
     ) -> Result<CompletedOperation> {
-        prepared.predecessor.require_parameters(parameters)?;
         scope(parameters, &record.frame.parameters_id)?;
         record.validate()?;
+        let reconstructed;
+        let prepared = if self.resumed_here(prepared, parameters) {
+            prepared
+        } else {
+            reconstructed = self.resume(prepared.capsule(), parameters)?;
+            &reconstructed
+        };
         let capsule = prepared.capsule();
         if record.frame.wallet != capsule.frame.wallet {
             return Err(Error::AuthorityMismatch("retained completion wallet"));

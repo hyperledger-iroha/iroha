@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     bootstrap_context as bc,
-    indexed_map::{self, Leaf, Path},
+    indexed_map::{self, Path},
     payment_wire::limbs,
     receive_lineage, request, statement,
 };
@@ -11,6 +11,8 @@ use iroha_pasta::poseidon;
 use std::sync::LazyLock;
 #[path = "credit_proof_codec.rs"]
 mod proof_codec;
+#[path = "credit_status_later_send.rs"]
+pub(super) mod later_send;
 
 const MAGIC: &[u8; 8] = b"KGSCST3\0";
 /// Wire v1 sections 2 and 6 allow 10,034 canonical bytes and 10,084 including IPM1 on NFC.
@@ -90,19 +92,18 @@ struct Opening {
     path: Path<32>,
 }
 impl Opening {
-    fn root(&self, credit: Fp, payment: Fp, status: VerifiedCreditStatus) -> Fp {
-        let value = poseidon::hash_with_domain(
-            receive_lineage::CREDIT_DOMAIN,
-            &[credit, payment, Fp::from(status.bit() as u64)],
-        );
-        indexed_map::path_root(
-            indexed_map::leaf_hash(Leaf {
-                key: credit,
-                value,
-                next: self.next,
-            }),
-            &self.path,
-        )
+    fn root(&self, credit: Fp, payment: Fp, status: VerifiedCreditStatus) -> Result<Fp> {
+        // Both Spartan transports use the wallet wire v1 §3.4 membership rules.
+        let opening = iroha_data_model::kagemusha::KagemushaWalletCreditOpeningV1 {
+            credit_id: credit.to_repr(),
+            payment_digest: payment.to_repr(),
+            burned: status == VerifiedCreditStatus::Burned,
+            next_key: self.next.to_repr(),
+            slot: self.path.index,
+            siblings: self.path.siblings.iter().flat_map(|s| s.to_repr()).collect(),
+        };
+        let root = opening.root().map_err(|_| Error::Malformed("credit status membership opening"))?;
+        field(&root)
     }
     fn write(&self, out: &mut Vec<u8>) {
         put_field(out, self.next);
@@ -263,6 +264,10 @@ impl NativeEngine {
         payment.require_parameters(parameters)?;
         let mut bytes =
             payment_wire::decode_peer_payload(4, wire, MAX_PAYLOAD).map_err(Error::Rejected)?;
+        if later_send::recognizes(bytes) {
+            return later_send::verify(self, bytes, payment, open_request, parameters)
+                .map(|verified| verified.outcome);
+        }
         if take(&mut bytes, 8)? != MAGIC {
             return Err(Error::Malformed("credit status magic"));
         }
@@ -286,7 +291,7 @@ impl NativeEngine {
             *entry = get_field(&mut bytes)?;
         }
         let opening = Opening::read(&mut bytes)?;
-        lineage[bc::CREDIT_ROOT] = opening.root(s[17], payment.digest(), status);
+        lineage[bc::CREDIT_ROOT] = opening.root(s[17], payment.digest(), status)?;
         let projection = projected(&receiver, &s, &receipt, lineage)?;
         let trusted = parameters.inner.profile(full::RECEIVE)?;
         let codec = proof_codec::Codec::new(&trusted, &parameters.inner.generators).map_err(Error::Rejected)?;
@@ -397,7 +402,7 @@ impl NativeEngine {
         let status = [VerifiedCreditStatus::Credited, VerifiedCreditStatus::Burned]
             .into_iter()
             .find(|status| {
-                opening.root(s[17], payment.digest(), *status) == lineage[bc::CREDIT_ROOT]
+                opening.root(s[17], payment.digest(), *status).is_ok_and(|root| root == lineage[bc::CREDIT_ROOT])
             })
             .ok_or(Error::AuthorityMismatch("exact retained credit membership"))?;
         let projection = projected(&receiver, &s, &receipt, lineage)?;
@@ -514,15 +519,15 @@ mod tests {
                 next: insert.low.next,
                 path: insert.slot,
             };
-            assert_eq!(opening.root(credit, payment, status), root);
+            assert_eq!(opening.root(credit, payment, status).unwrap(), root);
             let mut frame = Vec::new();
             opening.write(&mut frame);
             assert_eq!(frame.len(), 41);
             let mut view = frame.as_slice();
             let decoded = Opening::read(&mut view).unwrap();
             assert!(view.is_empty());
-            assert_eq!(decoded.root(credit, payment, status), root);
-            assert_ne!(decoded.root(credit, payment + Fp::ONE, status), root);
+            assert_eq!(decoded.root(credit, payment, status).unwrap(), root);
+            assert_ne!(decoded.root(credit, payment + Fp::ONE, status).unwrap(), root);
             assert_ne!(
                 decoded.root(
                     credit,
@@ -532,7 +537,7 @@ mod tests {
                     } else {
                         VerifiedCreditStatus::Credited
                     }
-                ),
+                ).unwrap(),
                 root
             );
             // Explicitly serializing the default sibling has a second encoding of the same opening.

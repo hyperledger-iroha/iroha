@@ -504,25 +504,20 @@ impl<F: Field> Table<F> for ZView<'_, '_, F> {
     }
 }
 
-/// A zero vector whose pages the operating system supplies on first write
-/// (large allocations are fresh mappings), so a table written only in part
-/// holds memory only where written. Falls back to writing zeros for a field
-/// whose zero is not the all-zero bit pattern.
+/// Allocate the native Pasta fields on zero-on-demand pages. For every other
+/// field, initialize elements from its logical zero.
 pub fn zeroed<F: Field>(n: usize) -> Vec<F> {
-    let zero = F::ZERO;
-    // SAFETY: reads the bytes of one field element (Pasta field elements are
-    // plain arrays of limbs, without padding).
-    let zero_bits =
-        unsafe { std::slice::from_raw_parts((&zero as *const F).cast::<u8>(), size_of::<F>()) }
-            .iter()
-            .all(|b| *b == 0);
-    if !zero_bits || n == 0 || size_of::<F>() == 0 {
+    use std::any::TypeId;
+
+    let field = TypeId::of::<F>();
+    let pasta = field == TypeId::of::<iroha_pasta::Fp>() || field == TypeId::of::<iroha_pasta::Fq>();
+    if n == 0 || !pasta {
         return vec![F::ZERO; n];
     }
     let layout = std::alloc::Layout::array::<F>(n).expect("table size");
-    // SAFETY: the layout has nonzero size; the allocation is zeroed and the
-    // all-zero bit pattern is `F::ZERO` (checked above), so all `n` elements
-    // are initialized; `Vec` frees it with the same layout.
+    // SAFETY: Fp and Fq store their Montgomery zero as four zero u64 limbs.
+    // The type check above selects exactly those types and n is nonzero.
+    // The returned Vec owns the allocation with its original layout.
     unsafe {
         let ptr = std::alloc::alloc_zeroed(layout).cast::<F>();
         if ptr.is_null() {

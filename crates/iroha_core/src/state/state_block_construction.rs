@@ -185,6 +185,7 @@ impl State {
             let block = StateBlock::from_fields(StateBlockFields {
                 genesis_crypto_policy: None,
                 genesis_staking_policy: None,
+                genesis_child_runtime: None,
                 local_storage_refusal: None,
                 _ivm_refunds: pipeline_ivm_prepared_cache
                     .as_ref()

@@ -158,6 +158,58 @@ pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, 
     out.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
     Ok(out)
 }
+
+/// Encode the same canonical V1 pointer envelope while retaining an original allocator refusal.
+///
+/// New explicitly selected hosts prepay the returned buffer in their original allocation pool.
+/// This utility preserves the checked physical layout and actual empty-vector reservation error;
+/// it does not acquire a pool or replace the existing installed helper's refusal contract.
+///
+/// # Errors
+/// Rejects an unrepresentable envelope and returns its original physical allocator refusal.
+pub fn encode_tlv_with_allocator_custody(
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Result<Vec<u8>, VMError> {
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    let total = payload
+        .len()
+        .checked_add(7 + iroha_crypto::Hash::LENGTH)
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
+    let layout =
+        std::alloc::Layout::array::<u8>(total).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|original| {
+        VMError::Deferred(VmDeferral::AllocatorDeferred(
+            iroha_allocation::AllocatorRefusal::from_vec_reserve(original, layout),
+        ))
+    })?;
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&payload_len.to_be_bytes());
+    out.extend_from_slice(payload);
+    out.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+    Ok(out)
+}
+
+#[cfg(test)]
+mod carrier_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn original_allocator_encoder_preserves_exact_pointer_bytes() {
+        for payload in [vec![], vec![0], vec![0, 1, 255], vec![17; 4096]] {
+            for pointer in [PointerType::NoritoBytes, PointerType::Blob] {
+                let encoded = encode_tlv_with_allocator_custody(pointer, &payload).unwrap();
+                assert_eq!(encoded, encode_tlv(pointer, &payload).unwrap());
+                let decoded = validate_tlv_bytes(&encoded).unwrap();
+                assert_eq!(decoded.type_id, pointer);
+                assert_eq!(decoded.payload, payload);
+            }
+        }
+    }
+}
 /// Validate a TLV envelope provided as a raw byte slice and return a view over
 /// its payload. The slice must contain the full header, payload, and hash.
 pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
@@ -216,12 +268,17 @@ const ABI_V1_POINTER_TYPES: &[PointerType] = &[
 /// Expose the policy allowlist for callers that need to diff surfaces.
 pub fn policy_pointer_types(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
-    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
+    static CARRIER: OnceLock<HashSet<PointerType>> = OnceLock::new();
+    if policy == SyscallPolicy::AbiV1GenericCarrier {
+        return CARRIER.get_or_init(|| [PointerType::NoritoBytes].into_iter().collect());
+    }
     ABI_V1.get_or_init(|| ABI_V1_POINTER_TYPES.iter().copied().collect())
 }
 /// Check the static pointer-ABI allowlist without allocating on first use.
 pub fn is_type_allowed_for_policy(policy: SyscallPolicy, ty: PointerType) -> bool {
-    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
+    if policy == SyscallPolicy::AbiV1GenericCarrier {
+        return ty == PointerType::NoritoBytes;
+    }
     ABI_V1_POINTER_TYPES.contains(&ty)
 }
 thread_local! {

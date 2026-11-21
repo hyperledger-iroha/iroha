@@ -69,9 +69,15 @@ pub fn install(
     let fixture = NativeFinalityFixture::new_with_explicit_parameters();
     let finality = SumeragiCommitVerifierV1::new(&fixture.verifier())
         .map_err(|e| Error::Rejected(e.to_string()))?;
-    let mut parameters =
+    let parameters =
         AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?;
-    parameters.confirmation = ConfirmationScope::FixtureSend;
+    // Only a host simulation uses the stand-in approval for its primary wallet.
+    // On either phone the standard installed custody gate remains mandatory.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let parameters = AuthenticatedParameters {
+        confirmation: ConfirmationScope::FixtureSend,
+        ..parameters
+    };
     Ok(parameters)
 }
 
@@ -757,6 +763,136 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "requires a signed device bundle and its two-wallet Send and Receive originals"]
+    fn software_peer_approval_cannot_authorize_the_device_send() {
+        let path = |name: &str| std::path::PathBuf::from(std::env::var_os(name).unwrap());
+        let bundle = path("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS");
+        let wallet = path("KAGEMUSHA_SPARTAN_DEVICE_ROOT");
+        let read = |dir: &std::path::Path, name: &str| std::fs::read(dir.join(name)).unwrap();
+        let params = AuthenticatedParameters::install(
+            &read(&bundle, "program-bundle.norito"),
+            &read(&bundle, "parameter-manifest.norito"),
+            read(&bundle, "parameter-signature.bin").try_into().unwrap(),
+            &scheme(),
+            SumeragiCommitVerifierV1::new(
+                &NativeFinalityFixture::new_with_explicit_parameters().verifier(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let device = NativeEngine::default();
+        let software = NativeEngine::default();
+        let outgoing = device
+            .verify_payment(&read(&wallet, "complete-payment.bin"), &params)
+            .unwrap();
+        let incoming = software
+            .verify_payment(&read(&wallet, "incoming-payment.bin"), &params)
+            .unwrap();
+        let counterparty = Counterparty::new(&params, outgoing.payer()).unwrap();
+        assert!(Arc::ptr_eq(&params.inner, &counterparty.parameters.inner));
+        assert!(!Arc::ptr_eq(
+            &params.installation,
+            &counterparty.parameters.installation
+        ));
+        let device_capsule = RecoveryCapsule::decode(
+            &std::fs::read(path("KAGEMUSHA_SPARTAN_DEVICE_SEND_CAPSULE")).unwrap(),
+            &scheme().scheme_id(),
+        )
+        .unwrap();
+        let device_send = device.resume(&device_capsule, &params).unwrap();
+        let receipt = HardwareAdvanceReceipt::verify_selected(
+            &device_send,
+            &outgoing.receipt().body,
+            outgoing.receipt().signature,
+        )
+        .unwrap();
+        assert_eq!(device_capsule.kind(), 3);
+        assert!(matches!(
+            device.recheck_selection(&device_send, &params),
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
+        ));
+        assert!(matches!(
+            device.require_selected_debit(&device_send, [1; 32], &params),
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
+        ));
+        assert!(matches!(
+            counterparty.sign(&device_send),
+            Err(Error::AuthorityMismatch(
+                "software fixture counterparty preparation"
+            ))
+        ));
+        assert!(matches!(
+            counterparty.finalize(&software, device_send, &receipt),
+            Err(Error::AuthorityMismatch(
+                "software fixture counterparty preparation"
+            ))
+        ));
+        let again = device.resume(&device_capsule, &params).unwrap();
+        assert!(matches!(
+            device.finalize(again, &receipt, &params),
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
+        ));
+
+        let peer_capsule = RecoveryCapsule::decode(
+            &read(&wallet, "counterparty-receive-capsule.norito"),
+            &scheme().scheme_id(),
+        )
+        .unwrap();
+        let peer_received = software
+            .resume(&peer_capsule, &counterparty.parameters)
+            .unwrap();
+        let record = CompletionRecord::decode(
+            &read(&wallet, "counterparty-receive-completion.norito"),
+            peer_capsule.wallet(),
+        )
+        .unwrap();
+        let held = software
+            .verify_staged_completion(&peer_received, &record, &counterparty.parameters)
+            .unwrap();
+        let origin = SendOrigin::after_receive(&peer_received.witness, held.head().profile()).unwrap();
+        let back = send10_with_request(&origin, outgoing.payer(), incoming.request().clone()).unwrap();
+        let peer_send = software
+            .prepare(&back, held.head(), &counterparty.parameters)
+            .unwrap();
+        let selected = software
+            .prepare_selection(peer_send.capsule(), &counterparty.parameters)
+            .unwrap();
+        software
+            .require_selected_debit(&selected, [2; 32], &counterparty.parameters)
+            .unwrap();
+        assert!(matches!(
+            device.recheck_selection(&selected, &params),
+            Err(Error::AuthorityMismatch("resumed selection authority"))
+        ));
+        assert!(matches!(
+            device.require_selected_debit(&selected, [2; 32], &params),
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
+        ));
+        let receipt = counterparty.sign(&selected).unwrap();
+        let peer_review = software.resume(selected.capsule(), &counterparty.parameters).unwrap();
+        assert!(matches!(
+            device.finalize(peer_review, &receipt, &params),
+            Err(Error::AuthorityMismatch("protected Send review confirmation unavailable"))
+        ));
+        let completed = counterparty
+            .finalize(&software, selected, &receipt)
+            .unwrap();
+        let payment = device
+            .verify_payment(&completed.completion().output_part(1).unwrap(), &params)
+            .unwrap();
+        assert_eq!(payment.payer().body, counterparty.credential().body);
+        assert_eq!(payment.request().body, incoming.request().body);
+    }
+
     /// Two wallets through the real engine under the authenticated program
     /// bundle of a complete compiler run: A Bootstrap, A Load100, B Bootstrap,
     /// B-signed Request, A Send10 to B, B Receive; then back: A-signed
@@ -1418,6 +1554,9 @@ fn software_bootstrap(
 /// proved and verified by the real engine under the installed programs, and
 /// each receiver's Request signature is checked inside its Receive relation.
 pub struct Counterparty {
+    // A distinct installation identity never enters the device's custody provider.
+    // Both owners read the same immutable, authenticated programs and generators.
+    parameters: AuthenticatedParameters,
     marker: [u8; 32],
     key: crate::full::WalletKey,
     bootstrap: ExactOperationWitness,
@@ -1446,6 +1585,13 @@ impl Counterparty {
             .map_err(|_| Error::Malformed("fixture counterparty account"))?;
         let (bootstrap, marker) = software_bootstrap(parameters, &key, asset, account, 0x42)?;
         Ok(Self {
+            parameters: AuthenticatedParameters {
+                installation: Arc::new(()),
+                id: parameters.id,
+                manifest_digest: parameters.manifest_digest,
+                confirmation: ConfirmationScope::FixtureSend,
+                inner: Arc::clone(&parameters.inner),
+            },
             key,
             bootstrap,
             marker,
@@ -1512,9 +1658,34 @@ impl Counterparty {
             "isolated fixture counterparty Request",
         ))
     }
+    /// Complete an exact operation of this software wallet. Its fixture approval
+    /// and parameter owner are private and never supplied to a device session.
+    pub fn finalize(
+        &self,
+        engine: &NativeEngine,
+        prepared: PreparedOperation,
+        receipt: &HardwareAdvanceReceipt,
+    ) -> Result<CompletedOperation> {
+        self.require_own_preparation(&prepared)?;
+        engine.finalize(prepared, receipt, &self.parameters)
+    }
+
+    fn require_own_preparation(&self, prepared: &PreparedOperation) -> Result<()> {
+        let own = self.credential();
+        if prepared.credential().body != own.body
+            || prepared.credential().signature != own.signature
+            || prepared.capsule().payment_key() != &own.body[130..195]
+            || prepared.manifest_digest != self.parameters.manifest_digest
+        {
+            return Err(Error::AuthorityMismatch("software fixture counterparty preparation"));
+        }
+        Ok(())
+    }
+
     /// B's stand-in hardware signature over an operation the engine prepared
     /// for B. The caller finalizes with the returned receipt.
     pub fn sign(&self, prepared: &PreparedOperation) -> Result<HardwareAdvanceReceipt> {
+        self.require_own_preparation(prepared)?;
         sign_selected(
             prepared,
             &self.key.d,

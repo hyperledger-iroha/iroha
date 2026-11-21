@@ -5,6 +5,9 @@
 //! remain retained DATA and cannot grant a monetary or service capability.
 
 use super::*;
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan::{
+    MAX_INVENTORY_BYTES, MAX_JSON_BYTES, MAX_PACK_BYTES,
+};
 use std::collections::BTreeSet;
 
 // The cutover removed `firstDeviceAuthentication` (Google sign-up key, OAuth client and Play
@@ -260,11 +263,6 @@ const FINANCIAL_SCHEMA: &str = "iroha.kagemusha.wallet-financial-originals.v1";
 /// Explicit Spartan profile of the same signed record. Only this exact schema selects the
 /// single-original carrier; no shape, size or absent member of another record does.
 const SPARTAN_SCHEMA: &str = "iroha.kagemusha.spartan.wallet-financial-originals.v1";
-// Signed-pin ceilings of the small Spartan carrier metadata. They refuse an oversized pin
-// before any file is opened; the carrier reader enforces its exact bounds on the installed
-// files themselves.
-const SPARTAN_PACK_MAX: usize = 16 * 1024 + 2048;
-const SPARTAN_METADATA_MAX: usize = 2048;
 
 /// At most one financial profile of one signed release: the retained graph or Spartan.
 type FinancialProfile = (Option<FinancialSelection>, Option<SpartanSelection>);
@@ -336,9 +334,9 @@ fn spartan_profile(value: &Value, input: &RuntimeOriginals<'_>) -> Result<Sparta
             "manifestDigest",
         ],
     )?;
-    let pack = blob(field(record, "verifierPack")?, SPARTAN_PACK_MAX)?;
-    let inventory = blob(field(record, "producerInventory")?, SPARTAN_METADATA_MAX)?;
-    let transport = blob(field(record, "transport")?, SPARTAN_METADATA_MAX)?;
+    let pack = blob(field(record, "verifierPack")?, MAX_PACK_BYTES)?;
+    let inventory = blob(field(record, "producerInventory")?, MAX_INVENTORY_BYTES)?;
+    let transport = blob(field(record, "transport")?, MAX_JSON_BYTES)?;
     if pack != BlobV1::of(input.verifier_pack)
         || inventory != BlobV1::of(input.producer_inventory)
     {
@@ -531,9 +529,9 @@ mod financial_profile_tests {
     fn spartan_pins_are_bounded_nonzero_and_canonical() {
         let input = offered(PACK, INVENTORY, ROOT);
         for (pin, bound) in [
-            ("verifierPack", SPARTAN_PACK_MAX),
-            ("producerInventory", SPARTAN_METADATA_MAX),
-            ("transport", SPARTAN_METADATA_MAX),
+            ("verifierPack", MAX_PACK_BYTES),
+            ("producerInventory", MAX_INVENTORY_BYTES),
+            ("transport", MAX_JSON_BYTES),
         ] {
             for (member, value) in [
                 ("bytes", Value::from(0u64)),
@@ -558,6 +556,39 @@ mod financial_profile_tests {
                 assert!(financial(&candidate, &input).is_err(), "{pin}");
             }
         }
+    }
+
+    #[test]
+    fn signed_spartan_blobs_use_the_carrier_readers_per_role_bounds() {
+        for (role, maximum) in [
+            ("verifierPack", MAX_PACK_BYTES),
+            ("producerInventory", MAX_INVENTORY_BYTES),
+            ("transport", MAX_JSON_BYTES),
+        ] {
+            for (size, accepted) in [(maximum, true), (maximum + 1, false)] {
+                let bytes = vec![0x42; size];
+                let selected = changed(record(SPARTAN_SCHEMA), role, Some(identity(&bytes)));
+                let pack = if role == "verifierPack" { &bytes } else { PACK };
+                let inventory = if role == "producerInventory" {
+                    &bytes[..]
+                } else {
+                    INVENTORY
+                };
+                let input = offered(pack, inventory, ROOT);
+                assert_eq!(
+                    spartan_profile(&selected, &input).is_ok(),
+                    accepted,
+                    "{role} at {size} bytes"
+                );
+            }
+        }
+        let inventory = vec![0x42; MAX_JSON_BYTES + 1];
+        let selected = changed(
+            record(SPARTAN_SCHEMA),
+            "producerInventory",
+            Some(identity(&inventory)),
+        );
+        assert!(spartan_profile(&selected, &offered(PACK, &inventory, ROOT)).is_ok());
     }
 
     #[test]

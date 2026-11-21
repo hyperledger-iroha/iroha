@@ -31,6 +31,7 @@ fn ironwood_retained_host_proposal_artifacts_refuse_before_any_effect() {
             (path.clone(), Some(bytes)),
         ]);
         let artifacts = HostExecutionArtifacts {
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             queued: vec![QueuedEffect {
                 payload: QueuedEffectPayload::Instruction(
@@ -105,6 +106,7 @@ fn ironwood_host_proposal_publication_preserves_old_and_opaque_rows() {
             // Native multisig proposals change only through their own instructions; a
             // contract durable-state artifact can neither replace nor delete them.
             let artifacts = HostExecutionArtifacts {
+                carrier_queue_backing: None,
                 x509_queue_backing: None,
                 queued: Vec::new(),
                 entrypoint_authorization: None,

@@ -28,8 +28,10 @@
 //! and the effect hash from it and checks the attempt's identifiers and the head's subject
 //! against it, at creation and at every restore.
 //!
-//! TODO(design §12.3, slice 5): production enactment (G3) of a certified production attempt.
-//! This release creates candidate-testing attempts only.
+//! Runtime proposals use the distinct original-signed creator in `runtime_upgrade`; generic
+//! creation cannot supply their notice or admission time. Runtime-only G3 is connected behind
+//! the certificate owner. TODO(design §12.3, slice 5): qualify production ballot authority and
+//! implement other proposal effects. This release creates candidate-testing attempts only.
 
 use iroha_data_model::{
     account::AccountId,
@@ -39,7 +41,7 @@ use iroha_data_model::{
             FrozenParliamentAttemptPolicyV1, ParliamentBallotParametersV1,
             ParliamentBallotPurposeV1, ParliamentCandidateTestingPolicyV1,
             ParliamentLifecycleParametersV1, RegisterParliamentCredentialV1,
-            SubmitAnonymousParliamentTransitionV1, anonymous_governance_attempt_id_v1,
+            SubmitAnonymousParliamentTransitionV1,
         },
         types::{GovernanceAttemptStatusV1, ParliamentBody, ProposalKind, RiskTierV1},
     },
@@ -84,6 +86,12 @@ pub(crate) fn anonymous_refusal(
     error: &AnonymousParliamentErrorV1,
     state: &mut StateTransaction<'_, '_>,
 ) -> Error {
+    if let Some(original) = error.original_codec_refusal() {
+        let _ = state.defer_execution(crate::execution_attempt::ExecutionDeferred::from(
+            original.clone(),
+        ));
+        return refused("local anonymous Parliament proposal encoding did not complete");
+    }
     let deferral = if error.is_local() {
         Some(ExecutionDeferral::VerifierArtifactsUnavailable)
     } else if matches!(error, AnonymousParliamentErrorV1::CredentialStore) {
@@ -134,7 +142,9 @@ fn require_parliament_manager(
 
 /// The purpose of an attempt created now (design §12.3): the release's qualification, or the
 /// network's committed candidate-testing selection, or none.
-fn committed_purpose(state: &StateTransaction<'_, '_>) -> Result<ParliamentBallotPurposeV1, Error> {
+fn committed_purpose(
+    state: &mut StateTransaction<'_, '_>,
+) -> Result<ParliamentBallotPurposeV1, Error> {
     let candidate = state
         .world
         .parameters()
@@ -142,7 +152,15 @@ fn committed_purpose(state: &StateTransaction<'_, '_>) -> Result<ParliamentBallo
         .get(ParliamentCandidateTestingPolicyV1::parameter_id())
         .map(ParliamentCandidateTestingPolicyV1::from_custom_parameter)
         .transpose()
-        .map_err(|error| refused(format!("committed candidate-testing selection: {error}")))?;
+        .map_err(|error| {
+            match crate::state::parliament_candidate_testing::candidate_policy_attempt_error(error)
+            {
+                ExecutionAttemptError::Deferred(original) => {
+                    attempt_refusal(state, ExecutionAttemptError::Deferred(original))
+                }
+                ExecutionAttemptError::Rejected(reason) => refused(reason),
+            }
+        })?;
     ParliamentBallotPurposeV1::select_v1(candidate.as_ref()).ok_or_else(|| {
         refused(
             "no anonymous Parliament attempt may be created: the release is unqualified and \
@@ -176,17 +194,29 @@ fn frozen_policy(
     let custom = parameters.custom();
     let lifecycle = custom
         .get(ParliamentLifecycleParametersV1::parameter_id())
-        .map(ParliamentLifecycleParametersV1::from_custom_parameter)
-        .transpose()
-        .map_err(|error| refused(format!("committed gov.parliament_lifecycle: {error}")))?
-        .unwrap_or_default();
+        .map(|parameter| {
+            crate::runtime::change_set::anonymous::policy::<ParliamentLifecycleParametersV1>(
+                parameter,
+                ParliamentLifecycleParametersV1::MAX_PAYLOAD_BYTES,
+            )
+        })
+        .transpose();
     let ballot = custom
         .get(ParliamentBallotParametersV1::parameter_id())
-        .map(ParliamentBallotParametersV1::from_custom_parameter)
-        .transpose()
-        .map_err(|error| refused(format!("committed gov.parliament_ballot: {error}")))?
-        .unwrap_or_default();
+        .map(|parameter| {
+            crate::runtime::change_set::anonymous::policy::<ParliamentBallotParametersV1>(
+                parameter, 512,
+            )
+        })
+        .transpose();
     let block_cadence_ms = parameters.sumeragi().block_cadence_ms.get();
+    let lifecycle = lifecycle
+        .map_err(|error| attempt_refusal(state, error))?
+        .unwrap_or_default();
+    lifecycle.validate().map_err(refused)?;
+    let ballot = ballot
+        .map_err(|error| attempt_refusal(state, error))?
+        .unwrap_or_default();
     FrozenParliamentAttemptPolicyV1::freeze_v1(
         pipeline,
         &lifecycle,
@@ -203,72 +233,124 @@ impl Execute for CreateAnonymousParliamentAttemptV1 {
         _authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if let Some(reason) = self.proposal.first_release_exact_json_u64_invariant_error() {
-            return Err(refused(reason));
+        if matches!(&self.proposal, ProposalKind::RuntimeUpgrade(_)) {
+            return Err(refused(
+                "runtime proposals require their original signed runtime creator",
+            ));
         }
-        let purpose = committed_purpose(state)?;
-        let content = self.proposal_content_id();
-        let id = self.governance_attempt_id();
-        let attempts = &state.world.parliament_anonymous_attempts;
-        if attempts.get(&id).is_some() {
-            return Err(refused("the anonymous Parliament attempt already exists"));
-        }
-        // A retry continues its terminal, non-enacted predecessor and inherits the redraw
-        // units the proposal has consumed (design §8.1).
-        let randomness_redraws_before_attempt = match self.attempt_sequence.checked_sub(1) {
-            None => 0,
-            Some(previous) => {
-                let predecessor = attempts
-                    .get(&anonymous_governance_attempt_id_v1(content, previous))
-                    .ok_or_else(|| {
-                        refused("an anonymous Parliament retry requires its exact predecessor")
-                    })?;
-                if !matches!(
-                    predecessor.attempt().status,
-                    GovernanceAttemptStatusV1::Rejected
-                        | GovernanceAttemptStatusV1::Superseded
-                        | GovernanceAttemptStatusV1::ExecutionFailed
-                ) {
-                    return Err(refused(
-                        "an anonymous Parliament retry requires a terminal non-enacted predecessor",
-                    ));
-                }
-                predecessor
-                    .randomness_redraws_used()
-                    .map_err(|error| refused(format!("predecessor redraw count: {error}")))?
-            }
-        };
-        // The admission cap: one casting position per nonterminal attempt (design §9).
-        let limit = casting_window_limit(&*state.world)
-            .map_err(|error| refused(format!("admission cap: {error}")))?;
-        if nonterminal_attempts(&state.world.parliament_anonymous_due) >= limit {
-            return Err(refused(format!(
-                "the anonymous Parliament admission cap of {limit} nonterminal attempts is reached"
-            )));
-        }
-        let (risk_tier, pipeline) = anonymous_pipeline_v1(&self.proposal);
-        let policy = frozen_policy(&pipeline, state)?;
-        let expected_head = parliament_expected_head_v1(&self.proposal, state)
-            .map_err(|error| attempt_refusal(state, error))?;
-        let created_at_ms = block_time_ms(state)?;
-        // The attempt stores the proposal; its reducer derives the digest and the effect hash
-        // and checks the snapshot and the head against it.
-        let snapshot = self.canonical_attempt(risk_tier);
-        let attempt = AnonymousParliamentAttemptStateV1::try_new(
-            purpose,
-            snapshot,
-            policy,
-            self.proposal,
-            expected_head,
-            AnonymousAttemptOriginV1 {
-                created_at_ms,
-                randomness_redraws_before_attempt,
-            },
-        )
-        .map_err(|error| anonymous_refusal(&error, state))?;
-        store_attempt(&mut state.world, id, attempt);
-        Ok(())
+        create_attempt(self, state)
     }
+}
+
+mod runtime_upgrade;
+
+/// Store only metadata derived by this module's public instruction owners.
+fn create_attempt(
+    request: CreateAnonymousParliamentAttemptV1,
+    state: &mut StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    if let Some(reason) = request
+        .proposal
+        .first_release_exact_json_u64_invariant_error()
+    {
+        return Err(refused(reason));
+    }
+    let purpose = committed_purpose(state)?;
+    let content = iroha_data_model::governance::types::ProposalContentId::derive_checked_v1(
+        &request.proposal,
+    )
+    .map_err(|original| {
+        state.attempt_error_to_instruction_error(
+            crate::execution_attempt::canonical_decode_attempt_error(original, refused),
+        )
+    })?;
+    let id =
+        iroha_data_model::governance::anonymous_ballot::checked_anonymous_governance_attempt_id_v1(
+            content,
+            request.attempt_sequence,
+        )
+        .map_err(|original| {
+            state.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_attempt_error(original, refused),
+            )
+        })?;
+    let previous_id = request.attempt_sequence.checked_sub(1)
+        .map(|previous| iroha_data_model::governance::anonymous_ballot::checked_anonymous_governance_attempt_id_v1(content, previous))
+        .transpose().map_err(|original| state.attempt_error_to_instruction_error(crate::execution_attempt::canonical_decode_attempt_error(original, refused)))?;
+    let attempts = &state.world.parliament_anonymous_attempts;
+    if attempts.get(&id).is_some() {
+        return Err(refused("the anonymous Parliament attempt already exists"));
+    }
+    // A retry continues its terminal, non-enacted predecessor and inherits the redraw
+    // units the proposal has consumed (design §8.1).
+    let randomness_redraws_before_attempt = match previous_id {
+        None => 0,
+        Some(previous) => {
+            let predecessor = attempts.get(&previous).ok_or_else(|| {
+                refused("an anonymous Parliament retry requires its exact predecessor")
+            })?;
+            if !matches!(
+                predecessor.attempt().status,
+                GovernanceAttemptStatusV1::Rejected
+                    | GovernanceAttemptStatusV1::Superseded
+                    | GovernanceAttemptStatusV1::ExecutionFailed
+            ) {
+                return Err(refused(
+                    "an anonymous Parliament retry requires a terminal non-enacted predecessor",
+                ));
+            }
+            predecessor
+                .randomness_redraws_used()
+                .map_err(|error| refused(format!("predecessor redraw count: {error}")))?
+        }
+    };
+    // The admission cap: one casting position per nonterminal attempt (design §9).
+    let limit = casting_window_limit(&*state.world).map_err(|error| match error {
+        crate::governance::parliament_anonymous::world_pass::AnonymousPassWorldErrorV1::Execution(original) => attempt_refusal(state, ExecutionAttemptError::Deferred(original)),
+        error => refused(format!("admission cap: {error}")),
+    })?;
+    if nonterminal_attempts(&state.world.parliament_anonymous_due) >= limit {
+        return Err(refused(format!(
+            "the anonymous Parliament admission cap of {limit} nonterminal attempts is reached"
+        )));
+    }
+    let (risk_tier, pipeline) = anonymous_pipeline_v1(&request.proposal);
+    let policy = frozen_policy(&pipeline, state)?;
+    let expected_head = match &request.proposal {
+        ProposalKind::RuntimeUpgrade(proposal) => {
+            crate::runtime::change_set::anonymous::expected_head(proposal, state)
+        }
+        other => parliament_expected_head_v1(other, state),
+    }
+    .map_err(|error| attempt_refusal(state, error))?;
+    let created_at_ms = block_time_ms(state)?;
+    // The attempt stores the proposal; its reducer derives the digest and the effect hash
+    // and checks the snapshot and the head against it.
+    let snapshot =
+        iroha_data_model::governance::anonymous_ballot::AnonymousGovernanceAttemptV1::try_new_v1(
+            content,
+            request.attempt_sequence,
+            risk_tier,
+        )
+        .map_err(|original| {
+            state.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_attempt_error(original, refused),
+            )
+        })?;
+    let attempt = AnonymousParliamentAttemptStateV1::try_new(
+        purpose,
+        snapshot,
+        policy,
+        request.proposal,
+        expected_head,
+        AnonymousAttemptOriginV1 {
+            created_at_ms,
+            randomness_redraws_before_attempt,
+        },
+    )
+    .map_err(|error| anonymous_refusal(&error, state))?;
+    store_attempt(&mut state.world, id, attempt);
+    Ok(())
 }
 
 impl Execute for SubmitAnonymousParliamentTransitionV1 {

@@ -915,6 +915,29 @@ pub struct StartupArgs {
     /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
     #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
     pub check_replay: bool,
+    /// Restore the exact retained checkpoint at HEIGHT and reproduce the stopped store's
+    /// certified suffix before signing one startup-floor statement as Norito JSON.
+    ///
+    /// This explicit signing action is separate from `--check-replay`, which never signs.
+    /// It starts no live node or runtime-provider service and writes no original chain State.
+    #[arg(
+        long,
+        value_name = "HEIGHT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        conflicts_with_all = [
+            "check_replay", "check_config", "check_storage", "json",
+            "managed_listeners", "managed_listener_deadline_ns",
+            "export_runtime_checkpoint", "receive_runtime_checkpoint_from",
+            "runtime_checkpoint_api_token_file", "runtime_checkpoint_output",
+            "rehearse_sorafs_repair", "repair_execution_time_ms",
+            "rehearse_taira_activation", "rehearse_taira_sponsor_stage",
+            "runtime_addition_review_request", "runtime_addition_review_output",
+            "world_payout_export_request", "world_payout_export_output",
+            "ironwood_context_export_request", "ironwood_context_export_output",
+            "require_genesis_inrou_deployment_authority"
+        ]
+    )]
+    pub attest_runtime_floor: Option<u64>,
     /// After matched replay, export an existing checkpoint at H with certified prefix rows,
     /// full signed genesis and H+1. The fresh output contains no transaction bodies 2..=H.
     #[arg(long, value_name = "HEIGHT", requires_all = ["check_replay", "runtime_checkpoint_output"], conflicts_with_all = ["rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request", "world_payout_export_request", "ironwood_context_export_request"])]
@@ -1450,6 +1473,19 @@ fn freeze_lane_manifests_for_startup_replay(
 fn freeze_lane_compliance_for_startup_replay(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
+    let engine = load_lane_compliance_for_startup_replay(nexus)?;
+    if let Some(engine) = &engine {
+        engine
+            .validate_active_catalog(&nexus.lane_catalog)
+            .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    }
+    Ok(engine)
+}
+
+/// Retain policy files once; exact checkpoint restore validates their effective catalog later.
+fn load_lane_compliance_for_startup_replay(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
     if !nexus.compliance.enabled {
         return Ok(None);
     }
@@ -1458,9 +1494,6 @@ fn freeze_lane_compliance_for_startup_replay(
             .attach("lane compliance enabled but no policy_dir configured")
     })?;
     let engine = LaneComplianceEngine::from_directory(dir, nexus.compliance.audit_only)
-        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-    engine
-        .validate_active_catalog(&nexus.lane_catalog)
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
     Ok(Some(Arc::new(engine)))
 }
@@ -6209,8 +6242,8 @@ fn read_config_and_genesis_with_filesystem_space(
             apply_concurrency_config(&config.concurrency)
         };
         let banner = scheduler_banner_line(core_count);
-        if args.startup.check_replay {
-            // --check-replay executes the real VM and reserves stdout for its JSON report.
+        if args.startup.check_replay || args.startup.attest_runtime_floor.is_some() {
+            // Offline replay and explicit floor signing reserve stdout for one JSON result.
             eprintln!("{banner}");
         } else {
             println!("{banner}");
@@ -8453,6 +8486,9 @@ fn run_main_with_config_guard(
                 "deployment launcher rejected parsed configuration: {error}"
             ))
         })?;
+    }
+    if let Some(height) = args.startup.attest_runtime_floor {
+        return replay_check::run_runtime_floor_attestation(&config, height);
     }
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
@@ -11470,6 +11506,82 @@ mod tests {
         #[allow(unused_imports)]
         use super::*;
         #[test]
+        fn runtime_floor_attestation_is_standalone_and_requires_positive_height() {
+            for height in ["1", "42", "18446744073709551615"] {
+                let parsed =
+                    Args::try_parse_from(["iroha3d", "--attest-runtime-floor", height]).unwrap();
+                assert_eq!(
+                    parsed.startup.attest_runtime_floor,
+                    Some(height.parse().unwrap())
+                );
+                assert!(!parsed.startup.check_replay);
+                assert!(!parsed.startup.check_config);
+                assert!(!parsed.startup.check_storage);
+            }
+            assert_eq!(
+                Args::try_parse_from(["iroha3d", "--attest-runtime-floor", "0"])
+                    .unwrap_err()
+                    .kind(),
+                clap::error::ErrorKind::ValueValidation
+            );
+            let replay = Args::try_parse_from(["iroha3d", "--check-replay"]).unwrap();
+            assert!(replay.startup.check_replay);
+            assert_eq!(replay.startup.attest_runtime_floor, None);
+        }
+
+        #[test]
+        fn runtime_floor_attestation_conflicts_with_other_startup_actions() {
+            let incompatible: &[&[&str]] = &[
+                &["--check-replay"],
+                &["--check-config"],
+                &["--check-storage"],
+                &["--json"],
+                &[
+                    "--managed-listeners",
+                    "/private/listeners",
+                    "--managed-listener-deadline-ns",
+                    "42",
+                ],
+                &["--managed-listener-deadline-ns", "42"],
+                &[
+                    "--receive-runtime-checkpoint-from",
+                    "https://peer.example",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+                &[
+                    "--check-replay",
+                    "--export-runtime-checkpoint",
+                    "2",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+                &["--runtime-checkpoint-api-token-file", "/private/token"],
+                &["--runtime-checkpoint-output", "/private/checkpoint"],
+                &["--rehearse-sorafs-repair", "/private/repair.nrt"],
+                &["--repair-execution-time-ms", "1000"],
+                &["--rehearse-taira-activation", "/private/pool.json"],
+                &["--rehearse-taira-sponsor-stage", "/private/stage.json"],
+                &["--runtime-addition-review-request", "/private/request.json"],
+                &["--runtime-addition-review-output", "/private/review"],
+                &["--world-payout-export-request", "/private/request.json"],
+                &["--world-payout-export-output", "/private/payout"],
+                &["--ironwood-context-export-request", "/private/request.json"],
+                &["--ironwood-context-export-output", "/private/ironwood"],
+                &["--require-genesis-inrou-deployment-authority", "account"],
+            ];
+            for other in incompatible {
+                let mut arguments = vec!["iroha3d", "--attest-runtime-floor", "42"];
+                arguments.extend_from_slice(other);
+                assert_eq!(
+                    Args::try_parse_from(arguments).unwrap_err().kind(),
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "floor signing must refuse {other:?} even when its required action is absent"
+                );
+            }
+        }
+
+        #[test]
         fn runtime_checkpoint_receive_requires_fresh_output_and_excludes_other_startup_actions() {
             let valid = [
                 "iroha3d",
@@ -13045,6 +13157,7 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    attest_runtime_floor: None,
                     export_runtime_checkpoint: None,
                     receive_runtime_checkpoint_from: None,
                     runtime_checkpoint_api_token_file: None,
@@ -13143,6 +13256,7 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    attest_runtime_floor: None,
                     export_runtime_checkpoint: None,
                     receive_runtime_checkpoint_from: None,
                     runtime_checkpoint_api_token_file: None,

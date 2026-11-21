@@ -2262,6 +2262,7 @@ pub fn check_genesis_block(
     check_genesis_execution_results(block)
 }
 pub(crate) mod genesis_crypto_policy;
+pub(crate) mod genesis_child_runtime;
 pub(crate) mod genesis_policies;
 pub(crate) mod genesis_staking_policy;
 
@@ -5181,6 +5182,12 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(initial) = state_block.genesis_staking_policy.as_ref()
+                && let Err(error) = initial.require_unchanged(&state_block)
+            {
+                drop(state_block);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(initial) = state_block.genesis_child_runtime.as_ref()
                 && let Err(error) = initial.require_unchanged(&state_block)
             {
                 drop(state_block);

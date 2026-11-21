@@ -312,6 +312,16 @@ capture_world_table_once!(
     "world.runtime_retirements"
 );
 capture_world_table_once!(
+    capture_runtime_generic_artifacts_once,
+    runtime_generic_artifacts,
+    "world.runtime_generic_artifacts"
+);
+capture_world_table_once!(
+    capture_runtime_generic_values_once,
+    runtime_generic_values,
+    "world.runtime_generic_values"
+);
+capture_world_table_once!(
     capture_runtime_escrow_captures_once,
     runtime_escrow_captures,
     "world.runtime_escrow_captures"
@@ -985,6 +995,8 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_c10_triggers_once::MATERIALIZER,
     capture_kagemusha_spartan_programs_once::MATERIALIZER,
     capture_runtime_retirements_once::MATERIALIZER,
+    capture_runtime_generic_values_once::MATERIALIZER,
+    capture_runtime_generic_artifacts_once::MATERIALIZER,
     capture_runtime_escrow_captures_once::MATERIALIZER,
     capture_runtime_migrations_once::MATERIALIZER,
     capture_runtime_boundaries_once::MATERIALIZER,
@@ -1460,6 +1472,8 @@ mod tests {
             "world.c10_triggers",
             "world.kagemusha_spartan_programs",
             "world.runtime_retirements",
+            "world.runtime_generic_values",
+            "world.runtime_generic_artifacts",
             "world.runtime_escrow_captures",
             "world.runtime_migrations",
             "world.runtime_boundaries",

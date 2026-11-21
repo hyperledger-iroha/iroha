@@ -179,6 +179,56 @@ pub fn decode_open_request_peer(wire: &[u8]) -> Result<OpenRequestPeer<'_>> {
     Ok(originals)
 }
 
+impl PreparedOperation {
+    /// Reconstruct a raw Send's original peer Request using its exact signed tape, receiver
+    /// credential, issuer certificates and fee schedule. The supplied canonical AccountId
+    /// is checked against the destination digest signed by both receiver and issuer.
+    ///
+    /// # Errors
+    /// Rejects any other operation, incomplete originals, or a different peer message.
+    pub fn verify_recovered_send_request(&self, supplied: &[u8]) -> Result<()> {
+        let ExactOperationWitness::Send(send) = self.witness.as_ref() else {
+            return Err(Error::AuthorityMismatch("Request recovery requires a Send"));
+        };
+        let (_, account) = PeerOriginals::OpenRequest
+            .decode(supplied)
+            .map_err(Error::Rejected)?;
+        let mut body = send.request.body;
+        // Specialization fills only the payer wallet, account, and Send sequence.
+        body[66..130].fill(0);
+        body[194..210].fill(0);
+        let tape = [body.as_slice(), &send.request.signature].concat();
+        let originals = &send.request_originals;
+        let certificates = originals
+            .certificates
+            .iter()
+            .flat_map(certificate_bytes)
+            .collect::<Vec<_>>();
+        let schedule = if body[258..290] == [0; 32] {
+            Vec::new()
+        } else {
+            [
+                send.fee_schedule.body.as_slice(),
+                &send.fee_schedule.signature,
+            ]
+            .concat()
+        };
+        let recovered = encode_open_request_peer(
+            &tape,
+            &credential_bytes(&originals.receiver),
+            &certificates,
+            &schedule,
+            account,
+        )?;
+        if recovered != supplied {
+            return Err(Error::AuthorityMismatch(
+                "released Send exact original Request",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl NativeEngine {
     /// Recheck an unselected Send review against the protected observation and current time.
     /// Selected recovery uses its historical observations without requiring a new clock sample.

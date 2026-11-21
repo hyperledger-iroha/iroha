@@ -93,6 +93,7 @@ impl PrivateSettlementPoolKeyExtV1 for PrivateSettlementPoolKeyV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementRootKeyV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct PrivateSettlementRootKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
     pub(crate) epoch: u64,
@@ -122,6 +123,7 @@ pub struct PrivateSettlementRootKeyV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockKeyV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum PrivateSettlementStagedLockKeyV1 {
     /// One exact complete-bundle Prepare registration.
     Bundle(Hash),
@@ -153,6 +155,7 @@ pub enum PrivateSettlementStagedLockKeyV1 {
     clippy::large_enum_variant,
     reason = "The canonical staged-lock schema retains the complete barrier in its bundle variant"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum PrivateSettlementStagedLockRecordV1 {
     /// Complete public all-Prepare barrier and its global registration height.
     Bundle {
@@ -213,6 +216,7 @@ impl_private_settlement_json_key_v1!(PrivateSettlementRootKeyV1, PrivateSettleme
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementFinalizationReferenceV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) bundle_id: Hash,
     pub(crate) receipt_digest: Hash,
@@ -226,6 +230,7 @@ pub struct PrivateSettlementFinalizationReferenceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementRootProvenanceV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum PrivateSettlementRootProvenanceV1 {
     Governance {
         governance_digest: Hash,
@@ -248,6 +253,7 @@ pub enum PrivateSettlementRootProvenanceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputRecordV1"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct PrivateSettlementOutputRecordV1 {
     pub(crate) reference: PrivateSettlementFinalizationReferenceV1,
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,

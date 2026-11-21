@@ -5,7 +5,11 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
         let source = "src/kagemusha_wallet_ffi/apple_debit_key.m";
         println!("cargo:rerun-if-changed={source}");
-        cc::Build::new()
+        let mut apple = cc::Build::new();
+        if std::env::var_os("CARGO_FEATURE_SPARTAN_DEVICE_FIXTURE").is_some() {
+            apple.define("IROHA_SPARTAN_DEVICE_FIXTURE", None);
+        }
+        apple
             .file(source)
             .flag("-fobjc-arc")
             .compile("kagemusha_apple_debit_key");

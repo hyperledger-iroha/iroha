@@ -258,6 +258,9 @@ pub struct ReplayCheckReport {
 /// [`ReplayCheckOutcome::Diverged`] report.
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayCheckError {
+    /// A capability was requested, but the actual replay did not complete successfully.
+    #[error("replay did not produce a matched nonempty execution: {0:?}")]
+    NotMatched(Box<ReplayCheckReport>),
     /// The replay State does not own a temporary copy.
     #[error("replay copy: {0}")]
     Destination(&'static str),
@@ -439,6 +442,39 @@ pub fn check_replay(
     inputs: ReplayCheckInputs,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<ReplayCheckReport, ReplayCheckError> {
+    check_replay_inner(inputs, progress, &mut |_| {})
+}
+
+/// The State owned by a completed ordinary replay, never reconstructed from report data.
+pub(crate) struct MatchedReplay {
+    state: Arc<State>,
+}
+
+impl MatchedReplay {
+    pub(crate) fn state(&self) -> &State {
+        &self.state
+    }
+}
+
+/// Retain the actual successful execution continuation for exact-checkpoint attestation.
+pub(crate) fn check_replay_retained(
+    inputs: ReplayCheckInputs,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<MatchedReplay, ReplayCheckError> {
+    let mut matched = None;
+    let report = check_replay_inner(inputs, progress, &mut |state| {
+        matched = Some(MatchedReplay {
+            state: Arc::clone(state),
+        });
+    })?;
+    matched.ok_or_else(|| ReplayCheckError::NotMatched(Box::new(report)))
+}
+
+fn check_replay_inner(
+    inputs: ReplayCheckInputs,
+    progress: &mut dyn FnMut(u64, u64),
+    on_matched: &mut dyn FnMut(&Arc<State>),
+) -> Result<ReplayCheckReport, ReplayCheckError> {
     let ReplayCheckInputs {
         state,
         source_lanes,
@@ -602,6 +638,9 @@ pub fn check_replay(
         }
         Err(error) => return Err(ReplayCheckError::StateRoot(Box::new(error))),
     };
+    if matches!(outcome, ReplayCheckOutcome::Matched) {
+        on_matched(&state);
+    }
     Ok(ReplayCheckReport {
         start,
         replayed_to,

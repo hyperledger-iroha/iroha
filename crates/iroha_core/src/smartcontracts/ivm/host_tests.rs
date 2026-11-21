@@ -7571,6 +7571,7 @@ fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
     let source_call = Hash::from(source.hash_as_entrypoint());
     let mut stx = block.transaction_for_fastpq_testing(source_call);
     let artifacts = HostExecutionArtifacts {
+        carrier_queue_backing: None,
         x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
@@ -7642,6 +7643,7 @@ fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
             .expect("completed fixture gas quote");
     assert!(confidential_gas_delta > 0);
     let artifacts = HostExecutionArtifacts {
+        carrier_queue_backing: None,
         x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
@@ -7834,6 +7836,7 @@ seiyaku DurableOwner {
         .expect("foreign durable path");
     assert!(!authorization.owns_durable_state_path(&foreign_path));
     let artifacts = HostExecutionArtifacts {
+        carrier_queue_backing: None,
         x509_queue_backing: None,
         queued: Vec::new(),
         entrypoint_authorization: Some(authorization.clone()),

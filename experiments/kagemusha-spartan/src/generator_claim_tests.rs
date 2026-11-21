@@ -88,6 +88,65 @@ fn exact_private_generator_fold_native_both_curves() {
     native::<Pallas>();
     native::<Vesta>();
 }
+#[test]
+fn private_predecessor_schedules_match_the_complete_four_source_fold() {
+    fn check<C: PastaCurve>()
+    where
+        F<C>: Scalar,
+    {
+        let gens = Gens::<C>::new(16);
+        let claims = sources(&gens, 4);
+        let relation = [17; 32];
+        let purpose = b"compare complete private fold";
+        let entropy = ProofEntropy::fresh().unwrap();
+        let unsupported = gens.prefix(15);
+        assert!(matches!(
+            prove_predecessors(
+                &unsupported,
+                relation,
+                [claims[0].clone(), claims[1].clone()],
+                None,
+                &entropy,
+                purpose,
+            ),
+            Err("generator source dimension")
+        ));
+        for joined in [false, true] {
+            let incoming = joined.then_some([claims[2].us.as_slice(), claims[3].us.as_slice()]);
+            let parents = [claims[0].clone(), claims[1].clone()];
+            let (actual, actual_trace) = prove_predecessors(
+                &gens,
+                relation,
+                parents.clone(),
+                incoming,
+                &entropy,
+                purpose,
+            )
+            .unwrap();
+            let all = if joined {
+                claims.clone()
+            } else {
+                parents.iter().chain(&parents).cloned().collect()
+            };
+            let (expected, expected_trace) =
+                prove(&gens, relation, all, &entropy, purpose).unwrap();
+            assert_eq!(actual_trace.shared, expected_trace.shared);
+            assert_eq!(actual.d, expected.d);
+            assert_eq!(actual.lr, expected.lr);
+            assert_eq!(actual.output.g, expected.output.g);
+            assert!(verify(&gens, relation, &actual));
+            let [mut wrong, other] = parents;
+            wrong.g = other.g;
+            assert!(matches!(
+                prove_predecessors(&gens, relation, [wrong, other], incoming, &entropy, purpose),
+                Err("wallet predecessor generator claim")
+            ));
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn holds<S: Scalar + PoseidonField>(b: &(UniformCircuit<S>, Instance<S>, Witness<S>)) -> bool {
     let mut v = b.2.w.clone();
     let rel =

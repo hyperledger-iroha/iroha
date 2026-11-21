@@ -188,6 +188,9 @@ pub(super) fn verify_retained_credit(
     slot: &[u8; 32],
     parameters: &native::AuthenticatedParameters,
 ) -> Result<String> {
+    if let Some(wire) = std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LATER_STATUS") {
+        return verify_later_credit(root, runtime, slot, parameters, Path::new(&wire));
+    }
     let head = runtime.output(slot, &[0; 32], 3)?;
     if head.status != 101 || head.bytes.len() != 196 || head.bytes[2] != 3 {
         return Err("retained credit needs the current Released head".into());
@@ -223,6 +226,75 @@ pub(super) fn verify_retained_credit(
     }
     runtime.close()?;
     Ok(format!("Verified retained credited receipt: {} full IPM1 bytes, {} payload bytes", status.len(), status.len()-84))
+}
+
+/// Run on a private copy of the software wallet. A first checks B's retained later-head
+/// status. A then releases its own independent Send after Receive and issues evidence for
+/// that Receive from its new head using the normal C entry and its protected map index.
+fn verify_later_credit(
+    root: &Path,
+    runtime: &mut SessionAdapter,
+    slot: &[u8; 32],
+    parameters: &native::AuthenticatedParameters,
+    remote_path: &Path,
+) -> Result<String> {
+    let read = |name: &str| std::fs::read(root.join(name)).map_err(fail);
+    let engine = native::NativeEngine::default();
+    let original = read("complete-payment.bin")?;
+    let outgoing = engine.verify_payment(&original, parameters).map_err(fail)?;
+    let send = outgoing.receipt().body[114..146].try_into().expect("Send operation");
+    let remote = std::fs::read(remote_path).map_err(fail)?;
+    let request = runtime.open_request(slot, &[0x39; 32], 10)?;
+    if !runtime.verify_credit_status(*slot, send, &[], &remote)?
+        || runtime.verify_credit_status(*slot, send, &request, &remote).is_ok()
+    {
+        return Err("payer C status verification did not bind the original Send and Request".into());
+    }
+    let mut damaged = remote.clone();
+    *damaged.last_mut().ok_or("empty later-head status")? ^= 1;
+    if runtime.verify_credit_status(*slot, send, &[], &damaged).is_ok() {
+        return Err("payer C verification accepted a changed later-head proof".into());
+    }
+    eprintln!("Payer C entry verified {} bytes from the counterparty's later Send", remote.len());
+
+    let before = runtime.output(slot, &[0; 32], 3)?;
+    if before.status != 101 || before.bytes.len() != 196 || before.bytes[2] != 3 {
+        return Err("later-head fixture requires a released wallet".into());
+    }
+    let action = read("competing-send-request.bin")?;
+    let review = runtime.prepare(slot, &action, &[])?;
+    if review.review.len() != 291 || review.review[2] != 3 {
+        return Err("unexpected later Send review".into());
+    }
+    let later = review.review[67..99].try_into().expect("review operation");
+    if before.bytes[68..100] == later || send == later {
+        return Err("later-head fixture requires an independent fresh Send after Receive".into());
+    }
+    HostConfirmation(Default::default()).confirm(&review.review)?;
+    let completed = runtime.execute(review.token)?;
+    if completed.status != 1 {
+        return Err(format!("later Send did not release, status {} detail {}", completed.status, completed.detail));
+    }
+    runtime.discard(review.token)?;
+    let head = runtime.output(slot, &[0; 32], 3)?;
+    if head.status != 101 || head.bytes.len() != 196 || head.bytes[68..100] != later {
+        return Err("later Send is not the released head".into());
+    }
+    let exact = read("incoming-payment.bin")?;
+    let wire = runtime.credit_status_for_payment(*slot, [0x39; 32], later, &exact)?;
+    let incoming = engine.verify_payment(&exact, parameters).map_err(fail)?;
+    let checked = engine.verify_credit_status_peer(&wire, &request, &incoming, parameters).map_err(fail)?;
+    if checked != native::VerifiedCreditStatus::Credited
+        || wire == remote || wire.len() > 10_084
+        || runtime.credit_status(*slot, [0x39; 32], later).is_ok()
+        || runtime.credit_status_for_payment(*slot, [0x39; 32], later, &original).is_ok()
+        || runtime.output(slot, &[0; 32], 3)?.bytes != head.bytes
+    {
+        return Err("later Send C status did not bind its receiver head and exact original Payment".into());
+    }
+    save_credit_measurement(root, "local-later-send", &wire)?;
+    runtime.close()?;
+    Ok(format!("Verified both C delivery paths, {} bytes from remote later Send and {} bytes from local later Send", remote.len(), wire.len()))
 }
 
 fn save_credit_measurement(root: &Path, direction: &str, bytes: &[u8]) -> Result<()> {

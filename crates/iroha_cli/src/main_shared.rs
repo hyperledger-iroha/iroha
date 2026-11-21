@@ -881,6 +881,7 @@ impl Command {
         match self {
             Self::App(command) => command.allows_fallback_config(),
             Self::Tools(command) => command.allows_fallback_config(),
+            Self::Ops(ops::Command::Runtime(command)) => command.allows_fallback_config(),
             Self::Account(_)
             | Self::Tx(_)
             | Self::Explorer(_)
@@ -901,6 +902,7 @@ impl Command {
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Contract(command) => command.allows_fallback_config(),
             Self::Tools(command) => command.allows_fallback_config(),
+            Self::Ops(ops::Command::Runtime(command)) => command.allows_fallback_config(),
             _ => false,
         }
     }

@@ -8793,6 +8793,7 @@ fn decode_world_fields(
     let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
     let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
         take_required(&mut map, "runtime_selection")?;
+    let runtime_child_admin_state = take_required(&mut map, "runtime_child_admin_state")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_protocol_policies: Storage<
@@ -9171,6 +9172,20 @@ fn decode_world_fields(
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     > = take_required(&mut map, "runtime_retirements")?;
+    let runtime_generic_values = map
+        .remove("runtime_generic_values")
+        .ok_or_else(|| json::Error::missing_field("runtime_generic_values"))?
+        .decode_carrier_store(
+            execution_budget,
+            snapshot_storage::carrier::restore_carriers,
+        )?;
+    let runtime_generic_artifacts = map
+        .remove("runtime_generic_artifacts")
+        .ok_or_else(|| json::Error::missing_field("runtime_generic_artifacts"))?
+        .decode_carrier_store(
+            execution_budget,
+            snapshot_storage::carrier::restore_artifacts,
+        )?;
     let runtime_escrow_captures: Storage<
         iroha_data_model::escrow::EscrowId,
         iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
@@ -9308,6 +9323,8 @@ fn decode_world_fields(
         c10_trigger_candidates,
         kagemusha_spartan_programs,
         runtime_retirements,
+        runtime_generic_values,
+        runtime_generic_artifacts,
         runtime_escrow_captures,
         runtime_migrations,
         runtime_boundaries,
@@ -9359,6 +9376,7 @@ fn decode_world_fields(
         runtime_containments,
         runtime_definitions,
         runtime_selection,
+        runtime_child_admin_state,
         privacy_consensus_policy,
         privacy_protocol_policies,
         kagemusha_wallet_ledger,
@@ -9606,14 +9624,22 @@ fn validate_runtime_manifest_and_retirement_shapes(
     }
     let current = world.view();
     validate(&current, "world.runtime_retirements")?;
-    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&current)
-        .map_err(|error| json::Error::InvalidField { field: "world.kagemusha_spartan_programs".into(), message: error.to_string() })?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&current).map_err(|error| {
+        json::Error::InvalidField {
+            field: "world.kagemusha_spartan_programs".into(),
+            message: error.to_string(),
+        }
+    })?;
     crate::smartcontracts::code::registered_manifest::validate_cut(&current, budget)?;
     drop(current);
     let previous = world.try_block_and_revert(budget)?;
     validate(&previous, "world.runtime_retirements.revert")?;
-    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&previous)
-        .map_err(|error| json::Error::InvalidField { field: "world.kagemusha_spartan_programs.revert".into(), message: error.to_string() })?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&previous).map_err(|error| {
+        json::Error::InvalidField {
+            field: "world.kagemusha_spartan_programs.revert".into(),
+            message: error.to_string(),
+        }
+    })?;
     crate::smartcontracts::code::registered_manifest::validate_cut(&previous, budget)?;
     Ok(())
 }
@@ -9688,12 +9714,23 @@ fn validate_runtime_retirement_roots(state: &State) -> Result<(), MergeLedgerCom
 #[path = "runtime_retirement_restore_tests.rs"]
 mod runtime_retirement_restore_tests;
 
+#[path = "child_runtime_snapshot.rs"]
+mod child_runtime_snapshot;
+
+#[path = "generic_carrier_snapshot.rs"]
+mod generic_carrier_snapshot;
+#[path = "runtime_support_restore.rs"]
+mod runtime_support_restore;
+
 fn parse_world(
     execution_budget: &iroha_allocation::AllocationBudget,
     map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
     let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
+    child_runtime_snapshot::validate_world(&world, execution_budget)?;
+    generic_carrier_snapshot::validate_world(&world, execution_budget)?;
+    runtime_support_restore::validate(&world.view())?;
     validate_runtime_manifest_and_retirement_shapes(&world, execution_budget)?;
     crate::runtime::ironwood::admission::world(&mut world).map_err(|error| match error {
         crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
@@ -11291,6 +11328,7 @@ fn build_state(
         *state.lane_privacy_registry.get_mut() = privacy;
     }
     validate_runtime_retirement_roots(&state)?;
+    child_runtime_snapshot::validate_identity(&state)?;
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(

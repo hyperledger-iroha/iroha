@@ -61,8 +61,8 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     };
     let (bundle, manifest, signature) = read_artifacts(artifacts)?;
     measurements.program_bundle(&bundle);
-    let parameters =
-        native::device_fixture::install(&bundle, &manifest, signature).map_err(fail)?;
+    let parameters = native::device_fixture::install(&bundle, &manifest, signature)
+        .map_err(|e| format!("authenticate signed device parameters: {e:?}"))?;
     let scheme = native::device_fixture::scheme();
     let mut f = advance::engineering_fixture::installed_fixture(
         scheme.clone(),
@@ -81,15 +81,16 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&custody)
-            .map_err(fail)?;
+            .map_err(|e| format!("create device custody directory: {e}"))?;
     }
     let mut provider: NativeProviderV1<_, _> = advance::KagemushaWalletProviderV1::open(
-        advance::KagemushaWalletStdFsV1::open(&custody).map_err(fail)?,
+        advance::KagemushaWalletStdFsV1::open(&custody)
+            .map_err(|e| format!("open device custody directory: {e:?}"))?,
         platform.clone(),
         scheme.scheme_id(),
         advance::KagemushaWalletProviderOptionsV1::default(),
     )
-    .map_err(fail)?;
+    .map_err(|e| format!("open device custody provider: {e:?}"))?;
     let saved = root.join("bootstrap-witness.norito");
     let (provider, witness) = if saved.exists() {
         let bytes = std::fs::read(&saved).map_err(fail)?;
@@ -127,14 +128,14 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         }
         (provider, witness)
     } else {
-        let mut enrollment =
-            EnrollmentOwnerV1::new(provider, f.config.clone()).map_err(|(_, e)| fail(e))?;
+        let mut enrollment = EnrollmentOwnerV1::new(provider, f.config.clone())
+            .map_err(|(_, e)| format!("open device enrollment: {e:?}"))?;
         let account = norito::encode_canonical(&f.account).map_err(fail)?;
         let asset = norito::encode_canonical(&f.asset).map_err(fail)?;
         let dispatch = PreKeyDispatchV1::decode(
             &enrollment
                 .begin(&[11; 32], &account, &asset)
-                .map_err(fail)?,
+                .map_err(|e| format!("begin device enrollment: {e:?}"))?,
         )
         .map_err(fail)?;
         let challenge = enrollment
@@ -143,10 +144,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
                     .encode_canonical()
                     .map_err(fail)?,
             )
-            .map_err(fail)?;
+            .map_err(|e| format!("accept device enrollment permit: {e:?}"))?;
         let progress = enrollment
             .authorize(&advance::engineering_fixture::sign(&f, &challenge))
-            .map_err(fail)?;
+            .map_err(|e| format!("authorize device enrollment: {e:?}"))?;
         let EnrollmentProgressV1::Evidence {
             slot,
             marker,
@@ -849,8 +850,8 @@ fn software_advance(
     })?;
     let capsule = prepared.capsule().clone();
     let completed = measurements.measure(operation, "finalize", || {
-        engine
-            .finalize(prepared, &receipt, parameters)
+        wallet
+            .finalize(engine, prepared, &receipt)
             .map_err(fail)
     })?;
     Ok((capsule, completed))
@@ -878,7 +879,14 @@ fn save_fixture_input(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 trait Confirmation {
-    fn confirm(&self, review: &[u8]) -> Result<()>;
+    fn confirm(&self, _review: &[u8]) -> Result<()> {
+        Err("this platform requires an exact Native confirmation adapter".into())
+    }
+
+    #[cfg(target_os = "android")]
+    fn confirm_android(&self, _owner: u64, _token: u64, _slot: &[u8; 32], _review: &[u8]) -> Result<()> {
+        Err("Android hardware confirmation adapter unavailable".into())
+    }
 }
 #[cfg(target_os = "android")]
 struct AndroidConfirmation {
@@ -887,31 +895,28 @@ struct AndroidConfirmation {
 }
 #[cfg(target_os = "android")]
 impl Confirmation for AndroidConfirmation {
-    fn confirm(&self, review: &[u8]) -> Result<()> {
-        let result = self
-            .vm
-            .attach_current_thread_for_scope(|env| {
-                let result = env.with_local_frame(8, |env| -> jni::errors::Result<bool> {
-                    let review = env.byte_array_from_slice(review)?;
-                    env.call_method(
-                        self.object.as_obj(),
-                        jni::jni_str!("confirm"),
-                        jni::jni_sig!("([B)Z"),
-                        &[jni::objects::JValue::Object(&review)],
-                    )?
-                    .z()
-                });
-                if result.is_err() {
-                    env.exception_clear();
-                }
-                result
-            })
-            .map_err(fail)?;
-        if result {
-            Ok(())
-        } else {
-            Err("hardware Send confirmation refused".into())
-        }
+    fn confirm_android(&self, owner: u64, token: u64, slot: &[u8; 32], review: &[u8]) -> Result<()> {
+        self.vm.attach_current_thread_for_scope(|env| {
+            let result = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
+                let slot = env.byte_array_from_slice(slot)?;
+                let review = env.byte_array_from_slice(review)?;
+                env.call_method(
+                    self.object.as_obj(),
+                    jni::jni_str!("confirm"),
+                    jni::jni_sig!("(JJ[B[B)V"),
+                    &[
+                        jni::objects::JValue::Long(owner as i64),
+                        jni::objects::JValue::Long(token as i64),
+                        jni::objects::JValue::Object(&slot),
+                        jni::objects::JValue::Object(&review),
+                    ],
+                )?.v()
+            });
+            if result.is_err() {
+                env.exception_clear();
+            }
+            result
+        }).map_err(|error| format!("Android protected Send confirmation refused: {error}"))
     }
 }
 
@@ -1081,7 +1086,11 @@ fn complete(
                 approval.confirm(&display)?;
                 runtime.confirm_apple_debit(prepared.token)?;
             }
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(target_os = "android")]
+            approval.confirm_android(
+                runtime.android_confirmation_handle(), prepared.token, &slot.0, &prepared.review,
+            )?;
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             approval.confirm(&prepared.review)?;
             Ok(())
         })?;
@@ -1120,6 +1129,21 @@ fn complete(
         Ok(())
     })?;
     Ok(record)
+}
+
+// Forward through the retail JNI decoder and the same live registry. No
+// independent response parser or unsigned approval bit enters the device.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_SpartanDeviceRuntimeNative_confirm(
+    env: jni::EnvUnowned<'_>,
+    class: jni::objects::JClass<'_>,
+    owner: jni::sys::jlong,
+    token: jni::sys::jlong,
+    message: jni::objects::JByteArray<'_>,
+    der: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobject {
+    connect_norito_bridge::android_fixture_debit_confirm(env, class, owner, token, message, der)
 }
 
 #[cfg(target_os = "android")]

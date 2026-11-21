@@ -1690,6 +1690,13 @@ fn parse_program_sections(
     {
         return Err(VMError::Trap(VmTrap::InvalidMetadata));
     }
+    // The independently selected carrier interface invokes only raw C10 `main`; it cannot
+    // borrow deployed-contract identity, private inputs or debug entrypoints from CNTR.
+    if syscall_policy == crate::SyscallPolicy::AbiV1GenericCarrier
+        && (contract_interface.is_some() || contract_debug.is_some())
+    {
+        return Err(VMError::Trap(VmTrap::InvalidMetadata));
+    }
     Ok(ParsedProgramMetadata {
         metadata,
         syscall_policy,

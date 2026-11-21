@@ -3,6 +3,11 @@
 use super::*;
 use group::{Curve, Group};
 
+#[path = "archive_remove_successor_tests.rs"]
+mod archive_remove_successor_tests;
+#[path = "signed_receive_scalar_tests.rs"]
+mod signed_receive_scalar_tests;
+
 #[test]
 #[ignore = "requires the signed device bundle and two distinct retained Payments"]
 fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
@@ -22,7 +27,23 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
     let second = std::fs::read(wallet.join("incoming-payment.bin")).unwrap();
     assert_ne!(first, second);
 
-    let engine = NativeEngine::default();
+    // Receive never needs a time observation, but its available memory may
+    // change between receipt-body validation and irreversible selection.
+    use iroha_data_model::kagemusha::{KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Memory(AtomicU64);
+    type TimeReading = (KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1);
+    impl TimeSource for Memory {
+        fn available_memory_bytes(&self) -> Result<u64> { Ok(self.0.load(Ordering::Relaxed)) }
+        fn prepared(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+            Err(Error::Unavailable("no Send clock in Receive fixture"))
+        }
+        fn observe(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+            Err(Error::Unavailable("no Send clock in Receive fixture"))
+        }
+    }
+    let memory = Arc::new(Memory(AtomicU64::new(u64::MAX)));
+    let engine = NativeEngine::with_time_source(memory.clone());
     let started = Instant::now();
     let accepted = engine.verify_payment(&first, &parameters).unwrap();
     let cold = started.elapsed();
@@ -58,7 +79,31 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
         capsule.wallet(),
     )
     .unwrap();
+    let started = Instant::now();
     let prepared = engine.resume(&capsule, &parameters).unwrap();
+    let reconstruction = started.elapsed();
+    let started = Instant::now();
+    engine.clone().recheck_selection(&prepared, &parameters).unwrap();
+    let live_recheck = started.elapsed();
+    let prepared = engine.retain_reconstruction(prepared, &parameters).unwrap();
+    eprintln!("signed Receive reconstruction {reconstruction:?}, same-owner live controls {live_recheck:?}");
+    memory.0.store(1, Ordering::Relaxed);
+    assert!(matches!(
+        engine.recheck_selection(&prepared, &parameters),
+        Err(Error::NotEnoughMemory { available: 1, .. })
+    ));
+    memory.0.store(u64::MAX, Ordering::Relaxed);
+    assert!(matches!(
+        NativeEngine::default().recheck_selection(&prepared, &parameters),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
+    let genesis = parameters.genesis_commit_verifier();
+    let checkpoint = genesis.export_epoch_checkpoint(genesis.initial_commit_epoch()).unwrap();
+    let reselected = engine.with_protected_epoch(&parameters, &checkpoint).unwrap();
+    assert!(matches!(
+        reselected.recheck_selection(&prepared, &parameters),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
     let released = engine
         .verify_staged_completion(&prepared, &record, &parameters)
         .unwrap();
@@ -89,7 +134,13 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
     );
 
     drop(parameters);
-    let reinstalled = engine.verify_payment(&first, &install()).unwrap();
+    let next_installation = install();
+    assert!(matches!(
+        engine.recheck_selection(&prepared, &next_installation),
+        Err(Error::AuthorityMismatch("resumed selection authority"))
+    ));
+    assert!(engine.retain_reconstruction(prepared, &next_installation).is_none());
+    let reinstalled = engine.verify_payment(&first, &next_installation).unwrap();
     assert!(!Arc::ptr_eq(&replaced.bytes, &reinstalled.bytes));
     eprintln!(
         "signed Payment {} bytes, first {cold:?}, same-owner repeat {warm:?}",

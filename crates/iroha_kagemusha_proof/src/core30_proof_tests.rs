@@ -297,3 +297,29 @@ mod receive_objects;
 #[allow(dead_code)]
 #[path = "../tests/common/send_objects.rs"]
 mod send_objects;
+
+#[cfg(unix)]
+#[path = "core30_incoming_omega_test.rs"]
+mod incoming_omega;
+#[cfg(unix)]
+#[path = "core30_funded_predecessor_test.rs"]
+mod funded_predecessor;
+#[cfg(unix)]
+#[path = "../tests/common/ordinary_load_receipt.rs"]
+mod ordinary_load_receipt;
+
+#[cfg(unix)]
+use crate::common;
+#[cfg(unix)]
+#[allow(dead_code)]
+mod load_chain {
+    use crate::common;
+    pub(super) mod bootstrap_outer {
+        pub(crate) use crate::omega_boundary_tests::RootedBootstrapOmega;
+    }
+    include!("../tests/common/proof_fixtures/a_load_recursive_body.rs");
+}
+#[cfg(unix)]
+#[allow(dead_code)]
+#[path = "../tests/common/ordinary_load_fixture.rs"]
+mod ordinary_load_fixture;

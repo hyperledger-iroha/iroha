@@ -170,6 +170,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     // Added after the frozen baseline by the `iroha.account.signing_key.v1` addition.
     built_in_wire_id!(crate::isi::account_signing_key::SetAccountSigningKeyV1 => "iroha.account.signing_key.set.v1", register, tolerant),
     // Added after the frozen baseline by the `iroha.governance.parliament.anonymous.v1` addition.
+    built_in_wire_id!(crate::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1 => "iroha.governance.parliament.anonymous.runtime_upgrade.create.v1", register, tolerant),
     built_in_wire_id!(crate::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1 => "iroha.governance.parliament.anonymous.attempt.create.v1", register, tolerant),
     built_in_wire_id!(crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1 => "iroha.governance.parliament.anonymous.transition.submit.v1", register, tolerant),
     built_in_wire_id!(crate::governance::anonymous_ballot::RegisterParliamentCredentialV1 => "iroha.governance.parliament.credential.register.v1", register, tolerant),
@@ -344,6 +345,9 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::sorafs_repair::ApplySorafsRepairV1 => "iroha.sorafs.bootstrap.repair.apply.v1", register, tolerant),
     built_in_wire_id!(crate::isi::taira_activation::ScheduleTairaTimeIronwoodV1 => "iroha.runtime.taira_time_ironwood.schedule.v1", register, tolerant),
     built_in_wire_id!(crate::isi::taira_read_scope::ScheduleTairaReadScopeV1 => "iroha.runtime.taira_read_scope.schedule.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::child_runtime::AuthorizeChildRuntimeActionV1 => "iroha.runtime.child_admin.authorize.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::child_runtime::AttestChildRuntimeSupportV1 => "iroha.runtime.child_admin.attest.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::runtime_carrier::StageRuntimeCarrierArtifactV1 => "iroha.runtime.generic_carrier.stage_artifact.v1", register, tolerant),
     built_in_wire_id!(endorsement::RegisterDomainCommittee => "nexus::RegisterDomainCommittee"),
     built_in_wire_id!(endorsement::SetDomainEndorsementPolicy => "nexus::SetDomainEndorsementPolicy"),
     built_in_wire_id!(endorsement::SubmitDomainEndorsement => "nexus::SubmitDomainEndorsement"),

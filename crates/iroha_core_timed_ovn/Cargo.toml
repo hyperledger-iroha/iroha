@@ -18,6 +18,7 @@ test-utils = ["dep:rand"]
 arrayvec = "0.7.6"
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api"] }
+iroha_schema = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 thiserror = { workspace = true }

@@ -18092,6 +18092,15 @@ pub mod isi {
                 }
                 // A root commits only runtime policies its lifecycle can read (§6, §7.1): the
                 // change-set notice, the change-set provenance and the emergency panel.
+                if custom.id() == iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id()
+                    && state_transaction.world.runtime_child_admin_state.get().is_some()
+                {
+                    let original = state_transaction.genesis_child_runtime.ok_or_else(|| {
+                        invalid_smart_contract_parameter("the signed child foundation is immutable after genesis")
+                    })?;
+                    original.require_parameter(state_transaction, custom)
+                        .map_err(invalid_smart_contract_parameter)?;
+                }
                 if custom.id()
                     == iroha_data_model::parameter::RuntimeUpgradePolicyV1::parameter_id()
                 {

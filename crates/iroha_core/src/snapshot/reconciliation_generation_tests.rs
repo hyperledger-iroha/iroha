@@ -263,6 +263,38 @@ async fn held_checkpoints_bound_sidecars_and_parent_custody() {
         )
     };
     assert_eq!(held().unwrap().len(), 1);
+    // The signed, canonical checkpoint at the actual certified tip is inventory even though
+    // it has no certified successor yet. Its artifact custody must never produce a floor
+    // signature: no exact State restore or certified catch-up has been performed.
+    {
+        use crate::runtime::checkpoint::{History as _, RecordAttestationError, attest_floor};
+        let view = chain.state().view();
+        let history = crate::sumeragi::certified_chain::CertifiedChain::new(&view).unwrap();
+        let floor = iroha_data_model::runtime::checkpoint::StartupFloorV1 {
+            network: chain.network_id(),
+            height: chain.height(),
+            block_hash: history.block_hash(chain.height()).unwrap(),
+            committed_ms: history.committed_ms(chain.height()).unwrap(),
+        };
+        let holds_artifacts = checkpoints.holds(
+            chain.state().chain_id_ref(),
+            chain.network_id(),
+            floor.height,
+            &floor.block_hash,
+        );
+        assert!(holds_artifacts);
+        assert!(matches!(
+            attest_floor(
+                &history,
+                &floor.network,
+                &history.committee(floor.height).unwrap(),
+                holds_artifacts,
+                &floor,
+                &crate::sumeragi::test_chain::fixture_keys()[0],
+            ),
+            Err(RecordAttestationError::CheckpointRehearsalRequired)
+        ));
+    }
     let directory = checkpoint_store::checkpoints_dir(&store);
     let digest_path = directory
         .join(format!("{}-{committed_ms}", chain.height()))

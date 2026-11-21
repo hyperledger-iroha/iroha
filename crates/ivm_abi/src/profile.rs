@@ -349,10 +349,11 @@ pub struct IvmProfileId {
 
 impl IvmProfileId {
     /// Every host profile this release can select, in a fixed order.
-    pub const IMPLEMENTED: [Self; 3] = [
+    pub const IMPLEMENTED: [Self; 4] = [
         Self::BASELINE_ABI_V1,
         Self::C10_RUNTIME_LIFECYCLE,
         Self::C10_ABI_V1,
+        Self::C10_GENERIC_CARRIER,
     ];
 
     /// The frozen baseline profile: ABI V1 on the baseline engine (ABI hash `7531b45d…`), the
@@ -377,12 +378,19 @@ impl IvmProfileId {
         policy: SyscallPolicy::AbiV1RuntimeLifecycle,
     };
 
+    /// Restricted descriptor-selected carrier instructions on the C10 engine, still ABI V1.
+    pub const C10_GENERIC_CARRIER: Self = Self {
+        engine: IvmEngine::C10,
+        policy: SyscallPolicy::AbiV1GenericCarrier,
+    };
+
     /// The implemented profiles of `engine`, in a fixed order.
     #[must_use]
     pub fn of_engine(engine: IvmEngine) -> &'static [Self] {
-        const C10: [IvmProfileId; 2] = [
+        const C10: [IvmProfileId; 3] = [
             IvmProfileId::C10_ABI_V1,
             IvmProfileId::C10_RUNTIME_LIFECYCLE,
+            IvmProfileId::C10_GENERIC_CARRIER,
         ];
         const BASELINE: [IvmProfileId; 1] = [IvmProfileId::BASELINE_ABI_V1];
         match engine {
@@ -400,7 +408,9 @@ impl IvmProfileId {
     pub const fn of_policy(policy: SyscallPolicy) -> Self {
         let engine = match policy {
             SyscallPolicy::AbiV1 => IvmEngine::Baseline,
-            SyscallPolicy::AbiV1RuntimeLifecycle => IvmEngine::C10,
+            SyscallPolicy::AbiV1RuntimeLifecycle | SyscallPolicy::AbiV1GenericCarrier => {
+                IvmEngine::C10
+            }
         };
         Self { engine, policy }
     }
@@ -417,7 +427,10 @@ impl IvmProfileId {
                 policy,
             }),
             (IvmEngine::Baseline, SyscallPolicy::AbiV1) => Some(Self::BASELINE_ABI_V1),
-            (IvmEngine::Baseline, SyscallPolicy::AbiV1RuntimeLifecycle) => None,
+            (
+                IvmEngine::Baseline,
+                SyscallPolicy::AbiV1RuntimeLifecycle | SyscallPolicy::AbiV1GenericCarrier,
+            ) => None,
         }
     }
 
@@ -438,10 +451,12 @@ impl IvmProfileId {
     pub fn abi_hash(self) -> [u8; 32] {
         static ABI_V1: OnceLock<[u8; 32]> = OnceLock::new();
         static RUNTIME_LIFECYCLE: OnceLock<[u8; 32]> = OnceLock::new();
+        static GENERIC_CARRIER: OnceLock<[u8; 32]> = OnceLock::new();
         let cached = match (self.engine, self.policy) {
             (IvmEngine::Baseline, _) => return crate::baseline::abi_hash(),
             (IvmEngine::C10, SyscallPolicy::AbiV1) => &ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1RuntimeLifecycle) => &RUNTIME_LIFECYCLE,
+            (IvmEngine::C10, SyscallPolicy::AbiV1GenericCarrier) => &GENERIC_CARRIER,
         };
         *cached.get_or_init(|| crate::syscalls::compute_c10_abi_hash(self.policy))
     }
@@ -833,7 +848,8 @@ mod tests {
             [
                 IvmProfileId::BASELINE_ABI_V1,
                 IvmProfileId::C10_RUNTIME_LIFECYCLE,
-                IvmProfileId::C10_ABI_V1
+                IvmProfileId::C10_ABI_V1,
+                IvmProfileId::C10_GENERIC_CARRIER
             ]
         );
         assert_eq!(
@@ -849,7 +865,8 @@ mod tests {
             IvmProfileId::of_engine(IvmEngine::C10),
             &[
                 IvmProfileId::C10_ABI_V1,
-                IvmProfileId::C10_RUNTIME_LIFECYCLE
+                IvmProfileId::C10_RUNTIME_LIFECYCLE,
+                IvmProfileId::C10_GENERIC_CARRIER
             ]
         );
         assert_eq!(

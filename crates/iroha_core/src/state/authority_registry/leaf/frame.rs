@@ -140,6 +140,7 @@ pub(super) fn typed_bare_payload<T: Encode + NoritoSchema, B: Write + AsRef<[u8]
     let Schema::Norito {
         nominal_name,
         layout,
+        ..
     } = schema
     else {
         return Err(LeafError::UnresolvedSchema(table));

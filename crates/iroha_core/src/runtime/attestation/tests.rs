@@ -10,7 +10,7 @@ use iroha_data_model::{
 };
 
 use super::*;
-use crate::runtime::change_set::{check_attestation, test_support};
+use crate::runtime::change_set::{check_attestation, successor, test_support};
 
 fn network() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])))
@@ -163,7 +163,9 @@ fn unfinished_game_export_is_not_drafted_or_signed_without_rewriting_frozen_cons
     ));
     assert!(matches!(
         sign_support(&world, &committee, 42, id, &pairs[0], [1; 32]),
-        Err(NodeAttestationError::Unqualified { .. })
+        Err(ExecutionAttemptError::Rejected(
+            NodeAttestationError::Unqualified { .. }
+        ))
     ));
     let selection = successor(
         &change,
@@ -200,10 +202,10 @@ fn a_release_that_lacks_a_successor_definition_refuses_to_attest() {
 
     let error = sign_support(&world, &committee, 42, id, &pairs[0], [0x55; 32])
         .expect_err("this release does not implement the added instruction");
-    let NodeAttestationError::Unsupported {
+    let ExecutionAttemptError::Rejected(NodeAttestationError::Unsupported {
         selection,
         definition,
-    } = error
+    }) = error
     else {
         panic!("{error:?}");
     };
@@ -246,7 +248,10 @@ fn a_release_refuses_to_attest_unimplemented_storage_effects() {
         let error = sign_support(&world, &committee, 42, id, &pairs[0], [0x55; 32])
             .expect_err("understanding the successor's definitions is insufficient");
         assert!(
-            matches!(error, NodeAttestationError::NoLongerApplies(_)),
+            matches!(
+                error,
+                ExecutionAttemptError::Rejected(NodeAttestationError::NoLongerApplies(_))
+            ),
             "{error}"
         );
         assert!(error.to_string().contains(operation), "{error}");
@@ -261,7 +266,10 @@ fn a_release_refuses_to_attest_unimplemented_storage_effects() {
         let error = sign_support(&world, &committee, 42, id, &pairs[0], [0x55; 32])
             .expect_err("this release does not implement the installed storage");
         assert!(
-            matches!(error, NodeAttestationError::Unsupported { .. }),
+            matches!(
+                error,
+                ExecutionAttemptError::Rejected(NodeAttestationError::Unsupported { .. })
+            ),
             "{error}"
         );
     }
@@ -285,28 +293,22 @@ fn only_a_committee_member_attests_a_recorded_scheduled_change_set() {
     let committee = keys(&pairs[..3]);
     let state = state_with(&change, &committee, ChangeSetStatusV1::Scheduled);
     let world = state.world_view();
-    assert_eq!(
+    assert!(matches!(
         sign_support(&world, &committee, 42, id, &pairs[3], [0x55; 32]),
-        Err(NodeAttestationError::NotInCommittee)
-    );
+        Err(ExecutionAttemptError::Rejected(
+            NodeAttestationError::NotInCommittee
+        ))
+    ));
     let unknown = ChangeSetId([0xEE; 32]);
-    assert_eq!(
+    assert!(matches!(
         sign_support(&world, &committee, 42, unknown, &pairs[0], [0x55; 32]),
-        Err(NodeAttestationError::NotRecorded(unknown))
-    );
-
+        Err(ExecutionAttemptError::Rejected(NodeAttestationError::NotRecorded(actual))) if actual == unknown
+    ));
     let activated = state_with(&change, &committee, ChangeSetStatusV1::Activated(150));
-    assert_eq!(
-        sign_support(
-            &activated.world_view(),
-            &committee,
-            42,
-            id,
-            &pairs[0],
-            [0x55; 32]
-        ),
-        Err(NodeAttestationError::NotScheduled(id))
-    );
+    assert!(matches!(
+        sign_support(&activated.world_view(), &committee, 42, id, &pairs[0], [0x55; 32]),
+        Err(ExecutionAttemptError::Rejected(NodeAttestationError::NotScheduled(actual))) if actual == id
+    ));
 }
 
 #[test]
@@ -386,5 +388,77 @@ fn the_release_advertises_dormant_profiles_while_each_root_requires_its_selectio
         committed_host_profiles(&state.world_view()),
         required,
         "a World founded on the baseline requires exactly its host profiles"
+    );
+}
+
+#[test]
+fn successor_support_uses_exact_scheduled_and_target_publications() {
+    use crate::runtime::change_set::successor_with_definitions;
+    let catalog = release_catalog().unwrap();
+    let first = test_support::add_instruction(network(), 100);
+    let applied_first = first
+        .apply(&catalog.baseline, &catalog.definitions)
+        .unwrap();
+    let mut second = test_support::install_storage(network(), 150, false);
+    second.predecessor = applied_first.selection.id().unwrap();
+    let storage = second.publish[0].id().unwrap();
+    let mut after = applied_first.selection.clone();
+    after.installed_storage.push(storage);
+    after.installed_storage.sort();
+    second.successor = after.id().unwrap();
+    let committee = keys(&validators());
+    let state = state_with(&second, &committee, ChangeSetStatusV1::Scheduled);
+    let first_id = first.id().unwrap();
+    {
+        let mut records = state.world.runtime_change_sets.block();
+        records.insert(
+            first_id,
+            ChangeSetRecordV1 {
+                change_set: first.clone(),
+                status: ChangeSetStatusV1::Scheduled,
+                proposed_ms: 0,
+                approved_height: 10,
+                approved_ms: 0,
+                notice: RuntimeNoticeV1 {
+                    blocks: 0,
+                    ms: 0,
+                    approval_cushion_ms: 0,
+                },
+                attestations: vec![],
+            },
+        );
+        records.commit();
+    }
+    let world = state.world_view();
+    let scheduled: BTreeMap<_, _> = world
+        .runtime_change_sets()
+        .iter()
+        .map(|(id, record)| (*id, record.clone()))
+        .collect();
+    let original = PublishedDefinitions(world.runtime_definitions());
+    let projection = successor_with_definitions(
+        &second,
+        second.id().unwrap(),
+        world.runtime_selection(),
+        &scheduled,
+        &original,
+    )
+    .unwrap();
+    let definitions = projection.definitions(&original);
+    for descriptor in first.publish.iter().chain(&second.publish) {
+        let id = descriptor.id().unwrap();
+        assert!(
+            original.definition(&id).is_none(),
+            "future publication is not in committed World"
+        );
+        assert_eq!(definitions.definition(&id), Some(descriptor));
+    }
+    assert_eq!(projection.selection, after);
+    let (_, observed, support) = successor_release_support(&world, second.id().unwrap()).unwrap();
+    assert_eq!(observed, after);
+    assert_eq!(
+        support,
+        release_support(catalog, &after),
+        "native support remains the unchanged catalog verdict"
     );
 }

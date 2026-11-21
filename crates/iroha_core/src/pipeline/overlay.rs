@@ -1260,7 +1260,7 @@ impl OverlayEffect {
         match &self.payload {
             QueuedEffectPayload::Instruction(instruction) => Some(instruction),
             QueuedEffectPayload::AttachedX509(action) => Some(action.instruction()),
-            QueuedEffectPayload::Emission(_) => None,
+            QueuedEffectPayload::Emission(_) | QueuedEffectPayload::CarrierWrite(_) => None,
         }
     }
     fn plain_instruction(instruction: InstructionBox) -> Self {
@@ -1793,7 +1793,9 @@ impl TxOverlay {
                     }
                     // TODO(I.3): independent overlay/replay roots do not own original
                     // signed attachment invocation custody and remain unsupported.
-                    QueuedEffectPayload::AttachedX509(_) => usize::MAX,
+                    QueuedEffectPayload::AttachedX509(_) | QueuedEffectPayload::CarrierWrite(_) => {
+                        usize::MAX
+                    }
                 })
                 .fold(0usize, usize::saturating_add)
         })
@@ -1923,6 +1925,15 @@ impl TxOverlay {
         if self
             .effects
             .iter()
+            .any(|effect| matches!(&effect.payload, QueuedEffectPayload::CarrierWrite(_)))
+        {
+            return Err(ValidationFail::NotPermitted(
+                "carrier writes require their original signed invocation".into(),
+            ));
+        }
+        if self
+            .effects
+            .iter()
             .any(|effect| matches!(&effect.payload, QueuedEffectPayload::AttachedX509(_)))
         {
             // TODO(I.3): bind replay roots to the original signed owner before
@@ -2039,6 +2050,11 @@ impl TxOverlay {
                 let effect_authority =
                     execution_context.map_or(authority, |context| &context.authority);
                 match effect.payload {
+                    QueuedEffectPayload::CarrierWrite(_) => {
+                        return Err(ValidationFail::NotPermitted(
+                            "carrier writes require their original signed invocation".into(),
+                        ));
+                    }
                     QueuedEffectPayload::AttachedX509(_) => {
                         return Err(ValidationFail::NotPermitted(
                             "X.509 original attachment custody cannot be applied through an independent overlay root".into(),

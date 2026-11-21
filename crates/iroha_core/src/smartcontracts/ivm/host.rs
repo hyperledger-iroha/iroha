@@ -28,6 +28,7 @@ type SyscallOutcome = (Result<u64, ivm::VMError>, IVM, DurableStateOverlay);
 type ContractCallOutcome = (Result<(), ivm::VMError>, IVM, DurableStateOverlay, u64);
 
 mod attachment_lifecycle;
+pub(crate) mod generic_carrier;
 mod x509_attachment;
 pub use x509_attachment::ExecutedHostInstructions;
 mod contract_calls;
@@ -840,6 +841,7 @@ pub fn vrf_epoch_length_from_state(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostExecutionClass {
     Generic,
+    Carrier,
     StateFreeGeneric,
     Contract,
     View,
@@ -908,6 +910,8 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     pipa_r_config: iroha_config::parameters::actual::PipaR,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedEffect>,
+    carrier: Option<generic_carrier::CarrierContext<'run>>,
+    carrier_queue_backing: Option<generic_carrier::QueueBacking>,
     // The Vec is destroyed before its original-pool backing allowance.
     x509_queue_backing: Option<x509_attachment::X509QueueBacking>,
     instruction_queue_limits: HostOutputLimits,
@@ -3073,6 +3077,7 @@ impl AmxBudgetViolation {
 /// Execution artifacts extracted from a host run that can be applied to state later.
 pub(crate) struct HostExecutionArtifacts {
     queued: Vec<QueuedEffect>,
+    carrier_queue_backing: Option<generic_carrier::QueueBacking>,
     // The Vec is destroyed before its original-pool backing allowance.
     x509_queue_backing: Option<x509_attachment::X509QueueBacking>,
     entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
@@ -3100,6 +3105,7 @@ pub(crate) enum QueuedEffectPayload {
     Instruction(InstructionBox),
     AttachedX509(x509_attachment::OwnedX509Action),
     Emission(contract_event::OwnedContractEmission),
+    CarrierWrite(generic_carrier::OwnedWrite),
 }
 impl QueuedEffect {
     pub(crate) fn instructions(effects: &[Self]) -> impl ExactSizeIterator<Item = &InstructionBox> {
@@ -3131,7 +3137,7 @@ impl QueuedEffect {
         match &self.payload {
             QueuedEffectPayload::Instruction(instruction) => Some(instruction),
             QueuedEffectPayload::AttachedX509(action) => Some(action.instruction()),
-            QueuedEffectPayload::Emission(_) => None,
+            QueuedEffectPayload::Emission(_) | QueuedEffectPayload::CarrierWrite(_) => None,
         }
     }
 }
@@ -3457,6 +3463,14 @@ impl HostExecutionArtifacts {
             crate::smartcontracts::code::PendingContractLifecycle,
         )>,
     ) -> Result<ExecutedHostInstructions, ValidationFail> {
+        if self.carrier_queue_backing.is_some() {
+            if lifecycle_completion.is_some() {
+                return Err(ValidationFail::NotPermitted(
+                    "carrier artifacts cannot complete a contract lifecycle".into(),
+                ));
+            }
+            return self.apply_carrier(tx, authority);
+        }
         let has_contract_effect = lifecycle_completion.is_some()
             || self.queued.iter().any(|queued| {
                 queued.contract_runtime_context.is_some()
@@ -3502,6 +3516,11 @@ impl HostExecutionArtifacts {
         for queued in &self.queued {
             Self::validate_queued_authorization(&tx.world, queued)
                 .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+            if matches!(&queued.payload, QueuedEffectPayload::CarrierWrite(_)) {
+                return Err(ValidationFail::NotPermitted(
+                    "carrier write lost its original typed group".into(),
+                ));
+            }
         }
         Self::validate_durable_authorizations(
             &tx.world,
@@ -3589,6 +3608,11 @@ impl HostExecutionArtifacts {
                         entrypoint_authorization.as_ref(),
                     )?;
                     tx.record_contract_emission(emission)?;
+                }
+                QueuedEffectPayload::CarrierWrite(_) => {
+                    return Err(ValidationFail::NotPermitted(
+                        "carrier write lost its original typed group".into(),
+                    ));
                 }
             }
             // A leaf can revoke its own permission or alter its binding in its final effect. Check
@@ -3788,6 +3812,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            carrier: None,
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
@@ -3919,6 +3945,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            carrier: None,
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
@@ -4004,6 +4032,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            carrier: None,
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
@@ -5648,6 +5678,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// faults still permit diagnostic inspection, never certified application.
     pub fn drain_instructions(&mut self) -> Result<Vec<InstructionBox>, ivm::VMError> {
         self.ensure_output_measurement()?;
+        if self.carrier_queue_backing.is_some() {
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
+        }
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
@@ -5657,7 +5690,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .into_iter()
             .filter_map(|effect| match effect.payload {
                 QueuedEffectPayload::Instruction(instruction) => Some(instruction),
-                QueuedEffectPayload::Emission(_) | QueuedEffectPayload::AttachedX509(_) => None,
+                QueuedEffectPayload::Emission(_)
+                | QueuedEffectPayload::AttachedX509(_)
+                | QueuedEffectPayload::CarrierWrite(_) => None,
             })
             .collect())
     }
@@ -5850,6 +5885,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<Vec<QueuedEffect>, ivm::VMError> {
         self.ensure_output_measurement()?;
+        if self.carrier_queue_backing.is_some() {
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
+        }
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
             return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
@@ -6106,6 +6144,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.finish_attachment_root()?;
         Ok(HostExecutionArtifacts {
             queued,
+            carrier_queue_backing: self.carrier_queue_backing.take(),
             x509_queue_backing: self.x509_queue_backing.take(),
             entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             confidential_gas_delta,
@@ -10240,6 +10279,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
         vm: ivm::host::SyscallQuote<'_>,
     ) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        if let Some(quote) = self.carrier_quote(number, vm)? {
+            return Ok(quote);
+        }
         self.execution_class.ensure_syscall_allowed(number)?;
         // Consensus hosts never receive raw private witnesses. Keep this
         // defense-in-depth boundary independent of entrypoint admission so a
@@ -10491,6 +10533,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             // Enforce both ABI policy and exhaustive metering classification for
             // direct host calls as well as VM-dispatched execution.
             ivm::host::require_host_syscall_metering_spec(vm.quote().syscall_policy(), number)?;
+            if let Some(gas) = self.carrier_syscall(number, vm)? {
+                return Ok(gas);
+            }
             self.execution_class.ensure_syscall_allowed(number)?;
             // See `prepare_syscall`: production consensus execution has no raw
             // witness transport, even if a caller bypasses the staged VM path and

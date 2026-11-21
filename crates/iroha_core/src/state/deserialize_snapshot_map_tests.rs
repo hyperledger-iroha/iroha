@@ -680,7 +680,7 @@ fn a_world_without_an_uninstalled_nested_member_restores_it_empty() {
 }
 
 #[test]
-fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
+fn a_baseline_world_excludes_additions_and_independent_profile_storage() {
     let world = World::default();
     let catalog = crate::runtime::release_catalog().expect("release catalog");
     let mut added: Vec<String> = catalog
@@ -711,9 +711,11 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
             "parliament_anonymous_registrations",
             "runtime_amx_captures",
             "runtime_boundaries",
+            "runtime_child_admin_state",
             "runtime_deferred_consents",
             "runtime_escrow_captures",
             "runtime_game_transfers",
+            "runtime_generic_artifacts",
             "runtime_migrations",
             "runtime_obligations",
             "runtime_retirements",
@@ -722,6 +724,16 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
             "sorafs_authority_proposals",
         ]
     );
+    let backing = catalog.generic_carriers.unwrap().backing;
+    assert_eq!(
+        catalog.world_storage["world.runtime_generic_values"],
+        backing
+    );
+    assert!(!catalog.baseline.installed_storage.contains(&backing));
+    assert!(!added.iter().any(|field| field == "runtime_generic_values"));
+    let mut expected_uninstalled = added;
+    expected_uninstalled.push("runtime_generic_values".into());
+    expected_uninstalled.sort_unstable();
     let mut uninstalled: Vec<String> =
         crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
             .expect("uninstalled members")
@@ -731,8 +743,8 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
             .collect();
     uninstalled.sort_unstable();
     assert_eq!(
-        uninstalled, added,
-        "the baseline installs every World field of this release but those its additions add"
+        uninstalled, expected_uninstalled,
+        "the baseline excludes native additions and the separate generic profile backing"
     );
 }
 
@@ -758,9 +770,12 @@ fn a_serving_baseline_snapshot_restores_uninstalled_authority_tables_empty() {
         "parliament_anonymous_due",
         "parliament_anonymous_registrations",
         "runtime_boundaries",
+        "runtime_child_admin_state",
         "runtime_deferred_consents",
         "runtime_amx_captures",
         "runtime_game_transfers",
+        "runtime_generic_artifacts",
+        "runtime_generic_values",
         "runtime_escrow_captures",
         "runtime_migrations",
         "runtime_obligations",
@@ -772,7 +787,7 @@ fn a_serving_baseline_snapshot_restores_uninstalled_authority_tables_empty() {
     added.sort_unstable();
     assert_eq!(
         uninstalled, added,
-        "the members an addition adds stay uninstalled until a change set activates it"
+        "dormant storage stays uninstalled until a governed change installs its owner"
     );
     let members = json_object_members(&encoded).unwrap();
     let written: Vec<String> = members

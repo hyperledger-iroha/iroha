@@ -186,8 +186,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         self.receiver_credit_status(slot, request_id, receive_operation, None)
     }
 
-    /// Issue a carrier acknowledgement only for the complete Payment actually consumed by
-    /// this released Receive. Multiple payers may have specialized the same open Request.
+    /// Issue read-only delivery evidence from the original released Receive or a later
+    /// released Send by the receiver whose authenticated credit map covers the supplied Payment.
     ///
     /// # Errors
     /// Rejects a different Payment original as well as any invalid Request, release or proof.
@@ -195,29 +195,53 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         &mut self,
         slot: &Slot,
         request_id: &[u8; 32],
-        receive_operation: &[u8; 32],
+        head_operation: &[u8; 32],
         payment: &[u8],
     ) -> Result<Vec<u8>, ProviderError> {
-        self.receiver_credit_status(slot, request_id, receive_operation, Some(payment))
+        self.receiver_credit_status(slot, request_id, head_operation, Some(payment))
     }
 
     fn receiver_credit_status(
         &mut self,
         slot: &Slot,
         request_id: &[u8; 32],
-        receive_operation: &[u8; 32],
+        head_operation: &[u8; 32],
         payment: Option<&[u8]>,
     ) -> Result<Vec<u8>, ProviderError> {
         self.require_account(slot, None)?;
         let wallet = self.authorized_wallet_id(slot)?;
         let request = self.issued_request_wire(slot, request_id)?;
-        let (capsule, retained) = self.provider.retained_transition(slot, receive_operation)?;
+        let (capsule, retained) = self.provider.retained_transition(slot, head_operation)?;
         if capsule.wallet() != &wallet
-            || capsule.kind() != 4
-            || capsule.operation_id() != receive_operation
+            || capsule.operation_id() != head_operation
             || retained.record.wallet() != &wallet
         {
-            return Err(invalid("future CreditStatus released Receive scope"));
+            return Err(invalid("CreditStatus released head scope"));
+        }
+        if capsule.kind() == 3 {
+            let original = payment.ok_or(invalid(
+                "later Send CreditStatus requires exact original Payment",
+            ))?;
+            let original = self.verify_payment(original).map_err(provider_error)?;
+            let (_, released) = self.verify_retained_release(slot, &capsule, &retained)?;
+            let bytes = released
+                .completion()
+                .output_part(1)
+                .map_err(provider_error)?;
+            let later = self.verify_payment(&bytes).map_err(provider_error)?;
+            if released.head().profile() != later.profile() {
+                return Err(invalid("later Send CreditStatus release binding"));
+            }
+            return self.with_transfer_maps(slot, |engine, parameters, maps| {
+                engine.encode_credit_status_at_send_head(
+                    &later, &original, &request, maps, parameters,
+                )
+            });
+        }
+        if capsule.kind() != 4 {
+            return Err(invalid(
+                "CreditStatus requires released Receive or covering Send",
+            ));
         }
         let proof = match payment {
             Some(original) => {
@@ -257,7 +281,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         {
             return Err(invalid("future CreditStatus released Send scope"));
         }
-        let (prepared, _) = self
+        let (prepared, released) = self
             .engine
             .verify_released_operation(&capsule, &retained.record, &self.parameters)
             .map_err(provider_error)?;
@@ -270,15 +294,14 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             }
             (Some(original), _) => original,
             (None, true) => return Err(lost("released Send open Request original")),
-            (None, false) => open_request,
+            (None, false) => {
+                prepared.verify_recovered_send_request(open_request).map_err(provider_error)?;
+                open_request
+            }
         };
-        let bytes = retained.record.output_part(1).map_err(provider_error)?;
-        let payment = self
-            .engine
-            .verify_payment(&bytes, &self.parameters)
-            .map_err(provider_error)?;
         self.engine
-            .verify_credit_status_peer(status, open_request, &payment, &self.parameters)
+            .verify_sent_delivery(&prepared, &released, open_request, status, &self.parameters)
+            .map(|delivery| delivery.outcome())
             .map_err(provider_error)
     }
 

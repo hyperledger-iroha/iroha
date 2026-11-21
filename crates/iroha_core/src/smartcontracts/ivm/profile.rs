@@ -60,10 +60,12 @@ impl ResolvedIvmProfile {
         static BASELINE_ABI_V1: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         static C10_ABI_V1: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         static C10_RUNTIME_LIFECYCLE: OnceLock<ResolvedIvmProfile> = OnceLock::new();
+        static C10_GENERIC_CARRIER: OnceLock<ResolvedIvmProfile> = OnceLock::new();
         let compiled = match (id.engine(), id.policy()) {
             (IvmEngine::Baseline, _) => &BASELINE_ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1) => &C10_ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1RuntimeLifecycle) => &C10_RUNTIME_LIFECYCLE,
+            (IvmEngine::C10, SyscallPolicy::AbiV1GenericCarrier) => &C10_GENERIC_CARRIER,
         };
         *compiled.get_or_init(|| Self::compile(id))
     }
@@ -171,6 +173,11 @@ pub(crate) fn activates(
 /// Whether this root may resolve `profile`: the implicit baseline, or a named profile that an
 /// active definition of the root's selection activates.
 pub(crate) fn is_selected(world: &impl WorldReadOnly, profile: ResolvedIvmProfile) -> bool {
+    // Only the descriptor instruction execution owner may construct a carrier invocation.
+    // Selecting its definition never widens any installed raw, contract or trigger interface.
+    if profile.id() == IvmProfileId::C10_GENERIC_CARRIER {
+        return false;
+    }
     profile.is_implicit()
         || world
             .runtime_selection()
@@ -313,6 +320,10 @@ mod tests {
         let published = crate::runtime::attestation::release_host_profiles(catalog);
         for id in IvmProfileId::IMPLEMENTED {
             let profile = ResolvedIvmProfile::of_id(id);
+            if id == IvmProfileId::C10_GENERIC_CARRIER {
+                assert!(!published.contains(&profile.definition_id()), "unfinished carrier vertical is not advertised");
+                continue;
+            }
             assert!(
                 published.contains(&profile.definition_id()),
                 "the release publishes the definition of {id:?}"

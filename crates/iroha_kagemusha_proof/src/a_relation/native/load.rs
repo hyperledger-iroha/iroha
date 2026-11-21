@@ -191,6 +191,8 @@ pub struct Inputs {
 /// Immutable complete Load circuit metadata from the authenticated native artifact owner.
 #[derive(Clone, Debug)]
 pub struct Plan {
+    #[cfg(test)]
+    pub(crate) initial_core30: bool,
     context: ContextPlan,
     policy: OwnPolicy,
     signatures: [QSignaturePlan; 1],
@@ -276,6 +278,8 @@ impl Plan {
         }
         LoadStagePlan::new(context.clone()).map_err(|_| Error::Artifact)?;
         Ok(Self {
+            #[cfg(test)]
+            initial_core30: false,
             context,
             policy,
             signatures,
@@ -405,6 +409,8 @@ impl Plan {
             )?);
         }
         let maps = Maps {
+            #[cfg(test)]
+            initial_core30: self.initial_core30,
             witness: input.state,
             receipt: input.receipt,
             insertion: input.insertion,
@@ -469,6 +475,8 @@ impl SignedTape {
 }
 #[derive(Clone)]
 struct Maps {
+    #[cfg(test)]
+    initial_core30: bool,
     witness: LoadWitness,
     receipt: [u8; LoadReceiptCells::BYTES],
     insertion: IndexedInsert<Fp>,
@@ -501,6 +509,13 @@ impl Maps {
             .witnesses(region, &witness.rest.map(|v| self.value(v)))?
             .try_into()
             .map_err(|_| LayoutError::Synthesis)?;
+        #[cfg(test)]
+        let state = if self.initial_core30 {
+            crate::admin_sigma::core30_initial::open_initial_state(chip, region, &core, &rest)?
+        } else {
+            StateCells::constrain_with_verifier(chip, region, &core, &rest)?
+        };
+        #[cfg(not(test))]
         let state = StateCells::constrain_with_verifier(chip, region, &core, &rest)?;
         let public = chip
             .uint()
@@ -605,6 +620,8 @@ impl StageCircuit {
         }
         let source = CircuitSources {
             maps: Maps {
+                #[cfg(test)]
+                initial_core30: plan.initial_core30,
                 witness: LoadWitness {
                     predecessor: state,
                     successor: state,

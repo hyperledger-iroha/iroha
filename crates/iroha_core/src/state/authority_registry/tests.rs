@@ -27,6 +27,7 @@ fn check_schema(schema: Schema) {
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => {
             assert!(!nominal_name().is_empty());
             assert_eq!(layout, V1_LAYOUT);

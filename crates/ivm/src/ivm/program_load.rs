@@ -131,7 +131,11 @@ fn prepare_generic_image<'a>(
             )?,
             None => crate::ivm_cache::global_get(instruction_region)?,
         };
-        validate_generic_program_syscalls(decoded.as_ref(), engine)?;
+        if parsed.profile == IvmProfileId::C10_GENERIC_CARRIER {
+            validate_carrier_program_syscalls(decoded.as_ref())?;
+        } else {
+            validate_generic_program_syscalls(decoded.as_ref(), engine)?;
+        }
         let prepared = prepare_instruction_stream(
             instruction_region,
             decoded.as_ref(),
@@ -166,9 +170,63 @@ fn prepare_generic_image<'a>(
     Ok(image)
 }
 
+/// The separately named carrier profile has its own closed generic instruction surface.
+/// Existing generic profiles retain their original validator and rejection precedence.
+fn validate_carrier_program_syscalls(
+    decoded: &[crate::ivm_cache::DecodedOp],
+) -> Result<(), VMError> {
+    for operation in decoded {
+        if let Some(number) = IvmEngine::C10.syscall_number(operation.inst)
+            && !crate::syscalls::is_generic_program_syscall_allowed(
+                SyscallPolicy::AbiV1GenericCarrier,
+                number,
+            )
+        {
+            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_carrier_profile_alone_admits_its_closed_state_syscall_surface() {
+        fn image(profile: IvmProfileId, number: u32) -> Vec<u8> {
+            let mut image = ProgramMetadata::default().encode_for_profile(profile, 0);
+            image.extend_from_slice(&crate::encoding::wide::encode_scall(number).to_le_bytes());
+            image.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+            image
+        }
+        let profile = IvmProfileId::C10_GENERIC_CARRIER;
+        for &number in crate::syscalls::syscalls_for_policy(profile.policy()) {
+            let image = image(profile, number);
+            IVM::validate_program_for_profile(&image, profile).unwrap();
+            IVM::new(10_000)
+                .load_program_for_profile(&image, profile)
+                .unwrap();
+        }
+        for number in [
+            crate::syscalls::SYSCALL_STATE_SCAN,
+            crate::syscalls::SYSCALL_CALL_CONTRACT,
+            crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+        ] {
+            assert!(
+                matches!(IVM::validate_program_for_profile(&image(profile, number), profile), Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == number)
+            );
+        }
+        for number in [
+            crate::syscalls::SYSCALL_STATE_GET,
+            crate::syscalls::SYSCALL_STATE_SET,
+            crate::syscalls::SYSCALL_STATE_DEL,
+        ] {
+            assert!(
+                matches!(IVM::validate_program_for_profile(&image(IvmProfileId::C10_ABI_V1, number), IvmProfileId::C10_ABI_V1), Err(VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall })) if syscall == number)
+            );
+        }
+    }
     use crate::error::{VmDeferral, VmTrap};
 
     fn generic(instructions: &[u8]) -> Vec<u8> {

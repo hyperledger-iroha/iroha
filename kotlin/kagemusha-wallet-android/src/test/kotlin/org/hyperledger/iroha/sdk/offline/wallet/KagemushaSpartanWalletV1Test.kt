@@ -296,6 +296,17 @@ class KagemushaSpartanWalletV1Test {
         }
     }
 
+    @Test
+    fun confirmationKeyRequiresPerUseAuthenticationAcrossKeystoreVersions() {
+        for (api in listOf(26, 29, 30, 31, 35)) {
+            assertTrue(spartanPerUseValidityV1(api, -1))
+            assertEquals(api >= 30, spartanPerUseValidityV1(api, 0))
+            for (seconds in listOf(-2, 1, 30, Int.MAX_VALUE)) {
+                assertFalse(spartanPerUseValidityV1(api, seconds))
+            }
+        }
+    }
+
     @Test fun `older phones lacking a strong enrolled biometric get a debit-only refusal`() {
         val absent = androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
         for (api in 26..29) {
@@ -307,6 +318,25 @@ class KagemushaSpartanWalletV1Test {
             assertFailsWith<KagemushaSpartanDebitUnavailableV1> { requireSpartanAuthenticatorV1(30, absent) }.reason)
         requireSpartanAuthenticatorV1(26, androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS)
         assertTrue(spartanAuthenticatorsV1(30) and androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL != 0)
+    }
+
+    @Test fun `shared Send review displays the projected amounts and both complete recipient IDs`() {
+        val original = ByteArray(291)
+        original[0] = 1
+        original[2] = 3
+        val wire = java.nio.ByteBuffer.wrap(original).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        wire.putLong(131, 123)
+        wire.putLong(147, 7)
+        original.fill(0x3a, 163, 195)
+        original.fill(0x5c, 195, 227)
+        val terms = KagemushaSpartanReviewProjectionV1(original).sendDebitTerms()(2)
+        assertTrue(terms.contains("Send 1.23 asset units"))
+        assertTrue(terms.contains("Fee  0.07"))
+        assertTrue(terms.contains("Total debit  1.30"))
+        assertTrue(terms.contains("Receiving wallet ID\n" + "3a".repeat(32)))
+        assertTrue(terms.contains("Receiving account ID\n" + "5c".repeat(32)))
+        original[2] = 4
+        assertFails { KagemushaSpartanReviewProjectionV1(original).sendDebitTerms() }
     }
 
     @Test fun `debit prompt accepts only its authenticated operation once and cancellation is exact`() {

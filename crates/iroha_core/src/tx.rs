@@ -3416,7 +3416,12 @@ impl StateBlock<'_> {
                     ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
                 })?;
         }
-        if state_transaction.taira_activation_entrypoint.is_none() {
+        let carrier_admitted = external_entrypoint && crate::runtime::generic_carriers::admission::admit(
+            &state_transaction.world,
+            state_transaction.block_height(),
+            signed.instructions(),
+        ).map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))?;
+        if state_transaction.taira_activation_entrypoint.is_none() && !carrier_admitted {
             crate::runtime::envelope::admit_envelopes(
                 state_transaction.world.runtime_selection.get(),
                 state_transaction.block_height(),

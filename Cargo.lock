@@ -4554,6 +4554,7 @@ dependencies = [
  "arrayvec",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_schema",
  "norito",
  "rand 0.10.3",
  "sha2 0.11.1",

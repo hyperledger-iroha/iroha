@@ -17,6 +17,7 @@ impl NativeEngine {
             .map_err(|error| Error::Rejected(error.to_string()))?;
         Ok(Self {
             selected_epoch: Some(selected),
+            selection_owner: Arc::new(()),
             ..self.clone()
         })
     }

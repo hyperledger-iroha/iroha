@@ -49,6 +49,10 @@ class KagemushaSpartanDebitUnavailableV1(val reason: KagemushaSpartanDebitUnavai
 internal fun spartanAuthenticatorsV1(api: Int): Int = Authenticators.BIOMETRIC_STRONG or
     (if (api >= 30) Authenticators.DEVICE_CREDENTIAL else 0)
 
+// API 30+ KeyInfo implementations report an omitted Keymaster AUTH_TIMEOUT as 0 or -1.
+internal fun spartanPerUseValidityV1(api: Int, seconds: Int): Boolean =
+    seconds == -1 || (api >= 30 && seconds == 0)
+
 internal fun requireSpartanAuthenticatorV1(api: Int, status: Int) {
     if (status == BiometricManager.BIOMETRIC_SUCCESS) return
     val reason = if (api < 30 && status in setOf(BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
@@ -136,7 +140,8 @@ internal object KagemushaSpartanAndroidConfirmationV1 {
             info.origin == KeyProperties.ORIGIN_GENERATED && info.keySize == 256 &&
             info.purposes == KeyProperties.PURPOSE_SIGN && info.digests.toSet() == setOf(KeyProperties.DIGEST_SHA256) &&
             info.isUserAuthenticationRequired && info.isUserAuthenticationRequirementEnforcedBySecureHardware &&
-            info.userAuthenticationValidityDurationSeconds == -1 && !info.isUserAuthenticationValidWhileOnBody &&
+            spartanPerUseValidityV1(Build.VERSION.SDK_INT, info.userAuthenticationValidityDurationSeconds) &&
+            !info.isUserAuthenticationValidWhileOnBody &&
             curve.curve == p256.curve && curve.generator == p256.generator &&
             curve.order == p256.order && curve.cofactor == p256.cofactor) { "Hardware confirmation policy unavailable" }
         return Material(key, publicKey, authenticators)

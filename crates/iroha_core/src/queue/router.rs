@@ -3876,6 +3876,28 @@ fn instruction_routes_to_universal_dataspace(instruction: &dyn Instruction) -> b
             .is::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace>()
 }
 
+/// New child-administration carriers name their physical data space explicitly.
+/// This is routing only: original-source, selected-policy and certificate checks stay in Core.
+fn child_runtime_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    use iroha_data_model::{
+        isi::child_runtime::{AttestChildRuntimeSupportV1, AuthorizeChildRuntimeActionV1},
+        runtime::lifecycle::RootScopeV1,
+    };
+    let any = instruction.as_any();
+    if let Some(action) = any.downcast_ref::<AuthorizeChildRuntimeActionV1>() {
+        return Some(action.certificate.plan.root.dataspace);
+    }
+    any.downcast_ref::<AttestChildRuntimeSupportV1>()
+        .map(|support| match support.attestation.attestation.root {
+            RootScopeV1::DataSpace(dataspace) => dataspace,
+            RootScopeV1::Universal => DataSpaceId::UNIVERSAL,
+        })
+}
+
+#[cfg(test)]
+#[path = "router/child_runtime_tests.rs"]
+mod child_runtime_tests;
+
 /// Artifact custody is explicitly scoped even before a contract address is deployed.
 fn contract_artifact_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
     use iroha_data_model::isi::smart_contract_code::{
@@ -3890,6 +3912,10 @@ fn contract_artifact_dataspace_target(instruction: &dyn Instruction) -> Option<D
         })
         .or_else(|| {
             any.downcast_ref::<RegisterSmartContractBytes>()
+                .map(|value| value.artifact_id.dataspace_id)
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::runtime_carrier::StageRuntimeCarrierArtifactV1>()
                 .map(|value| value.artifact_id.dataspace_id)
         })
         .or_else(|| {
@@ -4044,11 +4070,11 @@ fn kagemusha_dataspace_with_world(
     world: &impl WorldReadOnly,
     instruction: crate::kagemusha_wallet_v1::routing::Operation<'_>,
 ) -> Result<DataSpaceId, RoutingResolveError> {
-    instruction.dataspace(world).map_err(|error| {
-        RoutingResolveError::OrdinaryRouteUnavailable {
+    instruction
+        .dataspace(world)
+        .map_err(|error| RoutingResolveError::OrdinaryRouteUnavailable {
             reason: format!("KAGEMUSHA permanent scope unavailable: {error}"),
-        }
-    })
+        })
 }
 
 fn instruction_transaction_dataspace_target(
@@ -4082,6 +4108,9 @@ fn instruction_transaction_dataspace_target(
         return Ok(Some(dataspace));
     }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
+    if let Some(dataspace) = child_runtime_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
     if let Some(dataspace) = retail_declared_dataspace_target(instruction) {
@@ -4513,6 +4542,9 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
         return Ok(Some(dataspace));
     }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
+    if let Some(dataspace) = child_runtime_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
     if let Some(dataspace) = retail_declared_dataspace_target(instruction) {
