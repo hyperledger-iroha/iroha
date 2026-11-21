@@ -11944,6 +11944,565 @@
           "name": "policy_key_roundtrip_is_bounded_and_canonical"
         }
       ]
+    },
+    {
+      "id": "transaction.runtime_carrier_artifact_bytes",
+      "group": "transaction",
+      "what": "Largest complete C10 generic-carrier executable image accepted by staging or validation of retained artifact State.",
+      "unit": "bytes",
+      "value": 1048576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/isi/runtime_carrier.rs",
+        "symbol": "MAX_CARRIER_ARTIFACT_BYTES_V1",
+        "kind": "const",
+        "expr": "1_048_576"
+      },
+      "inclusive": true,
+      "framing": "Complete executable image, before computing the code hash or loading the selected IVM profile.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/runtime/generic_carriers/artifact_staging.rs",
+          "contains": "if instruction.code.len() > MAX_CARRIER_ARTIFACT_BYTES_V1 {"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/runtime/generic_carriers/artifact_staging.rs",
+          "contains": "if bytes.len() > MAX_CARRIER_ARTIFACT_BYTES_V1 || ivm::contract_code_hash(bytes) != id.code_hash"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/artifact_staging/tests.rs",
+          "name": "complete_image_size_precedes_hash_validation_and_preserves_artifact_state"
+        },
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/artifact_staging/tests.rs",
+          "name": "selected_staging_registers_exact_code_idempotently_before_carrier_kernel_selection"
+        }
+      ],
+      "test_note": "A valid small image stages. An exact-limit image carrying the original shorter image\u2019s hash reaches identity validation; an extra byte produces the size refusal before that identity check. Both refusals leave artifact State empty. This tests the staging comparison independently of the layout and verification of a maximum-size valid IVM image."
+    },
+    {
+      "id": "transaction.runtime_carrier_frame_bytes",
+      "group": "transaction",
+      "what": "Largest complete canonical carrier record admitted by the shared codec and the generic host state-set path.",
+      "unit": "bytes",
+      "value": 1048576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+        "symbol": "MAX_CARRIER_FRAME_BYTES",
+        "kind": "const",
+        "expr": "1 << 20"
+      },
+      "inclusive": true,
+      "framing": "Canonical Norito carrier record including header. The enclosing VM pointer TLV is outside this count.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+          "contains": "if norito::canonical_frame_len(&record)? > MAX_CARRIER_FRAME_BYTES {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+          "contains": "if frame.len() > MAX_CARRIER_FRAME_BYTES {",
+          "count": 2
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "if value_len > 1024 * 1024 {"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "if value.len() > 1024 * 1024 {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/carrier/tests.rs",
+          "name": "complete_frame_and_schema_frames_have_independent_bounds"
+        }
+      ],
+      "test_note": "The codec accepts a half-limit payload, rejects a payload whose enclosing frame exceeds the limit and refuses an overlong input. The VM quote and execution paths independently check the complete state-set value before the selected row schema validates it."
+    },
+    {
+      "id": "transaction.runtime_carrier_schema_frame_bytes",
+      "group": "transaction",
+      "what": "Largest canonical schema frame accepted when computing a carrier schema identity.",
+      "unit": "bytes",
+      "value": 65536,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+        "symbol": "MAX_CARRIER_SCHEMA_FRAME_BYTES",
+        "kind": "const",
+        "expr": "64 << 10"
+      },
+      "inclusive": true,
+      "framing": "Canonical schema frame including its Norito header.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+          "contains": "if norito::canonical_frame_len(schema)? > MAX_CARRIER_SCHEMA_FRAME_BYTES {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/carrier/tests.rs",
+          "name": "complete_frame_and_schema_frames_have_independent_bounds"
+        }
+      ],
+      "test_note": "The test validates a supported schema and refuses an independently constructed structural schema whose measured canonical frame exceeds the cap."
+    },
+    {
+      "id": "decoded_scratch.runtime_carrier_value_nodes",
+      "group": "decoded_scratch",
+      "what": "Maximum semantic value nodes, including the root and children with empty payloads. The codec checks both individual visits and declared child counts.",
+      "unit": "count",
+      "value": 65536,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+        "symbol": "MAX_CARRIER_VALUE_NODES",
+        "kind": "const",
+        "expr": "65_536"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+          "contains": "if depth > MAX_CARRIER_DEPTH || self.nodes == MAX_CARRIER_VALUE_NODES {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+          "contains": "if count > MAX_CARRIER_VALUE_NODES - self.nodes {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/carrier/tests.rs",
+          "name": "node_and_depth_bounds_count_semantic_children_even_when_payloads_are_empty"
+        }
+      ]
+    },
+    {
+      "id": "storage.runtime_carrier_key_bytes",
+      "group": "storage",
+      "what": "Largest bare canonical key payload accepted by the generic codec and state-access host.",
+      "unit": "bytes",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/carrier.rs",
+        "symbol": "MAX_CARRIER_KEY_BYTES",
+        "kind": "const",
+        "expr": "4096"
+      },
+      "inclusive": true,
+      "framing": "Bare key payload, before its storage identity or VM pointer TLV.",
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+          "contains": "if payload.len() > super::MAX_CARRIER_KEY_BYTES {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+          "contains": "if key_bytes.len() > MAX_CARRIER_KEY_BYTES {",
+          "count": 2
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "if key_len > MAX_CARRIER_KEY_BYTES {"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "if key_tlv.payload.len() > MAX_CARRIER_KEY_BYTES {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/carrier/tests.rs",
+          "name": "declared_lengths_and_key_bound_apply_before_reconstruction"
+        }
+      ]
+    },
+    {
+      "id": "transaction.child_foundation_parameter_bytes",
+      "group": "transaction",
+      "what": "Maximum canonical JSON payload of the genesis child-root foundation parameter. The reader checks the byte length before interpreting the recipe; the author checks it after canonical JSON production.",
+      "unit": "bytes",
+      "value": 131072,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/child_admin/foundation.rs",
+        "symbol": "MAX_CHILD_FOUNDATION_BYTES_V1",
+        "kind": "const",
+        "expr": "128 * 1024"
+      },
+      "inclusive": true,
+      "framing": "The UTF-8 payload of the custom parameter, excluding its identifier and outer genesis envelope.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/runtime/child_admin/foundation.rs",
+          "contains": "if payload.get().len() > MAX_CHILD_FOUNDATION_BYTES_V1 {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin/foundation.rs",
+          "contains": "|| parameter.payload().get().len() > MAX_CHILD_FOUNDATION_BYTES_V1"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/child_admin/tests.rs",
+          "name": "foundation_reader_checks_json_size_before_decoding_the_recipe"
+        }
+      ],
+      "test_note": "The reader reaches recipe decoding for a canonically encoded JSON string of exactly the maximum byte length and refuses the same shape one byte over before decoding. A string is an intentionally invalid recipe; ordinary recipe tests separately round-trip a valid genesis value."
+    },
+    {
+      "id": "transaction.child_admin_signers",
+      "group": "transaction",
+      "what": "Maximum entries in each child administrator roster, provenance roster and certificate signature collection, with identity order, threshold and cryptographic verification checked independently.",
+      "unit": "count",
+      "value": 64,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+        "symbol": "MAX_CHILD_ADMIN_SIGNERS_V1",
+        "kind": "const",
+        "expr": "64"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "|| self.admins.len() > MAX_CHILD_ADMIN_SIGNERS_V1"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "provenance.signers.len() > MAX_CHILD_ADMIN_SIGNERS_V1"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "|| provenance.len() > MAX_CHILD_ADMIN_SIGNERS_V1"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "|| self.signatures.len() > MAX_CHILD_ADMIN_SIGNERS_V1"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/child_admin/tests.rs",
+          "name": "policy_and_certificate_admit_sixty_four_distinct_signers_and_refuse_sixty_five"
+        }
+      ],
+      "test_note": "The policy with 64 distinct sorted keys and its genuine 64-signature certificate pass verification. A 65th valid signature and distinct roster key each yield the original count refusal. The optional provenance lists use the same ceiling."
+    },
+    {
+      "id": "transaction.child_admin_policy_frame_bytes",
+      "group": "transaction",
+      "what": "Maximum complete canonical child-admin policy frame following policy shape and notice validation.",
+      "unit": "bytes",
+      "value": 65536,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+        "symbol": "MAX_CHILD_ADMIN_POLICY_BYTES_V1",
+        "kind": "const",
+        "expr": "64 * 1024"
+      },
+      "inclusive": true,
+      "framing": "Complete canonical Norito frame, as measured by canonical_frame_len.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "check_size(self, MAX_CHILD_ADMIN_POLICY_BYTES_V1)"
+        }
+      ],
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "Check canonical size accounting for the policy at its configured bound. Document the largest reachable canonical policy if stricter roster and algorithm shapes make an exact-size valid policy impossible."
+      }
+    },
+    {
+      "id": "transaction.child_admin_certificate_frame_bytes",
+      "group": "transaction",
+      "what": "Maximum complete canonical child-admin plan or certificate. The reader checks the incoming certificate before decoding.",
+      "unit": "bytes",
+      "value": 8388608,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+        "symbol": "MAX_CHILD_ADMIN_CERTIFICATE_BYTES_V1",
+        "kind": "const",
+        "expr": "8 * 1024 * 1024"
+      },
+      "inclusive": true,
+      "framing": "Complete canonical Norito frame including its header.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "if bytes.len() > MAX_CHILD_ADMIN_CERTIFICATE_BYTES_V1 {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+          "contains": "check_size(self, MAX_CHILD_ADMIN_CERTIFICATE_BYTES_V1)",
+          "count": 2
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/runtime/child_admin/tests.rs",
+          "name": "exact_threshold_certificate_and_instruction_round_trip"
+        }
+      ],
+      "test_note": "A signed valid certificate round-trips. An exact-limit malformed buffer reaches canonical decoding; appending one byte to it instead returns the typed size refusal before decoding."
+    },
+    {
+      "id": "work_budget.generic_carrier_max_gas",
+      "group": "work_budget",
+      "what": "Largest gas declaration in the first generic-carrier implementation profile. Each selected descriptor must also specify a positive gas budget.",
+      "unit": "gas",
+      "value": 10000000,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/runtime/catalog/generic_carriers.rs",
+        "symbol": "MAX_GAS",
+        "kind": "const",
+        "expr": "10_000_000"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/runtime/generic_carriers.rs",
+          "contains": "&& implementation.limits.max_gas <= profile::MAX_GAS"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/tests.rs",
+          "name": "wrong_host_and_undeclared_effect_families_never_reach_the_decoder"
+        },
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/tests.rs",
+          "name": "descriptor_accepts_profile_maxima_and_bounds_reads_and_writes_independently"
+        }
+      ],
+      "test_note": "The selected descriptor accepts the exact 10,000,000-gas and 64-effect ceilings with both storage access classes populated. The other test rejects a descriptor one over each ceiling independently."
+    },
+    {
+      "id": "queued_effects.generic_carrier_max_effects",
+      "group": "queued_effects",
+      "what": "Maximum ordered writes declared by one generic-carrier implementation. Execution compares queued effects with the selected implementation\u2019s own limit.",
+      "unit": "count",
+      "value": 64,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/runtime/catalog/generic_carriers.rs",
+        "symbol": "MAX_EFFECTS",
+        "kind": "const",
+        "expr": "64"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/runtime/generic_carriers.rs",
+          "contains": "&& implementation.limits.max_effects <= profile::MAX_EFFECTS"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/tests.rs",
+          "name": "wrong_host_and_undeclared_effect_families_never_reach_the_decoder"
+        },
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/tests.rs",
+          "name": "descriptor_accepts_profile_maxima_and_bounds_reads_and_writes_independently"
+        }
+      ],
+      "test_note": "The selected descriptor accepts the exact 10,000,000-gas and 64-effect ceilings with both storage access classes populated. The other test rejects a descriptor one over each ceiling independently."
+    },
+    {
+      "id": "storage.generic_carrier_declared_dependencies",
+      "group": "storage",
+      "what": "Maximum storage definitions in each declared read or write class of a selected generic-carrier implementation.",
+      "unit": "count",
+      "value": 16,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/runtime/catalog/generic_carriers.rs",
+        "symbol": "MAX_STORAGE_DEPENDENCIES",
+        "kind": "const",
+        "expr": "16"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/runtime/generic_carriers.rs",
+          "contains": "dependencies.len() <= profile::MAX_STORAGE_DEPENDENCIES"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/runtime/generic_carriers/tests.rs",
+          "name": "descriptor_accepts_profile_maxima_and_bounds_reads_and_writes_independently"
+        }
+      ],
+      "test_note": "Seventeen separate table definitions are installed. The selected descriptor accepts 16 distinct sorted owners in each class simultaneously and independently refuses a 17th read or write owner."
+    },
+    {
+      "id": "vm_handles.generic_carrier_captured_dependencies",
+      "group": "vm_handles",
+      "what": "Maximum read owners and write owners the VM host can capture independently after decoding the selected descriptor.",
+      "unit": "count",
+      "value": 16,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+        "symbol": "MAX_DEPENDENCIES",
+        "kind": "const",
+        "expr": "16"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "let mut reads = [None; MAX_DEPENDENCIES];"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "let mut writes = [None; MAX_DEPENDENCIES];"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "if decoded.implementation.reads.len() > reads.len()"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+          "contains": "|| decoded.implementation.writes.len() > writes.len()"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier/tests.rs",
+          "name": "captures_all_sixteen_owners_per_class_and_refuses_the_next_index"
+        }
+      ],
+      "test_note": "The host captures an original invocation with 16 distinct sorted installed storage owners in each access class. Every in-range index resolves to the exact owner; index 16 is refused for both reads and writes."
+    },
+    {
+      "id": "transaction.parliament_runtime_request_bytes",
+      "group": "transaction",
+      "what": "Maximum complete canonical request to create or retry an anonymous universal runtime-upgrade governance attempt. Execution checks the entire instruction after authority validation and before admitting either request variant.",
+      "unit": "bytes",
+      "value": 1048576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous/runtime_upgrade.rs",
+        "symbol": "MAX_RUNTIME_REQUEST_BYTES",
+        "kind": "const",
+        "expr": "1 << 20"
+      },
+      "inclusive": true,
+      "framing": "Complete canonical request instruction frame, before dispatch to the initial or retry case.",
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous/runtime_upgrade.rs",
+          "contains": "if length > MAX_RUNTIME_REQUEST_BYTES {"
+        }
+      ],
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "Exercise the length check at the boundary on a variable-size, authorized initial request and the independently bounded retry form, whose payload is a fixed predecessor identity. Preserve the original enclosing Norito refusal."
+      }
+    },
+    {
+      "id": "storage.runtime_carrier_artifact_restore_bytes",
+      "group": "storage",
+      "what": "Maximum restored generic-carrier artifact body in either the current or undo snapshot record. The local name aliases the canonical artifact image limit.",
+      "unit": "bytes",
+      "value": 1048576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/state/snapshot_storage/carrier.rs",
+        "symbol": "MAX",
+        "kind": "const",
+        "expr": "iroha_data_model::isi::runtime_carrier::MAX_CARRIER_ARTIFACT_BYTES_V1"
+      },
+      "inclusive": true,
+      "refs": {
+        "iroha_data_model::isi::runtime_carrier::MAX_CARRIER_ARTIFACT_BYTES_V1": "transaction.runtime_carrier_artifact_bytes"
+      },
+      "framing": "Unwrapped image bytes. Record parsing first permits the eight-byte length prefix, and binary storage uses two hexadecimal digits per byte.",
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/state/snapshot_storage/carrier.rs",
+          "contains": "record(hex, MAX, budget)"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/state/snapshot_storage/carrier.rs",
+          "contains": "record(value.expect(\"current values cannot be null\"), MAX, budget)?"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/state/snapshot_storage/carrier.rs",
+          "contains": "if frame.len() > maximum {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/state/generic_carrier_storage/tests.rs",
+          "name": "artifact_snapshot_bounds_each_current_and_undo_image_independently"
+        }
+      ],
+      "test_note": "The shipping reader restores the exact-size current and undo image bodies from a normally serialized snapshot. Each independently lengthened canonical body is refused, and the original allocation pool releases all temporary reservations after success or refusal."
     }
   ],
   "relations": [
@@ -26558,6 +27117,30 @@
           "MAX_INVENTORY_BYTES": "4096",
           "MAX_JSON_BYTES": "2048"
         }
+      },
+      {
+        "reason": "The stopped-source retirement review accepts a bounded local manifest and removal request. It counts source units, per-unit native owners and retained uses, measures canonical manifest bytes, and checks path and label lengths and path depth before inspecting the reviewed file preimages. These constants constrain the offline source inventory and proposal. The API returns local review evidence and cannot authorize source removal or change transaction, block, proof or protocol validity.",
+        "files": [
+          {
+            "path": "crates/iroha_core/src/runtime/retirement/source_ownership.rs",
+            "symbols": [
+              "MAX_SOURCE_UNITS",
+              "MAX_SOURCE_OWNERS",
+              "MAX_SOURCE_PATH_BYTES",
+              "MAX_MANIFEST_BYTES",
+              "MAX_PATH_COMPONENTS",
+              "MAX_OWNER_LABEL_BYTES"
+            ],
+            "exprs": {
+              "MAX_SOURCE_UNITS": "256",
+              "MAX_SOURCE_OWNERS": "64",
+              "MAX_SOURCE_PATH_BYTES": "1024",
+              "MAX_MANIFEST_BYTES": "8 * 1024 * 1024",
+              "MAX_PATH_COMPONENTS": "32",
+              "MAX_OWNER_LABEL_BYTES": "256"
+            }
+          }
+        ]
       }
     ],
     "literals": {
@@ -27086,6 +27669,18 @@
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/suffix_custody/records.rs",
               "sites": {
                 "self.certified_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/child_admin.rs",
+              "sites": {
+                "change_set.effective_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/runtime_retirement_cut.rs",
+              "sites": {
+                "view.height() < 2": 1
               }
             }
           ]
@@ -28119,6 +28714,24 @@
               "sites": {
                 "bytes > u32::MAX as usize / 9": 1
               }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+              "sites": {
+                "input .take(4)": 2
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/keyed_schema/carrier.rs",
+              "sites": {
+                "(0x20..=0x7e).contains(&byte)": 2
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/keyed_state/range.rs",
+              "sites": {
+                "table.len() >= u32::MAX as usize / 9": 1
+              }
             }
           ]
         },
@@ -28481,6 +29094,12 @@
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix/prepare.rs",
               "sites": {
                 "(done + 8).min(total)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/carrier/codec.rs",
+              "sites": {
+                ".saturating_mul(2) .max(64)": 1
               }
             }
           ]
@@ -29702,6 +30321,12 @@
               "sites": {
                 "count >= 2 * MAX_PENDING": 1
               }
+            },
+            {
+              "path": "crates/iroha_core/src/state/snapshot_storage/carrier.rs",
+              "sites": {
+                "hex.len() / 2 > maximum": 1
+              }
             }
           ]
         },
@@ -30557,6 +31182,17 @@
               "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/settlement.rs",
               "sites": {
                 "signed_wire.len() > 64 * 1024": 2
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Each slash-delimited component of a path in the offline source-removal manifest may contain at most 255 ASCII bytes. canonical_path also checks its spelling and the overall path and depth before opening any reviewed file. This predicate accepts local source inventory paths only.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/runtime/retirement/source_ownership.rs",
+              "sites": {
+                "part.len() <= 255": 1
               }
             }
           ]

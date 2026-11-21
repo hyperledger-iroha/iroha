@@ -65,6 +65,67 @@ fn certificate(
 }
 
 #[test]
+fn policy_and_certificate_admit_sixty_four_distinct_signers_and_refuse_sixty_five() {
+    let (mut state, _) = fixture();
+    let mut keys: Vec<_> = (1..=65)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
+        .collect();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    state.policy.admins = keys[..64]
+        .iter()
+        .map(|key| key.public_key().clone())
+        .collect();
+    state.policy.threshold = 64;
+    state.policy.validate().unwrap();
+    let mut signed = certificate(&state, &keys[..64]);
+    signed.verify_against(&state, 5).unwrap();
+
+    signed
+        .signatures
+        .push(ChildAdminSignatureV1::sign(&signed.plan, &keys[64]).unwrap());
+    assert!(matches!(
+        signed.verify_signatures(),
+        Err(ChildAdminErrorV1::Shape(
+            "invalid certificate signer order or count"
+        ))
+    ));
+    state.policy.admins.push(keys[64].public_key().clone());
+    assert!(matches!(
+        state.policy.validate(),
+        Err(ChildAdminErrorV1::Shape("invalid admin roster or revision"))
+    ));
+}
+
+#[test]
+fn foundation_reader_checks_json_size_before_decoding_the_recipe() {
+    use super::foundation::{ChildRuntimeFoundationV1, MAX_CHILD_FOUNDATION_BYTES_V1};
+    use crate::parameter::CustomParameter;
+    use iroha_primitives::json::Json;
+
+    for size in [
+        MAX_CHILD_FOUNDATION_BYTES_V1,
+        MAX_CHILD_FOUNDATION_BYTES_V1 + 1,
+    ] {
+        let payload = Json::try_new("x".repeat(size - 2)).unwrap();
+        assert_eq!(payload.get().len(), size);
+        let parameter =
+            CustomParameter::new(ChildRuntimeFoundationV1::parameter_id().clone(), payload);
+        let result = ChildRuntimeFoundationV1::from_custom_parameter(&parameter);
+        if size == MAX_CHILD_FOUNDATION_BYTES_V1 {
+            // At the limit the reader reaches the decoder, which requires a recipe object.
+            assert!(matches!(result, Err(ChildAdminErrorV1::Resource(_))));
+        } else {
+            assert!(matches!(
+                result,
+                Err(ChildAdminErrorV1::Shape(
+                    "invalid child foundation parameter identity or size"
+                ))
+            ));
+        }
+    }
+}
+
+#[test]
 fn exact_threshold_certificate_and_instruction_round_trip() {
     let (state, keys) = fixture();
     let certificate = certificate(&state, &keys[..2]);
@@ -96,13 +157,16 @@ fn exact_threshold_certificate_and_instruction_round_trip() {
     let mut trailing = bytes;
     trailing.push(0);
     assert!(ChildRuntimeAdminCertificateV1::from_bytes(&trailing).is_err());
-    assert!(
-        ChildRuntimeAdminCertificateV1::from_bytes(&vec![
-            0;
-            MAX_CHILD_ADMIN_CERTIFICATE_BYTES_V1 + 1
-        ])
-        .is_err()
-    );
+    let mut malformed = vec![0; MAX_CHILD_ADMIN_CERTIFICATE_BYTES_V1];
+    assert!(matches!(
+        ChildRuntimeAdminCertificateV1::from_bytes(&malformed),
+        Err(ChildAdminErrorV1::Resource(_))
+    ));
+    malformed.push(0);
+    assert!(matches!(
+        ChildRuntimeAdminCertificateV1::from_bytes(&malformed),
+        Err(ChildAdminErrorV1::TooLarge)
+    ));
     assert_eq!(
         certificate.plan.id().unwrap(),
         certificate.plan.clone().id().unwrap()
