@@ -520,13 +520,12 @@ function projectBrowserConnectApproval(value, preview, config) {
       "browser Connect approval",
       "invalid_wallet_approval",
     );
-    const network = networkIdBytes(approval.networkId, "browser Connect approval.networkId");
+    networkIdBytes(approval.networkId, "browser Connect approval.networkId");
     const previewNetwork = preview == null ? undefined : ownDataDescriptor(
       preview, "networkId", "Connect preview", "invalid_wallet_approval",
     )?.value;
     const expectedNetwork = previewNetwork ?? config.networkId;
-    if (expectedNetwork !== undefined &&
-        !Buffer.from(network).equals(networkIdBytes(expectedNetwork, "Connect session networkId"))) {
+    if (expectedNetwork !== undefined && !approval.networkId.equals(expectedNetwork)) {
       throw new TypeError("browser Connect approval belongs to another network");
     }
     if (Object.hasOwn(approval, "nativeIdentity")) {

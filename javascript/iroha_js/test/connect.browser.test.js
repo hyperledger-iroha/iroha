@@ -1938,6 +1938,7 @@ test("browser-only Connect verifies approval and raw signature using native Tori
     stdin: { contents: [
       'export * from "@iroha/iroha-js/connect-browser";',
       'export { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";',
+      'export { NexusAppClient } from "@iroha/iroha-js/nexus-app";',
     ].join("\n"), resolveDir: process.cwd() },
     platform: "browser", format: "esm", bundle: true, write: false, metafile: true,
   });
@@ -1974,6 +1975,13 @@ test("browser-only Connect verifies approval and raw signature using native Tori
   }));
   const approval = await session.waitForApproval();
   assert.equal(approval.accountId, account.accountId);
+  const project = (networkId) => new browser.NexusAppClient({
+    baseUrl: "https://taira.sora.org", chainDiscriminant: 753, networkId,
+  }).awaitApproval({ sid: preview.sidBase64Url, appSession: session });
+  await assert.rejects(project(browser.NetworkId.parse(preview.networkId.literal)), (error) =>
+    error.code === "invalid_account_id" && error.cause?.nativeStatus === "browser_unavailable");
+  await assert.rejects(project(browser.NetworkId.fromBytes(new Uint8Array(32).fill(3))), (error) =>
+    error.code === "invalid_wallet_approval" && error.cause?.message.includes("another network"));
   const auth = await browser.createConnectCanonicalRequestAuth(session);
   const message = Uint8Array.of(1, 2, 3);
   const signature = auth.sign({ message });
