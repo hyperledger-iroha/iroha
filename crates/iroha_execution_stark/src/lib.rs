@@ -45,7 +45,7 @@ pub mod verifier;
 pub use circuit::{Builder, Circuit, Expr};
 pub use params::{Params, ParamsError};
 pub use proof::{Checkpoint, Proof, Statement, max_proof_bytes};
-pub use prover::{ProveError, check_trace, circuit_id, prove};
+pub use prover::{ProveError, check_trace, circuit_id, prove, prove_with_phase_timings};
 pub use verifier::{VerifyError, verify};
 
 #[cfg(test)]
@@ -174,6 +174,18 @@ mod tests {
         let bytes = proof.to_bytes();
         assert_eq!(Proof::from_bytes(&bytes).unwrap(), proof);
         assert!(Proof::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn phase_timings_preserve_proof_bytes() {
+        let circuit = toy_circuit(8);
+        let (statement, public, states) = toy_run(200, circuit.rows());
+        let params = fast_params();
+        let plain = prove(&circuit, &params, &statement, &public, &states).unwrap();
+        let timed =
+            prove_with_phase_timings(&circuit, &params, &statement, &public, &states).unwrap();
+        assert_eq!(plain.to_bytes(), timed.to_bytes());
+        verify(&circuit, &params, &statement, &public, &timed).unwrap();
     }
 
     #[test]
