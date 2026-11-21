@@ -10537,6 +10537,7 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     // owner (slice 4) decides each signerless ballot of a block against the board recomputed
     // from World, through the board's own block execution, and the queue's ballot partition
     // admits a ballot through the board's own admission checks before claiming its nullifier.
+    // The codec refusal adapter borrows the original local cause through typed ballot errors.
     assert_eq!(
         node_uses,
         [
@@ -10551,6 +10552,10 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/ballot_lifecycle.rs",
                 "use iroha_parliament_ballot::board::BallotBoardV1;"
+            ),
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous/codec_refusal.rs",
+                "use iroha_parliament_ballot::{"
             ),
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs",
