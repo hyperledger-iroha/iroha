@@ -1,6 +1,7 @@
 //! Actual lifecycle owners under exhausted ordinary credit and bounded diagnostics.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{
     Memory,
     encoding::wide,
@@ -94,6 +95,7 @@ fn exhausted_write_credit_does_not_block_private_reset_or_mode_transition() {
         let mut funded = IVM::try_new_with_memory_budget(10_000, &budget).unwrap();
         seed(&mut funded);
         let mut ordinary = local_vm();
+        funded.memory.ensure_merkle_storage().unwrap();
         let occupied = budget.reserved_bytes();
         budget.set_limit_bytes(0);
         let gas = funded.remaining_gas();
@@ -146,7 +148,6 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
         let registers = vm.registers.snapshot();
         let tags = vm.registers.snapshot_tags();
         let gas = vm.remaining_gas();
-        let epoch = vm.proof_state_epoch;
         let pc = vm.pc;
         let max_cycles = vm.max_cycles;
         let diagnostic = recorder(15);
@@ -154,7 +155,7 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
             .install_diagnostic_access_recorder(diagnostic.shared())
             .unwrap();
         assert!(
-            matches!(transition(&mut vm, action), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(transition(&mut vm, action), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             )),
             "{action:?}"
@@ -165,7 +166,6 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
         assert_eq!(vm.registers.snapshot(), registers);
         assert_eq!(vm.registers.snapshot_tags(), tags);
         assert_eq!(vm.remaining_gas(), gas);
-        assert_eq!(vm.proof_state_epoch, epoch);
         assert_eq!(vm.pc, pc);
         assert_eq!(vm.max_cycles, max_cycles);
         assert!(vm.zk_mode_enabled());
@@ -197,9 +197,9 @@ fn invalid_range_rejects_before_zeroing_an_earlier_valid_range() {
         let root = vm.memory.root().unwrap();
         assert!(matches!(
             transition(&mut vm, action),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::LocalInvariantViolation
-            ))
+            )))
         ));
         assert_secret_bytes(&vm);
         assert_eq!(vm.private_memory_bytes, ranges);

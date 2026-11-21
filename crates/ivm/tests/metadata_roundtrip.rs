@@ -1,4 +1,5 @@
 use ivm::{METADATA_MAGIC, ProgramMetadata, VMError};
+use ivm_abi::error::VmTrap;
 #[test]
 fn metadata_encode_parse_roundtrip() {
     let cases = vec![
@@ -42,7 +43,7 @@ fn metadata_parse_rejects_bad_magic_and_short() {
     let short = vec![0u8; 8];
     assert!(matches!(
         ProgramMetadata::parse(&short),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
     // Wrong magic
     let mut m = ProgramMetadata::default().encode();
@@ -50,12 +51,12 @@ fn metadata_parse_rejects_bad_magic_and_short() {
     bad[0] = b'X';
     assert!(matches!(
         ProgramMetadata::parse(&bad),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
     // A non-ZK header cannot declare a trace bound.
     m[ivm::HEADER_BUDGET_OFFSET] = 1;
     assert!(matches!(
         ProgramMetadata::parse(&m),
-        Err(VMError::MaxCyclesWithoutZk { max_cycles: 1 })
+        Err(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 1 }))
     ));
 }

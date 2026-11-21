@@ -156,6 +156,29 @@ impl norito::NoritoSchema for RetainedFinalizedGlobalThresholdBeaconSessionV1 {
         <FinalizedGlobalThresholdBeaconKeySessionRecordV1 as norito::NoritoSchema>::frame_name()
     }
 }
+// Structural release evidence follows the exact signed DTO serialized by `borrowed`,
+// including every nested public proof. Physical validated graph and budget owners have no wire
+// fields. Register the alias's Rust identity as well so nested schema references stay complete.
+#[cfg(test)]
+impl iroha_schema::TypeId for RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+    fn id() -> String {
+        <FinalizedGlobalThresholdBeaconKeySessionRecordV1 as iroha_schema::TypeId>::id()
+    }
+}
+#[cfg(test)]
+impl iroha_schema::IntoSchema for RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+    fn type_name() -> String {
+        <FinalizedGlobalThresholdBeaconKeySessionRecordV1 as iroha_schema::IntoSchema>::type_name()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        <FinalizedGlobalThresholdBeaconKeySessionRecordV1 as iroha_schema::IntoSchema>::update_schema_map(map);
+        let record = map
+            .get::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>()
+            .expect("the signed finalized record registered its complete schema")
+            .clone();
+        map.insert::<Self>(record);
+    }
+}
 impl SerializePayload for RetainedFinalizedGlobalThresholdBeaconSessionV1 {
     fn serialize(&self, out: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.borrowed().serialize(out)

@@ -11,6 +11,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use std::str::FromStr;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -96,7 +97,10 @@ fn test_balance_syscall_permission() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
-    assert!(matches!(result, Err(VMError::PermissionDenied)));
+    assert!(matches!(
+        result,
+        Err(VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Grant permission and retry using a fresh WSV instance
     let mut wsv2 = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
@@ -164,7 +168,10 @@ fn test_transfer_syscall_permission() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
-    assert!(matches!(result, Err(VMError::PermissionDenied)));
+    assert!(matches!(
+        result,
+        Err(VMError::Trap(VmTrap::PermissionDenied))
+    ));
     let mut wsv2 = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
         ((bob.clone(), asset.clone()), Quantity::zero()),
@@ -179,7 +186,10 @@ fn test_transfer_syscall_permission() {
         .expect("alloc dataspace tlv");
     vm.set_register(14, dataspace_ptr);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::Trap(VmTrap::PermissionDenied))
+    ));
     vm.set_register(14, 0);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer syscall failed");
@@ -220,7 +230,10 @@ fn test_mint_syscall_permission() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
-    assert!(matches!(result, Err(VMError::PermissionDenied)));
+    assert!(matches!(
+        result,
+        Err(VMError::Trap(VmTrap::PermissionDenied))
+    ));
     let mut wsv2 =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));

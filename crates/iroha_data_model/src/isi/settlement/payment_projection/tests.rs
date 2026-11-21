@@ -8,7 +8,7 @@ use crate::{
         AtomicSettlementEscrows, AtomicSettlementMovement, AtomicSettlementMovements, SettlementId,
     },
     transaction::{
-        FeeChargeLimit, FeePaymentIntent, TransactionBuilder,
+        FeeChargeLimit, FeePaymentIntent, TransactionBuilder, TransactionResult,
         error::{TransactionLimitError, TransactionRejectionReason},
     },
 };

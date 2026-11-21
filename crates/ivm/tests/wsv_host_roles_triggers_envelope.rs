@@ -7,6 +7,7 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::codec::encode_canonical_norito;
+use ivm_abi::error::VmTrap;
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -45,7 +46,7 @@ fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
         assert!(
             matches!(
                 host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "JSON pointer must be rejected before interpreting tag {tag}"
         );

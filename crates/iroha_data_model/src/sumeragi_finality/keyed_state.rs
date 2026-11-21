@@ -46,7 +46,7 @@ use norito::{
 mod build;
 pub use build::KeyedStateBuilderV1;
 mod range;
-pub use range::StateRangeProofV1;
+pub use range::{StateRangeProofV1, StateTableVisitError};
 
 type Digest = [u8; 32];
 const DOMAIN: &[u8] = b"iroha:keyed-state:radix:blake3:v1\0";

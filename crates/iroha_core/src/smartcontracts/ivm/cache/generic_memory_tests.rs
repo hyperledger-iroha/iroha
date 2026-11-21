@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseFuture};
+use ivm_abi::error::VmDeferral;
 use std::{
     future::Future,
     pin::Pin,
@@ -37,9 +38,9 @@ fn prepare(cache: &mut IvmCache) -> GenericProgramSummary {
 fn capacity_refusal<T>(result: &Result<T, ivm::VMError>) {
     assert!(matches!(
         result,
-        Err(ivm::VMError::AllocationDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
 }
 
@@ -54,7 +55,7 @@ fn prepared_arrays_refuse_original_pool_and_survive_eviction_until_final_owner()
     let cache = PreparedContractCache::with_execution_budget(1, budget.clone());
     assert!(matches!(
         cache.get_or_prepare(hash, &program),
-        Err(ivm::VMError::AllocationDeferred(_))
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     assert!(cache.get(hash).is_none());
@@ -90,10 +91,10 @@ fn generic_verifier_refuses_zero_original_pool_and_retries_without_publishing() 
     let program = super::tests::minimal_generic_program();
     assert!(matches!(
         cache.summarize_generic_program(&program),
-        Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes,
             limit_bytes: 0,
-        })) if requested_bytes > 0
+        }))) if requested_bytes > 0
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(budget.peak_reserved_bytes(), 0);
@@ -169,10 +170,10 @@ fn generic_template_refusal_releases_unpublished_vm_and_allows_retry() {
 
     assert!(matches!(
         cache.checkout_generic_runtime(&summary, GAS, HEAP),
-        Err(ivm::VMError::AllocationDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { limit_bytes, .. }
                 | AllocationRefusal::ExceedsLimit { limit_bytes, .. }
-        )) if limit_bytes == vm_bytes
+        ))) if limit_bytes == vm_bytes
     ));
     assert_eq!(budget.reserved_bytes(), summary_bytes);
     assert!(cache.with_local(|local| local.runtime_templates.is_empty()));

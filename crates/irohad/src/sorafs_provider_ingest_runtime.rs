@@ -2301,8 +2301,8 @@ fn observe_committed_provider_transaction(
     }
     match u32::try_from(index)
         .ok()
-        .and_then(|index| block.network_output_at(index))
-        .map(|(_, output)| output.result.as_ref())
+        .and_then(|index| block.network_execution_output_at(index))
+        .map(|(_, output)| output.result().as_ref())
     {
         Some(Ok(_)) => ProviderIngestTransactionObservationV1::CommittedSuccess,
         Some(Err(_)) => ProviderIngestTransactionObservationV1::CommittedRejected,

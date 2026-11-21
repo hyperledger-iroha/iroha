@@ -24,11 +24,17 @@ filenames, local Git excludes, and untracked rules cannot authorize that excepti
 Cargo home must be absolute and canonical, and Cargo
 configuration cannot traverse symlinks. Unsigned Cargo configuration in the checkout, ancestor
 directories, or Cargo home is rejected. Use a new absolute target directory and
-a new absolute evidence directory outside the repository. Both release builds
+a new absolute evidence directory outside the repository. Both standalone smoke builds
 use locked offline dependencies, four build jobs, no incremental artifacts and
 no sccache reuse. The installed compiler, dependency cache, linker and system
 libraries remain trusted build-environment prerequisites; retained compiler and
 Cargo version logs do not constitute hermetic toolchain qualification.
+
+For a registered release scope, select `--kind registered_release_smoke` for
+both commands below. This ten-run gate builds the same two release images with
+the registered configuration's single Cargo job and one codegen unit for both
+release code and build dependencies. Its retained commands bind those settings,
+and the registered session requires the exact executables that passed those runs.
 
 ```sh
 python3 scripts/private_settlement_smoke_campaign.py run \

@@ -354,7 +354,7 @@ pub struct RuntimeUpgradeListItem {
     Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradesListResponse")]
-/// The selection the universal root executes, the committee that attests change sets, and
+/// The selection this execution root executes, the committee that attests change sets, and
 /// every recorded change set.
 pub struct RuntimeUpgradesListResponse {
     /// Identity of the committed selection, 32-byte lowercase hex: the predecessor a new
@@ -1693,9 +1693,10 @@ pub struct RuntimeDraftUpgradeResponse {
 /// selection, the change set that activates the addition in the body at its effective height
 /// (`specs/live_runtime_upgrades.md` §4, §6). It publishes the addition's definitions the root
 /// lacks, installs its storage, activates its interfaces and implementation and binds its wire
-/// IDs. Release signers endorse its identity, `POST /v1/runtime/upgrades/propose` drafts the
-/// proposal that schedules it, and every validator attests it; admission checks notice and
-/// provenance when the signed proposal executes.
+/// IDs. Release signers endorse its root-bound identity. For the Universal root,
+/// `POST /v1/runtime/upgrades/propose` drafts the SORA Parliament proposal. A founded child
+/// uses its administrator certificate instead. Every validator independently attests support;
+/// scheduling checks the root's committed notice and provenance.
 ///
 /// # Errors
 /// Returns an error when the qualification is not 32 bytes of hex, the addition is not one of this
@@ -1762,8 +1763,9 @@ pub struct RuntimeDraftMigrationRequest {
 }
 /// POST /v1/runtime/migrations/draft — draft, from this node's release catalog and the committed
 /// selection, the change set of one step of a migration (`specs/live_runtime_upgrades.md` §5.4).
-/// Release signers endorse its identity, `POST /v1/runtime/upgrades/propose` drafts the proposal
-/// that schedules it, and every validator attests it. A root admits a migration only once it has
+/// Release signers endorse its root-bound identity. The Universal root schedules it through
+/// SORA Parliament and a founded child through its administrator certificate. Every validator
+/// independently attests it. A root admits a migration only once it has
 /// activated the kernel's lifecycle State, and a cut-over or a retirement only once the
 /// migration's record allows it; the activation enforces both.
 ///
@@ -1847,6 +1849,19 @@ fn runtime_release(
         .map_err(|error| runtime_conversion_error(format!("release digest: {error}")))?;
     Ok((catalog, digest))
 }
+/// Keep an unfinished support check out of the deterministic HTTP conversion-error path.
+fn runtime_support_attempt_error<E: std::fmt::Display>(
+    error: iroha_core::execution_attempt::ExecutionAttemptError<E>,
+) -> crate::Error {
+    match error {
+        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+            crate::Error::TransactionAdmissionDeferred(original)
+        }
+        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            runtime_conversion_error(error.to_string())
+        }
+    }
+}
 /// POST /v1/runtime/upgrades/attest/{id} — sign, with this node's validator key, its support
 /// for the scheduled change set `id`, and draft the instruction that records it for an operator
 /// to submit (`specs/live_runtime_upgrades.md` §6, "Attest"). The node attests only a successor
@@ -1886,13 +1901,26 @@ pub async fn handle_runtime_attest_upgrade(
         signer,
         release,
     )
-    .map_err(|error| runtime_conversion_error(error.to_string()))?;
-    let boxed: iroha_data_model::isi::InstructionBox =
-        iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1 { attestation }.into();
+    .map_err(runtime_support_attempt_error)?;
+    let boxed = support_attestation_instruction(attestation);
     Ok(ProposeUpgradeResponse {
         ok: true,
         tx_instructions: vec![instruction_box_to_tx_instr(&boxed)],
     })
+}
+/// Preserve the authenticated change set's root in the instruction the operator relays.
+fn support_attestation_instruction(
+    attestation: iroha_data_model::runtime::lifecycle::SignedSupportAttestationV1,
+) -> iroha_data_model::isi::InstructionBox {
+    use iroha_data_model::runtime::lifecycle::RootScopeV1;
+    match attestation.attestation.root {
+        RootScopeV1::Universal => {
+            iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1 { attestation }.into()
+        }
+        RootScopeV1::DataSpace(_) => {
+            iroha_data_model::isi::child_runtime::AttestChildRuntimeSupportV1 { attestation }.into()
+        }
+    }
 }
 /// GET /v1/runtime/release — this node's release, whether it executes the committed selection,
 /// and whether it executes the successor of each scheduled change set, naming the first
@@ -1910,13 +1938,16 @@ pub async fn handle_runtime_release(
     state: Arc<iroha_core::state::State>,
     build: &iroha_torii_shared::status::BuildStatus,
 ) -> Result<RuntimeReleaseResponse, crate::Error> {
-    use iroha_core::runtime::attestation::{ReleaseSupport, release_support, successor_selection};
+    use iroha_core::runtime::attestation::{
+        ReleaseSupport, committed_release_support, successor_release_support,
+    };
     let (catalog, release) = runtime_release(build)?;
-    let support = |selection: &iroha_data_model::runtime::definition::RootSelectionV1| {
+    let support = |selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+                   observed: ReleaseSupport| {
         let id = selection
             .id()
             .map_err(|error| runtime_conversion_error(format!("selection identity: {error}")))?;
-        let missing = match release_support(catalog, selection) {
+        let missing = match observed {
             ReleaseSupport::Supported => None,
             ReleaseSupport::Missing(definition) => Some(hex::encode(definition.0)),
         };
@@ -1927,15 +1958,22 @@ pub async fn handle_runtime_release(
         })
     };
     let world = state.world_view();
-    let selection = support(world.runtime_selection())?;
+    let observed = committed_release_support(catalog, &world)
+        .map_err(|original| runtime_support_attempt_error(original.into_attempt()))?;
+    let selection = support(world.runtime_selection(), observed)?;
     let mut scheduled = Vec::new();
     for (id, record) in world.runtime_change_sets().iter() {
         if record.status != iroha_data_model::runtime::lifecycle::ChangeSetStatusV1::Scheduled {
             continue;
         }
-        let (successor, unresolved) = match successor_selection(&world, *id) {
-            Ok((_, successor)) => (Some(support(&successor)?), None),
-            Err(error) => (None, Some(error.to_string())),
+        let (successor, unresolved) = match successor_release_support(&world, *id) {
+            Ok((_, successor, observed)) => (Some(support(&successor, observed)?), None),
+            Err(iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error)) => {
+                (None, Some(error.to_string()))
+            }
+            Err(original @ iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_)) => {
+                return Err(runtime_support_attempt_error(original));
+            }
         };
         scheduled.push(RuntimeChangeSetSupport {
             id_hex: hex::encode(id.0),
@@ -1960,6 +1998,29 @@ mod tests {
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
     use iroha_crypto::Algorithm;
+
+    #[test]
+    fn original_runtime_support_refusal_remains_service_unavailable() {
+        use axum::response::IntoResponse as _;
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX);
+        let original = norito::with_decode_limits_scope(limits, || {
+            norito::core::classify_decode_attempt(|| {
+                norito::core::read_seq_len_slice(&1_u64.to_le_bytes())
+            })
+            .unwrap_err()
+        });
+        let expected = original.local_refusal().unwrap();
+        let error = runtime_support_attempt_error(
+            iroha_core::runtime::attestation::ReleaseSupportError::Codec(original).into_attempt(),
+        );
+        assert!(
+            matches!(&error, crate::Error::TransactionAdmissionDeferred(actual) if actual.decode_refusal() == Some(&expected))
+        );
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 
     #[test]
     fn runtime_upgrade_instruction_drafts_use_canonical_wire_ids_and_frames() {
@@ -2920,6 +2981,87 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn runtime_drafts_c10_registration_storage_and_service_from_the_installed_root() {
+        use iroha_data_model::{
+            ivm_c10::{RegisterSmartContractCodeC10V1, RegisterTriggerC10V1},
+            runtime::{definition::DefinitionDescriptorV1, lifecycle::SelectionTransitionV1},
+        };
+        let state = Arc::new(State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let catalog = iroha_core::runtime::release_catalog().unwrap();
+        let module = "iroha.runtime.ivm_c10.v1";
+        let addition = catalog
+            .additions
+            .iter()
+            .find(|a| a.module == module)
+            .unwrap();
+        let response = handle_runtime_draft_upgrade(
+            state.clone(),
+            NoritoJson(RuntimeDraftUpgradeRequest {
+                addition: module.into(),
+                effective_height: 40,
+                qualification_hex: hex::encode([0xc1; 32]),
+            }),
+        )
+        .await
+        .unwrap();
+        let change = response.change_set;
+        assert_eq!(response.id_hex, hex::encode(change.id().unwrap().0));
+        assert_eq!(change.predecessor, catalog.baseline_id);
+        assert_ne!(change.successor, change.predecessor);
+        assert_eq!(change.effective_height, 40);
+        assert_eq!(change.qualification, [0xc1; 32]);
+        let published = catalog
+            .baseline_definitions
+            .iter()
+            .map(|id| (*id, catalog.definitions[id].clone()))
+            .collect::<BTreeMap<_, _>>();
+        let applied = change.apply(&catalog.baseline, &published).unwrap();
+        let services = applied.selection.services_profile;
+        assert_ne!(services, catalog.baseline.services_profile);
+        let DefinitionDescriptorV1::Implementation(template) =
+            &catalog.definitions[&addition.implementation]
+        else {
+            panic!("C10 registration template must be an implementation");
+        };
+        for wire in [
+            RegisterSmartContractCodeC10V1::WIRE_ID,
+            RegisterTriggerC10V1::WIRE_ID,
+        ] {
+            let binding = applied
+                .selection
+                .bindings
+                .iter()
+                .find(|binding| binding.wire_id == wire)
+                .expect("successor must bind the C10 registration");
+            // Composition publishes the registration with the successor's services.
+            let DefinitionDescriptorV1::Implementation(implementation) =
+                &applied.published[&binding.implementation]
+            else {
+                panic!("C10 registration must bind a published implementation");
+            };
+            assert_eq!(implementation.code, template.code);
+            assert_eq!(implementation.services_profile, services);
+        }
+        for id in addition.storage.values() {
+            assert!(
+                change
+                    .transitions
+                    .contains(&SelectionTransitionV1::InstallStorage(*id))
+            );
+        }
+        assert!(
+            change
+                .transitions
+                .contains(&SelectionTransitionV1::SetServicesProfile(services))
+        );
+        assert_eq!(*state.view().world().runtime_selection(), catalog.baseline);
+    }
+
     /// A change set that only deprecates the baseline's native bundle, so this release
     /// executes its successor.
     fn deprecate_baseline_bundle(
@@ -3070,6 +3212,59 @@ mod tests {
             successor.selection_id_hex,
             hex::encode(change_set.successor.0)
         );
+    }
+
+    #[test]
+    fn support_drafts_preserve_signed_root_in_the_exact_instruction_family() {
+        use iroha_data_model::{
+            isi::{
+                child_runtime::AttestChildRuntimeSupportV1, runtime_upgrade::AttestRuntimeSupportV1,
+            },
+            runtime::lifecycle::{RootScopeV1, SupportAttestationV1},
+        };
+        let key = validator_keys().remove(0);
+        let change = deprecate_baseline_bundle(150);
+        for root in [
+            RootScopeV1::Universal,
+            RootScopeV1::DataSpace(iroha_model_base::topology::DataSpaceId::new(
+                (1_u64 << 42) + 9,
+            )),
+        ] {
+            let signed = SupportAttestationV1 {
+                network: change.network,
+                root,
+                change_set: change.id().unwrap(),
+                predecessor: change.predecessor,
+                successor: change.successor,
+                committee: [3; 32],
+                tested_checkpoint: 100,
+                valid_from: 150,
+                valid_until: 151,
+                release: [4; 32],
+                validator: key.public_key().clone(),
+            }
+            .sign(key.private_key())
+            .unwrap();
+            let instruction = support_attestation_instruction(signed.clone());
+            let actual = match root {
+                RootScopeV1::Universal => {
+                    &instruction
+                        .as_any()
+                        .downcast_ref::<AttestRuntimeSupportV1>()
+                        .unwrap()
+                        .attestation
+                }
+                RootScopeV1::DataSpace(_) => {
+                    &instruction
+                        .as_any()
+                        .downcast_ref::<AttestChildRuntimeSupportV1>()
+                        .unwrap()
+                        .attestation
+                }
+            };
+            assert_eq!(actual, &signed);
+            actual.verify().unwrap();
+        }
     }
 
     #[tokio::test]

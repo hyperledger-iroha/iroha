@@ -1,6 +1,7 @@
 //! Native direct jumps joined to the original private control and history columns.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn instruction(wide_offset: bool, offset: i32) -> u32 {
     if wide_offset {
@@ -129,7 +130,7 @@ fn direct_jump_gas_binds_two_full_width_units_and_forbids_underflow() {
         for available in [0, 1] {
             let (_, recorder, outcome) =
                 shifts::capture(&[jump], &[], root_setup_gas() + available, 32);
-            assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             let trapped = &recorder.records()[0];
             assert_eq!(trapped.opcode_gas, Some(2));
             assert!(matches!(trapped.outcome, DiagnosticStepOutcome::Trapped(_)));
@@ -176,7 +177,10 @@ fn direct_jump_cycle_limit_and_one_cycle_commit_are_exact() {
     for wide_offset in [false, true] {
         let jump = instruction(wide_offset, 0);
         let (program, recorder, outcome) = shifts::capture(&[jump], &[], 128, 1);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let fixture = ScalarFixture::from_record(&program, &recorder.records()[0]);
         assert!(fixture.accepts(&program));

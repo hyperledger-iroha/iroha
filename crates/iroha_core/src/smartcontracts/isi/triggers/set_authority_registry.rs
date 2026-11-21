@@ -1,8 +1,12 @@
 //! Trigger-owned classification; private stores never escape their owner.
 
 use super::*;
+#[cfg(not(test))]
+use crate::state::authority_registry::schema;
+#[cfg(test)]
+use crate::state::authority_registry::schema_with_structure as schema;
 use crate::state::authority_registry::{
-    Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, classified_owner, schema,
+    Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, classified_owner,
 };
 
 classified_owner!(Set, check_trigger_fields, AUTHORITY_FIELDS, readers = SetReadReleases, {

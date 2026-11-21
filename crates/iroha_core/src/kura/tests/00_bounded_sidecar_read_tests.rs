@@ -1,4 +1,5 @@
 // The actual reader must mint this owner before the cumulative scope retires.
+use ivm_abi::error::VmDeferral;
 fn bounded_sidecar_original_quota(error: super::Error) -> norito::core::DecodeLocalRefusal {
     let super::Error::CodecAttempt(error) = error else {
         panic!("observed sidecar codec refusal required: {error:?}");
@@ -29,7 +30,7 @@ fn bounded_sidecar_original_quota(error: super::Error) -> norito::core::DecodeLo
         retained = Some(owner.into_vm_error());
     });
     assert_eq!(allocations, 0, "original sidecar transport cannot allocate");
-    let ivm::VMError::DecodeDeferred(retained) = retained.unwrap() else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(retained)) = retained.unwrap() else {
         panic!("same original decoder owner crosses VM boundary");
     };
     assert_eq!(retained, original);

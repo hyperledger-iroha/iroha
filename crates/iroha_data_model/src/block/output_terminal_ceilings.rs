@@ -58,6 +58,22 @@ impl ExecutionOutputTerminalCeilings {
     /// # Errors
     /// Returns canonical construction or sizing failures.
     pub fn derive_for_lifecycle(lifecycle: bool) -> Result<Self, String> {
+        Self::derive_for_profiles(lifecycle, false)
+    }
+
+    /// Bound each selected output family using its own canonical terminal encoding.
+    ///
+    /// # Errors
+    /// Propagates terminal construction and canonical sizing failures.
+    pub fn derive_for_profiles(lifecycle: bool, c10: bool) -> Result<Self, String> {
+        let size = |row: ExecutionOutputV1| -> Result<u64, String> {
+            let ordinary = output_bytes(&row)?;
+            if c10 {
+                Ok(ordinary.max(output_bytes(&row.into_c10_sizing_terminal()?)?))
+            } else {
+                Ok(ordinary)
+            }
+        };
         let trigger = TriggerUseV1 {
             trigger_id: "x"
                 .repeat(MAX_NAME_BYTES)
@@ -66,7 +82,7 @@ impl ExecutionOutputTerminalCeilings {
             registered_at_height: u64::MAX - 1,
             action_hash: Hash::prehashed([0xff; Hash::LENGTH]),
         };
-        let network = output_bytes(&coverage(
+        let network = size(coverage(
             ExecutionOutputV1::network_output_limit_rejection(u32::MAX),
             lifecycle,
         ))?;
@@ -80,9 +96,9 @@ impl ExecutionOutputTerminalCeilings {
                 candidate_index: u32::MAX,
                 trigger: trigger.clone(),
             });
-            pipeline = pipeline.max(output_bytes(&coverage(row, lifecycle))?);
+            pipeline = pipeline.max(size(coverage(row, lifecycle))?);
         }
-        let mut time = output_bytes(&coverage(
+        let mut time = size(coverage(
             ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
                 schedule_index: u32::MAX,
                 event: TimeEvent {
@@ -122,7 +138,7 @@ impl ExecutionOutputTerminalCeilings {
                 true,
             );
             reserve_policy_shape(&mut row, &trigger)?;
-            time = time.max(output_bytes(&row)?);
+            time = time.max(size(row)?);
             for event in [
                 PipelineEventPositionV1::Network(u32::MAX),
                 PipelineEventPositionV1::BlockApproved,
@@ -136,7 +152,7 @@ impl ExecutionOutputTerminalCeilings {
                     true,
                 );
                 reserve_policy_shape(&mut row, &trigger)?;
-                pipeline = pipeline.max(output_bytes(&row)?);
+                pipeline = pipeline.max(size(row)?);
             }
         }
         Ok(Self {

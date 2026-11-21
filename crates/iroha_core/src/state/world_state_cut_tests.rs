@@ -3,6 +3,7 @@ use super::*;
 use crate::state::{StateReadOnly, World};
 use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
 use iroha_model_base::state_path::StatePath;
+use ivm_abi::error::VmDeferral;
 use std::sync::OnceLock;
 
 fn key(text: &str) -> StatePath {
@@ -683,7 +684,10 @@ fn transport_physical_cut(error: CutError) -> crate::sumeragi::driver::traits::P
         assert!(original.allocator_refusal().is_some());
         let error = ivm::VMError::metered(99, original.into_vm_error());
         assert!(error.fault_kind().is_none());
-        assert!(matches!(&error, ivm::VMError::AllocatorDeferred(_)));
+        assert!(matches!(
+            &error,
+            ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(_))
+        ));
         let artifact =
             ivm::ContractArtifactError::preparation("actual World-cut allocation", error);
         assert!(artifact.is_local_deferral());

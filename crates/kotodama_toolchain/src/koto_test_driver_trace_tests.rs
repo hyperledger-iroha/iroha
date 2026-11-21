@@ -5,6 +5,7 @@ use crate::koto_test_driver::{
     HashMap, IVMHost, MockWorldStateView, WsvHost, default_caller_account,
 };
 use iroha_allocation::AllocationBudget;
+use ivm_abi::error::VmDeferral;
 
 const LIMIT: usize = 128 * 1024 * 1024;
 
@@ -105,7 +106,7 @@ fn refused_nested_capture_keeps_original_report_and_retries_in_same_pool() {
     budget.set_limit_bytes(retained);
     assert!(matches!(
         host.record_nested_trace(&second),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), retained);
     let preserved = host.supplemental_trace.as_ref().unwrap();
@@ -175,9 +176,9 @@ fn foreign_pool_report_composition_refuses_without_replacing_nested_owner() {
     let reserved = (first.reserved_bytes(), second.reserved_bytes());
     assert!(matches!(
         capture_report(&root, host.supplemental_trace.as_ref()),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
+        )))
     ));
     assert_eq!((first.reserved_bytes(), second.reserved_bytes()), reserved);
     assert_eq!(values(host.supplemental_trace.as_ref().unwrap()), vec![22]);

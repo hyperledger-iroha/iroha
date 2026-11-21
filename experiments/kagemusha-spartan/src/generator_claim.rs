@@ -11,7 +11,7 @@ use crate::{
 };
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
-use iroha_pasta::msm::{MemoryBudget, msm_public, msm_secret};
+use iroha_pasta::msm::{MemoryBudget, msm_public};
 use iroha_pasta::poseidon::PoseidonField;
 use iroha_pasta::{PastaAffine, PastaCurve};
 use zeroize::{Zeroize, Zeroizing};
@@ -218,18 +218,10 @@ fn closed<S: Field>(us: &[S], point: &[S]) -> S {
 fn inner<S: Field>(a: &[S], b: &[S]) -> S {
     a.iter().zip(b).map(|(a, b)| *a * b).sum()
 }
-fn eq_weights<S: Field>(point: &[S]) -> Vec<S> {
-    let mut out = vec![S::ONE];
-    for r in point {
-        out = out
-            .into_iter()
-            .flat_map(|v| [v * (S::ONE - r), v * r])
-            .collect();
-    }
-    out
-}
+/// The private coefficients' sum over the installed generators, through the
+/// constant-time secret MSM (`ipa::secret_msm`).
 fn msm<C: PastaCurve>(s: &[F<C>], g: &[Aff<C>]) -> C {
-    msm_secret::<C>(s, g, MemoryBudget::DEFAULT).expect("bounded generator restructuring MSM")
+    crate::ipa::secret_msm::<C>(s, g)
 }
 
 /// The exact claim decision, also required for the fresh exported claim.
@@ -243,6 +235,84 @@ pub fn decide<C: PastaCurve>(gens: &Gens<C>, claim: &Claim<C>) -> bool {
             .is_ok_and(|g| g == C::from(claim.g))
 }
 
+/// Evaluate a private lineage challenge vector on the public generator prefix.
+fn private_source_point<C: PastaCurve>(
+    gens: &Gens<C>,
+    us: &[F<C>],
+) -> Result<Aff<C>, &'static str> {
+    if us.is_empty() || us.len() >= usize::BITS as usize {
+        return Err("generator source dimension");
+    }
+    let bases = gens
+        .g
+        .get(..1usize << us.len())
+        .ok_or("generator source dimension")?;
+    let weights = Zeroizing::new(s_vector(us));
+    iroha_pasta::msm::msm_secret_ct_cancellable::<C>(
+        &weights,
+        bases,
+        MemoryBudget::DEFAULT,
+        &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+        None,
+    )
+    .map(|point| point.to_affine())
+    .map_err(|_| "generator source resource bound")
+}
+
+fn check_private_sources<C: PastaCurve>(
+    gens: &Gens<C>,
+    k: usize,
+    sources: &[Claim<C>],
+) -> Result<(), &'static str> {
+    for claim in sources {
+        if claim.us.len() != k || private_source_point(gens, &claim.us)? != claim.g {
+            return Err("wallet predecessor generator claim");
+        }
+    }
+    Ok(())
+}
+
+/// Construct the four sources from the public operation shape. A single-parent
+/// operation repeats its two checked slots. Receive derives both incoming points
+/// locally, including when its total verifier must record a Burn.
+pub(crate) fn prove_predecessors<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    parents: [Claim<C>; 2],
+    incoming: Option<[&[F<C>]; 2]>,
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    if !gens.g.len().is_power_of_two() || gens.g.len() < 2 {
+        return Err("generator source dimension");
+    }
+    let k = gens.g.len().ilog2() as usize;
+    check_private_sources(gens, k, &parents)?;
+    let [own, inherited] = parents;
+    let corrected = |us: &[F<C>]| -> Result<Claim<C>, &'static str> {
+        if us.len() != k {
+            return Err("generator source dimension");
+        }
+        Ok(Claim {
+            g: private_source_point(gens, us)?,
+            us: us.to_vec(),
+        })
+    };
+    let [peer, peer_inherited] = match incoming {
+        Some([own, inherited]) => [corrected(own)?, corrected(inherited)?],
+        None => [own.clone(), inherited.clone()],
+    };
+    prove_checked_with_rng(
+        gens,
+        relation,
+        vec![own, inherited, peer, peer_inherited],
+        &mut entropy.stream(purpose),
+    )
+}
+
 /// Fresh operation entropy is mandatory at production call sites.
 pub fn prove<C: PastaCurve>(
     gens: &Gens<C>,
@@ -250,7 +320,7 @@ pub fn prove<C: PastaCurve>(
     sources: Vec<Claim<C>>,
     entropy: &ProofEntropy,
     purpose: &[u8],
-) -> (Fold<C>, Trace<C>)
+) -> Result<(Fold<C>, Trace<C>), &'static str>
 where
     F<C>: Scalar,
 {
@@ -261,18 +331,32 @@ pub(crate) fn prove_with_rng<C: PastaCurve>(
     relation: [u8; 32],
     sources: Vec<Claim<C>>,
     rng: &mut SpikeRng,
-) -> (Fold<C>, Trace<C>)
+) -> Result<(Fold<C>, Trace<C>), &'static str>
 where
     F<C>: Scalar,
 {
-    assert_eq!(sources.len(), SOURCE_COUNT);
+    if sources.len() != SOURCE_COUNT {
+        return Err("generator source count");
+    }
+    let k = sources[0].us.len();
+    if k == 0 || k >= usize::BITS as usize || (1usize << k) > gens.g.len() {
+        return Err("generator source dimension");
+    }
+    check_private_sources(gens, k, &sources)?;
+    prove_checked_with_rng(gens, relation, sources, rng)
+}
+
+fn prove_checked_with_rng<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    sources: Vec<Claim<C>>,
+    rng: &mut SpikeRng,
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
     let k = sources[0].us.len();
     let n = 1usize << k;
-    assert!(k > 0 && n <= gens.g.len());
-    assert!(
-        sources.iter().all(|s| s.us.len() == k && decide(gens, s)),
-        "exact source generator claims"
-    );
     let masks = (0..1 + 2 * k).map(|_| rng.scalar()).collect::<Vec<_>>();
     let digest = input_digest::<C>(&relation, &sources, &masks);
     let d = d_open(gens, digest, masks[0]).to_affine();
@@ -288,8 +372,9 @@ where
     let mut weight = F::<C>::ONE;
     for s in &sources {
         commitment += C::from(s.g) * weight;
-        for (x, v) in coeff.iter_mut().zip(s_vector(&s.us)) {
-            *x += weight * v;
+        let weights = Zeroizing::new(s_vector(&s.us));
+        for (x, v) in coeff.iter_mut().zip(weights.iter()) {
+            *x += weight * *v;
         }
         weight *= mu;
     }
@@ -298,32 +383,37 @@ where
         .map(|_| challenge(&mut t, &mut ch, false))
         .collect::<Vec<_>>();
     let zeta = challenge(&mut t, &mut ch, true);
-    let mut b = Zeroizing::new(eq_weights(&point));
+    let mut b = Zeroizing::new(crate::grid::eq_table(&point));
     let u = C::from(gens.u) * zeta;
     let mut g = Zeroizing::new(gens.g[..n].to_vec());
     let mut lr = vec![];
     let mut us = vec![];
     for round in 0..k {
         let h = coeff.len() / 2;
-        let l = msm::<C>(&coeff[..h], &g[h..])
+        let l = (msm::<C>(&coeff[..h], &g[h..])
             + u * inner(&coeff[..h], &b[h..])
-            + C::from(gens.h) * masks[1 + 2 * round];
-        let r = msm::<C>(&coeff[h..], &g[..h])
+            + C::from(gens.h) * masks[1 + 2 * round])
+            .to_affine();
+        let r = (msm::<C>(&coeff[h..], &g[..h])
             + u * inner(&coeff[h..], &b[..h])
-            + C::from(gens.h) * masks[2 + 2 * round];
-        t.point(b"L", &l.to_affine());
-        t.point(b"R", &r.to_affine());
+            + C::from(gens.h) * masks[2 + 2 * round])
+            .to_affine();
+        t.point(b"L", &l);
+        t.point(b"R", &r);
         let challenge = challenge(&mut t, &mut ch, true);
         us.push(challenge);
         for j in 0..h {
             coeff[j] = challenge * coeff[j] + coeff[j + h];
             b[j] = b[j] + challenge * b[j + h];
-            g[j] = (C::from(g[j]) + C::from(g[j + h]) * challenge).to_affine();
         }
+        // Only the installed generators and the exported output.us challenges
+        // enter this fold. Private coefficients stay on the constant-time
+        // secret MSM and the H masks use constant-time scalar multiplication.
+        iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
         coeff.truncate(h);
         b.truncate(h);
         g.truncate(h);
-        lr.push((l.to_affine(), r.to_affine()));
+        lr.push((l, r));
     }
     let fold = Fold {
         sources,
@@ -334,7 +424,7 @@ where
         output: Claim { us, g: g[0] },
     };
     let trace = trace(gens, relation, &fold).expect("fresh restructuring verifies");
-    (fold, trace)
+    Ok((fold, trace))
 }
 
 /// Reconstruct every transcript and equation. Does not decide the output MSM;

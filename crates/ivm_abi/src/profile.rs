@@ -11,12 +11,12 @@
 //! engine's wire values.
 //!
 //! Two engines exist. [`IvmEngine::Baseline`] is the frozen pre-C10 engine ([`crate::baseline`])
-//! of the installed baseline selection; [`IvmProfileId::of_policy`] binds the interface policy
-//! [`SyscallPolicy::AbiV1`] to it, so every registration, execution, trigger, replay and nested
-//! call of an ABI V1 artifact runs it. [`IvmEngine::C10`] executes the named runtime-lifecycle
-//! policy and the explicit [`IvmProfileId::C10_ABI_V1`] identity; no root selects C10's own ABI V1
-//! surface until a release publishes it as a separate host-profile definition.
+//! of the installed baseline selection. [`IvmProfileId::of_policy`] binds its interface policy
+//! [`SyscallPolicy::AbiV1`] to that engine. [`IvmEngine::C10`] executes the runtime-lifecycle
+//! policy and the separate [`IvmProfileId::C10_ABI_V1`] identity. A root admits C10 ABI V1
+//! contracts through the governed `iroha.runtime.ivm_c10.v1` addition.
 
+use crate::error::VmTrap;
 use crate::{
     SyscallPolicy, VMError,
     error::HostOutputResource,
@@ -108,8 +108,8 @@ impl IvmEngine {
     /// The wire enum is the baseline's (`IvmFaultKindV1`, original tags): the baseline projection
     /// is exact. C10 faults the baseline enum cannot name (`ControlFlowViolation`, the register
     /// integer overflow) have no value in it; C10's own family is [`c10_wire_fault_kind`].
-    // TODO(phase 5 dispatch): C10 executions report through `c10_wire_fault_kind` once their
-    // results are dispatched to the C10 families; the lifecycle profile keeps this projection.
+    /// The runtime-lifecycle profile retains this projection on the C10 engine. The governed
+    /// C10 ABI V1 result service uses [`c10_wire_fault_kind`] directly.
     #[must_use]
     pub fn fault_kind(self, error: &VMError) -> Option<IvmFaultKindV1> {
         match self {
@@ -224,64 +224,56 @@ const fn c10_numeric_fault(code: NumericFaultV1) -> NumericFaultV1 {
 /// classified here.
 fn c10_fault_kind(error: &VMError) -> Option<IvmFaultKindV1> {
     use IvmFaultKindV1 as F;
-    Some(match error.as_unmetered() {
-        VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => F::OutOfGas,
-        VMError::OutOfMemory => F::MemoryLimitExceeded,
-        VMError::MemoryAccessViolation { .. } => F::MemoryAccessViolation,
-        VMError::MisalignedAccess { .. } => F::MisalignedAccess,
-        VMError::MemoryOutOfBounds => F::MemoryOutOfBounds,
-        VMError::DecodeError => F::DecodeError,
-        VMError::InvalidOpcode(_) => F::InvalidOpcode,
-        VMError::UnknownSyscall(_) => F::UnknownSyscall,
-        VMError::NotImplemented { .. } => F::UnsupportedSyscall,
-        VMError::GasCostOverflow => F::GasCostOverflow,
-        VMError::NumericFault(code) => F::Numeric(c10_numeric_fault(*code)),
-        VMError::PointerAbiFault(code) => F::PointerAbi(*code),
-        VMError::AssertionFailed => F::AssertionFailed,
-        VMError::ExceededMaxCycles => F::ExceededMaxCycles,
-        VMError::InvalidMetadata => F::InvalidMetadata,
-        VMError::MissingHalt => F::MissingHalt,
-        VMError::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
-        VMError::PermissionDenied => F::PermissionDenied,
-        VMError::ReentrantCall => F::ReentrantCall,
-        VMError::CallDepthExceeded => F::CallDepthExceeded,
+    Some(match error.unmetered_trap()? {
+        VmTrap::OutOfGas | VmTrap::SyscallOutOfGas { .. } => F::OutOfGas,
+        VmTrap::OutOfMemory => F::MemoryLimitExceeded,
+        VmTrap::MemoryAccessViolation { .. } => F::MemoryAccessViolation,
+        VmTrap::MisalignedAccess { .. } => F::MisalignedAccess,
+        VmTrap::MemoryOutOfBounds => F::MemoryOutOfBounds,
+        VmTrap::DecodeError => F::DecodeError,
+        VmTrap::InvalidOpcode(_) => F::InvalidOpcode,
+        VmTrap::UnknownSyscall(_) => F::UnknownSyscall,
+        VmTrap::NotImplemented { .. } => F::UnsupportedSyscall,
+        VmTrap::GasCostOverflow => F::GasCostOverflow,
+        VmTrap::NumericFault(code) => F::Numeric(c10_numeric_fault(*code)),
+        VmTrap::PointerAbiFault(code) => F::PointerAbi(*code),
+        VmTrap::AssertionFailed => F::AssertionFailed,
+        VmTrap::ExceededMaxCycles => F::ExceededMaxCycles,
+        VmTrap::InvalidMetadata => F::InvalidMetadata,
+        VmTrap::MissingHalt => F::MissingHalt,
+        VmTrap::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
+        VmTrap::PermissionDenied => F::PermissionDenied,
+        VmTrap::ReentrantCall => F::ReentrantCall,
+        VmTrap::CallDepthExceeded => F::CallDepthExceeded,
         // C10-only faults the baseline wire enum cannot name (see `IvmEngine::fault_kind`).
-        VMError::ControlFlowViolation | VMError::RegisterIntegerOverflow => return None,
-        VMError::PrivacyViolation => F::PrivacyViolation,
-        VMError::RegisterOutOfBounds => F::RegisterOutOfBounds,
-        VMError::NoritoInvalid => F::NoritoInvalid,
-        VMError::AbiTypeNotAllowed { .. } => F::AbiTypeNotAllowed,
-        VMError::HostOutputBudgetExceeded {
+        VmTrap::ControlFlowViolation | VmTrap::RegisterIntegerOverflow => return None,
+        VmTrap::PrivacyViolation => F::PrivacyViolation,
+        VmTrap::RegisterOutOfBounds => F::RegisterOutOfBounds,
+        VmTrap::NoritoInvalid => F::NoritoInvalid,
+        VmTrap::AbiTypeNotAllowed { .. } => F::AbiTypeNotAllowed,
+        VmTrap::HostOutputBudgetExceeded {
             resource: HostOutputResource::Items,
             ..
         } => F::HostOutputItemsExceeded,
-        VMError::HostOutputBudgetExceeded {
+        VmTrap::HostOutputBudgetExceeded {
             resource: HostOutputResource::Bytes,
             ..
         } => F::HostOutputBytesExceeded,
-        VMError::AmxBudgetExceeded { .. } => F::AmxBudgetExceeded,
-        VMError::ExecutionDeferred(_)
-        | VMError::AllocationDeferred(_)
-        | VMError::AllocatorDeferred(_)
-        | VMError::DecodeDeferred(_)
-        | VMError::VerificationDeferred(_)
-        | VMError::HostUnavailable
-        | VMError::SyscallGasQuoteExceeded { .. }
-        | VMError::SyscallMeteringModeMismatch { .. }
-        | VMError::ContractAbort { .. }
-        | VMError::UnsupportedProgramVersion { .. }
-        | VMError::UnsupportedProgramFeatureBits { .. }
-        | VMError::UnsupportedProgramAbiVersion { .. }
-        | VMError::MissingMaxCycles
-        | VMError::MaxCyclesWithoutZk { .. }
-        | VMError::ArtifactAbiHashMismatch { .. }
-        | VMError::GenericSyscallNotAllowed { .. } => return None,
+        VmTrap::AmxBudgetExceeded { .. } => F::AmxBudgetExceeded,
+        VmTrap::ContractAbort { .. }
+        | VmTrap::UnsupportedProgramVersion { .. }
+        | VmTrap::UnsupportedProgramFeatureBits { .. }
+        | VmTrap::UnsupportedProgramAbiVersion { .. }
+        | VmTrap::MissingMaxCycles
+        | VmTrap::MaxCyclesWithoutZk { .. }
+        | VmTrap::ArtifactAbiHashMismatch { .. }
+        | VmTrap::GenericSyscallNotAllowed { .. } => return None,
         // The baseline engine alone raises these; a C10 invocation never produces them.
-        VMError::ProgramVectorLengthTooLarge { .. }
-        | VMError::InvalidVectorLength { .. }
-        | VMError::VectorExtensionDisabled
-        | VMError::ZkExtensionDisabled => return None,
-        VMError::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
+        VmTrap::ProgramVectorLengthTooLarge { .. }
+        | VmTrap::InvalidVectorLength { .. }
+        | VmTrap::VectorExtensionDisabled
+        | VmTrap::ZkExtensionDisabled => return None,
+        VmTrap::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
     })
 }
 
@@ -294,12 +286,12 @@ fn c10_fault_kind(error: &VMError) -> Option<IvmFaultKindV1> {
 /// resource refusals return `None`, exactly as there.
 #[must_use]
 pub fn c10_wire_fault_kind(error: &VMError) -> Option<IvmFaultKindC10V1> {
-    match error.as_unmetered() {
-        VMError::ControlFlowViolation => Some(IvmFaultKindC10V1::ControlFlowViolation),
-        VMError::RegisterIntegerOverflow => Some(IvmFaultKindC10V1::Numeric(
+    match error.unmetered_trap()? {
+        VmTrap::ControlFlowViolation => Some(IvmFaultKindC10V1::ControlFlowViolation),
+        VmTrap::RegisterIntegerOverflow => Some(IvmFaultKindC10V1::Numeric(
             NumericFaultC10V1::RegisterIntegerOverflow,
         )),
-        other => c10_fault_kind(other).and_then(c10_kind_of_shared),
+        _ => c10_fault_kind(error).and_then(c10_kind_of_shared),
     }
 }
 
@@ -356,10 +348,12 @@ pub struct IvmProfileId {
 }
 
 impl IvmProfileId {
-    /// The profile of every named host policy, in a fixed order: the profiles a root can select.
-    pub const IMPLEMENTED: [Self; 2] = [
-        Self::of_policy(SyscallPolicy::AbiV1),
-        Self::of_policy(SyscallPolicy::AbiV1RuntimeLifecycle),
+    /// Every host profile this release can select, in a fixed order.
+    pub const IMPLEMENTED: [Self; 4] = [
+        Self::BASELINE_ABI_V1,
+        Self::C10_RUNTIME_LIFECYCLE,
+        Self::C10_ABI_V1,
+        Self::C10_GENERIC_CARRIER,
     ];
 
     /// The frozen baseline profile: ABI V1 on the baseline engine (ABI hash `7531b45d…`), the
@@ -371,10 +365,8 @@ impl IvmProfileId {
 
     /// C10's own ABI V1 surface on the C10 engine.
     ///
-    /// No named policy binds to it and no published host-profile definition activates it, so no
-    /// root resolves it. Tools and tests that target the C10 engine explicitly (the Kotodama
-    /// C10 target, raw code, the engine's own suites) name it.
-    // TODO: phase 5 publishes this surface as the host profile of `iroha.runtime.ivm_c10.v1`.
+    /// The governed `iroha.runtime.ivm_c10.v1` addition binds this engine and ABI together.
+    /// Tools can explicitly target it while the installed baseline still selects its own engine.
     pub const C10_ABI_V1: Self = Self {
         engine: IvmEngine::C10,
         policy: SyscallPolicy::AbiV1,
@@ -386,12 +378,19 @@ impl IvmProfileId {
         policy: SyscallPolicy::AbiV1RuntimeLifecycle,
     };
 
+    /// Restricted descriptor-selected carrier instructions on the C10 engine, still ABI V1.
+    pub const C10_GENERIC_CARRIER: Self = Self {
+        engine: IvmEngine::C10,
+        policy: SyscallPolicy::AbiV1GenericCarrier,
+    };
+
     /// The implemented profiles of `engine`, in a fixed order.
     #[must_use]
     pub fn of_engine(engine: IvmEngine) -> &'static [Self] {
-        const C10: [IvmProfileId; 2] = [
+        const C10: [IvmProfileId; 3] = [
             IvmProfileId::C10_ABI_V1,
             IvmProfileId::C10_RUNTIME_LIFECYCLE,
+            IvmProfileId::C10_GENERIC_CARRIER,
         ];
         const BASELINE: [IvmProfileId; 1] = [IvmProfileId::BASELINE_ABI_V1];
         match engine {
@@ -409,7 +408,9 @@ impl IvmProfileId {
     pub const fn of_policy(policy: SyscallPolicy) -> Self {
         let engine = match policy {
             SyscallPolicy::AbiV1 => IvmEngine::Baseline,
-            SyscallPolicy::AbiV1RuntimeLifecycle => IvmEngine::C10,
+            SyscallPolicy::AbiV1RuntimeLifecycle | SyscallPolicy::AbiV1GenericCarrier => {
+                IvmEngine::C10
+            }
         };
         Self { engine, policy }
     }
@@ -426,7 +427,10 @@ impl IvmProfileId {
                 policy,
             }),
             (IvmEngine::Baseline, SyscallPolicy::AbiV1) => Some(Self::BASELINE_ABI_V1),
-            (IvmEngine::Baseline, SyscallPolicy::AbiV1RuntimeLifecycle) => None,
+            (
+                IvmEngine::Baseline,
+                SyscallPolicy::AbiV1RuntimeLifecycle | SyscallPolicy::AbiV1GenericCarrier,
+            ) => None,
         }
     }
 
@@ -447,10 +451,12 @@ impl IvmProfileId {
     pub fn abi_hash(self) -> [u8; 32] {
         static ABI_V1: OnceLock<[u8; 32]> = OnceLock::new();
         static RUNTIME_LIFECYCLE: OnceLock<[u8; 32]> = OnceLock::new();
+        static GENERIC_CARRIER: OnceLock<[u8; 32]> = OnceLock::new();
         let cached = match (self.engine, self.policy) {
             (IvmEngine::Baseline, _) => return crate::baseline::abi_hash(),
             (IvmEngine::C10, SyscallPolicy::AbiV1) => &ABI_V1,
             (IvmEngine::C10, SyscallPolicy::AbiV1RuntimeLifecycle) => &RUNTIME_LIFECYCLE,
+            (IvmEngine::C10, SyscallPolicy::AbiV1GenericCarrier) => &GENERIC_CARRIER,
         };
         *cached.get_or_init(|| crate::syscalls::compute_c10_abi_hash(self.policy))
     }
@@ -519,6 +525,7 @@ impl From<SyscallPolicy> for IvmProfileId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmErrorRef, VmTrap};
     use crate::{
         error::{ExecutionDeferral, Perm, VerificationRefusal},
         metadata::ProgramMetadata,
@@ -530,56 +537,56 @@ mod tests {
     /// variant fail to compile here until the projection table below names it.
     fn variant_index(error: &VMError) -> usize {
         match error {
-            VMError::ExecutionDeferred(_) => 0,
-            VMError::AllocationDeferred(_) => 1,
-            VMError::DecodeDeferred(_) => 2,
-            VMError::AllocatorDeferred(_) => 3,
-            VMError::VerificationDeferred(_) => 4,
-            VMError::Metered { .. } => 5,
-            VMError::OutOfGas => 6,
-            VMError::OutOfMemory => 7,
-            VMError::MemoryAccessViolation { .. } => 8,
-            VMError::MisalignedAccess { .. } => 9,
-            VMError::MemoryOutOfBounds => 10,
-            VMError::DecodeError => 11,
-            VMError::InvalidOpcode(_) => 12,
-            VMError::UnknownSyscall(_) => 13,
-            VMError::HostUnavailable => 14,
-            VMError::NotImplemented { .. } => 15,
-            VMError::SyscallGasQuoteExceeded { .. } => 16,
-            VMError::SyscallMeteringModeMismatch { .. } => 17,
-            VMError::GasCostOverflow => 18,
-            VMError::SyscallOutOfGas { .. } => 19,
-            VMError::NumericFault(_) => 20,
-            VMError::PointerAbiFault(_) => 21,
-            VMError::AssertionFailed => 22,
-            VMError::ContractAbort { .. } => 23,
-            VMError::ExceededMaxCycles => 24,
-            VMError::InvalidMetadata => 25,
-            VMError::UnsupportedProgramVersion { .. } => 26,
-            VMError::UnsupportedProgramFeatureBits { .. } => 27,
-            VMError::UnsupportedProgramAbiVersion { .. } => 28,
-            VMError::MissingMaxCycles => 29,
-            VMError::MaxCyclesWithoutZk { .. } => 30,
-            VMError::ArtifactAbiHashMismatch { .. } => 31,
-            VMError::GenericSyscallNotAllowed { .. } => 32,
-            VMError::MissingHalt => 33,
-            VMError::NullifierAlreadyUsed => 34,
-            VMError::PermissionDenied => 35,
-            VMError::ReentrantCall => 36,
-            VMError::CallDepthExceeded => 37,
-            VMError::ControlFlowViolation => 38,
-            VMError::PrivacyViolation => 39,
-            VMError::RegisterOutOfBounds => 40,
-            VMError::NoritoInvalid => 41,
-            VMError::AbiTypeNotAllowed { .. } => 42,
-            VMError::HostOutputBudgetExceeded { .. } => 43,
-            VMError::AmxBudgetExceeded { .. } => 44,
-            VMError::ProgramVectorLengthTooLarge { .. } => 45,
-            VMError::InvalidVectorLength { .. } => 46,
-            VMError::VectorExtensionDisabled => 47,
-            VMError::ZkExtensionDisabled => 48,
-            VMError::RegisterIntegerOverflow => 49,
+            VMError::Deferred(VmDeferral::ExecutionDeferred(_)) => 0,
+            VMError::Deferred(VmDeferral::AllocationDeferred(_)) => 1,
+            VMError::Deferred(VmDeferral::DecodeDeferred(_)) => 2,
+            VMError::Deferred(VmDeferral::AllocatorDeferred(_)) => 3,
+            VMError::Deferred(VmDeferral::VerificationDeferred(_)) => 4,
+            VMError::Trap(VmTrap::Metered { .. }) => 5,
+            VMError::Trap(VmTrap::OutOfGas) => 6,
+            VMError::Trap(VmTrap::OutOfMemory) => 7,
+            VMError::Trap(VmTrap::MemoryAccessViolation { .. }) => 8,
+            VMError::Trap(VmTrap::MisalignedAccess { .. }) => 9,
+            VMError::Trap(VmTrap::MemoryOutOfBounds) => 10,
+            VMError::Trap(VmTrap::DecodeError) => 11,
+            VMError::Trap(VmTrap::InvalidOpcode(_)) => 12,
+            VMError::Trap(VmTrap::UnknownSyscall(_)) => 13,
+            VMError::Deferred(VmDeferral::HostUnavailable) => 14,
+            VMError::Trap(VmTrap::NotImplemented { .. }) => 15,
+            VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. }) => 16,
+            VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => 17,
+            VMError::Trap(VmTrap::GasCostOverflow) => 18,
+            VMError::Trap(VmTrap::SyscallOutOfGas { .. }) => 19,
+            VMError::Trap(VmTrap::NumericFault(_)) => 20,
+            VMError::Trap(VmTrap::PointerAbiFault(_)) => 21,
+            VMError::Trap(VmTrap::AssertionFailed) => 22,
+            VMError::Trap(VmTrap::ContractAbort { .. }) => 23,
+            VMError::Trap(VmTrap::ExceededMaxCycles) => 24,
+            VMError::Trap(VmTrap::InvalidMetadata) => 25,
+            VMError::Trap(VmTrap::UnsupportedProgramVersion { .. }) => 26,
+            VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { .. }) => 27,
+            VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { .. }) => 28,
+            VMError::Trap(VmTrap::MissingMaxCycles) => 29,
+            VMError::Trap(VmTrap::MaxCyclesWithoutZk { .. }) => 30,
+            VMError::Trap(VmTrap::ArtifactAbiHashMismatch { .. }) => 31,
+            VMError::Trap(VmTrap::GenericSyscallNotAllowed { .. }) => 32,
+            VMError::Trap(VmTrap::MissingHalt) => 33,
+            VMError::Trap(VmTrap::NullifierAlreadyUsed) => 34,
+            VMError::Trap(VmTrap::PermissionDenied) => 35,
+            VMError::Trap(VmTrap::ReentrantCall) => 36,
+            VMError::Trap(VmTrap::CallDepthExceeded) => 37,
+            VMError::Trap(VmTrap::ControlFlowViolation) => 38,
+            VMError::Trap(VmTrap::PrivacyViolation) => 39,
+            VMError::Trap(VmTrap::RegisterOutOfBounds) => 40,
+            VMError::Trap(VmTrap::NoritoInvalid) => 41,
+            VMError::Trap(VmTrap::AbiTypeNotAllowed { .. }) => 42,
+            VMError::Trap(VmTrap::HostOutputBudgetExceeded { .. }) => 43,
+            VMError::Trap(VmTrap::AmxBudgetExceeded { .. }) => 44,
+            VMError::Trap(VmTrap::ProgramVectorLengthTooLarge { .. }) => 45,
+            VMError::Trap(VmTrap::InvalidVectorLength { .. }) => 46,
+            VMError::Trap(VmTrap::VectorExtensionDisabled) => 47,
+            VMError::Trap(VmTrap::ZkExtensionDisabled) => 48,
+            VMError::Trap(VmTrap::RegisterIntegerOverflow) => 49,
         }
     }
     const VARIANTS: usize = 50;
@@ -610,163 +617,224 @@ mod tests {
         .expect("local refusal");
         vec![
             (
-                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::AllocationUnavailable,
+                )),
                 None,
             ),
-            (VMError::AllocationDeferred(refusal), None),
-            (VMError::DecodeDeferred(decoded.clone()), None),
             (
-                VMError::AllocatorDeferred(
+                VMError::Deferred(VmDeferral::AllocationDeferred(refusal)),
+                None,
+            ),
+            (
+                VMError::Deferred(VmDeferral::DecodeDeferred(decoded.clone())),
+                None,
+            ),
+            (
+                VMError::Deferred(VmDeferral::AllocatorDeferred(
                     iroha_allocation::AllocatorRefusal::try_from(
                         iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 1 },
                     )
                     .expect("allocator refusal"),
-                ),
+                )),
                 None,
             ),
             (
-                VMError::VerificationDeferred(VerificationRefusal::from_decode_refusal(decoded)),
+                VMError::Deferred(VmDeferral::VerificationDeferred(
+                    VerificationRefusal::from_decode_refusal(decoded),
+                )),
                 None,
             ),
             (
-                VMError::Metered {
-                    gas: 1,
-                    source: Box::new(VMError::OutOfGas),
-                },
+                VMError::metered(1, VMError::Trap(VmTrap::OutOfGas)),
                 Some(F::OutOfGas),
             ),
             (
-                VMError::Metered {
-                    gas: 1,
-                    source: Box::new(VMError::HostUnavailable),
-                },
+                VMError::metered(1, VMError::Deferred(VmDeferral::HostUnavailable)),
                 None,
             ),
-            (VMError::OutOfGas, Some(F::OutOfGas)),
-            (VMError::OutOfMemory, Some(F::MemoryLimitExceeded)),
+            (VMError::Trap(VmTrap::OutOfGas), Some(F::OutOfGas)),
             (
-                VMError::MemoryAccessViolation {
+                VMError::Trap(VmTrap::OutOfMemory),
+                Some(F::MemoryLimitExceeded),
+            ),
+            (
+                VMError::Trap(VmTrap::MemoryAccessViolation {
                     addr: 0,
                     perm: Perm::READ,
-                },
+                }),
                 Some(F::MemoryAccessViolation),
             ),
             (
-                VMError::MisalignedAccess { addr: 1 },
+                VMError::Trap(VmTrap::MisalignedAccess { addr: 1 }),
                 Some(F::MisalignedAccess),
             ),
-            (VMError::MemoryOutOfBounds, Some(F::MemoryOutOfBounds)),
-            (VMError::DecodeError, Some(F::DecodeError)),
-            (VMError::InvalidOpcode(0), Some(F::InvalidOpcode)),
-            (VMError::UnknownSyscall(0), Some(F::UnknownSyscall)),
-            (VMError::HostUnavailable, None),
             (
-                VMError::NotImplemented { syscall: 0 },
+                VMError::Trap(VmTrap::MemoryOutOfBounds),
+                Some(F::MemoryOutOfBounds),
+            ),
+            (VMError::Trap(VmTrap::DecodeError), Some(F::DecodeError)),
+            (
+                VMError::Trap(VmTrap::InvalidOpcode(0)),
+                Some(F::InvalidOpcode),
+            ),
+            (
+                VMError::Trap(VmTrap::UnknownSyscall(0)),
+                Some(F::UnknownSyscall),
+            ),
+            (VMError::Deferred(VmDeferral::HostUnavailable), None),
+            (
+                VMError::Trap(VmTrap::NotImplemented { syscall: 0 }),
                 Some(F::UnsupportedSyscall),
             ),
             (
-                VMError::SyscallGasQuoteExceeded {
+                VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
                     quoted: 1,
                     actual: 2,
-                },
+                }),
                 None,
             ),
-            (VMError::SyscallMeteringModeMismatch { syscall: 0 }, None),
-            (VMError::GasCostOverflow, Some(F::GasCostOverflow)),
             (
-                VMError::SyscallOutOfGas {
+                VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { syscall: 0 }),
+                None,
+            ),
+            (
+                VMError::Trap(VmTrap::GasCostOverflow),
+                Some(F::GasCostOverflow),
+            ),
+            (
+                VMError::Trap(VmTrap::SyscallOutOfGas {
                     syscall: 0,
                     phase: 0,
-                },
+                }),
                 Some(F::OutOfGas),
             ),
             (
-                VMError::NumericFault(NumericFaultV1::DivisionByZero),
+                VMError::Trap(VmTrap::NumericFault(NumericFaultV1::DivisionByZero)),
                 Some(F::Numeric(NumericFaultV1::DivisionByZero)),
             ),
             (
-                VMError::PointerAbiFault(PointerAbiFaultV1::WrongType),
+                VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::WrongType)),
                 Some(F::PointerAbi(PointerAbiFaultV1::WrongType)),
             ),
-            (VMError::AssertionFailed, Some(F::AssertionFailed)),
             (
-                VMError::ContractAbort {
+                VMError::Trap(VmTrap::AssertionFailed),
+                Some(F::AssertionFailed),
+            ),
+            (
+                VMError::Trap(VmTrap::ContractAbort {
                     contract: "c".into(),
                     name: "n".into(),
                     error_type: "e".into(),
                     schema_hash: [0; 32],
                     code: 1,
                     message: None,
-                },
+                }),
                 None,
             ),
-            (VMError::ExceededMaxCycles, Some(F::ExceededMaxCycles)),
-            (VMError::InvalidMetadata, Some(F::InvalidMetadata)),
             (
-                VMError::UnsupportedProgramVersion { major: 9, minor: 9 },
+                VMError::Trap(VmTrap::ExceededMaxCycles),
+                Some(F::ExceededMaxCycles),
+            ),
+            (
+                VMError::Trap(VmTrap::InvalidMetadata),
+                Some(F::InvalidMetadata),
+            ),
+            (
+                VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 9, minor: 9 }),
                 None,
             ),
-            (VMError::UnsupportedProgramFeatureBits { bits: 0x80 }, None),
-            (VMError::UnsupportedProgramAbiVersion { version: 9 }, None),
-            (VMError::MissingMaxCycles, None),
-            (VMError::MaxCyclesWithoutZk { max_cycles: 1 }, None),
+            (
+                VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x80 }),
+                None,
+            ),
+            (
+                VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: 9 }),
+                None,
+            ),
+            (VMError::Trap(VmTrap::MissingMaxCycles), None),
+            (
+                VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 1 }),
+                None,
+            ),
             // Baseline-engine failures: the C10 engine never raises them.
             (
-                VMError::ProgramVectorLengthTooLarge {
+                VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
                     vector_length: 65,
                     max_allowed: 64,
-                },
+                }),
                 None,
             ),
-            (VMError::InvalidVectorLength { vector_length: 65 }, None),
-            (VMError::VectorExtensionDisabled, None),
-            (VMError::ZkExtensionDisabled, None),
             (
-                VMError::ArtifactAbiHashMismatch {
+                VMError::Trap(VmTrap::InvalidVectorLength { vector_length: 65 }),
+                None,
+            ),
+            (VMError::Trap(VmTrap::VectorExtensionDisabled), None),
+            (VMError::Trap(VmTrap::ZkExtensionDisabled), None),
+            (
+                VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
                     expected: [0; 32],
                     actual: [1; 32],
-                },
+                }),
                 None,
             ),
-            (VMError::GenericSyscallNotAllowed { syscall: 0 }, None),
-            (VMError::MissingHalt, Some(F::MissingHalt)),
-            (VMError::NullifierAlreadyUsed, Some(F::NullifierAlreadyUsed)),
-            (VMError::PermissionDenied, Some(F::PermissionDenied)),
-            (VMError::ReentrantCall, Some(F::ReentrantCall)),
-            (VMError::CallDepthExceeded, Some(F::CallDepthExceeded)),
-            // C10-only faults the restored baseline wire enum cannot name.
-            (VMError::ControlFlowViolation, None),
-            (VMError::RegisterIntegerOverflow, None),
-            (VMError::PrivacyViolation, Some(F::PrivacyViolation)),
-            (VMError::RegisterOutOfBounds, Some(F::RegisterOutOfBounds)),
-            (VMError::NoritoInvalid, Some(F::NoritoInvalid)),
             (
-                VMError::AbiTypeNotAllowed { abi: 1, type_id: 0 },
+                VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: 0 }),
+                None,
+            ),
+            (VMError::Trap(VmTrap::MissingHalt), Some(F::MissingHalt)),
+            (
+                VMError::Trap(VmTrap::NullifierAlreadyUsed),
+                Some(F::NullifierAlreadyUsed),
+            ),
+            (
+                VMError::Trap(VmTrap::PermissionDenied),
+                Some(F::PermissionDenied),
+            ),
+            (VMError::Trap(VmTrap::ReentrantCall), Some(F::ReentrantCall)),
+            (
+                VMError::Trap(VmTrap::CallDepthExceeded),
+                Some(F::CallDepthExceeded),
+            ),
+            // C10-only faults the restored baseline wire enum cannot name.
+            (VMError::Trap(VmTrap::ControlFlowViolation), None),
+            (VMError::Trap(VmTrap::RegisterIntegerOverflow), None),
+            (
+                VMError::Trap(VmTrap::PrivacyViolation),
+                Some(F::PrivacyViolation),
+            ),
+            (
+                VMError::Trap(VmTrap::RegisterOutOfBounds),
+                Some(F::RegisterOutOfBounds),
+            ),
+            (VMError::Trap(VmTrap::NoritoInvalid), Some(F::NoritoInvalid)),
+            (
+                VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 1, type_id: 0 }),
                 Some(F::AbiTypeNotAllowed),
             ),
             (
-                VMError::HostOutputBudgetExceeded {
+                VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                     resource: HostOutputResource::Items,
                     attempted: 2,
                     limit: 1,
-                },
+                }),
                 Some(F::HostOutputItemsExceeded),
             ),
             (
-                VMError::HostOutputBudgetExceeded {
+                VMError::Trap(VmTrap::HostOutputBudgetExceeded {
                     resource: HostOutputResource::Bytes,
                     attempted: 2,
                     limit: 1,
-                },
+                }),
                 Some(F::HostOutputBytesExceeded),
             ),
             (
-                VMError::AmxBudgetExceeded {
+                VMError::Trap(VmTrap::AmxBudgetExceeded {
                     dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     stage: iroha_data_model::errors::AmxStage::Commit,
                     elapsed_ms: 2,
                     budget_ms: 1,
-                },
+                }),
                 Some(F::AmxBudgetExceeded),
             ),
         ]
@@ -779,7 +847,9 @@ mod tests {
             IvmProfileId::IMPLEMENTED,
             [
                 IvmProfileId::BASELINE_ABI_V1,
-                IvmProfileId::C10_RUNTIME_LIFECYCLE
+                IvmProfileId::C10_RUNTIME_LIFECYCLE,
+                IvmProfileId::C10_ABI_V1,
+                IvmProfileId::C10_GENERIC_CARRIER
             ]
         );
         assert_eq!(
@@ -795,7 +865,8 @@ mod tests {
             IvmProfileId::of_engine(IvmEngine::C10),
             &[
                 IvmProfileId::C10_ABI_V1,
-                IvmProfileId::C10_RUNTIME_LIFECYCLE
+                IvmProfileId::C10_RUNTIME_LIFECYCLE,
+                IvmProfileId::C10_GENERIC_CARRIER
             ]
         );
         assert_eq!(
@@ -820,7 +891,7 @@ mod tests {
             );
         }
         let c10 = IvmProfileId::C10_ABI_V1;
-        assert!(!IvmProfileId::IMPLEMENTED.contains(&c10));
+        assert!(IvmProfileId::IMPLEMENTED.contains(&c10));
         assert_eq!(
             crate::syscalls::policy_for_abi_hash(&c10.abi_hash()),
             None,
@@ -960,24 +1031,26 @@ mod tests {
     #[test]
     fn baseline_engine_projection_is_its_frozen_table() {
         assert_eq!(
-            IvmEngine::Baseline.fault_kind(&VMError::AssertionFailed),
+            IvmEngine::Baseline.fault_kind(&VMError::Trap(VmTrap::AssertionFailed)),
             Some(F::AssertionFailed)
         );
         assert_eq!(
-            IvmEngine::Baseline.fault_kind(&VMError::VectorExtensionDisabled),
+            IvmEngine::Baseline.fault_kind(&VMError::Trap(VmTrap::VectorExtensionDisabled)),
             Some(F::VectorExtensionDisabled),
             "the restored wire enum names every baseline fault"
         );
         assert_eq!(
-            IvmEngine::Baseline.fault_kind(&VMError::InvalidVectorLength { vector_length: 65 }),
+            IvmEngine::Baseline.fault_kind(&VMError::Trap(VmTrap::InvalidVectorLength {
+                vector_length: 65
+            })),
             Some(F::InvalidVectorLength)
         );
         assert_eq!(
-            IvmEngine::Baseline.fault_kind(&VMError::ControlFlowViolation),
+            IvmEngine::Baseline.fault_kind(&VMError::Trap(VmTrap::ControlFlowViolation)),
             None
         );
         assert_eq!(
-            IvmEngine::C10.fault_kind(&VMError::ZkExtensionDisabled),
+            IvmEngine::C10.fault_kind(&VMError::Trap(VmTrap::ZkExtensionDisabled)),
             None
         );
     }
@@ -1045,10 +1118,7 @@ mod tests {
             if error.execution_deferral().is_some() {
                 assert_eq!(expected, None, "a local refusal is never a fault");
             }
-            let wrapped = VMError::Metered {
-                gas: 17,
-                source: Box::new(error),
-            };
+            let wrapped = VMError::metered(17, error);
             assert_eq!(
                 IvmEngine::C10.fault_kind(&wrapped),
                 expected,
@@ -1062,8 +1132,8 @@ mod tests {
         use IvmFaultKindC10V1 as C;
         for (error, baseline) in projection_table() {
             let expected = match error.as_unmetered() {
-                VMError::ControlFlowViolation => Some(C::ControlFlowViolation),
-                VMError::RegisterIntegerOverflow => {
+                VmErrorRef::Trap(VmTrap::ControlFlowViolation) => Some(C::ControlFlowViolation),
+                VmErrorRef::Trap(VmTrap::RegisterIntegerOverflow) => {
                     Some(C::Numeric(NumericFaultC10V1::RegisterIntegerOverflow))
                 }
                 _ => baseline.map(|kind| {
@@ -1075,10 +1145,7 @@ mod tests {
                 expected,
                 "projection of {error:?}"
             );
-            let wrapped = VMError::Metered {
-                gas: 5,
-                source: Box::new(error),
-            };
+            let wrapped = VMError::metered(5, error);
             assert_eq!(
                 c10_wire_fault_kind(&wrapped),
                 expected,
@@ -1089,7 +1156,7 @@ mod tests {
         for tag in 1..=13 {
             let code = NumericFaultV1::from_tag(tag).expect("numeric fault tag");
             assert_eq!(
-                c10_wire_fault_kind(&VMError::NumericFault(code)),
+                c10_wire_fault_kind(&VMError::Trap(VmTrap::NumericFault(code))),
                 Some(C::Numeric(NumericFaultC10V1::from(code)))
             );
             assert_eq!(NumericFaultC10V1::from(code).tag(), tag);
@@ -1107,9 +1174,9 @@ mod tests {
         }
         // The baseline-engine failures have no C10 value.
         for error in [
-            VMError::VectorExtensionDisabled,
-            VMError::ZkExtensionDisabled,
-            VMError::InvalidVectorLength { vector_length: 65 },
+            VMError::Trap(VmTrap::VectorExtensionDisabled),
+            VMError::Trap(VmTrap::ZkExtensionDisabled),
+            VMError::Trap(VmTrap::InvalidVectorLength { vector_length: 65 }),
         ] {
             assert_eq!(c10_wire_fault_kind(&error), None);
         }
@@ -1122,7 +1189,7 @@ mod tests {
             assert_eq!(c10_numeric_fault(code), code);
             for engine in IvmEngine::ALL {
                 assert_eq!(
-                    engine.fault_kind(&VMError::NumericFault(code)),
+                    engine.fault_kind(&VMError::Trap(VmTrap::NumericFault(code))),
                     Some(F::Numeric(code))
                 );
             }
@@ -1135,7 +1202,7 @@ mod tests {
         for tag in 1..=11 {
             let code = PointerAbiFaultV1::from_tag(tag).expect("pointer fault tag");
             assert_eq!(
-                IvmEngine::C10.fault_kind(&VMError::PointerAbiFault(code)),
+                IvmEngine::C10.fault_kind(&VMError::Trap(VmTrap::PointerAbiFault(code))),
                 Some(F::PointerAbi(code))
             );
         }

@@ -1,6 +1,7 @@
 //! Native private MEAN, exact signed rounding, original costs and coherent attacks.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFixture) {
     let (program, fixture) = native(instruction, inputs);
@@ -216,7 +217,7 @@ fn private_mean_binds_two_gas_three_cycles_and_native_last_attempt_boundary() {
     for gas in 0..2 {
         let (_, recorder, outcome) =
             shifts::capture(&[instruction], &inputs, root_setup_gas() + gas, 32);
-        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+        assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];
         assert_eq!(record.opcode_gas, Some(2));
@@ -235,7 +236,10 @@ fn private_mean_binds_two_gas_three_cycles_and_native_last_attempt_boundary() {
     }
     for limit in [1, 2, 3] {
         let (limited, recorder, outcome) = shifts::capture(&[instruction], &inputs, 100, limit);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];
         assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);

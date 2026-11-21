@@ -4,6 +4,7 @@
 //! manifests, storing bytecode, and binding contract instances. Read APIs query the authenticated
 //! world-state view so callers never rely on process-local caches. This replaces the historical
 //! process-global map and ensures every node observes the same registry contents.
+pub(crate) mod registered_manifest;
 use crate::execution_attempt::ExecutionAttemptError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::smartcontracts::Execute;
@@ -43,6 +44,7 @@ use thiserror::Error;
     norito::derive::JsonDeserialize,
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ContractSubjectBinding {
     /// Exact account authority used while this contract executes.
@@ -587,14 +589,12 @@ pub(crate) fn contract_upgrade_added_scalars(
     replacement_code_hash: Hash,
 ) -> Result<Vec<ivm::EmbeddedStateDescriptor>, ExecutionAttemptError<ValidationFail>> {
     let admitted = |code_hash| -> Result<
-        ivm::VerifiedContractArtifact,
+        ivm::EmbeddedContractInterfaceV1,
         ExecutionAttemptError<ValidationFail>,
     > {
         let artifact_id = ContractArtifactId::for_address(address, code_hash)
             .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
-        let manifest = world
-            .contract_manifests()
-            .get(&artifact_id)
+        let manifest = registered_manifest::RegisteredManifest::get(world, &artifact_id)
             .ok_or_else(|| {
                 ValidationFail::InternalError(format!(
                     "upgrade artifact `{code_hash}` has no stored manifest"
@@ -615,13 +615,15 @@ pub(crate) fn contract_upgrade_added_scalars(
                 )),
             },
         )?;
-        if artifact.code_hash != code_hash || !manifest.same_signed_content(&artifact.manifest) {
+        if artifact.code_hash != code_hash
+            || !manifest.agrees_with(artifact.profile, artifact.manifest)
+        {
             return Err(ValidationFail::InternalError(
                 "upgrade artifact does not match its immutable stored identity and manifest".into(),
             )
             .into());
         }
-        Ok(artifact)
+        Ok(artifact.contract_interface)
     };
     if stored_artifact_has_retired_abi(world, address, previous_code_hash)? {
         admitted(replacement_code_hash)?;
@@ -629,11 +631,8 @@ pub(crate) fn contract_upgrade_added_scalars(
     }
     let previous = admitted(previous_code_hash)?;
     let replacement = admitted(replacement_code_hash)?;
-    let plan = ivm_abi::upgrade::validate_contract_upgrade(
-        &previous.contract_interface,
-        &replacement.contract_interface,
-    )
-    .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+    let plan = ivm_abi::upgrade::validate_contract_upgrade(&previous, &replacement)
+        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
     Ok(plan.added_scalars.into_iter().cloned().collect())
 }
 
@@ -1117,7 +1116,7 @@ struct BorrowedBoundContractRecord<'a> {
     contract_subject: &'a AccountId,
     contract_alias_binding: Option<&'a crate::state::ContractAliasBindingRecord>,
     code_hash: Hash,
-    manifest: &'a ContractManifest,
+    manifest: registered_manifest::RegisteredManifest<'a>,
     code_bytes: &'a [u8],
 }
 
@@ -1144,7 +1143,8 @@ fn borrow_bound_contract_record<'a>(
     // Preserve the independently checked manifest and bytecode read order used
     // by fetch_manifest/fetch_code_bytes, without materializing either value.
     crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)?;
-    let Some(manifest) = state.world().contract_manifests().get(&artifact_id) else {
+    let Some(manifest) = registered_manifest::RegisteredManifest::get(state.world(), &artifact_id)
+    else {
         return Ok(None);
     };
     crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)?;
@@ -1185,20 +1185,33 @@ pub fn fetch_bound_contract_record(
     state: &impl StateReadOnly,
     contract_address: &ContractAddress,
 ) -> Result<Option<BoundContractRecord>, ExecutionAttemptError<ValidationFail>> {
-    Ok(
-        borrow_bound_contract_record(state, contract_address)?.map(|record| BoundContractRecord {
-            lifecycle_revision: record.lifecycle_revision,
-            contract_address: record.contract_address.clone(),
-            contract_subject: record.contract_subject.clone(),
-            contract_alias: record
-                .contract_alias_binding
-                .map(|binding| binding.alias.clone()),
-            contract_alias_binding: record.contract_alias_binding.cloned(),
-            code_hash: record.code_hash,
-            manifest: record.manifest.clone(),
-            code_bytes: record.code_bytes.to_vec(),
-        }),
-    )
+    let Some(record) = borrow_bound_contract_record(state, contract_address)? else {
+        return Ok(None);
+    };
+    let registered_manifest::RegisteredManifest::Baseline(manifest) = record.manifest else {
+        return Ok(None);
+    };
+    Ok(Some(BoundContractRecord {
+        lifecycle_revision: record.lifecycle_revision,
+        contract_address: record.contract_address.clone(),
+        contract_subject: record.contract_subject.clone(),
+        contract_alias: record
+            .contract_alias_binding
+            .map(|binding| binding.alias.clone()),
+        contract_alias_binding: record.contract_alias_binding.cloned(),
+        code_hash: record.code_hash,
+        manifest: manifest.into_owned(),
+        code_bytes: record.code_bytes.to_vec(),
+    }))
+}
+
+/// Resolve executable bytes from the exact binding under either registered manifest family.
+pub(crate) fn fetch_bound_contract_program(
+    state: &impl StateReadOnly,
+    address: &ContractAddress,
+) -> Result<Option<(Hash, Vec<u8>)>, ExecutionAttemptError<ValidationFail>> {
+    Ok(borrow_bound_contract_record(state, address)?
+        .map(|record| (record.code_hash, record.code_bytes.to_vec())))
 }
 /// Resolve the fully bound contract instance record for a deterministic contract subject.
 ///

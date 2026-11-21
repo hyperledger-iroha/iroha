@@ -27,6 +27,7 @@ fn check_schema(schema: Schema) {
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => {
             assert!(!nominal_name().is_empty());
             assert_eq!(layout, V1_LAYOUT);
@@ -75,7 +76,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        66 + usize::from(cfg!(feature = "telemetry"))
+        67 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),
@@ -86,6 +87,10 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(V1_LAYOUT.flags, norito::core::header_flags::COMPACT_LEN);
     assert!(matches!(
         fields()["state.ivm_execution_budget"].role,
+        Role::Local(_)
+    ));
+    assert!(matches!(
+        fields()["state.c10_event_blocks"].role,
         Role::Local(_)
     ));
     // Off-chain finality proof resume points: consensus execution never reads them.

@@ -2751,8 +2751,10 @@ dependencies = [
  "num-integer",
  "num-traits",
  "rayon",
+ "sha2 0.11.1",
  "w3f-bls",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]

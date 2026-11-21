@@ -5,6 +5,7 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::{
     SetReadOnly, invocation_identity::time_trigger_use_v1, time_trigger_action_is_due,
 };
+use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait as _;
 use iroha_data_model::{
     block::execution_output::TimeInvocationV1,
     events::{EventBox, time::TimeEvent},
@@ -39,11 +40,13 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
                 )
             })?;
-            matched.extend(
-                self.state
-                    .world
-                    .triggers
-                    .match_time_event(event, height, now, maximum),
+            crate::state::c10_trigger_runtime::fill_time_schedule(
+                &self.state.world,
+                &event,
+                height,
+                now,
+                maximum,
+                &mut matched,
             );
             if matched.len() > maximum {
                 return Err("Time matcher exceeded its frozen capacity".into());
@@ -89,15 +92,41 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         let height = self.source.header().height().get();
         let now = u64::try_from(self.source.header().creation_time().as_millis())
             .map_err(|_| "Time timestamp exceeds u64")?;
-        let action = self
+        let (authority, executable, retry, c10_identity) = if let Some(stored) =
+            self.state.world.c10_triggers.get(id)
+        {
+            if crate::state::c10_trigger_runtime::time_occurrences(stored, &event, height, now) == 0
+            {
+                self.skip_uninvoked(ExecutionOutputPhase::Time, 1)?;
+                return Ok(false);
+            }
+            let action = &stored.trigger().action;
+            (
+                action.authority().clone(),
+                crate::runtime::deferred_consent::trigger_executable_ref(action.executable())
+                    .map_err(|e| e.to_string())?,
+                action.retry_policy().is_some(),
+                if self.lifecycle {
+                    None
+                } else {
+                    Some(crate::state::c10_trigger_runtime::identity(stored, height)?)
+                },
+            )
+        } else if let Some(action) = self
             .state
             .world
             .triggers
             .time_triggers()
             .get(id)
             .filter(|action| time_trigger_action_is_due(action, &event, height, now))
-            .cloned();
-        let Some(action) = action else {
+        {
+            (
+                action.authority.clone(),
+                action.executable().clone(),
+                action.retry_policy.is_some(),
+                None,
+            )
+        } else {
             self.skip_uninvoked(ExecutionOutputPhase::Time, 1)?;
             return Ok(false);
         };
@@ -120,15 +149,19 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             event,
             trigger: match &source {
                 Some(source) => source.identity().clone(),
-                None => time_trigger_use_v1(&self.state.world.triggers, id, height)?,
+                None => match c10_identity {
+                    Some(identity) => identity,
+                    None => time_trigger_use_v1(&self.state.world.triggers, id, height)?,
+                },
             },
         };
-        let disposition = self.try_apply_internal(
+        let disposition = self.try_apply_internal_family(
             InternalInvocation::Time(invocation),
-            EventBox::Time(event),
-            &action,
+            crate::state::c10_trigger_runtime::CallbackEvent::Event(&EventBox::Time(event)),
+            &authority,
+            &executable,
             source,
         )?;
-        Ok(disposition == InternalOutputDisposition::Rejected && action.retry_policy.is_some())
+        Ok(disposition == InternalOutputDisposition::Rejected && retry)
     }
 }

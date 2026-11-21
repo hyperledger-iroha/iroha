@@ -124,6 +124,22 @@ test("actual Node24 preserves original same-process owner across all fixed case 
   assert.ok(nestedComplete < nestedStart, "actual buffering remains accepted");
 });
 
+test("either complete nested parent label form of the fixed stream is accepted", () => {
+  const result = execute("positive");
+  const events = structuredClone(result.events);
+  const nested = events.filter((item) => ["test:complete", "test:pass"].includes(item.type) && item.data.nesting === 1);
+  assert.equal(nested.length, 18);
+  const labelled = Object.hasOwn(nested[0].data.details, "classname");
+  assert.ok(nested.every((item) => Object.hasOwn(item.data.details, "classname") === labelled
+    && Object.hasOwn(item.data, "classname") === (labelled && item.type === "test:pass")));
+  for (const item of nested) {
+    const parent = events.find((other) => other.type === "test:enqueue" && other.data.testId === item.data.parentId).data.name;
+    if (labelled) { delete item.data.details.classname; delete item.data.classname; }
+    else { item.data.details.classname = parent; if (item.type === "test:pass") item.data.classname = parent; }
+  }
+  assert.equal(consume(events, result).cases.length, 55);
+});
+
 for (const mode of ["registration-error", "case-error", "after-error", "skip", "todo", "extra", "missing", "late-error"]) {
   test(`actual Node24 ${mode} cannot qualify the fixed case stream`, () => {
     const result = execute(mode);
@@ -175,16 +191,20 @@ const mutations = {
   "coordinate mutation": (e) => { event(e, "test:pass").data.column += 1; },
   "ordinal mutation": (e) => { event(e, "test:pass").data.testNumber += 1; },
   "parent label": (e) => { event(e, "test:pass", 1).data.classname = "other"; },
-  "matching nested detail label is not an original field": (e) => {
+  "changed nested detail label presence": (e) => {
     const terminal = event(e, "test:complete", 1);
-    terminal.data.details.classname = e.find((x) => x.type === "test:enqueue"
+    if (Object.hasOwn(terminal.data.details, "classname")) delete terminal.data.details.classname;
+    else terminal.data.details.classname = e.find((x) => x.type === "test:enqueue"
       && x.data.testId === terminal.data.parentId).data.name;
   },
-  "matching nested outer label is not an original field": (e) => {
+  "changed nested outer label presence": (e) => {
     const terminal = event(e, "test:pass", 1);
-    terminal.data.classname = e.find((x) => x.type === "test:enqueue"
+    if (Object.hasOwn(terminal.data, "classname")) delete terminal.data.classname;
+    else terminal.data.classname = e.find((x) => x.type === "test:enqueue"
       && x.data.testId === terminal.data.parentId).data.name;
   },
+  "incorrect nested completion label": (e) => { event(e, "test:complete", 1).data.details.classname = "other"; },
+  "unowned root result label": (e) => { event(e, "test:pass").data.classname = "other"; },
   "duplicate enqueue": (e) => { e.splice(1, 0, structuredClone(e[0])); },
   "duplicate pass": (e) => { const i = e.findIndex((x) => x.type === "test:pass"); e.splice(i + 1, 0, structuredClone(e[i])); },
   "missing complete": (e) => { e.splice(e.findIndex((x) => x.type === "test:complete"), 1); },

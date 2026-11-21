@@ -1,5 +1,6 @@
 //! Canonical Norito helpers shared by ABI producers and consumers.
 use crate::VMError;
+use crate::error::{VmDeferral, VmTrap};
 use norito::{NoritoSerialize, core::DecodeLimits};
 /// Encode a Norito value using the V1 canonical layout.
 ///
@@ -7,12 +8,12 @@ use norito::{NoritoSerialize, core::DecodeLimits};
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the value cannot be encoded.
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the value cannot be encoded.
 pub fn encode_canonical_norito<T>(value: &T) -> Result<Vec<u8>, VMError>
 where
     T: NoritoSerialize,
 {
-    norito::encode_canonical(value).map_err(|_| VMError::NoritoInvalid)
+    norito::encode_canonical(value).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Return conservative resource limits derived from one complete Norito frame.
 ///
@@ -33,9 +34,9 @@ pub const fn canonical_norito_decode_limits(payload_len: usize) -> DecodeLimits 
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when the payload does not decode or when
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] when the payload does not decode or when
 /// its byte representation is not the canonical V1 representation. An original enclosing
-/// admission or allocator refusal is retained as [`VMError::DecodeDeferred`].
+/// admission or allocator refusal is retained as [`crate::error::VmDeferral::DecodeDeferred`].
 pub fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: for<'__frame> norito::NoritoDeserialize<'__frame> + NoritoSerialize,
@@ -50,9 +51,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for protocol/schema limits, malformed frames, or a
+/// Returns [`crate::error::VmTrap::NoritoInvalid`] for protocol/schema limits, malformed frames, or a
 /// non-canonical representation. An original enclosing admission or allocator refusal is
-/// retained as [`VMError::DecodeDeferred`], without an invented allocation-pool owner.
+/// retained as [`crate::error::VmDeferral::DecodeDeferred`], without an invented allocation-pool owner.
 pub fn decode_canonical_norito_with_limits<T>(
     payload: &[u8],
     limits: DecodeLimits,
@@ -62,14 +63,15 @@ where
 {
     norito::decode_canonical_for_admission(payload, limits).map_err(|error| {
         match error.into_local_refusal() {
-            Ok(original) => VMError::DecodeDeferred(original),
-            Err(_) => VMError::NoritoInvalid,
+            Ok(original) => VMError::Deferred(VmDeferral::DecodeDeferred(original)),
+            Err(_) => VMError::Trap(VmTrap::NoritoInvalid),
         }
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     #[test]
     fn rejects_alternate_layout_and_restores_ambient_flags() {
         let value = vec!["first".to_owned(), "second".to_owned()];
@@ -97,7 +99,7 @@ mod tests {
         );
         assert!(matches!(
             decode_canonical_norito::<Vec<String>>(&alternate),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_payload = b"unrelated outer payload context";
@@ -132,7 +134,7 @@ mod tests {
         .expect("frame forged vector length with a valid header and checksum");
         assert!(matches!(
             decode_canonical_norito::<Vec<u64>>(&payload),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
 
@@ -160,7 +162,7 @@ mod tests {
                 DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
             ] {
                 let error = with_decode_limits_scope(limit, || reader(&bytes)).unwrap_err();
-                let VMError::DecodeDeferred(original) = error else {
+                let VMError::Deferred(VmDeferral::DecodeDeferred(original)) = error else {
                     panic!("actual enclosing refusal must retain its owner");
                 };
                 assert_eq!(original.kind(), DecodeLocalRefusalKind::EnclosingLimit);
@@ -171,7 +173,7 @@ mod tests {
                         "foreign numeric limits cannot replace custody"
                     );
                 });
-                let VMError::DecodeDeferred(independent) =
+                let VMError::Deferred(VmDeferral::DecodeDeferred(independent)) =
                     with_decode_limits_scope(limit, || reader(&bytes)).unwrap_err()
                 else {
                     panic!("independent attempt must retain a separate owner");
@@ -195,7 +197,7 @@ mod tests {
                 norito::core::with_decode_limits_scope(outer, || {
                     decode_canonical_norito_with_limits::<Vec<String>>(&bytes, protocol)
                 }),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
         let malformed = &bytes[..7];
@@ -203,7 +205,7 @@ mod tests {
             norito::core::with_decode_limits_scope(protocol, || {
                 decode_canonical_norito::<Vec<String>>(malformed)
             }),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
 }

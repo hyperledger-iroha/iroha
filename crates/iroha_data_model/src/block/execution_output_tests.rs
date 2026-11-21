@@ -182,7 +182,7 @@ fn execution_output_roundtrips_all_owners_diagnostics_and_exact_receipts() {
         );
         assert_eq!(
             row.result().batch_transfer_outcomes(),
-            row.result().1.as_slice()
+            row.result().batch_transfer_outcomes()
         );
         assert_eq!(
             row.completions().len(),
@@ -555,6 +555,7 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                 | ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
                 | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::C10(_)
                 | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!("internal fixture"),
             };
             *result = rejected();
@@ -574,6 +575,7 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                     | ExecutionOutputV1::NetworkWithLifecycle(_)
                     | ExecutionOutputV1::PipelineWithLifecycle(_)
                     | ExecutionOutputV1::TimeWithLifecycle(_)
+                    | ExecutionOutputV1::C10(_)
                     | ExecutionOutputV1::GovernanceBlockStart(_) => {
                         unreachable!("internal fixture")
                     }
@@ -992,6 +994,7 @@ fn bounded_terminals_roundtrip_maximum_trigger_name_and_scalar_positions() {
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::C10(_)
             | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!(),
         }
         assert_eq!(
@@ -1014,6 +1017,7 @@ fn omitted_internal_rejection(mut row: ExecutionOutputV1) -> ExecutionOutputV1 {
         | ExecutionOutputV1::NetworkWithLifecycle(_)
         | ExecutionOutputV1::PipelineWithLifecycle(_)
         | ExecutionOutputV1::TimeWithLifecycle(_)
+        | ExecutionOutputV1::C10(_)
         | ExecutionOutputV1::GovernanceBlockStart(_) => panic!("internal fixture"),
     };
     *result = TransactionResult::new(Err(TransactionRejectionReason::LimitCheck(
@@ -1086,6 +1090,7 @@ fn omitted_internal_rejection_refuses_tampered_result_root_completion_and_receip
                 | ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
                 | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::C10(_)
                 | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!(),
             };
             match fault {
@@ -1288,6 +1293,7 @@ fn lifecycle_mut(row: &mut ExecutionOutputV1) -> &mut TriggerLifecycleEffectsV1 
         ExecutionOutputV1::Network(_)
         | ExecutionOutputV1::Pipeline(_)
         | ExecutionOutputV1::Time(_)
+        | ExecutionOutputV1::C10(_)
         | ExecutionOutputV1::GovernanceBlockStart(_) => {
             panic!("explicit successor fixture required")
         }

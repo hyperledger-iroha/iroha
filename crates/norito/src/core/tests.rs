@@ -7,6 +7,30 @@ use crate::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
+fn schema_directed_depth_scope_preserves_original_refusal_and_restores_depth() {
+    let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 1);
+    with_decode_limits_scope(limits, || {
+        let refused = classify_decode_attempt(|| {
+            with_decode_depth_scope(|| with_decode_depth_scope(|| Ok(())))
+        })
+        .unwrap_err();
+        assert_eq!(refused.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        assert!(matches!(
+            refused.error(),
+            Error::NestingDepthExceeded {
+                depth: 2,
+                limit: 1,
+                ..
+            }
+        ));
+        assert!(with_decode_depth_scope(|| Ok(())).is_ok());
+        assert!(with_decode_depth_scope::<()>(|| Err(Error::LengthMismatch)).is_err());
+        assert!(with_decode_depth_scope(|| Ok(())).is_ok());
+    });
+    assert!(with_decode_depth_scope(|| with_decode_depth_scope(|| Ok(()))).is_ok());
+}
+
+#[test]
 fn active_decode_depth_requires_exact_narrower_surviving_caller() {
     let bytes = crate::to_bytes(&vec![vec![7_u64]]).unwrap();
     let narrow = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0);

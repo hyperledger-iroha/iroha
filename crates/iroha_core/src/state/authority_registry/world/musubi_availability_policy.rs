@@ -8,6 +8,7 @@ use norito::{Decode, Encode, NoritoSchema};
 
 /// Canonical finalized anchor and index revision for one archive's availability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha:state:musubi-availability-authority:v1")]
 pub(in crate::state) struct MusubiAvailabilityAuthorityV1 {

@@ -1,5 +1,6 @@
 //! One fixed canonical node array and its original execution/retention charges.
 
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{FixedAllocationValue, MemoryReservation},
@@ -28,7 +29,7 @@ impl CanonicalNodes {
     pub(super) fn memory_plan(leaves: usize) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::default();
         plan.include(Self::layout(leaves)?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         Ok(plan)
     }
 
@@ -149,7 +150,9 @@ impl Deref for CanonicalNodes {
     }
 }
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 #[cfg(test)]
 thread_local! {

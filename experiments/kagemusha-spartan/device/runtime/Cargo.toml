@@ -20,6 +20,10 @@ jni = { version = "0.22.4", default-features = false }
 base64 = "0.22"
 sha2 = "0.10"
 
+[dev-dependencies]
+p256 = { version = "0.14.0", features = ["ecdsa"] }
+tempfile = "3.23.0"
+
 [patch.crates-io]
 bytes = { path = "../../../../vendor/bytes" }
 http-body-util = { path = "../../../../vendor/http-body-util" }

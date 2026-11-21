@@ -7,6 +7,8 @@ mod compact_bootstrap {
     include!("../tests/common/proof_fixtures/compact_bootstrap_body.rs");
 }
 
+pub(crate) use compact_bootstrap::rooted_compact_bootstrap_from_source;
+
 #[test]
 #[ignore = "genuine compact Bootstrap source and metadata Omega boundary; run optimized"]
 fn omega_owner_early_and_late_cancel_then_fresh_proof_and_exact_read_only_replay() {

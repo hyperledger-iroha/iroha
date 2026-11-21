@@ -1,4 +1,7 @@
 //! Paired native execution, certification and publication timings under the two commitment profiles.
+
+#![cfg(test)]
+
 use std::time::{Duration, Instant};
 
 use crate::{

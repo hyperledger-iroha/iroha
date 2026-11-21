@@ -696,6 +696,8 @@ fn origin_substitution_and_real_rejection_refuse_before_state_application() {
                             _ => {
                                 actual.result = ExecutionOutputV1::network_output_limit_rejection(0)
                                     .result()
+                                    .baseline()
+                                    .expect("baseline output limit")
                                     .clone()
                             }
                         }

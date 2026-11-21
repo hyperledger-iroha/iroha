@@ -9,6 +9,7 @@ use iroha_data_model::{
     isi::privacy::{PrivacyZkX509RequestErrorV1, SubmitPrivacyZkX509CertificateV1},
     transaction::signed_attachments::{SIGNED_ATTACHMENTS_MAX_ACTIONS_V1, SignedAttachmentErrorV1},
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 /// Queue backing and all added metadata copies drop after every queued effect.
 #[derive(Debug)]
@@ -32,37 +33,37 @@ struct DecodedRequest {
     allowance: AllocationReservation,
 }
 impl DecodedRequest {
-    fn decode(vm: &IVM) -> Result<Self, ivm::VMError> {
-        let tlv = vm.validate_tlv(vm.register(10))?;
+    fn decode(vm: &dyn ivm::host::SyscallContext) -> Result<Self, ivm::VMError> {
+        let tlv = vm.public_tlv(vm.public_register(10)?)?;
         if tlv.type_id != PointerType::NoritoBytes
             || tlv.payload.len()
                 > SubmitPrivacyZkX509CertificateV1::canonical_instruction_box_frame_byte_limit_v1()
         {
-            return Err(ivm::VMError::NoritoInvalid);
+            return Err(ivm::VMError::Trap(VmTrap::NoritoInvalid));
         }
-        let budget = vm
-            .allocation_budget()
-            .ok_or(ivm::VMError::ExecutionDeferred(
-                ivm::ExecutionDeferral::LocalInvariantViolation,
-            ))?;
+        let budget =
+            vm.allocation_budget()
+                .ok_or(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ivm::ExecutionDeferral::LocalInvariantViolation,
+                )))?;
         let limits = norito::canonical_decode_limits(tlv.payload.len());
         let demand = limits
             .max_total_allocated_bytes()
             .checked_add(norito::core::DecodeBudgetContext::allocation_layout().size())
-            .ok_or(ivm::VMError::AllocationDeferred(
+            .ok_or(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::DemandOverflow,
-            ))?;
+            )))?;
         let mut allowance = budget
             .try_reserve_bytes(demand)
-            .map_err(ivm::VMError::AllocationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let scope = norito::core::DecodeBudgetContext::from_reservation(limits, &mut allowance)
             .map_err(|error| match error {
-                iroha_allocation::PrepaidSharedError::Reservation(_) => {
-                    ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::LocalInvariantViolation)
-                }
-                iroha_allocation::PrepaidSharedError::Allocator { .. } => {
-                    ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
-                }
+                iroha_allocation::PrepaidSharedError::Reservation(_) => ivm::VMError::Deferred(
+                    VmDeferral::ExecutionDeferred(ivm::ExecutionDeferral::LocalInvariantViolation),
+                ),
+                iroha_allocation::PrepaidSharedError::Allocator { .. } => ivm::VMError::Deferred(
+                    VmDeferral::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable),
+                ),
             })?;
         let instruction: InstructionBox = scope
             .with(|| {
@@ -72,7 +73,7 @@ impl DecodedRequest {
             })
             .map_err(|error| {
                 crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
-                    ivm::VMError::NoritoInvalid
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
                 })
                 .into_vm_error(std::convert::identity)
             })?;
@@ -80,7 +81,7 @@ impl DecodedRequest {
             .as_any()
             .is::<SubmitPrivacyZkX509CertificateV1>()
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         drop(scope);
         Ok(Self {
@@ -165,17 +166,19 @@ impl ExecutedHostInstructions {
     ) -> Result<Self, ivm::VMError> {
         let bytes = std::alloc::Layout::array::<InstructionBox>(count)
             .map_err(|_| {
-                ivm::VMError::AllocationDeferred(
+                ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
                     iroha_allocation::AllocationRefusal::DemandOverflow,
-                )
+                ))
             })?
             .size();
         let backing = budget
             .try_reserve_bytes(bytes)
-            .map_err(ivm::VMError::AllocationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut instructions = Vec::new();
         instructions.try_reserve_exact(count).map_err(|_| {
-            ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
+            ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         Ok(Self {
             instructions,
@@ -237,17 +240,19 @@ impl ExecutedHostInstructions {
 
 fn x509_vm_error(error: X509Error) -> ivm::VMError {
     match error {
-        X509Error::Capacity(original) => ivm::VMError::AllocationDeferred(original),
-        X509Error::AllocationUnavailable => {
-            ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
+        X509Error::Capacity(original) => {
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(original))
         }
+        X509Error::AllocationUnavailable => ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::ExecutionDeferral::AllocationUnavailable,
+        )),
         X509Error::Custody(crate::executor::attachment_custody::CustodyError::Declaration(
             SignedAttachmentErrorV1::LocalResource(original),
         ))
         | X509Error::Request(PrivacyZkX509RequestErrorV1::Attachment(
             SignedAttachmentErrorV1::LocalResource(original),
-        )) => ivm::VMError::DecodeDeferred(original),
-        _ => ivm::VMError::PermissionDenied,
+        )) => ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)),
+        _ => ivm::VMError::Trap(VmTrap::PermissionDenied),
     }
 }
 fn copy_proof(proof: &[u8], budget: &AllocationBudget) -> Result<ChargedBuffer<u8>, X509Error> {
@@ -270,23 +275,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Ok(());
         }
         let limit = usize::try_from(self.instruction_queue_limits.max_items).map_err(|_| {
-            ivm::VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow,
+            ))
         })?;
         let capacity = limit.max(self.queued.capacity());
         let bytes = std::alloc::Layout::array::<QueuedEffect>(capacity)
             .map_err(|_| {
-                ivm::VMError::AllocationDeferred(
+                ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
                     iroha_allocation::AllocationRefusal::DemandOverflow,
-                )
+                ))
             })?
             .size();
         let backing = budget
             .try_reserve_bytes(bytes)
-            .map_err(ivm::VMError::AllocationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         self.queued
             .try_reserve_exact(capacity.saturating_sub(self.queued.len()))
             .map_err(|_| {
-                ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
+                ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ivm::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
         // Preallocate the configured output-item bound once. Child rollback
         // truncates elements but retains this capacity and its original charge.
@@ -324,33 +333,36 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         Ok(bytes)
     }
 
-    pub(super) fn queue_x509_attachment(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn queue_x509_attachment(
+        &mut self,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let request = DecodedRequest::decode(vm)?;
         self.ensure_instruction_queue_allowed(&request.instruction)?;
         let typed = request
             .instruction
             .as_any()
             .downcast_ref::<SubmitPrivacyZkX509CertificateV1>()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         let ordinal = typed.proof_ref.action_index;
         let limits = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::PermissionDenied)?
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
             .privacy_consensus_limits();
         let source_byte_limit = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::PermissionDenied)?
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?
             .transaction_source_byte_limit();
         let budget = vm
             .allocation_budget()
-            .ok_or(ivm::VMError::ExecutionDeferred(
+            .ok_or(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ivm::ExecutionDeferral::LocalInvariantViolation,
-            ))?
+            )))?
             .clone();
         let gas = crate::gas::meter_instruction(&request.instruction, &self.confidential_gas)
-            .map_err(ivm::VMError::VerificationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::VerificationDeferred(cause)))?;
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if !self.try_reserve_serialized_output(&request.instruction, 1) {
             self.abort_attachment_attempt();
@@ -359,7 +371,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.reserve_x509_queue_backing(&budget)?;
         let metadata = budget
             .try_reserve_bytes(self.x509_metadata_clone_bytes()?)
-            .map_err(ivm::VMError::AllocationDeferred)?;
+            .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let (binding, proof) = self
             .with_attachment_invocation(|invocation| {
                 invocation.with_x509_action(
@@ -387,7 +399,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .retain_metadata(metadata);
         // This ordinal observes only successful queue insertion. It is neither
         // a proof result nor authority to branch on an unapplied ledger effect.
-        vm.set_register(10, u64::from(ordinal));
+        vm.write_register(10, u64::from(ordinal))?;
         Ok(gas)
     }
 }
@@ -396,6 +408,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 mod allocation_tests {
     use super::*;
     use iroha_test_samples::ALICE_ID;
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn queued_backing_refuses_before_allocation_and_survives_truncation() {
@@ -403,7 +416,7 @@ mod allocation_tests {
         let mut host = CoreHost::new(ALICE_ID.clone());
         assert!(matches!(
             host.reserve_x509_queue_backing(&budget),
-            Err(ivm::VMError::AllocationDeferred(_))
+            Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(host.queued.capacity(), 0);
         assert!(host.x509_queue_backing.is_none());

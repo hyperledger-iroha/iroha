@@ -1,6 +1,7 @@
 //! Hooks in the ordinary interpreter; no replay, alternate dispatch or raw input owner.
 
 use super::IVM;
+use crate::error::VmDeferral;
 use crate::{
     Memory, PreparedContract, VMError,
     execution_memory::ExecutionMemoryLease,
@@ -121,7 +122,9 @@ impl Recorder {
         self.refusal = Some(reason);
         // Private control signal. Only capture_public_leaf_root installs this owner and
         // translates it back; this is never returned as a transaction verdict.
-        VMError::ExecutionDeferred(crate::error::ExecutionDeferral::VerifierArtifactsUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::VerifierArtifactsUnavailable,
+        ))
     }
     pub(super) fn gas_debit(&mut self, before: u64, cost: u64) -> Result<(), VMError> {
         let first = if !self.root_committed {

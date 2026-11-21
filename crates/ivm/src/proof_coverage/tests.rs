@@ -4,6 +4,7 @@
 //! directions. The proof-code checks are token drift guards over reviewed
 //! claims; they are not behavioural proof-coverage verification.
 
+use crate::error::{VmDeferral, VmErrorRef, VmTrap};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::traps::VM_ERROR_COUNT;
@@ -101,97 +102,96 @@ fn vm_error_samples() -> Vec<VMError> {
     .into_local_refusal()
     .unwrap();
     vec![
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
-        VMError::AllocationDeferred(refusal),
-        VMError::DecodeDeferred(decoded.clone()),
-        VMError::AllocatorDeferred(
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable,
+        )),
+        VMError::Deferred(VmDeferral::AllocationDeferred(refusal)),
+        VMError::Deferred(VmDeferral::DecodeDeferred(decoded.clone())),
+        VMError::Deferred(VmDeferral::AllocatorDeferred(
             iroha_allocation::AllocatorRefusal::try_from(
                 iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 1 },
             )
             .unwrap(),
-        ),
-        VMError::VerificationDeferred(crate::error::VerificationRefusal::from_decode_refusal(
-            decoded,
         )),
-        VMError::Metered {
-            gas: 1,
-            source: Box::new(VMError::OutOfGas),
-        },
-        VMError::OutOfGas,
-        VMError::OutOfMemory,
-        VMError::MemoryAccessViolation {
+        VMError::Deferred(VmDeferral::VerificationDeferred(
+            crate::error::VerificationRefusal::from_decode_refusal(decoded),
+        )),
+        VMError::metered(1, VMError::Trap(VmTrap::OutOfGas)),
+        VMError::Trap(VmTrap::OutOfGas),
+        VMError::Trap(VmTrap::OutOfMemory),
+        VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: 0,
             perm: Perm::READ,
-        },
-        VMError::MisalignedAccess { addr: 1 },
-        VMError::MemoryOutOfBounds,
-        VMError::DecodeError,
-        VMError::InvalidOpcode(0),
-        VMError::UnknownSyscall(0),
-        VMError::HostUnavailable,
-        VMError::NotImplemented { syscall: 0 },
-        VMError::SyscallGasQuoteExceeded {
+        }),
+        VMError::Trap(VmTrap::MisalignedAccess { addr: 1 }),
+        VMError::Trap(VmTrap::MemoryOutOfBounds),
+        VMError::Trap(VmTrap::DecodeError),
+        VMError::Trap(VmTrap::InvalidOpcode(0)),
+        VMError::Trap(VmTrap::UnknownSyscall(0)),
+        VMError::Deferred(VmDeferral::HostUnavailable),
+        VMError::Trap(VmTrap::NotImplemented { syscall: 0 }),
+        VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
             quoted: 1,
             actual: 2,
-        },
-        VMError::SyscallMeteringModeMismatch { syscall: 0 },
-        VMError::GasCostOverflow,
-        VMError::SyscallOutOfGas {
+        }),
+        VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { syscall: 0 }),
+        VMError::Trap(VmTrap::GasCostOverflow),
+        VMError::Trap(VmTrap::SyscallOutOfGas {
             syscall: 0,
             phase: 0,
-        },
-        VMError::NumericFault(NumericFaultV1::DivisionByZero),
-        VMError::RegisterIntegerOverflow,
-        VMError::PointerAbiFault(PointerAbiFaultV1::WrongType),
-        VMError::AssertionFailed,
-        VMError::ContractAbort {
+        }),
+        VMError::Trap(VmTrap::NumericFault(NumericFaultV1::DivisionByZero)),
+        VMError::Trap(VmTrap::RegisterIntegerOverflow),
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::WrongType)),
+        VMError::Trap(VmTrap::AssertionFailed),
+        VMError::Trap(VmTrap::ContractAbort {
             contract: "c".into(),
             name: "n".into(),
             error_type: "e".into(),
             schema_hash: [0; 32],
             code: 1,
             message: None,
-        },
-        VMError::ExceededMaxCycles,
-        VMError::InvalidMetadata,
-        VMError::UnsupportedProgramVersion { major: 9, minor: 9 },
-        VMError::UnsupportedProgramFeatureBits { bits: 0x80 },
-        VMError::UnsupportedProgramAbiVersion { version: 9 },
-        VMError::MissingMaxCycles,
-        VMError::MaxCyclesWithoutZk { max_cycles: 1 },
-        VMError::ProgramVectorLengthTooLarge {
+        }),
+        VMError::Trap(VmTrap::ExceededMaxCycles),
+        VMError::Trap(VmTrap::InvalidMetadata),
+        VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 9, minor: 9 }),
+        VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits: 0x80 }),
+        VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version: 9 }),
+        VMError::Trap(VmTrap::MissingMaxCycles),
+        VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 1 }),
+        VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
             vector_length: 65,
             max_allowed: 64,
-        },
-        VMError::ArtifactAbiHashMismatch {
+        }),
+        VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
             expected: [0; 32],
             actual: [1; 32],
-        },
-        VMError::GenericSyscallNotAllowed { syscall: 0 },
-        VMError::InvalidVectorLength { vector_length: 0 },
-        VMError::MissingHalt,
-        VMError::VectorExtensionDisabled,
-        VMError::ZkExtensionDisabled,
-        VMError::NullifierAlreadyUsed,
-        VMError::PermissionDenied,
-        VMError::ReentrantCall,
-        VMError::CallDepthExceeded,
-        VMError::ControlFlowViolation,
-        VMError::PrivacyViolation,
-        VMError::RegisterOutOfBounds,
-        VMError::NoritoInvalid,
-        VMError::AbiTypeNotAllowed { abi: 1, type_id: 0 },
-        VMError::HostOutputBudgetExceeded {
+        }),
+        VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall: 0 }),
+        VMError::Trap(VmTrap::InvalidVectorLength { vector_length: 0 }),
+        VMError::Trap(VmTrap::MissingHalt),
+        VMError::Trap(VmTrap::VectorExtensionDisabled),
+        VMError::Trap(VmTrap::ZkExtensionDisabled),
+        VMError::Trap(VmTrap::NullifierAlreadyUsed),
+        VMError::Trap(VmTrap::PermissionDenied),
+        VMError::Trap(VmTrap::ReentrantCall),
+        VMError::Trap(VmTrap::CallDepthExceeded),
+        VMError::Trap(VmTrap::ControlFlowViolation),
+        VMError::Trap(VmTrap::PrivacyViolation),
+        VMError::Trap(VmTrap::RegisterOutOfBounds),
+        VMError::Trap(VmTrap::NoritoInvalid),
+        VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 1, type_id: 0 }),
+        VMError::Trap(VmTrap::HostOutputBudgetExceeded {
             resource: HostOutputResource::Items,
             attempted: 2,
             limit: 1,
-        },
-        VMError::AmxBudgetExceeded {
+        }),
+        VMError::Trap(VmTrap::AmxBudgetExceeded {
             dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             stage: iroha_data_model::errors::AmxStage::Commit,
             elapsed_ms: 2,
             budget_ms: 1,
-        },
+        }),
     ]
 }
 
@@ -502,7 +502,9 @@ fn run_phases_match_the_interpreter_and_root_call_sources() {
         }
         let code = scan::read_code(phase.path);
         assert!(
-            code.contains(&format!("fn {}(", phase.function)),
+            scan::functions(&code)
+                .iter()
+                .any(|(name, _)| name == phase.function),
             "{}: {} no longer defines {}",
             phase.id,
             phase.path,
@@ -1191,11 +1193,24 @@ fn trap_kinds_match_the_enum_source() {
 #[test]
 fn vm_errors_match_the_enum_source_and_trap_classification() {
     let inventory = vm_error_names();
+    let source = scan::read(ABI_ERROR);
     passes(check_enum_variants(
-        &scan::read(ABI_ERROR),
+        &source,
         "pub enum VMError",
-        &inventory,
+        &["Trap", "Deferred"],
     ));
+    for family in [VmErrorFamily::Trap, VmErrorFamily::Deferred] {
+        let entries: Vec<_> = VM_ERRORS
+            .iter()
+            .filter(|entry| entry.family == family)
+            .map(|entry| entry.variant)
+            .collect();
+        passes(check_enum_variants(
+            &source,
+            &format!("pub enum {}", family.name()),
+            &entries,
+        ));
+    }
     let samples = vm_error_samples();
     assert_eq!(
         samples
@@ -1211,7 +1226,8 @@ fn vm_errors_match_the_enum_source_and_trap_classification() {
             Some(kind) => assert_eq!(classified, kind, "{}", entry.variant),
             None => {
                 assert_eq!(entry.variant, "Metered");
-                assert_eq!(classified, IVM::classify_trap(sample.as_unmetered()));
+                assert!(matches!(sample.unmetered_trap(), Some(VmTrap::OutOfGas)));
+                assert_eq!(classified, VmTrapKind::OutOfGas);
             }
         }
     }
@@ -1283,24 +1299,21 @@ fn every_vm_error_projects_only_completed_deterministic_faults() {
             );
         }
         let kind = error.fault_kind();
-        let wrapped = VMError::Metered {
-            gas: 17,
-            source: Box::new(error),
-        };
+        let wrapped = VMError::metered(17, error);
         assert_eq!(wrapped.fault_kind(), kind, "metering must preserve {name}");
     }
     use iroha_data_model::executor::fault::IvmFaultKindV1;
     for tag in 1..=13 {
         let code = NumericFaultV1::from_tag(tag).unwrap();
         assert_eq!(
-            VMError::NumericFault(code).fault_kind(),
+            VMError::Trap(VmTrap::NumericFault(code)).fault_kind(),
             Some(IvmFaultKindV1::Numeric(code))
         );
     }
     for tag in 1..=11 {
         let code = PointerAbiFaultV1::from_tag(tag).unwrap();
         assert_eq!(
-            VMError::PointerAbiFault(code).fault_kind(),
+            VMError::Trap(VmTrap::PointerAbiFault(code)).fault_kind(),
             Some(IvmFaultKindV1::PointerAbi(code))
         );
     }
@@ -1332,7 +1345,7 @@ fn producer_scope_files() -> Vec<String> {
 /// file never names the error type, which no construction can avoid.
 fn producer_code(file: &str) -> String {
     let text = scan::read(file);
-    if text.contains("VMError") {
+    if text.contains("VMError") || text.contains("VmTrap") || text.contains("VmDeferral") {
         scan::strip_line_comments(&scan::non_test_source(&text))
     } else {
         String::new()
@@ -1415,9 +1428,11 @@ fn vm_error_producers_match_every_constructing_source_file() {
         .filter(|sample| sample.execution_deferral().is_some())
         .map(|sample| {
             let origin = match sample.as_unmetered() {
-                VMError::HostUnavailable
-                | VMError::SyscallGasQuoteExceeded { .. }
-                | VMError::SyscallMeteringModeMismatch { .. } => TrapOrigin::HostInvariant,
+                VmErrorRef::Deferred(VmDeferral::HostUnavailable)
+                | VmErrorRef::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. })
+                | VmErrorRef::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => {
+                    TrapOrigin::HostInvariant
+                }
                 _ => TrapOrigin::LocalDeferral,
             };
             (vm_error_variant_name(sample), origin)
@@ -1708,7 +1723,7 @@ fn numeric_and_pointer_faults_match_their_tag_decoders_and_enum_sources() {
             "contiguous stable tags"
         );
         assert_eq!(
-            IVM::classify_trap(&VMError::NumericFault(entry.fault)),
+            IVM::classify_trap(&VMError::Trap(VmTrap::NumericFault(entry.fault))),
             VmTrapKind::NumericFault
         );
     }
@@ -1736,7 +1751,7 @@ fn numeric_and_pointer_faults_match_their_tag_decoders_and_enum_sources() {
             "contiguous stable tags"
         );
         assert_eq!(
-            IVM::classify_trap(&VMError::PointerAbiFault(entry.fault)),
+            IVM::classify_trap(&VMError::Trap(VmTrap::PointerAbiFault(entry.fault))),
             VmTrapKind::PointerAbiFault
         );
     }
@@ -1887,7 +1902,7 @@ fn mutated_sources_fail_every_completeness_check() {
         check_interpreter_dispatch(&insert_after(
             &interpreter,
             add_arm,
-            "                        return Err(VMError::OutOfMemory);\n",
+            "                        return Err(VMError::Trap(VmTrap::OutOfMemory));\n",
         )),
         "direct traps of ADD changed",
     );
@@ -1903,7 +1918,7 @@ fn mutated_sources_fail_every_completeness_check() {
         check_interpreter_dispatch(&insert_after(
             &interpreter,
             "// Fetch-Decode-Execute loop\n",
-            "                return Err(VMError::DecodeError);\n",
+            "                return Err(VMError::Trap(VmTrap::DecodeError));\n",
         )),
         "direct traps of run phase `step_preamble` changed",
     );
@@ -1932,7 +1947,7 @@ fn mutated_sources_fail_every_completeness_check() {
         check_interpreter_dispatch(&insert_after(
             &interpreter,
             entry_anchor,
-            "        if self.cycles > 0 { return Err(VMError::DecodeError); }\n",
+            "        if self.cycles > 0 { return Err(VMError::Trap(VmTrap::DecodeError)); }\n",
         )),
         "direct traps of run phase `invocation_entry` changed",
     );
@@ -1941,7 +1956,7 @@ fn mutated_sources_fail_every_completeness_check() {
         check_interpreter_dispatch(&insert_after(
             &interpreter,
             terminal_anchor,
-            "            if self.cycles == 0 { return Err(VMError::DecodeError); }\n",
+            "            if self.cycles == 0 { return Err(VMError::Trap(VmTrap::DecodeError)); }\n",
         )),
         "direct traps of run phase `terminal` changed",
     );
@@ -1984,7 +1999,7 @@ fn mutated_sources_fail_every_completeness_check() {
         check_root_call_initialization(&insert_after(
             &call_runtime,
             root_anchor,
-            "        if self.pc > 9 { return Err(VMError::OutOfMemory); }\n",
+            "        if self.pc > 9 { return Err(VMError::Trap(VmTrap::OutOfMemory)); }\n",
         )),
         "direct traps of run phase `root_call_initialization` changed",
     );
@@ -2049,13 +2064,15 @@ fn mutated_sources_fail_every_completeness_check() {
     };
     rejects(
         with(CALL_RUNTIME, &|code| {
-            format!("{code}\nfn brand_new() -> VMError {{ VMError::OutOfMemory }}\n")
+            format!("{code}\nfn brand_new() -> VMError {{ VMError::Trap(VmTrap::OutOfMemory) }}\n")
         }),
         "crates/ivm/src/call_runtime.rs constructs VMError::OutOfMemory without a reviewed origin",
     );
     rejects(
         with("crates/ivm/src/gas.rs", &|code| {
-            format!("{code}\nfn brand_new() -> crate::VMError {{ crate::VMError::OutOfGas }}\n")
+            format!(
+                "{code}\nfn brand_new() -> crate::VMError {{ crate::VMError::Trap(crate::error::VmTrap::OutOfGas) }}\n"
+            )
         }),
         "crates/ivm/src/gas.rs constructs VMError::OutOfGas without a reviewed origin",
     );
@@ -2067,13 +2084,13 @@ fn mutated_sources_fail_every_completeness_check() {
     );
     rejects(
         with("crates/ivm/src/contract_return_stack.rs", &|code| {
-            code.replace("VMError::CallDepthExceeded", "other_error()")
+            code.replace("VmTrap::CallDepthExceeded", "other_error()")
         }),
         "crates/ivm/src/contract_return_stack.rs no longer constructs VMError::CallDepthExceeded",
     );
     passes(with("crates/ivm/src/gas.rs", &|code| {
         format!(
-            "{code}\nfn is_out_of_gas(error: &crate::VMError) -> bool {{\n    matches!(error, crate::VMError::OutOfGas)\n}}\n"
+            "{code}\nfn is_out_of_gas(error: &crate::VMError) -> bool {{\n    matches!(error, crate::VMError::Trap(crate::error::VmTrap::OutOfGas))\n}}\n"
         )
     }));
 
@@ -2107,9 +2124,13 @@ fn mutated_sources_fail_every_completeness_check() {
         ),
         (
             &error_source,
-            "pub enum VMError",
-            vm_error_names(),
-            "pub enum VMError {\n",
+            "pub enum VmDeferral",
+            VM_ERRORS
+                .iter()
+                .filter(|e| e.family == VmErrorFamily::Deferred)
+                .map(|e| e.variant)
+                .collect(),
+            "pub enum VmDeferral {\n",
             "    HostUnavailable,\n",
         ),
         (

@@ -355,6 +355,28 @@ fn governed_retirement_records_last_use_effective_floor_original_proof_and_perma
                 assert_eq!(coverage.definition(), old);
                 assert_eq!(coverage.roots(), 1);
                 assert_ne!(coverage.evidence(), Hash::new([]));
+                let original = chain
+                    .state()
+                    .runtime_retirement_cut()
+                    .expect("retirement source observation binds the complete original World");
+                crate::runtime::retirement::source_candidate::verify_local_receipt(
+                    original.view(),
+                    proof.receipt.root,
+                    old,
+                    &proof,
+                )
+                .expect("the source join verifies the original paid retirement carrier");
+                let mut substituted = proof.clone();
+                substituted.block.commit_qc[0] ^= 1;
+                assert!(
+                    crate::runtime::retirement::source_candidate::verify_local_receipt(
+                        original.view(),
+                        proof.receipt.root,
+                        old,
+                        &substituted,
+                    )
+                    .is_err()
+                );
                 let mut missing_alias = None;
                 let code_coverage = crate::runtime::retirement::verify_native_code_coverage(
                     &view,
@@ -383,6 +405,73 @@ fn governed_retirement_records_last_use_effective_floor_original_proof_and_perma
                     panic!("missing alias is native");
                 };
                 assert_eq!(old_implementation.code, other.code);
+                // The joined API requires the State-owned complete-World observation, then
+                // refuses the same still-unretired compiled alias without granting deletion.
+                {
+                    use crate::runtime::retirement::{source_candidate, source_ownership::*};
+                    use sha2::Digest as _;
+                    let directory = tempfile::tempdir().unwrap();
+                    let bytes = b"fn reviewed_retirement_owner() {}\n";
+                    std::fs::write(directory.path().join("retired.rs"), bytes).unwrap();
+                    let manifest = SourceManifestV1 {
+                        version: 1,
+                        units: vec![SourceUnitV1 {
+                            path: "retired.rs".into(),
+                            bytes: bytes.len() as u64,
+                            sha256: sha2::Sha256::digest(bytes).into(),
+                            native_owners: vec![old_implementation.code.clone()],
+                            retained_uses: Vec::new(),
+                        }],
+                    };
+                    let request = SourceRemovalRequestV1 {
+                        paths: vec!["retired.rs".into()],
+                        native_owners: vec![old_implementation.code.clone()],
+                    };
+                    let sources = check_sources(
+                        directory.path(),
+                        &manifest,
+                        manifest_digest(&manifest).unwrap(),
+                        &request,
+                        SourceReadLimits {
+                            max_file_bytes: 4096,
+                            max_total_bytes: 4096,
+                        },
+                    )
+                    .unwrap();
+                    let mut missing = None;
+                    assert!(
+                        source_candidate::verify_source_candidate(
+                            &sources,
+                            &original,
+                            &[],
+                            &mut |alias, root| {
+                                assert_eq!(root, proof.receipt.root);
+                                if alias == old {
+                                    Ok(Some(proof.clone()))
+                                } else {
+                                    missing = Some(alias);
+                                    Ok(None)
+                                }
+                            }
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(missing, Some(missing_alias));
+                    std::fs::write(directory.path().join("retired.rs"), b"changed").unwrap();
+                    assert!(matches!(
+                        source_candidate::verify_source_candidate(
+                            &sources,
+                            &original,
+                            &[],
+                            &mut |_, _| unreachable!(
+                                "changed source refuses before proof acquisition"
+                            )
+                        ),
+                        Err(source_candidate::CandidateError::Sources(
+                            Error::PreimageChanged(_)
+                        ))
+                    ));
+                }
                 assert_eq!(proof.receipt.last_required, Some(3));
                 assert_eq!(proof.receipt.startup_floor, floor);
                 validate_root(view.world(), proof.receipt.root, chain.height()).unwrap();

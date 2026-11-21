@@ -110,6 +110,36 @@ fn every_terminal_reply_is_replayed_without_reentering_advance() {
 }
 
 #[test]
+fn regulatory_refusal_outlives_a_relaxed_list_for_the_old_token() {
+    let mut cache = ReviewCache::default();
+    let old = cache.insert(7).unwrap();
+    assert_eq!(
+        cache
+            .execute(old, |_| Err(Failure::code(BLOCKED)))
+            .unwrap_err()
+            .status,
+        BLOCKED
+    );
+    assert!(cache.find(|value| *value == 7).is_none());
+    let new = cache.insert(7).unwrap();
+    assert_ne!(old, new);
+    assert_eq!(
+        cache
+            .execute(old, |_| panic!("blocked token re-entered Advance"))
+            .unwrap_err()
+            .status,
+        BLOCKED
+    );
+    assert_eq!(
+        cache
+            .execute(new, |_| Ok(response(1, vec![1])))
+            .unwrap()
+            .kind,
+        1
+    );
+}
+
+#[test]
 fn pending_and_uncertain_execution_remain_retryable() {
     let mut cache = ReviewCache::default();
     let token = cache.insert(()).unwrap();

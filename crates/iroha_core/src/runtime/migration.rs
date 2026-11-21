@@ -42,6 +42,8 @@ use mv::storage::StorageReadOnly as _;
 use super::{catalog::additions::RUNTIME_LIFECYCLE, release_catalog};
 use crate::state::{WorldBlock, WorldTransaction};
 
+pub mod storage;
+
 /// Whether `selection` installs the kernel's lifecycle State: the storage of the
 /// `iroha.runtime.lifecycle.v1` addition.
 ///
@@ -382,7 +384,10 @@ pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
         };
         match (record.status, restriction) {
             (MigrationStatusV1::Running, None) => {
-                match (migration.stage)(world, &record.cursor, migration.rows_per_stage) {
+                match migration
+                    .code
+                    .stage(world, &record.cursor, migration.rows_per_stage)
+                {
                     Ok(outcome) => {
                         record.cursor = outcome.cursor;
                         record.rows = record.rows.saturating_add(u64::from(outcome.rows));
@@ -401,7 +406,7 @@ pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
                 record.status = MigrationStatusV1::CutOver(height);
             }
             (MigrationStatusV1::CutOver(_), Some(RestrictionV1::CompletionOnly(_))) => {
-                let outcome = (migration.drain)(world, migration.rows_per_stage);
+                let outcome = migration.code.drain(world, migration.rows_per_stage);
                 record.stages = record.stages.saturating_add(1);
                 if outcome.empty {
                     record.status = MigrationStatusV1::Drained(height);
@@ -440,11 +445,11 @@ pub(crate) fn barrier(world: &mut WorldBlock<'_>, height: u64) {
             continue;
         };
         if record.barrier_holds() {
-            (migration.barrier)(world, &record.cursor);
+            migration.code.barrier(world, &record.cursor);
         } else if matches!(
             record.status,
             MigrationStatusV1::CutOver(_) | MigrationStatusV1::Drained(_)
-        ) && (migration.stale)(world)
+        ) && migration.code.stale(world)
         {
             iroha_logger::error!(
                 migration = %id,
@@ -456,8 +461,8 @@ pub(crate) fn barrier(world: &mut WorldBlock<'_>, height: u64) {
     }
 }
 
-/// The change set of one step of the migration `module` on the universal root of `world`
-/// ([`super::ReleaseCatalog::migration_step`]); an operator endorses and proposes it.
+/// The change set of one step of the migration `module` on the authenticated root of `world`
+/// ([`super::ReleaseCatalog::migration_step`]); its root's governance authorizes scheduling.
 ///
 /// # Errors
 /// `module` is not a migration of this release, or the step does not apply to the committed
@@ -470,7 +475,7 @@ pub fn draft_step(
     effective_height: u64,
     qualification: [u8; 32],
 ) -> Result<ChangeSetV1, super::CatalogError> {
-    release_catalog()?.migration_step(
+    let change = release_catalog()?.migration_step(
         module,
         step,
         world.runtime_selection(),
@@ -478,7 +483,13 @@ pub fn draft_step(
         network,
         effective_height,
         qualification,
-    )
+    )?;
+    super::draft_scope::bind(world, network, change).map_err(|error| {
+        super::CatalogError::Addition {
+            module: module.into(),
+            reason: error.to_string(),
+        }
+    })
 }
 
 #[cfg(test)]

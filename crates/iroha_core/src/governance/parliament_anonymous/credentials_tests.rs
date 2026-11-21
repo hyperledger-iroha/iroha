@@ -1,8 +1,11 @@
 //! Tests of credential registration and the credential-aware seal (design §3.2, §3.3) with
 //! genuine registration proofs. Binding juries here seat three and keep one alternate, so
-//! the four invited seats need four proofs, made once per test binary.
+//! the four invited seats need four proofs, made once per network in each test binary.
 
-use std::{collections::BTreeSet, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -78,10 +81,12 @@ pub(super) fn jury_invitations(
     (election.id(), invited)
 }
 
-/// The genuine registration of invited seat `index`, proved once per test binary.
+/// The genuine registration of invited seat `index`, proved once per fixture network.
 pub(super) fn registration(index: usize) -> CredentialRegistrationV1 {
-    static REGISTRATIONS: OnceLock<Vec<CredentialRegistrationV1>> = OnceLock::new();
-    REGISTRATIONS.get_or_init(|| {
+    static REGISTRATIONS: Mutex<BTreeMap<NetworkId, Vec<CredentialRegistrationV1>>> =
+        Mutex::new(BTreeMap::new());
+    let mut registrations = REGISTRATIONS.lock().unwrap();
+    registrations.entry(network()).or_insert_with(|| {
         let driver = drawn_small_jury();
         let (election, invited) = jury_invitations(&driver);
         let context = driver
@@ -601,6 +606,49 @@ fn a_binding_jury_below_three_credentials_ends_without_a_roster() {
     assert_eq!(driver.state.sealed_body(JURY), None);
     assert_eq!(driver.state.no_roster_bodies().get(&JURY), Some(&0));
     driver.assert_restores();
+}
+
+#[test]
+fn credential_seal_codec_refusal_cannot_become_a_planned_or_committed_outcome() {
+    let mut driver = drawn_small_jury();
+    let mut records = Vec::new();
+    register(&mut driver, &mut records, 0..3);
+    answer_public_bodies(&mut driver);
+    let close_ms = close_ms(&driver);
+    let jury_close = driver.state.lifecycle_items().unwrap().into_iter()
+        .map(|due| due.item)
+        .find(|item| matches!(item, AnonymousLifecycleItemV1::CloseInvitations { body, .. } if *body == JURY))
+        .unwrap();
+    let before = driver.state.clone();
+    let limits = || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let error = norito::core::with_decode_limits_scope(limits(), || {
+        driver.state.apply_item_with_credentials(
+            &network(),
+            jury_close,
+            anchor(driver.height + 1, 0, close_ms),
+            |_, _| records.clone(),
+        )
+    })
+    .unwrap_err();
+    assert!(error.original_codec_refusal().is_some());
+    assert!(error.is_local());
+    assert_eq!(driver.state, before);
+    let error = norito::core::with_decode_limits_scope(limits(), || {
+        driver
+            .state
+            .plan_due_items(&network(), driver.height + 1, close_ms, 0, |_, _| {
+                records.clone()
+            })
+    })
+    .unwrap_err();
+    assert!(error.original_codec_refusal().is_some());
+    assert!(error.is_local());
+    assert_eq!(driver.state, before);
+    let outcomes = close_invitations(&mut driver, &records);
+    assert_eq!(
+        jury_effect(&outcomes).close,
+        Some(AnonymousInvitationCloseV1::Sealed)
+    );
 }
 
 #[test]

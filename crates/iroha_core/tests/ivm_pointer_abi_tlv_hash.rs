@@ -4,6 +4,7 @@ use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_model_base::name::Name;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT
@@ -88,7 +89,7 @@ fn tlv_zero_hash_rejected() {
     .unwrap();
     // Should fail under single ABI
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn tlv_valid_hash_accepted() {

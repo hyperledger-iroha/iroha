@@ -6,13 +6,15 @@
 //! E56). The pre-tail execution of the restored height is never reproduced, so that height
 //! serves no row proof.
 
+#[cfg(test)]
+mod carrier_transition_tests;
 mod recovery;
 
 use super::*;
 use crate::{
     runtime,
     state::authority_registry::keyed_commitment::selected_schema::{
-        SelectedSchemaCache, SelectedStateSchema,
+        SelectedSchemaCache, SelectedSchemaHandle, SelectedStateSchema,
     },
     sumeragi::certified_chain::CommittedBlock,
 };
@@ -30,7 +32,7 @@ pub(super) struct KeyedCut {
     /// rebuilds `P_h` and never the pre-tail execution it followed.
     pub execution: Option<KeyedStateTreeV1>,
     pub published: KeyedStateTreeV1,
-    pub schema: Arc<SelectedStateSchema>,
+    pub schema: SelectedSchemaHandle,
 }
 
 /// What a decoded snapshot claims under the keyed profile: the complete State published at
@@ -111,6 +113,45 @@ pub(crate) fn schema_for(
         return Err("keyed profile requires every State-level storage owner".into());
     }
     CACHE.get(catalog, selection)
+}
+
+fn schema_for_world(
+    world: &impl WorldReadOnly,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<SelectedSchemaHandle, CutError> {
+    let selection = world.runtime_selection();
+    if selection.commitment_profile != iroha_data_model::runtime::carrier::keyed::profile_id() {
+        return schema_for(selection)
+            .map(SelectedSchemaHandle::Native)
+            .map_err(CutError::Invalid);
+    }
+    let catalog =
+        runtime::release_catalog().map_err(|error| CutError::Invalid(error.to_string()))?;
+    let profile = catalog
+        .generic_carriers
+        .ok_or_else(|| CutError::Invalid("carrier profile has no source owner".into()))?;
+    if selection.kernel != profile.kernel
+        || !catalog
+            .keyed_storage
+            .iter()
+            .all(|id| selection.installed_storage.binary_search(id).is_ok())
+    {
+        return Err(CutError::Invalid(
+            "carrier keyed profile requires its exact kernel and every State-level owner".into(),
+        ));
+    }
+    let published = runtime::change_set::PublishedDefinitions(world.runtime_definitions());
+    let schema =
+        SelectedStateSchema::resolve_carrier_funded(catalog, selection, &published, budget)
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    CutError::Invalid(error)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    CutError::Deferred(original)
+                }
+            })?;
+    Ok(schema)
 }
 
 /// A response retaining the producer's original memory reservation until encoding finishes.
@@ -261,7 +302,7 @@ use iroha_data_model::sumeragi_finality::{KeyedStateRoot, keyed_state::KeyedStat
 /// Original sealed execution. This value stays with its overlay across local retry and is
 /// published only alongside that overlay's native tip.
 pub(super) struct ExecutionVersion {
-    schema: Arc<SelectedStateSchema>,
+    schema: SelectedSchemaHandle,
     parent: KeyedStateRoot,
     tree: KeyedStateTreeV1,
 }
@@ -282,6 +323,19 @@ impl ExecutionVersion {
 
 fn capture_error(error: KeyedCaptureError) -> CutError {
     match error {
+        KeyedCaptureError::Deferred(original) => CutError::Deferred(original),
+        KeyedCaptureError::Codec(original) => {
+            match crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
+                error.to_string()
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    CutError::Invalid(error)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    CutError::Deferred(original)
+                }
+            }
+        }
         KeyedCaptureError::Tree(KeyedStateError::Admission(original)) => original.into(),
         KeyedCaptureError::Tree(KeyedStateError::Buffer(original))
         | KeyedCaptureError::Source(CaptureError::Allocation(original)) => original.into(),
@@ -326,7 +380,7 @@ impl StateBlockFields<'_> {
     }
 
     fn keyed_execution(&self) -> Result<ExecutionVersion, CutError> {
-        let schema = schema_for(self.world.runtime_selection.get())?;
+        let schema = schema_for_world(&self.world, &self.state_ref.ivm_execution_budget())?;
         let predecessor = self.keyed_predecessor()?;
         let parent = if let Some(cut) = &predecessor {
             cut.published.root().into()
@@ -371,7 +425,7 @@ impl StateBlockFields<'_> {
                 "keyed publication differs from its execution header".into(),
             ));
         }
-        let schema = schema_for(self.world.runtime_selection.get())?;
+        let schema = schema_for_world(&self.world, &self.state_ref.ivm_execution_budget())?;
         if execution.schema.digest != schema.digest {
             return Err(CutError::Invalid(
                 "keyed schema changed after execution was sealed".into(),

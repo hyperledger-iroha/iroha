@@ -554,7 +554,9 @@ fn staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
 fn staged_genesis_execution_errors(
     outputs: &[iroha_data_model::block::execution_output::ExecutionOutputV1],
 ) -> Vec<String> {
-    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    use iroha_data_model::block::execution_output::{
+        ExecutionOutputV1, ExecutionSourceC10V1, TransactionRejectionRef,
+    };
 
     outputs
         .iter()
@@ -575,8 +577,18 @@ fn staged_genesis_execution_errors(
                 ExecutionOutputV1::GovernanceBlockStart(_) => {
                     format!("governance block-start output[{output_index}]")
                 }
+                ExecutionOutputV1::C10(row) => match &row.source {
+                    ExecutionSourceC10V1::Network(index) => format!("transaction[{index}]"),
+                    ExecutionSourceC10V1::Pipeline { .. } => {
+                        format!("pipeline output[{output_index}]")
+                    }
+                    ExecutionSourceC10V1::Time { .. } => format!("time output[{output_index}]"),
+                },
             };
-            Some(format!("{source}: {reason:?}"))
+            Some(match reason {
+                TransactionRejectionRef::Baseline(reason) => format!("{source}: {reason:?}"),
+                TransactionRejectionRef::C10(reason) => format!("{source}: C10({reason:?})"),
+            })
         })
         .collect()
 }
@@ -983,8 +995,17 @@ mod tests {
             lifecycle_success,
             ExecutionOutputV1::time_output_limit_rejection(time.clone()),
             ExecutionOutputV1::network_lifecycle_output_limit_rejection(29),
-            ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline),
-            ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
+            ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline.clone()),
+            ExecutionOutputV1::time_lifecycle_output_limit_rejection(time.clone()),
+            ExecutionOutputV1::network_output_limit_rejection(51)
+                .into_c10_output_limit()
+                .unwrap(),
+            ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline)
+                .into_c10_output_limit()
+                .unwrap(),
+            ExecutionOutputV1::time_output_limit_rejection(time)
+                .into_c10_output_limit()
+                .unwrap(),
         ];
         let reason = "LimitCheck(TransactionLimitError { reason: \"execution output exceeds consensus byte limit\" })";
         let original_outputs = outputs.clone();
@@ -998,6 +1019,9 @@ mod tests {
                 format!("transaction[29]: {reason}"),
                 format!("pipeline output[6]: {reason}"),
                 format!("time output[7]: {reason}"),
+                format!("transaction[51]: C10({reason})"),
+                format!("pipeline output[9]: C10({reason})"),
+                format!("time output[10]: C10({reason})"),
             ]
         );
         assert!(

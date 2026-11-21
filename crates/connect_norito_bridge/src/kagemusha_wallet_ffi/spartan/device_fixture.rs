@@ -5,7 +5,7 @@
 //! installation transfer. No public roots, provider mocks or proof verdicts are
 //! accepted here. This module is absent from production bridge builds.
 
-use super::{Action, FutureSession, Session, native};
+use super::{Action, FutureSession, Session};
 use crate::kagemusha_wallet_ffi as ffi;
 use iroha_core_zk::kagemusha_spartan_native::FutureRuntime;
 use std::sync::{Arc, Mutex};
@@ -164,6 +164,7 @@ pub struct SessionAdapter {
     handle: u64,
     parameters: [u8; 32],
     closed: bool,
+    retained_outputs_only: bool,
     calls: [usize; 8],
 }
 
@@ -236,6 +237,7 @@ impl SessionAdapter {
             handle,
             parameters,
             closed: false,
+            retained_outputs_only: false,
             calls: [0; 8],
         };
         let first = this.install(bundle, manifest, signature)?;
@@ -311,14 +313,148 @@ impl SessionAdapter {
                 out,
             )
         })?;
-        if reply.status != 85
+        if !matches!(reply.status, 85 | 87)
             || reply.token != self.handle
             || reply.bytes.len() != 64
             || reply.bytes[..32] != self.parameters
         {
             return Err("wrong authenticated account parameter identity".into());
         }
+        self.retained_outputs_only = reply.status == 87;
         Ok(reply.bytes[32..].try_into().unwrap())
+    }
+
+    /// Read the access mode returned by the most recent successful C account authorization.
+    pub fn retained_outputs_only(&self) -> bool {
+        self.retained_outputs_only
+    }
+
+    /// Read the genuine received-credit acknowledgement through the retail C ABI.
+    pub fn credit_status(
+        &mut self,
+        slot: [u8; 32],
+        request: [u8; 32],
+        receive: [u8; 32],
+    ) -> Result<Vec<u8>> {
+        self.read_receiver_credit_status(slot, request, receive, 1, &[])
+    }
+
+    /// Read a receiver acknowledgement bound by the C owner to the exact carrier Payment.
+    pub fn credit_status_for_payment(
+        &mut self,
+        slot: [u8; 32],
+        request: [u8; 32],
+        receive: [u8; 32],
+        payment: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.read_receiver_credit_status(slot, request, receive, 3, payment)
+    }
+
+    fn read_receiver_credit_status(
+        &mut self,
+        slot: [u8; 32],
+        request: [u8; 32],
+        receive: [u8; 32],
+        selector: u32,
+        payment: &[u8],
+    ) -> Result<Vec<u8>> {
+        let reply = call(|out| unsafe {
+            ffi::connect_norito_kagemusha_spartan_credit_status_v1(
+                self.handle,
+                slot.as_ptr(),
+                selector,
+                receive.as_ptr(),
+                request.as_ptr(),
+                request.len(),
+                payment.as_ptr(),
+                payment.len(),
+                out,
+            )
+        })?;
+        if reply.status != 104 || reply.token != 0 || !(85..=10_084).contains(&reply.bytes.len()) {
+            return Err("wrong C receipt response".into());
+        }
+        Ok(reply.bytes)
+    }
+    /// Verify an independently produced peer acknowledgement against the local Send.
+    pub fn verify_credit_status(
+        &mut self,
+        slot: [u8; 32],
+        send: [u8; 32],
+        open: &[u8],
+        status: &[u8],
+    ) -> Result<bool> {
+        let reply = call(|out| unsafe {
+            ffi::connect_norito_kagemusha_spartan_credit_status_v1(
+                self.handle,
+                slot.as_ptr(),
+                2,
+                send.as_ptr(),
+                open.as_ptr(),
+                open.len(),
+                status.as_ptr(),
+                status.len(),
+                out,
+            )
+        })?;
+        match (reply.status, reply.token, reply.bytes.as_slice()) {
+            (105, 0, [1]) => Ok(true),
+            (105, 0, [0]) => Ok(false),
+            _ => Err("wrong C receipt verification response".into()),
+        }
+    }
+
+    /// Issue or retry an open Request using the source-bound hardware key through the C entry.
+    pub fn open_request(
+        &mut self,
+        slot: &[u8; 32],
+        id: &[u8; 32],
+        amount: u128,
+    ) -> Result<Vec<u8>> {
+        let reply = call(|out| unsafe {
+            ffi::connect_norito_kagemusha_spartan_issue_open_request_v1(
+                self.handle,
+                slot.as_ptr(),
+                id.as_ptr(),
+                amount.to_le_bytes().as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                out,
+            )
+        })?;
+        if reply.status != 96 || reply.token != 0 || reply.bytes.is_empty() {
+            return Err("invalid C open Request result".into());
+        }
+        Ok(reply.bytes)
+    }
+
+    /// Install and read back the scheme-authenticated local list through the stock C entry.
+    pub fn install_blacklist(
+        &mut self,
+        slot: &[u8; 32],
+        original: &[u8],
+        certificates: &[u8],
+    ) -> Result<[u8; 32]> {
+        let reply = call(|out| unsafe {
+            ffi::connect_norito_kagemusha_spartan_install_blacklist_v1(
+                self.handle,
+                slot.as_ptr(),
+                original.as_ptr(),
+                original.len(),
+                certificates.as_ptr(),
+                certificates.len(),
+                out,
+            )
+        })?;
+        if reply.status != 95 || reply.token != 0 || reply.bytes == [0; 32] {
+            return Err("invalid C local blacklist acknowledgment".into());
+        }
+        reply
+            .bytes
+            .try_into()
+            .map_err(|_| "invalid C local blacklist digest length".into())
     }
 
     /// Prepare the exact witness and current head through the production C entry.
@@ -335,13 +471,90 @@ impl SessionAdapter {
                 out,
             )
         })?;
-        if reply.status != 82 || reply.token == 0 || reply.bytes.len() != 291 {
+        let valid_projection = matches!(
+            (reply.bytes.get(..3), reply.bytes.len()),
+            (Some([1, 0, 1..=4]), 291) | (Some([2, 0, 7]), 243)
+        );
+        if reply.status != 82 || reply.token == 0 || !valid_projection {
             return Err("wrong native review response".into());
         }
         Ok(Prepared {
             token: reply.token,
             review: reply.bytes,
         })
+    }
+
+    /// Registry owner for the Android SDK confirmation of this live fixture review.
+    #[cfg(target_os = "android")]
+    pub fn android_confirmation_handle(&self) -> u64 {
+        self.handle
+    }
+
+    /// Obtain the asset digest of this exact prepared review for iOS presentation.
+    #[cfg(target_os = "ios")]
+    pub fn apple_debit_asset(&mut self, token: u64) -> Result<[u8; 33]> {
+        let selector = [2u8];
+        let reply = call(|out| unsafe {
+            ffi::connect_norito_kagemusha_spartan_confirm_v1(
+                self.handle,
+                token,
+                std::ptr::null(),
+                0,
+                selector.as_ptr(),
+                1,
+                out,
+            )
+        })?;
+        if reply.status != 94
+            || reply.token != 0
+            || !reply.bytes.get(32).is_some_and(|scale| *scale <= 28)
+        {
+            return Err("missing Native review asset".into());
+        }
+        reply
+            .bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| "wrong Native asset width".into())
+    }
+
+    /// Exercise the same fresh Secure Enclave prompt used by the physical iOS SDK.
+    #[cfg(target_os = "ios")]
+    pub fn confirm_apple_debit(&mut self, token: u64) -> Result<()> {
+        let send = |message: &[u8], signature: &[u8]| {
+            call(|out| unsafe {
+                ffi::connect_norito_kagemusha_spartan_confirm_v1(
+                    self.handle,
+                    token,
+                    message.as_ptr(),
+                    message.len(),
+                    signature.as_ptr(),
+                    signature.len(),
+                    out,
+                )
+            })
+        };
+        let provisioned = send(&[], &[1])?;
+        if provisioned.status != 93 || !provisioned.bytes.is_empty() {
+            return Err("wrong Native iOS debit key provisioning response".into());
+        }
+        let challenge = send(&[], &[])?;
+        if challenge.status != 88 || challenge.bytes.len() != 32 {
+            return Err("wrong Native iOS debit challenge".into());
+        }
+        eprintln!("SPARTAN_CONFIRMATION_REQUIRED");
+        let retained = match send(&challenge.bytes, &[0]) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = send(&challenge.bytes, &[]);
+                return Err(error);
+            }
+        };
+        if retained.status != 89 || !retained.bytes.is_empty() {
+            return Err("missing verified Native iOS user-presence record".into());
+        }
+        eprintln!("SPARTAN_CONFIRMATION_GRANTED");
+        Ok(())
     }
 
     /// Execute or retry the Native-owned review token through C.
@@ -364,6 +577,32 @@ impl SessionAdapter {
                 out,
             )
         })
+    }
+
+    /// Read the wallet's next Load ordinal from its released head through C.
+    pub fn next_load_ordinal(&mut self, slot: &[u8; 32]) -> Result<u128> {
+        let reply = self.output(slot, &[0; 32], 4)?;
+        if reply.status != 106 || reply.detail != 0 || reply.token != 0 {
+            return Err("wrong C next Load ordinal status".into());
+        }
+        let bytes = reply
+            .bytes
+            .try_into()
+            .map_err(|_| "wrong C next Load ordinal length")?;
+        Ok(u128::from_le_bytes(bytes))
+    }
+
+    /// Issue or recover the exact independently signed Bootstrap activation over C.
+    pub fn activation(&mut self, slot: &[u8; 32]) -> Result<Vec<u8>> {
+        let reply = self.output(slot, &[0; 32], 5)?;
+        if reply.status != 107
+            || reply.detail != 0
+            || reply.token != 0
+            || !(129..=32_896).contains(&reply.bytes.len())
+        {
+            return Err("wrong C activation response".into());
+        }
+        Ok(reply.bytes)
     }
 
     /// Verify a complete Payment through C and return its canonical public projection.

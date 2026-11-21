@@ -3,8 +3,11 @@
 use super::*;
 
 const MAX_PROGRAM_BYTES: usize = 128 * 1024 * 1024;
+#[path = "compact_program.rs"]
+mod compact;
+
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgram.v1")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgramPayload.v3")]
 struct PublicProgram {
     version: u16,
     side: u8,
@@ -15,8 +18,8 @@ struct PublicProgram {
     inputs: u32,
     // Norito's canonical Vec<u8> representation is a bounded raw byte blob.
     // Nested arrays would frame every scalar byte separately (over 9x larger).
-    // Instruction records are three little-endian u32 words; field records are
-    // exact canonical 32-byte representations, with no alternate encoding.
+    // Instructions use opcode-local differential byte planes. Field records
+    // use exact canonical 32-byte representations.
     operations: Vec<u8>,
     constants: Vec<u8>,
     outputs: [u32; 3],
@@ -27,10 +30,106 @@ struct PublicProgram {
     late: Vec<[u32; 4]>,
     link: Vec<[u32; 2]>,
 }
-fn encode(value: &PublicProgram) -> Result<Vec<u8>, String> {
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-    norito::to_bytes(value).map_err(|e| format!("public program encode: {e}"))
+
+/// Formal degree propagation over a matrix-evaluation tape. Inputs are `r_x`
+/// (`sx`), `r_y` (`sz`), then the LogUp challenges alpha and beta (when the
+/// program has them). Every output `A, B, C` must be multilinear in `r_x` and
+/// `r_y` and of at most the declared degrees in alpha and beta: the sumcheck
+/// round degrees, the matrix fold's `deg q` and the soundness bounds all use
+/// exactly those degrees, so a declaration is checked, never trusted. Formal
+/// degrees (max under addition, sum under multiplication) bound the real ones.
+fn check_tape_degrees(
+    ops: &[Op],
+    inputs: usize,
+    layout: (usize, usize, usize),
+    outputs: [u32; 3],
+    declared: (usize, usize),
+) -> Result<(), String> {
+    for (i, op) in ops.iter().enumerate() {
+        let (src, k) = operands(*op);
+        if src[..k].iter().any(|&a| a as usize >= inputs + i) {
+            return Err("matrix tape forward operand".into());
+        }
+    }
+    if outputs.iter().any(|&o| o as usize >= inputs + ops.len()) {
+        return Err("matrix tape output bound".into());
+    }
+    check_register_degrees(&Regs::of(inputs, ops, outputs), layout, declared)
 }
+
+/// `check_tape_degrees` over the tape's register program: one saturating
+/// degree byte per (live register, variable), so the table stays small for
+/// any instruction count.
+fn check_register_degrees(
+    regs: &Regs,
+    (sx, sz, challenges): (usize, usize, usize),
+    declared: (usize, usize),
+) -> Result<(), String> {
+    let vars = regs.inputs.len();
+    if vars != sx + sz + challenges || challenges > 2 {
+        return Err("matrix tape input layout".into());
+    }
+    let cells = regs
+        .count
+        .checked_mul(vars)
+        .filter(|&n| n <= MAX_PROGRAM_BYTES)
+        .ok_or("matrix tape degree table bound")?;
+    // Every bound checked below is at most 128, so saturation can only make
+    // a refusal certain.
+    let mut degree = vec![0u8; cells];
+    for (v, &r) in regs.inputs.iter().enumerate() {
+        degree[r as usize * vars + v] = 1;
+    }
+    let row = |r: Slot| r as usize * vars..(r as usize + 1) * vars;
+    let mut next = vec![0u8; vars];
+    for &(op, d) in &regs.ops {
+        match op {
+            Op::Add(a, b) | Op::Sub(a, b) => {
+                for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
+                    *n = (*x).max(*y);
+                }
+            }
+            Op::Mul(a, b) => {
+                for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
+                    *n = x.saturating_add(*y);
+                }
+            }
+            Op::Scale(a, _) => next.copy_from_slice(&degree[row(a)]),
+            Op::Const(_) => next.fill(0),
+        }
+        degree[row(d)].copy_from_slice(&next);
+    }
+    let bound = |v: usize| {
+        if v < sx + sz {
+            1
+        } else if v == sx + sz {
+            declared.0
+        } else {
+            declared.1
+        }
+    };
+    for (k, out) in regs.out.into_iter().enumerate() {
+        let degrees = &degree[row(out)];
+        if let Some(v) = (0..vars).find(|&v| degrees[v] as usize > bound(v)) {
+            let what = if v < sx {
+                format!("r_x[{v}]")
+            } else if v < sx + sz {
+                format!("r_y[{}]", v - sx)
+            } else if v == sx + sz {
+                "alpha".into()
+            } else {
+                "beta".into()
+            };
+            return Err(format!(
+                "matrix tape output {k} has formal degree {} in {what}, above its declared bound {}",
+                degrees[v],
+                bound(v)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn u32s<const N: usize>(v: [usize; N]) -> Result<[u32; N], String> {
     let mut out = [0; N];
     for (i, v) in v.into_iter().enumerate() {
@@ -146,31 +245,24 @@ impl<F: Scalar> UniformCircuit<F> {
             "S-uniform" => 2,
             _ => return Err("only monetary program labels may be installed".into()),
         };
+        self.encode_public_program(side)
+    }
+
+    /// Canonical encoding for comparing standalone relation programs in tests.
+    /// Side zero identifies a standalone fixture and is rejected by both
+    /// primary and secondary program import.
+    #[cfg(test)]
+    pub(crate) fn standalone_program_bytes(&self) -> Result<Vec<u8>, String> {
+        self.encode_public_program(0)
+    }
+
+    fn encode_public_program(&self, side: u8) -> Result<Vec<u8>, String> {
         let tape = self.plan();
         let degrees = self.challenge_degrees();
-        let operation_bytes = tape
-            .ops
-            .len()
-            .checked_mul(12)
-            .ok_or("program instruction byte bound")?;
-        if operation_bytes > MAX_PROGRAM_BYTES {
-            return Err("program instruction byte bound".into());
-        }
-        let mut operations = Vec::with_capacity(operation_bytes);
-        for op in &tape.ops {
-            let words = match *op {
-                Op::Add(a, b) => [0, a, b],
-                Op::Sub(a, b) => [1, a, b],
-                Op::Mul(a, b) => [2, a, b],
-                Op::Scale(a, b) => [3, a, b],
-                Op::Const(a) => [4, a, 0],
-            };
-            for word in words {
-                operations.extend_from_slice(&word.to_le_bytes());
-            }
-        }
+        let inputs = u32::try_from(tape.inputs).map_err(|_| "program input count bound")?;
+        let operations = compact::pack(inputs, || tape.slot_instructions())?;
         let value = PublicProgram {
-            version: 1,
+            version: 3,
             side,
             modulus_minus_one: (-F::ONE).to_repr(),
             geometry: u32s([
@@ -189,7 +281,7 @@ impl<F: Scalar> UniformCircuit<F> {
             ])?,
             challenges: self.phase2_challenges() as u32,
             degrees: u32s([degrees.0, degrees.1])?,
-            inputs: tape.inputs as u32,
+            inputs,
             operations,
             constants: pack_fields(&tape.pool)?,
             outputs: tape.out,
@@ -205,52 +297,14 @@ impl<F: Scalar> UniformCircuit<F> {
                 .map(|&(a, b)| u32s([a, b]))
                 .collect::<Result<_, _>>()?,
         };
-        let bytes = encode(&value)?;
-        if bytes.len() > MAX_PROGRAM_BYTES {
-            return Err(format!(
-                "public program exceeds device bound ({} bytes; {} instructions, {} constants, {} fixed fields)",
-                bytes.len(),
-                tape.ops.len(),
-                tape.pool.len(),
-                self.fixed_values.len()
-            ));
-        }
-        Ok(bytes)
+        compact::encode(&value)
     }
 
     /// Decode a bounded verifier-only program. Its digest must subsequently be
     /// authenticated by the independent scheme-root manifest before use.
     pub fn import_program(bytes: &[u8], primary: bool) -> Result<Self, String> {
-        if bytes.len() > MAX_PROGRAM_BYTES {
-            return Err("public program exceeds device bound".into());
-        }
-        let p: PublicProgram = norito::core::with_decode_limits(
-            norito::DecodeLimits::new(
-                MAX_PROGRAM_BYTES,
-                MAX_PROGRAM_BYTES,
-                4 * MAX_PROGRAM_BYTES,
-                4 * MAX_PROGRAM_BYTES,
-                16,
-            ),
-            || {
-                let payload = norito::canonical_frame_payload_with_archive_limit::<PublicProgram>(
-                    bytes,
-                    norito::core::V1_LAYOUT_FLAGS,
-                    MAX_PROGRAM_BYTES as u64,
-                )?;
-                let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-                let (value, used) = norito::core::decode_field_canonical(payload)?;
-                if used != payload.len() {
-                    return Err(norito::Error::LengthMismatch);
-                }
-                Ok(value)
-            },
-        )
-        .map_err(|e| format!("public program decode: {e}"))?;
-        if encode(&p)? != bytes {
-            return Err("noncanonical public program".into());
-        }
-        if p.version != 1
+        let p = compact::decode::<PublicProgram>(bytes)?;
+        if p.version != 3
             || p.side != if primary { 1 } else { 2 }
             || p.modulus_minus_one != (-F::ONE).to_repr()
         {
@@ -276,7 +330,7 @@ impl<F: Scalar> UniformCircuit<F> {
             || !(9..=18).contains(&col_bits)
             || row_bits + col_bits > 30
             || k != 3
-            || io_len != if primary { 64 } else { 62 }
+            || io_len != 64
             || !matches!(p.challenges, 0 | 2)
             || p.degrees[0] > 1
             || p.degrees[1] > 128
@@ -304,7 +358,6 @@ impl<F: Scalar> UniformCircuit<F> {
             || phase_rows.is_none_or(|n| n > rows)
             || constraints > 1usize << sx
             || p.inputs as usize != sx + shape.sz() + p.challenges as usize
-            || !p.operations.len().is_multiple_of(12)
             || !p.constants.len().is_multiple_of(32)
         {
             return Err("public program phase layout".into());
@@ -336,36 +389,9 @@ impl<F: Scalar> UniformCircuit<F> {
             .checked_mul(shape.cols())
             .ok_or("fixed program field count overflow")?;
         let fixed_values = unpack_fixed_fields(&p.fixed, fixed_count)?;
-        let mut ops = Vec::with_capacity(p.operations.len() / 12);
-        let (mut muls, mut scales) = (0, 0);
-        for (i, record) in p.operations.chunks_exact(12).enumerate() {
-            let words: [u32; 3] = std::array::from_fn(|j| {
-                u32::from_le_bytes(
-                    record[j * 4..j * 4 + 4]
-                        .try_into()
-                        .expect("exact instruction word"),
-                )
-            });
-            let [tag, a, b] = words;
-            let before = p.inputs as usize + i;
-            let slot = |v: u32| (v as usize) < before;
-            let constant = |v: u32| (v as usize) < pool.len();
-            let op = match tag {
-                0 if slot(a) && slot(b) => Op::Add(a, b),
-                1 if slot(a) && slot(b) => Op::Sub(a, b),
-                2 if slot(a) && slot(b) => {
-                    muls += 1;
-                    Op::Mul(a, b)
-                }
-                3 if slot(a) && constant(b) => {
-                    scales += 1;
-                    Op::Scale(a, b)
-                }
-                4 if constant(a) && b == 0 => Op::Const(a),
-                _ => return Err("public program forward/invalid instruction".into()),
-            };
-            ops.push(op);
-        }
+        let ops = compact::unpack(p.inputs, pool.len(), &p.operations)?;
+        let muls = ops.iter().filter(|op| matches!(op, Op::Mul(..))).count();
+        let scales = ops.iter().filter(|op| matches!(op, Op::Scale(..))).count();
         if p.outputs
             .iter()
             .any(|v| *v as usize >= p.inputs as usize + ops.len())
@@ -373,9 +399,16 @@ impl<F: Scalar> UniformCircuit<F> {
             return Err("public program output bound".into());
         }
         let regs = Regs::of(p.inputs as usize, &ops, p.outputs);
+        drop(ops);
+        // The declared LogUp degrees size the matrix fold's q and every bound
+        // over it: derive the tape's real degrees instead of trusting them.
+        check_register_degrees(
+            &regs,
+            (sx, shape.sz(), p.challenges as usize),
+            (p.degrees[0] as usize, p.degrees[1] as usize),
+        )?;
         let tape = Tape {
             inputs: p.inputs as usize,
-            ops,
             pool,
             out: p.outputs,
             muls,
@@ -460,12 +493,56 @@ impl<F: Scalar> UniformCircuit<F> {
             plan,
         })
     }
+
+    /// The program's matrix tape is multilinear in `r_x`, `r_y` and within
+    /// its declared LogUp degrees (`check_tape_degrees`). Import checks this
+    /// before building the program; native parameter admission checks every
+    /// authenticated program again, however it was obtained.
+    pub(crate) fn check_declared_degrees(&self) -> Result<(), String> {
+        check_register_degrees(
+            &self.plan().regs,
+            (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
+            self.challenge_degrees(),
+        )
+    }
+
+    /// The exact compiled matrix tape in its public-program form: the input
+    /// layout, the instruction records `export_program` writes, the constant
+    /// pool and the output slots. E4's cold-tape normalization
+    /// (`bootstrap_discharge::ColdTape::normalize`) checks it again and
+    /// derives the in-circuit evaluator from it; nothing here is trusted.
+    pub(crate) fn matrix_tape_words(&self) -> crate::bootstrap_discharge::TapeWords<F> {
+        let tape = self.plan();
+        crate::bootstrap_discharge::TapeWords {
+            layout: (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
+            inputs: tape.inputs,
+            words: tape.slot_instructions().map(op_words).collect(),
+            pool: tape.pool.clone(),
+            outputs: tape.out,
+        }
+    }
 }
+
+/// An instruction's public-program record: tag, then its two words.
+fn op_words(op: Op) -> [u32; 3] {
+    match op {
+        Op::Add(a, b) => [0, a, b],
+        Op::Sub(a, b) => [1, a, b],
+        Op::Mul(a, b) => [2, a, b],
+        Op::Scale(a, b) => [3, a, b],
+        Op::Const(a) => [4, a, 0],
+    }
+}
+
+#[cfg(test)]
+#[path = "compact_program_fixture_tests.rs"]
+mod compact_fixture;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_pasta::{Fp, Fq};
+
     fn sample<F: Scalar>(primary: bool) -> UniformCircuit<F> {
         let mut w = crate::full::Wiring::default();
         let f = w.family(0, 1);
@@ -525,7 +602,7 @@ mod tests {
             t,
             c,
             10,
-            if primary { 64 } else { 62 },
+            64,
             b"public artifact fixture",
         )
         .0
@@ -533,8 +610,8 @@ mod tests {
     fn check<F: Scalar>(primary: bool) {
         let c = sample::<F>(primary);
         let bytes = c.export_program().unwrap();
-        let packed: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
-        assert_eq!(packed.operations.len(), c.plan().ops.len() * 12);
+        let packed: PublicProgram = compact::decode(&bytes).unwrap();
+        assert_eq!(packed.operations.len(), c.plan().regs.ops.len() * 9);
         assert_eq!(packed.constants.len(), c.plan().pool.len() * 32);
         assert_eq!(
             unpack_fixed_fields::<F>(&packed.fixed, c.fixed_values.len())
@@ -563,17 +640,19 @@ mod tests {
         assert_eq!(c.link_io(&rho, &r), loaded.link_io(&rho, &r));
         assert!(UniformCircuit::<F>::import_program(&bytes, !primary).is_err());
         assert!(UniformCircuit::<F>::import_program(&bytes[..bytes.len() - 1], primary).is_err());
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
-        p.operations[..4].copy_from_slice(&2u32.to_le_bytes());
-        p.operations[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
-        p.operations[8..12].fill(0);
-        assert!(UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err());
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
+        p.operations = compact::pack(p.inputs, || std::iter::once(Op::Mul(u32::MAX, 0))).unwrap();
+        assert!(
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err()
+        );
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
         p.geometry[5] = u32::MAX;
         p.geometry[6] = u32::MAX;
-        assert!(UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err());
+        assert!(
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err()
+        );
         for field in 0..3 {
-            let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+            let mut p: PublicProgram = compact::decode(&bytes).unwrap();
             match field {
                 0 => {
                     p.operations.push(0);
@@ -586,14 +665,15 @@ mod tests {
                 }
             }
             assert!(
-                UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err(),
+                UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary)
+                    .is_err(),
                 "partial fixed-width records are not canonical"
             );
         }
-        let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+        let mut p: PublicProgram = compact::decode(&bytes).unwrap();
         p.constants.extend_from_slice(&[255; 32]);
         assert!(
-            UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary).is_err(),
+            UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary).is_err(),
             "each field must be strictly below its modulus"
         );
     }
@@ -601,6 +681,82 @@ mod tests {
     fn public_program_roundtrips_without_private_witnesses() {
         check::<Fp>(true);
         check::<Fq>(false);
+    }
+
+    /// Degrees come from the tape, never from the declaration: inputs r_x0,
+    /// r_x1, r_y0, r_y1, alpha, beta (slots 0-5).
+    #[test]
+    fn matrix_tape_degrees_are_derived_not_declared() {
+        let layout = (2, 2, 2);
+        let mut ops = vec![
+            Op::Mul(0, 2), // 6: r_x0 r_y0
+            Op::Mul(6, 1), // 7: r_x0 r_x1 r_y0
+            Op::Mul(5, 5), // 8: beta^2
+            Op::Mul(7, 8), // 9: r_x0 r_x1 r_y0 beta^2
+            Op::Sub(4, 3), // 10: alpha - r_y1
+            Op::Mul(9, 10),
+            Op::Const(0),     // 12
+            Op::Scale(11, 0), // 13
+            Op::Add(13, 12),  // 14
+        ];
+        let honest = [14, 7, 6];
+        assert_eq!(check_tape_degrees(&ops, 6, layout, honest, (1, 2)), Ok(()));
+        // An over-declaration is only conservative.
+        assert_eq!(check_tape_degrees(&ops, 6, layout, honest, (1, 9)), Ok(()));
+        let low_beta = check_tape_degrees(&ops, 6, layout, honest, (1, 1)).unwrap_err();
+        assert!(low_beta.contains("degree 2 in beta"), "{low_beta}");
+        let low_alpha = check_tape_degrees(&ops, 6, layout, honest, (0, 2)).unwrap_err();
+        assert!(low_alpha.contains("degree 1 in alpha"), "{low_alpha}");
+        // Not multilinear: r_x0 squared, then r_y1 squared, in some output.
+        ops.push(Op::Mul(0, 6)); // 15
+        let squared = check_tape_degrees(&ops, 6, layout, [14, 15, 6], (1, 2)).unwrap_err();
+        assert!(
+            squared.contains("output 1 has formal degree 2 in r_x[0]"),
+            "{squared}"
+        );
+        ops.push(Op::Mul(10, 3)); // 16: (alpha - r_y1) r_y1
+        let squared = check_tape_degrees(&ops, 6, layout, [14, 7, 16], (1, 2)).unwrap_err();
+        assert!(squared.contains("degree 2 in r_y[1]"), "{squared}");
+        // Repeated squaring saturates and stays refused at any declaration.
+        let mut tower = vec![Op::Mul(5, 5)];
+        for i in 0..9 {
+            tower.push(Op::Mul(6 + i, 6 + i));
+        }
+        let top = 6 + tower.len() as u32 - 1;
+        let saturated = check_tape_degrees(&tower, 6, layout, [top, 0, 0], (1, 128)).unwrap_err();
+        assert!(saturated.contains("degree 255 in beta"), "{saturated}");
+        // Layout, forward operands and outputs are part of the check.
+        assert!(check_tape_degrees(&ops, 5, layout, honest, (1, 2)).is_err());
+        assert!(check_tape_degrees(&[Op::Mul(6, 0)], 6, layout, [0, 0, 0], (1, 2)).is_err());
+        assert!(check_tape_degrees(&ops, 6, layout, [99, 0, 0], (1, 2)).is_err());
+    }
+
+    /// A canonical, in-bounds tape whose real degree exceeds its declaration
+    /// is refused at import and by native admission's recheck.
+    #[test]
+    fn imported_tape_above_declared_degree_is_refused() {
+        fn run<F: Scalar>(primary: bool) {
+            let c = sample::<F>(primary);
+            assert_eq!(c.check_declared_degrees(), Ok(()));
+            let bytes = c.export_program().unwrap();
+            let honest = UniformCircuit::<F>::import_program(&bytes, primary).unwrap();
+            assert_eq!(honest.check_declared_degrees(), Ok(()));
+            let mut p: PublicProgram = compact::decode(&bytes).unwrap();
+            // Square r_x[0] and make it A's evaluation: still a valid
+            // straight-line program, but no longer the matrices' MLE.
+            let mut ops = compact::unpack(p.inputs, p.constants.len() / 32, &p.operations).unwrap();
+            let slot = p.inputs + ops.len() as u32;
+            ops.push(Op::Mul(0, 0));
+            p.operations = compact::pack(p.inputs, || ops.iter().copied()).unwrap();
+            p.outputs[0] = slot;
+            let refused =
+                UniformCircuit::<F>::import_program(&compact::encode(&p).unwrap(), primary)
+                    .err()
+                    .expect("a squared r_x tape must be refused");
+            assert!(refused.contains("formal degree 2 in r_x[0]"), "{refused}");
+        }
+        run::<Fp>(true);
+        run::<Fq>(false);
     }
     #[test]
     fn fixed_padding_runs_have_one_bounded_canonical_encoding() {
@@ -647,6 +803,46 @@ mod tests {
         }
         assert!(unpack_fixed_fields::<Fp>(&zero, 0).is_err());
         assert!(unpack_fixed_fields::<Fp>(&[], MAX_PROGRAM_BYTES / 32 + 1).is_err());
+    }
+
+    /// The actual eight saved public programs of a complete chain run import
+    /// with their tapes inside the declared degrees (formal propagation).
+    #[test]
+    #[ignore = "requires saved full-backend-chain public programs"]
+    fn saved_programs_have_their_declared_matrix_degrees() {
+        let directory = std::env::var_os("KAGEMUSHA_SPARTAN_PROGRAMS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain")
+            });
+        fn check<F: Scalar>(path: &std::path::Path, primary: bool) {
+            let bytes = std::fs::read(path).unwrap();
+            let loaded = UniformCircuit::<F>::import_program(&bytes, primary)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert_eq!(loaded.check_declared_degrees(), Ok(()));
+            let tape = loaded.plan();
+            eprintln!(
+                "{}: sx={} sz={} constraints={} challenges={} declared degrees={:?}, {} instructions, {} live registers: within declared degrees",
+                path.file_name().unwrap().to_string_lossy(),
+                loaded.shape.sx,
+                loaded.shape.sz(),
+                loaded.constraints,
+                loaded.phase2_challenges(),
+                loaded.challenge_degrees(),
+                tape.regs.ops.len(),
+                tape.registers(),
+            );
+        }
+        for kind in 0..4 {
+            check::<Fp>(
+                &directory.join(format!("research-kind-{kind}-primary.norito")),
+                true,
+            );
+            check::<Fq>(
+                &directory.join(format!("research-kind-{kind}-secondary.norito")),
+                false,
+            );
+        }
     }
 
     /// Read the actual eight-program closed profile. No compiler warm-up or

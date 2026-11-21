@@ -1,6 +1,7 @@
 //! PC ownership, before-effects growth and original-pool erasure tests.
 
 use super::*;
+use crate::error::VmDeferral;
 use std::{alloc::Layout, mem::size_of};
 
 fn prepare(log: &mut PcTraceLog, rows: usize, original: &AllocationBudget) -> Result<(), VMError> {
@@ -19,7 +20,7 @@ fn pc_growth_keeps_old_and_new_charges_and_preserves_refused_observations() {
     let ptr = log.as_slice().as_ptr();
     original.set_limit_bytes(12 * bytes - 1);
     assert!(
-        matches!(prepare(&mut log, 1, &original), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 8 * bytes)
+        matches!(prepare(&mut log, 1, &original), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == 8 * bytes)
     );
     assert_eq!(log.as_slice(), &[4, 8, 12, 16]);
     assert_eq!(log.as_slice().as_ptr(), ptr);
@@ -41,9 +42,9 @@ fn pc_growth_keeps_old_and_new_charges_and_preserves_refused_observations() {
     assert_eq!(original.reserved_bytes(), 0);
     assert!(matches!(
         prepare(&mut log, 1, &original),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
 }
 
@@ -57,19 +58,19 @@ fn pc_copy_scope_refusal_and_unwind_preserve_the_original() {
         log.record_reserved(pc);
     }
     assert!(
-        matches!(log.prepare(0, None), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(log.prepare(0, None), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
     foreign.with_deferred_refund_notifications(|scope| {
-        assert!(matches!(log.reset(Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        assert!(matches!(log.reset(Some(scope)), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
             )));
         assert!(matches!(
             log.try_clone_allocation(Some(scope)),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
-            ))
+            )))
         ));
     });
     let before = original.reserved_bytes();
@@ -87,9 +88,9 @@ fn pc_copy_scope_refusal_and_unwind_preserve_the_original() {
         } else {
             assert!(matches!(
                 result.unwrap(),
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ExecutionDeferral::AllocationUnavailable
-                ))
+                )))
             ));
         }
         assert_eq!(original.reserved_bytes(), before);

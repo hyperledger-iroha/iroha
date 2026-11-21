@@ -18,6 +18,11 @@ import org.hyperledger.iroha.sdk.norito.Varint
  * companion and returns the receiver's durable acknowledgement, the wallet's Credited envelope
  * ([IrohaPeerNfcReaderExchangeV1.run]). Every value matches the Swift `IrohaPeerNfcV1` byte for
  * byte. TODO(G4): SessionControl over NFC.
+ *
+ * The same commands, chunks and resume carry every profile. What binds the three messages of one
+ * exchange differs: the wallet V1 profile is bound by reading them, and a wallet-bound profile
+ * (`KAGEMUSHA_SPARTAN_PAYMENT_V3`, its acknowledgement being a CreditStatus) only by its wallet's
+ * [IrohaPeerNfcExchangeVerifierV1] on the [IrohaPeerNfcProfilePolicyV1].
  */
 object IrohaPeerNfcV1 {
     /** Proprietary ISO/IEC 7816-4 class of every command except SELECT. */
@@ -31,7 +36,11 @@ object IrohaPeerNfcV1 {
     const val MAXIMUM_MESSAGE_BYTES =
         IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_WALLET_ENCODED_BYTES
 
-    /** The 84-byte IPM1 header plus the maximum Payment carrier with its payer companion (12,098 bytes). */
+    /**
+     * The 84-byte IPM1 header plus the maximum Payment carrier with its payer companion (12,098 bytes):
+     * 12,182 bytes in all, for every profile. A sender checkpoint refuses a longer Payment before any byte
+     * is written, and the card refuses its BEGIN_PAYMENT header.
+     */
     const val MAXIMUM_PAYMENT_BYTES =
         IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWalletPaymentV1.MAXIMUM_BYTES
 
@@ -232,9 +241,66 @@ class IrohaPeerNfcLimitsV1 @JvmOverloads constructor(
     }
 }
 
-/** One immutable application profile for every IPM1 message of an NFC exchange. */
-class IrohaPeerNfcProfilePolicyV1(@JvmField val profile: IrohaPeerPayloadProfile) {
+/**
+ * The guarded wallet operations that bind one NFC exchange of a profile whose messages the carrier cannot
+ * bind by reading them. [IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3] is such a profile: its Payment
+ * restores its completed Request only inside the installed wallet, and its folded CreditStatus names no
+ * scheme. For it the carrier checks profile, kind, frozen sizes and exact bytes, and every binding below is
+ * the wallet's own decision. Each method returns only when the wallet accepts and throws otherwise; a throw
+ * refuses the exchange with [IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH]. None of them may answer from the
+ * shape of a message.
+ *
+ * The NFC state machines call them where trust is established, and again whenever a durable record is
+ * restored, so no sender checkpoint and no card acknowledgement of such a profile exists that the wallet
+ * did not bind. They run on the caller's thread and may block on the wallet.
+ */
+interface IrohaPeerNfcExchangeVerifierV1 {
+    /** Reader and card: [request] names the scheme and asset of this wallet's signed selection. */
+    fun requireRequest(request: IrohaPeerWireMessageV1)
+
+    /**
+     * Reader, before a sender checkpoint exists or is restored: [payment] is this wallet's exact retained
+     * Payment of the protected Send it made for exactly [request], the payer's specialization included.
+     */
+    fun requireOutgoingPayment(request: IrohaPeerWireMessageV1, payment: IrohaPeerWireMessageV1)
+
+    /**
+     * Reader, before the acknowledgement is durable, confirmed or marked: the wallet cryptographically
+     * verified the kind-4 [status] against its exact retained outgoing [payment] and [request], under the
+     * exact operation and scheme of that Send.
+     */
+    fun requireReceivedStatus(
+        request: IrohaPeerWireMessageV1,
+        payment: IrohaPeerWireMessageV1,
+        status: IrohaPeerWireMessageV1,
+    )
+
+    /**
+     * Card, before an acknowledgement record is created, installed or restored: [status] is this wallet's
+     * own retained decision for the Payment it received for exactly [request]. [payment] is that Payment
+     * at COMMIT, and the status must then be the one the wallet issued for those complete bytes, never the
+     * status of another Payment of the same [request]; it is null where only the durable record is restored.
+     */
+    fun requireIssuedStatus(
+        request: IrohaPeerWireMessageV1,
+        payment: IrohaPeerWireMessageV1?,
+        status: IrohaPeerWireMessageV1,
+    )
+}
+
+/**
+ * One immutable application profile for every IPM1 message of an NFC exchange, with the wallet's
+ * [exchangeVerifier] where the profile's exchange is bound by its wallet ([requiresExchangeVerifier]).
+ * A profile bound by reading its messages ignores the verifier. Policies are equal by profile.
+ */
+class IrohaPeerNfcProfilePolicyV1 @JvmOverloads constructor(
+    @JvmField val profile: IrohaPeerPayloadProfile,
+    @JvmField val exchangeVerifier: IrohaPeerNfcExchangeVerifierV1? = null,
+) {
     fun accepts(candidate: IrohaPeerPayloadProfile): Boolean = profile == candidate
+
+    /** Whether only the wallet can bind this profile's Request, Payment and status to one another. */
+    val requiresExchangeVerifier: Boolean get() = profile.nfcWalletBound
 
     override fun equals(other: Any?): Boolean = other is IrohaPeerNfcProfilePolicyV1 && profile == other.profile
 
@@ -930,7 +996,7 @@ internal fun nfcDecodeMessage(
     val canonicalLength = data.nfcU32(12)
     val encodedLength = data.nfcU32(16)
     if (canonicalLength == 0L || encodedLength == 0L) nfcFail(IrohaPeerNfcErrorV1.INVALID_IPM1)
-    val bound = minOf(IrohaPeerWireLimitsV1.PEER_V1.maximumCanonicalBytes, kind.maximumWalletFrameBytes).toLong()
+    val bound = minOf(IrohaPeerWireLimitsV1.PEER_V1.maximumCanonicalBytes, kind.maximumBytes(profile)).toLong()
     if (canonicalLength > bound || encodedLength > bound) nfcFail(IrohaPeerNfcErrorV1.INVALID_LENGTH)
     if (data.nfcU8(5) == IrohaPeerContentEncodingV1.NONE.code && canonicalLength != encodedLength) {
         nfcFail(IrohaPeerNfcErrorV1.INVALID_LENGTH)
@@ -948,6 +1014,97 @@ internal fun nfcDecodeMessage(
 }
 
 private val IPM1_MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
+
+/** A profile whose exchange only its wallet can bind ([IrohaPeerNfcExchangeVerifierV1]). */
+internal val IrohaPeerPayloadProfile.nfcWalletBound: Boolean
+    get() = this == IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3
+
+/**
+ * Reader and card: the Request read or hosted under [policy]. A wallet-bound profile's Request must name its
+ * wallet's signed selection; a profile bound by reading its messages decides that with the Payment.
+ */
+internal fun nfcRequireExchangeRequest(policy: IrohaPeerNfcProfilePolicyV1, request: IrohaPeerWireMessageV1) {
+    if (!policy.profile.nfcWalletBound) return
+    nfcRequireWalletBound(policy, request) { it.requireRequest(request) }
+}
+
+/**
+ * Reader: the messages of one sender checkpoint. The wallet V1 profile is bound by reading them
+ * ([nfcRequireWalletExchange]). A wallet-bound profile is bound by its wallet: the Request against its
+ * signed selection, the Payment as the wallet's exact retained Payment for that Request, and a status
+ * only after the wallet's cryptographic verification against that Payment.
+ */
+internal fun nfcRequireSenderExchange(
+    policy: IrohaPeerNfcProfilePolicyV1,
+    request: IrohaPeerWireMessageV1,
+    payment: IrohaPeerWireMessageV1,
+    status: IrohaPeerWireMessageV1?,
+) {
+    if (!policy.profile.nfcWalletBound) return nfcRequireWalletExchange(request, payment, status)
+    nfcRequireWalletBound(policy, request, payment, status) { verifier ->
+        verifier.requireRequest(request)
+        verifier.requireOutgoingPayment(request, payment)
+        if (status != null) verifier.requireReceivedStatus(request, payment, status)
+    }
+}
+
+/**
+ * Card: the Payment presented to the application at COMMIT. A wallet-bound profile's Payment is bound by
+ * the commit handler's wallet alone, and the acknowledgement that wallet answers is checked by
+ * [nfcRequireIssuedStatus]; here only the hosted Request and the one profile are required.
+ */
+internal fun nfcRequireCommitExchange(
+    policy: IrohaPeerNfcProfilePolicyV1,
+    request: IrohaPeerWireMessageV1,
+    payment: IrohaPeerWireMessageV1,
+) {
+    if (!policy.profile.nfcWalletBound) return nfcRequireWalletExchange(request, payment)
+    nfcRequireWalletBound(policy, request, payment) { it.requireRequest(request) }
+}
+
+/**
+ * Card: the acknowledgement its wallet answers at COMMIT ([payment] present) or restores from its durable
+ * record ([payment] null). The wallet V1 profile reads the scheme the Credited names; a wallet-bound
+ * profile's status names none, so its wallet decides and no shape is accepted in its place.
+ */
+internal fun nfcRequireIssuedStatus(
+    policy: IrohaPeerNfcProfilePolicyV1,
+    request: IrohaPeerWireMessageV1,
+    payment: IrohaPeerWireMessageV1?,
+    status: IrohaPeerWireMessageV1,
+) {
+    if (!policy.profile.nfcWalletBound) {
+        if (payment != null) nfcRequireWalletExchange(request, payment, status) else nfcRequireCreditedScheme(request, status)
+        return
+    }
+    nfcRequireWalletBound(policy, request, payment, status) { it.requireIssuedStatus(request, payment, status) }
+}
+
+/**
+ * Runs [bind] on the wallet verifier of a wallet-bound [policy]. Every message travels under the policy's
+ * one profile: another profile's message is refused before the wallet is asked. A policy without its
+ * verifier binds nothing, so the exchange is refused, never carried unbound.
+ */
+private inline fun nfcRequireWalletBound(
+    policy: IrohaPeerNfcProfilePolicyV1,
+    vararg messages: IrohaPeerWireMessageV1?,
+    bind: (IrohaPeerNfcExchangeVerifierV1) -> Unit,
+) {
+    if (messages.any { it != null && it.nfcProfile != policy.profile }) nfcFail(IrohaPeerNfcErrorV1.INVALID_PROFILE)
+    val verifier = policy.exchangeVerifier ?: throw IrohaPeerNfcExceptionV1(
+        IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH,
+        cause = IllegalStateException("${policy.profile.name} NFC exchanges require the wallet's exchange verifier"),
+    )
+    try {
+        bind(verifier)
+    } catch (failure: IrohaPeerNfcExceptionV1) {
+        throw failure
+    } catch (cancelled: java.util.concurrent.CancellationException) {
+        throw cancelled
+    } catch (failure: RuntimeException) {
+        throw IrohaPeerNfcExceptionV1(IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH, cause = failure)
+    }
+}
 
 /**
  * The Payment must carry a completion of the hosted open Request (its terms and signature), and

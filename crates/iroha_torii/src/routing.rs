@@ -231,7 +231,7 @@ use iroha_data_model::{
     smart_contract::manifest,
     transaction::{
         executable::Executable,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+        signed::{SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -10710,6 +10710,51 @@ fn contract_manifest_response_body(
     };
     norito::json::to_json_pretty(&response)
 }
+/// Read the manifest and its captured profile from a single retained C10 registry cut.
+pub(crate) fn handle_get_c10_contract_code(
+    state: &CoreState,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+) -> Result<Response> {
+    use iroha_data_model::ivm_c10::manifest::{
+        REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1,
+    };
+    let world = state.world_view();
+    let missing = || {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    };
+    let manifest = world
+        .c10_contract_manifests()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let host_profile = *world
+        .c10_contract_profiles()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let body = norito::json::to_json_pretty(&RegisteredManifestC10V1 {
+        network_id: *state.network_id_ref(),
+        artifact_id,
+        host_profile,
+        manifest: manifest.clone(),
+    })
+    .map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to serialize the registered C10 manifest: {e}"
+        )))
+    })?;
+    let mut response = application_json_response(body);
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(REGISTERED_MANIFEST_MEDIA_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static("Accept"),
+    );
+    Ok(response)
+}
+
 /// Fetch an on-chain contract manifest by its exact dataspace-scoped identity.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -19437,6 +19482,7 @@ fn query_multisig_proposals(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
+    use ivm_abi::error::{VmDeferral, VmTrap};
     use super::*;
     #[test]
     fn local_contract_authorization_refusal_is_transport_capacity_not_a_completed_denial() {
@@ -19560,12 +19606,12 @@ mod multisig_contract_call_tests {
         let held = pool.try_reserve_bytes(8).unwrap();
         let refusal = pool.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
-        let converted = contract_vm_attempt_error(ivm::VMError::AllocationDeferred(refusal), |_| panic!("local refusal cannot be formatted as a completed VM error"));
+        let converted = contract_vm_attempt_error(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(refusal)), |_| panic!("local refusal cannot be formatted as a completed VM error"));
         let ExecutionAttemptError::<()>::Deferred(owner) = converted else { panic!("original refusal remains local") };
         assert_eq!(owner.allocation_refusal(), Some(&expected));
         drop(held);
         assert_eq!(pool.reserved_bytes(), 0);
-        assert!(matches!(contract_vm_attempt_error(ivm::VMError::PermissionDenied, |error| error), ExecutionAttemptError::Rejected(ivm::VMError::PermissionDenied)));
+        assert!(matches!(contract_vm_attempt_error(ivm::VMError::Trap(VmTrap::PermissionDenied), |error| error), ExecutionAttemptError::Rejected(ivm::VMError::Trap(VmTrap::PermissionDenied))));
     }
 
     #[test]
@@ -32407,22 +32453,22 @@ struct AccountHistoryTxBase {
 trait HistoryTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint;
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint>;
-    fn result(&self) -> &TransactionResult;
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_>;
 }
 impl HistoryTransaction for iroha_data_model::query::CommittedTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint { &self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result() }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result() }
 }
 struct BorrowedNetworkTransaction<'a> {
     entrypoint: &'a TransactionEntrypoint,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
-    result: &'a TransactionResult,
+    result: iroha_data_model::block::execution_output::TransactionResultRef<'a>,
 }
 impl HistoryTransaction for BorrowedNetworkTransaction<'_> {
     fn entrypoint(&self) -> &TransactionEntrypoint { self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result }
 }
 fn history_cache_anchor(height: usize, hash: Option<&str>) -> Result<Option<HashOf<BlockHeader>>> {
     if height == 0 {
@@ -32498,10 +32544,10 @@ fn project_finalized_network_range<T>(
             let entrypoint = block.network_entrypoint_at(index)
                 .ok_or_else(|| conversion_error("validated Network source disappeared".into()))?;
             let index = u32::try_from(index).map_err(|_| history_capacity_error())?;
-            let (_, output) = block.network_output_at(index)
+            let (_, output) = block.network_execution_output_at(index)
                 .ok_or_else(|| conversion_error("validated Network output disappeared".into()))?;
             let transaction = BorrowedNetworkTransaction {
-                entrypoint, entrypoint_hash: entrypoint.hash(), result: &output.result,
+                entrypoint, entrypoint_hash: entrypoint.hash(), result: output.result(),
             };
             let rows = project(height, &transaction);
             let count = projections.len().checked_add(rows.len()).ok_or_else(history_capacity_error)?;
@@ -33796,16 +33842,16 @@ pub(crate) fn output_fee_projection(
     block: &iroha_data_model::block::SignedBlock,
     output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
 ) -> Result<Option<iroha_data_model::transaction::FeePaymentIntent>, Error> {
-    let Some(network) = output.network() else {
+    let Some(input_index) = output.network_index() else {
         return Ok(None);
     };
     let entrypoint = block
-        .network_entrypoint_at(network.input_index as usize)
+        .network_entrypoint_at(input_index as usize)
         .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
     Ok(tx_fee_projection(&BorrowedNetworkTransaction {
         entrypoint,
         entrypoint_hash: entrypoint.hash(),
-        result: &network.result,
+        result: output.result(),
     }))
 }
 
@@ -40018,21 +40064,28 @@ fn native_contract_emission_source_is_visible(
     emission: &iroha_data_model::smart_contract::event::ContractEmissionV1,
 ) -> bool {
     use iroha_data_model::block::execution_output::{
-        ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
-        PipelineExecutionOutputV2,
+        ExecutionOutputV1, ExecutionSourceC10V1, NetworkExecutionOutputV2,
+        PipelineEventPositionV1, PipelineExecutionOutputV2,
     };
-    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) { return false; }
-    match output {
-        ExecutionOutputV1::Network(source)
-        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: source, .. }) => visibility.allows_external_entrypoint(block, source.input_index as usize),
-        ExecutionOutputV1::Pipeline(source)
-        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: source, .. }) => match source.invocation.event {
-            PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
-            PipelineEventPositionV1::BlockApproved => true,
+    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) {
+        return false;
+    }
+    let position = match output {
+        ExecutionOutputV1::Network(row)
+        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => PipelineEventPositionV1::Network(row.input_index),
+        ExecutionOutputV1::Pipeline(row)
+        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => row.invocation.event,
+        ExecutionOutputV1::C10(row) => match &row.source {
+            ExecutionSourceC10V1::Network(index) => PipelineEventPositionV1::Network(*index),
+            ExecutionSourceC10V1::Pipeline { invocation, .. } => invocation.event,
+            ExecutionSourceC10V1::Time { .. } => return true,
         },
-        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
-        // A governance block-start output names no account, input or session.
-        ExecutionOutputV1::GovernanceBlockStart(_) => true,
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+        | ExecutionOutputV1::GovernanceBlockStart(_) => return true,
+    };
+    match position {
+        PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
+        PipelineEventPositionV1::BlockApproved => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -40064,7 +40117,7 @@ mod native_contract_emission_source_visibility_tests {
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
             ExternalExecutionRouteRole, builder::BlockBuilder,
             execution_output::{
-                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                ExecutionOutputV1, ExecutionOutputC10V1, ExecutionSourceC10V1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
                 PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineExecutionOutputV2,
                 PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2,
                 TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
@@ -40072,7 +40125,7 @@ mod native_contract_emission_source_visibility_tests {
         },
         events::time::{TimeEvent, TimeInterval},
         smart_contract::{ContractAddress, entrypoint::*, event::*},
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionResult},
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
@@ -40144,30 +40197,39 @@ mod native_contract_emission_source_visibility_tests {
         }
     }
 
-    fn network_outputs(index: u32) -> [ExecutionOutputV1; 2] {
+    fn c10_output(source: ExecutionSourceC10V1) -> ExecutionOutputV1 {
+        ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source,
+            result: iroha_data_model::ivm_c10::TransactionResultC10V1(Ok(Vec::new()), Vec::new(), None, Default::default()),
+            completions: Vec::new(),
+            trigger_lifecycle: None,
+        })
+    }
+
+    fn network_outputs(index: u32) -> [ExecutionOutputV1; 3] {
         let execution = NetworkExecutionOutputV1 {
             input_index: index, result: TransactionResult::new(Ok(Vec::new())),
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Network(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Network(index)), ExecutionOutputV1::Network(execution.clone()),
          ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 2] {
+    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 3] {
         let execution = PipelineExecutionOutputV1 {
             invocation: PipelineInvocationV1 { event, candidate_index: 0, trigger: trigger() },
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Pipeline(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Pipeline { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Pipeline(execution.clone()),
          ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn time_outputs() -> [ExecutionOutputV1; 2] {
+    fn time_outputs() -> [ExecutionOutputV1; 3] {
         let execution = TimeExecutionOutputV1 {
             invocation: TimeInvocationV1 {
                 schedule_index: 0, trigger: trigger(),
@@ -40176,7 +40238,7 @@ mod native_contract_emission_source_visibility_tests {
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Time(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Time { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Time(execution.clone()),
          ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
@@ -46935,7 +46997,7 @@ mod contract_feed_binding_tests {
     use iroha_data_model::{
         smart_contract::ContractAddress,
         transaction::{
-            FeePaymentIntent, TransactionBuilder,
+            FeePaymentIntent, TransactionBuilder, TransactionResult,
             error::TransactionRejectionReason,
             executable::{ContractArgumentRecord, ContractInvocation},
         },
@@ -47054,7 +47116,7 @@ mod contract_feed_binding_tests {
         BorrowedNetworkTransaction {
             entrypoint,
             entrypoint_hash: entrypoint.hash(),
-            result,
+            result: result.into(),
         }
     }
     routing_test! { sync non_contract_transactions_never_reach_contract_feeds
@@ -55556,7 +55618,7 @@ fn external_signed_transaction_results(
         usize,
         HashOf<TransactionEntrypoint>,
         &SignedTransaction,
-        &TransactionResult,
+        iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ),
 > + '_ {
     (0..block.network_entrypoint_count()).filter_map(move |index| {
@@ -55570,7 +55632,7 @@ fn external_signed_transaction_result_at(
 ) -> Option<(
     HashOf<TransactionEntrypoint>,
     &SignedTransaction,
-    &TransactionResult,
+    iroha_data_model::block::execution_output::TransactionResultRef<'_>,
 )> {
     // The caller owns a complete carrier validated by the finalized reader.
     // Do not repeat whole-tree validation for every projected row.
@@ -55581,9 +55643,8 @@ fn external_signed_transaction_result_at(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => return None,
     };
     let entrypoint_hash = source.hash();
-    let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
-    let result = &output.result;
-    Some((entrypoint_hash, signed, result))
+    let (_, output) = block.network_execution_output_at(u32::try_from(index).ok()?)?;
+    Some((entrypoint_hash, signed, output.result()))
 }
 fn resolve_explorer_history_entrypoint(
     block: &SignedBlock,
@@ -60456,6 +60517,7 @@ pub mod event {
     //! Events stream handler
     use super::*;
     use crate::{event, stream::WebSocketNorito};
+    include!("routing/c10_event_stream.rs");
     /// Type for any error during events streaming
     #[derive(Debug, thiserror::Error)]
     enum Error {

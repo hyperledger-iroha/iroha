@@ -1409,7 +1409,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 smoke, "source_seal", return_value=campaign["source"]
             ) as seal:
                 receipt = MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
-            validate.assert_called_once_with(root, expected_commit=COMMIT)
+            validate.assert_called_once_with(root, expected_commit=COMMIT, kind="registered_release_smoke")
             seal.assert_called_once_with(root, COMMIT)
             self.assertEqual(receipt["campaign_sha256"], MODULE.file_binding(root / "campaign.json")["sha256"])
             self.assertEqual(receipt["runs"], 10)

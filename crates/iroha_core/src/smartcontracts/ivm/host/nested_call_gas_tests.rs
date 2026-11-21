@@ -2,6 +2,7 @@
 mod nested_call_gas_tests {
     //! Low-level real nested execution; source admission/State policy are owned separately.
     use super::*;
+    use ivm_abi::error::{VmErrorRef, VmTrap};
 
     #[test]
     fn actual_nested_contract_run_draws_only_from_the_parent_gas() {
@@ -56,7 +57,7 @@ seiyaku GasCallee { view fn value() authorize(anyone) -> int { return 42; } }
         let (result, parent, overlay, _) = run(consumed - 1);
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
-            ivm::VMError::OutOfGas
+            VmErrorRef::Trap(VmTrap::OutOfGas)
         ));
         // The missing unit is the last one the tree spends: the parent's own epilogue after the
         // child has returned. The parent therefore completes no result table, whatever its
@@ -106,7 +107,7 @@ seiyaku GasFailure { permission AssetOps;
         );
         assert!(matches!(
             result.unwrap_err().as_unmetered(),
-            ivm::VMError::ContractAbort { code: 1, .. }
+            VmErrorRef::Trap(VmTrap::ContractAbort { code: 1, .. })
         ));
         assert!(
             overlay.is_empty(),

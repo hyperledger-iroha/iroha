@@ -2,6 +2,7 @@
 use super::*;
 use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
 use ivm::{IVM, Memory, Perm, ProgramMetadata, VMError, encoding::wide as enc, ivm_mode};
+use ivm_abi::error::VmTrap;
 use packet::{AFTER, AFTER_TAG, BEFORE, BEFORE_TAG, ENABLED, Event, Space};
 
 /// Architectural register file size of the fixture register arrays.
@@ -584,7 +585,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
             assert_eq!(ok, !private || address == Memory::STACK_START);
             assert!(matches!(
                 (ok, result),
-                (true, Ok(())) | (false, Err(VMError::PrivacyViolation))
+                (true, Ok(())) | (false, Err(VMError::Trap(VmTrap::PrivacyViolation)))
             ));
             assert_native_reads(&vm, &f);
             assert_native_write(&vm, &f);
@@ -615,20 +616,20 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
     vm.memory.clear_tracking();
     assert!(match (
         &(vm.run()),
-        &(VMError::MemoryAccessViolation {
+        &(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: 0,
             perm: Perm::WRITE
-        })
+        }))
     ) {
         (
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: actual_field_0,
                 perm: actual_field_1,
-            }),
-            VMError::MemoryAccessViolation {
+            })),
+            VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: expected_field_0,
                 perm: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -736,24 +737,24 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
     vm.memory.clear_tracking();
     assert!(match (
         &(vm.run()),
-        &(VMError::MemoryAccessViolation {
+        &(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: u32::from_le_bytes(
                 u64::to_le_bytes(Memory::OUTPUT_START + 8)[..4]
                     .try_into()
                     .expect("low-byte width")
             ),
             perm: Perm::WRITE
-        })
+        }))
     ) {
         (
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: actual_field_0,
                 perm: actual_field_1,
-            }),
-            VMError::MemoryAccessViolation {
+            })),
+            VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: expected_field_0,
                 perm: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -841,18 +842,18 @@ fn native_early_trap_priority_and_late_alignment_keep_exact_read_prefix() {
     let bad = Memory::HEAP_START + 1;
     let cost = 3;
     for (base_private, value_private, expected, reads) in [
-        (true, true, VMError::PrivacyViolation, 0),
-        (false, true, VMError::PrivacyViolation, 2),
+        (true, true, VMError::Trap(VmTrap::PrivacyViolation), 0),
+        (false, true, VMError::Trap(VmTrap::PrivacyViolation), 2),
         (
             false,
             false,
-            VMError::MisalignedAccess {
+            VMError::Trap(VmTrap::MisalignedAccess {
                 addr: u32::from_le_bytes(
                     u64::to_le_bytes(bad)[..4]
                         .try_into()
                         .expect("low-byte width"),
                 ),
-            },
+            }),
             2,
         ),
     ] {
@@ -867,13 +868,16 @@ fn native_early_trap_priority_and_late_alignment_keep_exact_read_prefix() {
             vm.memory.clear_tracking();
             let result = vm.run();
             if out_of_gas {
-                assert!(matches!(result, Err(VMError::OutOfGas)));
+                assert!(matches!(result, Err(VMError::Trap(VmTrap::OutOfGas))));
             } else {
                 assert!(match (result, &expected) {
-                    (Err(VMError::PrivacyViolation), VMError::PrivacyViolation) => true,
                     (
-                        Err(VMError::MisalignedAccess { addr: actual }),
-                        VMError::MisalignedAccess { addr: expected },
+                        Err(VMError::Trap(VmTrap::PrivacyViolation)),
+                        VMError::Trap(VmTrap::PrivacyViolation),
+                    ) => true,
+                    (
+                        Err(VMError::Trap(VmTrap::MisalignedAccess { addr: actual })),
+                        VMError::Trap(VmTrap::MisalignedAccess { addr: expected }),
                     ) => actual == *expected,
                     _ => false,
                 });

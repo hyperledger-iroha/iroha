@@ -57,6 +57,9 @@ pub enum Schema {
         nominal_name: fn() -> std::borrow::Cow<'static, str>,
         /// Explicit payload layout used by the leaf encoder.
         layout: CanonicalLayout,
+        /// Read-only structural evidence for release tests; never part of a State identity.
+        #[cfg(test)]
+        structure: Option<fn() -> iroha_schema::MetaMap>,
     },
     /// Existing borrowed semantic encoder excluding materialized runtime caches.
     Semantic {
@@ -81,6 +84,19 @@ pub const fn schema<T: Encode + NoritoSchema>() -> Schema {
     Schema::Norito {
         nominal_name: norito::schema::identity::nominal_name::<T>,
         layout: V1_LAYOUT,
+        #[cfg(test)]
+        structure: None,
+    }
+}
+
+/// Preserve the typed World codec for the independent release-layout guard.
+#[cfg(test)]
+pub(crate) const fn schema_with_structure<T: Encode + NoritoSchema + iroha_schema::IntoSchema>()
+-> Schema {
+    Schema::Norito {
+        nominal_name: norito::schema::identity::nominal_name::<T>,
+        layout: V1_LAYOUT,
+        structure: Some(T::schema),
     }
 }
 
@@ -336,5 +352,7 @@ pub const WORLD_FIELDS: &[Field] = world::WORLD_FIELDS;
 pub(in crate::state) mod inventory_test_support;
 #[cfg(test)]
 mod runtime_codec_tests;
+#[cfg(test)]
+mod storage_layout;
 #[cfg(test)]
 mod tests;

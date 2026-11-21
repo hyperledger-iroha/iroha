@@ -743,11 +743,11 @@ fn verify_carrier_execution(
         }
         let output = certified_tip
             .block()
-            .network_output_at(input_index)
+            .network_execution_output_at(input_index)
             .ok_or_else(|| {
                 invalid("native operation carrier lacks exact successful original execution")
             })?;
-        let applied = output.1.result.as_ref().is_ok();
+        let applied = output.1.result().as_ref().is_ok();
         if require_success && !applied {
             return Err(invalid(
                 "native operation carrier lacks exact successful original execution",

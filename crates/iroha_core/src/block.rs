@@ -213,12 +213,14 @@ fn map_overlay_error(
                 ),
             ))
         }
-        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::AmxBudgetExceeded {
-            dataspace,
-            stage,
-            elapsed_ms,
-            budget_ms,
-        }) => TransactionRejectionReason::Validation(
+        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::Trap(
+            ivm_abi::error::VmTrap::AmxBudgetExceeded {
+                dataspace,
+                stage,
+                elapsed_ms,
+                budget_ms,
+            },
+        )) => TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::NotPermitted(format!(
                 "{} code={}",
                 crate::pipeline::overlay::amx_timeout_message(
@@ -2260,6 +2262,7 @@ pub fn check_genesis_block(
     check_genesis_execution_results(block)
 }
 pub(crate) mod genesis_crypto_policy;
+pub(crate) mod genesis_child_runtime;
 pub(crate) mod genesis_policies;
 pub(crate) mod genesis_staking_policy;
 
@@ -3466,7 +3469,7 @@ pub(crate) mod valid {
             struct VerifiedProof<'block> {
                 proof: &'block ProofBlob,
                 dsid: DataSpaceId,
-                facts: ivm::axt::AxtProofUseFacts,
+                facts: ivm_abi::axt::AxtProofUseFacts,
             }
             type VerifiedProofBuckets = BTreeMap<(Option<u64>, Hash), Vec<usize>>;
 
@@ -3500,7 +3503,7 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    let expiry_deadline = ivm::axt::expiry_slot_with_skew(
+                    let expiry_deadline = ivm_abi::axt::expiry_slot_with_skew(
                         expiry_slot,
                         axt_timing.slot_length_ms,
                         axt_timing.max_clock_skew_ms,
@@ -3661,7 +3664,7 @@ pub(crate) mod valid {
                 verified_proofs.push(VerifiedProof {
                     proof,
                     dsid,
-                    facts: ivm::axt::AxtProofUseFacts::from_verified_envelope(envelope),
+                    facts: ivm_abi::axt::AxtProofUseFacts::from_verified_envelope(envelope),
                 });
                 verified_proof_buckets
                     .entry(cache_key)
@@ -3755,7 +3758,7 @@ pub(crate) mod valid {
                 }
                 let mut touch_dsids: BTreeSet<DataSpaceId> = BTreeSet::new();
                 for touch in &envelope.touches {
-                    if ivm::axt::validate_model_touch_manifest(&touch.manifest).is_err() {
+                    if ivm_abi::axt::validate_model_touch_manifest(&touch.manifest).is_err() {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Descriptor,
@@ -5179,6 +5182,12 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(initial) = state_block.genesis_staking_policy.as_ref()
+                && let Err(error) = initial.require_unchanged(&state_block)
+            {
+                drop(state_block);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(initial) = state_block.genesis_child_runtime.as_ref()
                 && let Err(error) = initial.require_unchanged(&state_block)
             {
                 drop(state_block);
@@ -8978,11 +8987,14 @@ pub(crate) mod valid {
                 map_block_err_to_reason(&BlockValidationError::InvalidGenesis(
                     InvalidGenesisError::RejectedOutput(GenesisOutputRejection {
                         output_index: 0,
-                        reason: Box::new(TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "rejected genesis mapping fixture".into()
-                            ),
-                        )),
+                        reason: Box::new(
+                            TransactionRejectionReason::Validation(
+                                iroha_data_model::ValidationFail::NotPermitted(
+                                    "rejected genesis mapping fixture".into()
+                                ),
+                            )
+                            .into()
+                        ),
                     })
                 )),
                 Some(Reason::InvalidGenesis)

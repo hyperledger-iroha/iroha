@@ -507,7 +507,11 @@ pub(super) fn rejected_replay(
                     let error = evidence.output.result().as_ref().err().ok_or_else(|| eyre!("already settled old decision was applied again"))?;
                     // A rejection displays only its outer layer ("Validation failed"); the
                     // decision-authority cause is nested below `InstructionFailed`.
-                    let outermost: &dyn std::error::Error = error;
+                    use iroha_data_model::block::execution_output::TransactionRejectionRef;
+                    let outermost: &dyn std::error::Error = match error {
+                        TransactionRejectionRef::Baseline(reason) => reason,
+                        TransactionRejectionRef::C10(reason) => reason,
+                    };
                     let detail = std::iter::successors(Some(outermost), |cause| cause.source())
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()

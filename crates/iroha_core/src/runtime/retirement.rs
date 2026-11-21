@@ -2,8 +2,9 @@
 //!
 //! The complete parent State publication selects membership and child genesis authority.
 //! Missing registered roots block coverage. Proofs never select their own committee or scope.
-//! TODO(N14): connect the reviewed native source inventory and physical deletion rehearsal
-//! before exposing a code-deletion verdict. This module only authenticates
+//! The offline source candidate joins scoped reviewed source owners to original complete-World
+//! alias inventories and receipts. TODO(N14): qualify the physical source-removed oldest-floor
+//! restart rehearsal before exposing a code-deletion verdict. This module only authenticates
 //! coverage of the supplied statements; it is not a release-removal authorization.
 
 use std::num::NonZeroUsize;
@@ -14,6 +15,12 @@ pub(crate) use producer::{
     record_governed_exclusions, validate_persistence, validate_root,
 };
 mod code_coverage;
+#[expect(
+    dead_code,
+    reason = "TODO(N14): integrate the offline source candidate with the source-removed oldest-floor rehearsal before exposing a release verdict"
+)]
+pub(crate) mod source_candidate;
+pub mod source_ownership;
 #[cfg(test)]
 pub(crate) use code_coverage::verify_native_code_coverage;
 

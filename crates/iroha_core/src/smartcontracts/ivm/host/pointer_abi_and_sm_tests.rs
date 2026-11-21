@@ -52,9 +52,12 @@ fn pointer_abi_daily_limit_rejects_noncanonical_options() {
     assert!(matches!(
         (
             &(CoreHost::decode_optional_amount(&vm, invalid_tag)),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     let noncanonical_none = vm.alloc_heap(layout.allocation_bytes().unwrap()).unwrap();
     vm.store_u64(noncanonical_none, 0).unwrap();
@@ -62,9 +65,12 @@ fn pointer_abi_daily_limit_rejects_noncanonical_options() {
     assert!(matches!(
         (
             &(CoreHost::decode_optional_amount(&vm, noncanonical_none)),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
     let wrong_payload = store_tlv(
         &mut vm,
@@ -290,7 +296,7 @@ fn sm3_syscall_failure_records_failure_metric() {
     let err = vm
         .run()
         .expect_err("SM3 must be rejected when TLV carries the wrong type");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
     assert_eq!(
         metrics
             .sm_syscall_failures_total
@@ -393,7 +399,7 @@ fn sm_syscalls_ignore_local_crypto_preferences() {
             }
             vm.set_register(14, 16);
             let quote = host
-                .prepare_syscall(*number, &vm)
+                .prepare_syscall(*number, vm.syscall_quote())
                 .expect("mandatory SM quote");
             let actual = host
                 .syscall(*number, &mut vm)
@@ -447,8 +453,8 @@ fn sm_quotes_validate_pointer_types_without_node_opt_in() {
         );
         vm.set_register(10, pointer);
         assert!(matches!(
-            host.prepare_syscall(number, &vm),
-            Err(ivm::VMError::NoritoInvalid)
+            host.prepare_syscall(number, vm.syscall_quote()),
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(
             host.drain_instructions()

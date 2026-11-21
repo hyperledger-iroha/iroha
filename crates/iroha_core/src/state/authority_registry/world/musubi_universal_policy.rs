@@ -10,6 +10,7 @@ use norito::{Decode, Encode, NoritoSchema};
 
 /// Last independent update revision of one resolver row; its release is the table key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha:state:musubi-resolver-authority:v1")]
 pub(in crate::state) struct MusubiResolverAuthorityV1 {
@@ -27,6 +28,7 @@ impl MusubiResolverAuthorityV1 {
 
 /// Last independent update revision of one directory row; its selector is the table key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha:state:musubi-directory-authority:v1")]
 pub(in crate::state) struct MusubiDirectoryAuthorityV1 {

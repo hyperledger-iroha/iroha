@@ -1,5 +1,6 @@
 """Typed Torii HTTP client: collection queries, typed errors, governance and transaction-submission helpers."""
 
+from . import anonymous_ballot as _anonymous_ballot
 from . import client as _client
 from . import collection as _collection
 from . import errors as _errors
@@ -10,6 +11,7 @@ from . import private_settlement_client as _private_settlement_client
 from . import transaction_submission as _transaction_submission
 
 _MODULES = (
+    _anonymous_ballot,
     _client,
     _list_query,
     _collection,

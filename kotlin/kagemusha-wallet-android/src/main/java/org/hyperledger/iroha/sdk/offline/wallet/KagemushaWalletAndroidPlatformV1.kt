@@ -50,7 +50,18 @@ import org.hyperledger.iroha.sdk.offline.KagemushaWalletEnrollmentRefusalV1
  */
 class KagemushaWalletAndroidPlatformV1 private constructor(
     private val adapter: KagemushaWalletAndroidPlatformAdapterV1,
+    @get:JvmSynthetic internal val preferStrongBox: Boolean,
+    @get:JvmSynthetic internal val requireDebitAuthenticator: () -> Unit,
 ) {
+    private class SpartanOrigin(val slot: ByteArray, val message: ByteArray, val der: ByteArray)
+    private val spartanOrigin = java.util.concurrent.atomic.AtomicReference<SpartanOrigin?>()
+
+    @JvmSynthetic internal fun retainSpartanSignature(slot: ByteArray, message: ByteArray, der: ByteArray, retain: () -> Unit) {
+        val origin = SpartanOrigin(slot.copyOf(), message.copyOf(), der.copyOf())
+        check(spartanOrigin.compareAndSet(null, origin)) { "Another hardware signature is being retained" }
+        try { retain() } finally { spartanOrigin.compareAndSet(origin, null) }
+    }
+
     private val storageObservations = WalletStorageObservationV1(::publishWalletStorageObservationV1)
     /**
      * E5 evidence of the exact native-selected payment key, right after its generation: the
@@ -154,6 +165,17 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
                 is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
                 KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(2)
             }
+            16 -> {
+                val signed = spartanOrigin.get()
+                if (signed != null && auxiliary == 0 && signed.slot.contentEquals(slot) &&
+                    input.size == 32 + signed.der.size && signed.message.contentEquals(input.copyOfRange(0, 32)) &&
+                    signed.der.contentEquals(input.copyOfRange(32, input.size))) KagemushaWalletNativeReplyV1(0)
+                else KagemushaWalletNativeReplyV1(2)
+            }
+            15 -> if (input.isEmpty() && auxiliary == 0) {
+                try { KagemushaWalletNativeReplyV1(0, bytes = KagemushaSpartanAndroidConfirmationV1.probe(slot)) }
+                catch (_: Exception) { KagemushaWalletNativeReplyV1(2) }
+            } else KagemushaWalletNativeReplyV1(2)
             else -> KagemushaWalletNativeReplyV1(2)
         }.also { reply ->
             storageObservations.reply(operation, reply)
@@ -172,13 +194,17 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
         fun create(context: Context): KagemushaWalletAndroidPlatformV1 = create(
             KagemushaWalletAndroidSystemEnvironmentV1(context),
             KagemushaWalletAndroidSystemKeyStoreV1(),
+            android.os.Build.VERSION.SDK_INT >= 28 && context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_STRONGBOX_KEYSTORE),
+            context.applicationContext.let { app -> { requireSpartanAuthenticatorV1(app) } },
         )
 
         internal fun create(
             environment: KagemushaWalletAndroidEnvironmentV1,
             keyStore: KagemushaWalletAndroidKeyStoreV1,
+            preferStrongBox: Boolean = false,
+            requireDebitAuthenticator: () -> Unit = {},
         ): KagemushaWalletAndroidPlatformV1 =
-            KagemushaWalletAndroidPlatformV1(KagemushaWalletAndroidPlatformAdapterV1(environment, keyStore))
+            KagemushaWalletAndroidPlatformV1(KagemushaWalletAndroidPlatformAdapterV1(environment, keyStore), preferStrongBox, requireDebitAuthenticator)
     }
 }
 

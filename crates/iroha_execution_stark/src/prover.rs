@@ -36,7 +36,7 @@ pub enum ProveError {
     BadSample,
 }
 
-/// Optional per-phase wall/CPU report on stderr (`IROHA_EXECUTION_STARK_TIMINGS=1`).
+/// Per-call wall and CPU phase timing report on stderr.
 struct Phases {
     enabled: bool,
     start: std::time::Instant,
@@ -51,9 +51,8 @@ fn process_cpu_seconds() -> f64 {
 }
 
 impl Phases {
-    fn new() -> Self {
+    fn new(enabled: bool) -> Self {
         let now = std::time::Instant::now();
-        let enabled = std::env::var_os("IROHA_EXECUTION_STARK_TIMINGS").is_some();
         Self {
             enabled,
             start: now,
@@ -275,15 +274,11 @@ pub(crate) fn from_components(components: &[Fp]) -> Fp4 {
 
 /// Proves a statement.
 ///
-/// The single-letter names follow the protocol notation: `n` rows, OOD point `z`, `v` the LDE
-/// generator, `q` quotient-domain blowups, `j`/`k` coset and position.
-///
 /// `public_inputs[c][row]` are the application's public columns for every row; `states[row]` is the register
 /// vector before step `row`, for `row in 0..=steps`.
 ///
 /// # Errors
 /// Fails on malformed inputs, simulation divergence or an unsatisfied circuit.
-#[allow(clippy::many_single_char_names)]
 pub fn prove(
     circuit: &Circuit,
     params: &Params,
@@ -291,13 +286,43 @@ pub fn prove(
     public_inputs: &[Vec<i64>],
     states: &[Vec<i64>],
 ) -> Result<Proof, ProveError> {
+    prove_inner(circuit, params, statement, public_inputs, states, false)
+}
+
+/// Proves a statement and reports wall and CPU times for its phases to stderr.
+///
+/// The timing report applies only to this call. Its proof uses the same protocol as [`prove`].
+///
+/// # Errors
+/// Returns the same input and proving errors as [`prove`].
+pub fn prove_with_phase_timings(
+    circuit: &Circuit,
+    params: &Params,
+    statement: &Statement,
+    public_inputs: &[Vec<i64>],
+    states: &[Vec<i64>],
+) -> Result<Proof, ProveError> {
+    prove_inner(circuit, params, statement, public_inputs, states, true)
+}
+
+/// The single-letter names follow the protocol notation: `n` rows, OOD point `z`, `v` the LDE
+/// generator, `q` quotient-domain blowups, `j`/`k` coset and position.
+#[allow(clippy::many_single_char_names)]
+fn prove_inner(
+    circuit: &Circuit,
+    params: &Params,
+    statement: &Statement,
+    public_inputs: &[Vec<i64>],
+    states: &[Vec<i64>],
+    phase_timings: bool,
+) -> Result<Proof, ProveError> {
     params.check(circuit)?;
     if states.first() != Some(&statement.initial)
         || states.get(statement.steps) != Some(&statement.final_state)
     {
         return Err(ProveError::Boundary);
     }
-    let mut phases = Phases::new();
+    let mut phases = Phases::new(phase_timings);
     if let Some(checkpoint) = &statement.checkpoint
         && states.get(checkpoint.step) != Some(&checkpoint.registers)
     {

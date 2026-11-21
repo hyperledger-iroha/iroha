@@ -1,6 +1,7 @@
 //! Native total unary/selection operations and coherent private-column forgeries.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 const UNARY_OPS: [u8; 2] = [wide::arithmetic::NOT, wide::arithmetic::NEG];
 const SELECTION_OPS: [u8; 2] = [wide::arithmetic::MIN, wide::arithmetic::MAX];
@@ -330,11 +331,11 @@ fn total_unary_selection_one_gas_boundaries_cycles_pc_and_false_halt_reject() {
         let root_gas = root_setup_gas();
         for gas in [0, root_result_table_gas()] {
             let (program, recorder, outcome) = shifts::capture(&[instruction], &inputs, gas, 32);
-            assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             assert_root_preflight_out_of_gas(&program, &recorder, gas);
         }
         let (_, recorder, outcome) = shifts::capture(&[instruction], &inputs, root_gas, 32);
-        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+        assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
         assert_eq!(recorder.records().len(), 1);
         let record = &recorder.records()[0];
         assert_eq!(record.instruction, Some(instruction));
@@ -376,7 +377,10 @@ fn total_unary_selection_one_gas_boundaries_cycles_pc_and_false_halt_reject() {
         carries(&mut underflow.0.row[CARRIES..CARRIES + 4], 0, 1, true);
         assert!(!underflow.accepts(&program));
         let (limited, recorder, outcome) = shifts::capture(&[instruction], &inputs, 16, 1);
-        assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+        assert!(matches!(
+            outcome,
+            Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+        ));
         assert_eq!(recorder.records().len(), 1);
         let mut exhausted = ScalarFixture::from_record(&limited, &recorder.records()[0]);
         assert!(exhausted.accepts(&limited));

@@ -1,6 +1,7 @@
 //! Finite original-pool controls for interval growth, copies, reset and teardown.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_allocation::AllocationRefusal;
 
 const ROW_BYTES: usize = std::mem::size_of::<(u64, u64)>();
@@ -16,9 +17,9 @@ fn funded_growth_refusal_retains_ranges_and_allows_original_pool_retry() {
     assert_eq!(budget.reserved_bytes(), 4 * ROW_BYTES);
     assert!(matches!(
         ranges.try_insert(20..22),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(ranges.pairs_for_testing(), original);
     assert_eq!(budget.reserved_bytes(), 4 * ROW_BYTES);
@@ -28,9 +29,9 @@ fn funded_growth_refusal_retains_ranges_and_allows_original_pool_retry() {
     budget.set_limit_bytes(12 * ROW_BYTES - 1);
     assert!(matches!(
         ranges.try_insert(20..22),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(ranges.pairs_for_testing(), original);
     budget.set_limit_bytes(12 * ROW_BYTES);
@@ -113,7 +114,7 @@ fn template_copy_spends_original_parent_credit_and_rejects_an_equal_foreign_pool
     assert_eq!(budget.reserved_bytes(), ROW_BYTES);
     assert!(matches!(
         copy.try_clone(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(copy.pairs_for_testing(), &[(10, 20)]);
     drop(copy);

@@ -1,6 +1,7 @@
 //! Original-pool literal allocation, rebinding and final-owner reclamation.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{
     IVM,
     metadata::{LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata, encode_literal_descriptor},
@@ -62,9 +63,9 @@ fn literal_arrays_refuse_original_pool_and_retry_without_payload_copies() {
     let budget = AllocationBudget::new(0);
     assert!(matches!(
         decode(&program, Some(&budget)),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(4096);
@@ -88,9 +89,9 @@ fn literal_arrays_refuse_original_pool_and_retry_without_payload_copies() {
     let occupied = budget.try_reserve_bytes(exact).unwrap();
     assert!(matches!(
         decode(&program, Some(&budget)),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), exact);
     drop(occupied);
@@ -111,9 +112,9 @@ fn second_array_refusal_and_foreign_rebind_leave_original_owners_intact() {
     ] {
         assert!(matches!(
             result,
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::Capacity { .. }
-            ))
+            )))
         ));
         assert_eq!(second.reserved_bytes(), 0);
         assert_eq!(first.reserved_bytes(), total);
@@ -179,7 +180,7 @@ fn generic_runtime_and_snapshot_keep_literal_credit_through_warm_reset() {
     budget.set_limit_bytes(base);
     assert!(matches!(
         vm.load_program(&program()),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), base);
     assert!(vm.literal_table.entries.is_none());
@@ -229,7 +230,7 @@ fn prepared_loading_shares_original_literals_and_rebinds_foreign_pool() {
     second.set_limit_bytes(base);
     assert!(matches!(
         foreign.load_prepared(&contract),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(second.reserved_bytes(), base);
     assert!(foreign.literal_table.entries.is_none());

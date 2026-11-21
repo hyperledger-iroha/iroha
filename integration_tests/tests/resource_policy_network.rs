@@ -273,11 +273,12 @@ fn identical_result(records: &[CommittedTransaction]) -> Result<&CommittedTransa
     let first = records
         .first()
         .ok_or_else(|| eyre!("no validator record"))?;
+    let expected_output_hash = iroha_crypto::HashOf::new(first.output());
     for (index, record) in records.iter().enumerate() {
         ensure!(
             record.block_hash() == first.block_hash()
-                && record.result() == first.result()
-                && record.result().hash() == first.result().hash(),
+                && record.output() == first.output()
+                && record.output_hash() == &expected_output_hash,
             "validator {index} committed {:?} in {}, validator 0 {:?} in {}",
             record.result(),
             record.block_hash(),
@@ -334,7 +335,7 @@ fn assert_identically_rejected(
     let record = identical_result(&records)?;
     let rendered = format!("{:?}", record.result());
     ensure!(
-        record.result().0.is_err() && rendered.contains(expected),
+        record.result().is_err() && rendered.contains(expected),
         "expected a rejection containing {expected:?}, got {rendered}"
     );
     ensure!(
@@ -360,7 +361,7 @@ fn assert_identically_applied(
     let records = committed_on_all(clients, transaction, deadline)?;
     let record = identical_result(&records)?;
     ensure!(
-        record.result().0.is_ok(),
+        record.result().is_ok(),
         "expected the coherent proposal to apply, got {:?}",
         record.result()
     );

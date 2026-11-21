@@ -54,7 +54,7 @@ pub const NUMERIC_ROUNDING_REGISTER: usize = 13;
 /// Failure-mode register for arithmetic operations: zero traps, one returns status.
 pub const NUMERIC_FAILURE_MODE_REGISTER: usize = 14;
 /// Numeric fault tag the C10 engine assigns to a signed 64-bit register overflow
-/// ([`crate::VMError::RegisterIntegerOverflow`]).
+/// ([`crate::error::VmTrap::RegisterIntegerOverflow`]).
 ///
 /// It is not a [`NumericFaultV1`] value: the wire enum is the baseline's (tags 1–13), numeric
 /// syscalls never return this tag, and the C10 ABI descriptor binds it on its own.

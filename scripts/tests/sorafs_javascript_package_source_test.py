@@ -43,6 +43,11 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     assert len(sources) == SOURCE_FILES and len(projected.members) == PROJECTED_MEMBERS
     assert projected.version == "0.0.3"
     rows = {row.name: row for row in projected.members}
+    for name in ("anonymous-ballot.d.ts", "kagemusha-wallet-read.d.ts", "sccp-read.d.ts",
+                 "src/anonymousBallot.js", "src/kagemushaWalletRead.js", "src/sccpRead.js",
+                 "src/offchainSigning.js", "src/toriiErrorEnvelope.js"):
+        member = "dist/" + name[4:] if name.startswith("src/") else name
+        assert rows[member].source == name and rows[member].content is sources[name]
     ordinary = rows["dist/crc64Xz.js"]
     assert ordinary.source == "src/crc64Xz.js"
     assert ordinary.content is sources[ordinary.source]

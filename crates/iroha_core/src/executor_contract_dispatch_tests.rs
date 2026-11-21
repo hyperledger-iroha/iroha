@@ -1,3 +1,4 @@
+use ivm_abi::error::VmTrap;
 #[test]
 fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_without_main() {
     let (program, expected_entrypoint_pc) =
@@ -497,7 +498,7 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
         assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
         assert!(matches!(
             runtime.memory.alloc(SMALL_HEAP_LIMIT + 8),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
     }
     {
@@ -1468,7 +1469,7 @@ fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
         .expect_err("direct migration must enforce executor-upgrade authority");
     assert!(matches!(
         error,
-        ExecutorMigrationError::Rejected(VMError::PermissionDenied)
+        ExecutorMigrationError::Rejected(VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(!state_transaction.is_execution_deferred());
     assert!(matches!(executor, super::Executor::Initial));
@@ -1964,7 +1965,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
                 if matches!(error.as_ref(),
                     crate::block::BlockValidationError::InvalidGenesis(
                         crate::block::InvalidGenesisError::RejectedOutput(output)
-                    ) if matches!(output.reason.as_ref(),
+                    ) if matches!(output.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
                         iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                             ValidationFail::NotPermitted(reason)
                         ) if reason.contains("only be changed by an enacted SORA Parliament proposal")
@@ -2163,7 +2164,7 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                     if matches!(error.as_ref(),
                         crate::block::BlockValidationError::InvalidGenesis(
                             crate::block::InvalidGenesisError::RejectedOutput(output)
-                        ) if matches!(output.reason.as_ref(),
+                        ) if matches!(output.reason.as_borrowed().baseline().expect("baseline genesis fixture"),
                             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                 ValidationFail::NotPermitted(reason)
                             ) if reason.contains(name) && reason.contains("Invalid permission payload")

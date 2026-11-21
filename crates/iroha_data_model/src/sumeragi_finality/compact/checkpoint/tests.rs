@@ -140,10 +140,17 @@ fn authenticated_boundary_checkpoint_restores_without_prior_blocks() {
 
 #[test]
 fn restore_requires_exact_independently_selected_global_root() {
-    let (fixture, _, reader) = authenticated_boundary(4);
+    let (fixture, chain, reader) = authenticated_boundary(4);
     let selected = root(&fixture);
     let checkpoint = reader.export_epoch_checkpoint(1).unwrap();
     let foreign = NativeFinalityFixture::start("checkpoint-foreign-genesis");
+    let base = SumeragiCommitVerifierV1::new(&selected).unwrap();
+    assert_eq!(base.initial_commit_epoch(), 0);
+    let mut restored_local = base.restore_trusted_local_epoch(&checkpoint).unwrap();
+    let commit = certificate(&fixture, &chain[3]);
+    assert_eq!(restored_local.verify(&commit).unwrap().height(), 4);
+    assert!(SumeragiCommitVerifierV1::new(&root(&foreign)).unwrap()
+        .restore_trusted_local_epoch(&checkpoint).is_err());
     assert!(
         SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint(&checkpoint, &root(&foreign))
             .is_err()

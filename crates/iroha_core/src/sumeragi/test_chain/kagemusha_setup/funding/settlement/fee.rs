@@ -391,7 +391,12 @@ fn execute_actual_send_fee_without_receive_and_with_permanent_replay() {
         .sign(&key(42), [instruction.clone().into()], 6_999);
     assert_eq!(setup.chain.commit_at(7_000, vec![tx]), [false]);
     assert_eq!(
-        setup.chain.committed(7).block().output_error(0),
+        setup
+            .chain
+            .committed(7)
+            .block()
+            .output_error(0)
+            .map(|reason| reason.baseline().expect("baseline KAGEMUSHA fixture")),
         Some(&missing_history_reason())
     );
     assert_eq!(ledger_rows(&setup), before_missing);

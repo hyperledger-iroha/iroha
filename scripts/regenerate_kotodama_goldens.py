@@ -54,8 +54,6 @@ HEADER_BUDGET_OFFSET = 8
 HEADER_ABI_VERSION_OFFSET = 16
 # Every baseline artifact carries the compiler's default cycle limit, ZK or not.
 BASELINE_MAX_CYCLES = 1_000_000
-# A C10 ZK build's trace bound; the baseline target ignores the option.
-ZK_TRACE_CYCLES = 1_000_000
 ZK_MODE_BIT = 0x01
 VECTOR_MODE_BIT = 0x02
 KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
@@ -875,7 +873,7 @@ def build_command(
         str(stage),
     ]
     if mode == "zk":
-        command.extend(["--zk", "--zk-trace-cycles", str(ZK_TRACE_CYCLES)])
+        command.append("--zk")
     command.extend(path.as_posix() for path in sources)
     return command
 

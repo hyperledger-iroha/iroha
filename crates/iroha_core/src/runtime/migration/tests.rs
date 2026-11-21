@@ -396,11 +396,67 @@ fn a_restriction_suspends_a_migration_and_a_stale_write_stops_its_drain() {
 }
 
 #[test]
+fn live_barrier_mirrors_the_stage_fault_sentinel_before_and_after_copy_completion() {
+    with_migration(|| {
+        let world = world();
+        let accounts = accounts();
+        schedule_step(&world, MigrationStep::Start, 10);
+
+        // The first copying stage stores the even sequence 2. A later write in the same
+        // block changes that staged source row to the odd sentinel; it must reach the barrier.
+        run_block(&world, 10, |block| {
+            block.tx_sequences.insert(accounts[1].clone(), u64::MAX);
+        });
+        let (old, new) = rows(&world);
+        assert_eq!(old[1], (accounts[1].clone(), u64::MAX));
+        let staged_key = successor(&accounts[1], 0).unwrap().0;
+        assert!(
+            new.contains(&(staged_key, true)),
+            "the barrier kept a stale even value"
+        );
+        assert_eq!(new, copied(&old[..2]));
+        assert_eq!(record(&world).status, MigrationStatusV1::Running);
+
+        run_block(&world, 11, |_| {});
+        run_block(&world, 12, |_| {});
+        assert_eq!(record(&world).status, MigrationStatusV1::Complete(12));
+        let (old, new) = rows(&world);
+        assert_eq!(new, copied(&old));
+
+        // Completed copying still owes the live barrier. Change another even row so a stale
+        // successor is observable, then verify the governed cutover preserves the exact copy.
+        run_block(&world, 13, |block| {
+            block.tx_sequences.insert(accounts[3].clone(), u64::MAX);
+        });
+        let (old, new) = rows(&world);
+        assert_eq!(old[3], (accounts[3].clone(), u64::MAX));
+        let completed_key = successor(&accounts[3], 0).unwrap().0;
+        assert!(
+            new.contains(&(completed_key, true)),
+            "the completed barrier kept a stale even value"
+        );
+        assert_eq!(new, copied(&old));
+        assert_eq!(record(&world).status, MigrationStatusV1::Complete(12));
+
+        let cutover = schedule_step(&world, MigrationStep::CutOver, 14);
+        run_block(&world, 14, |_| {});
+        assert_eq!(
+            status_of(&world, &cutover),
+            ChangeSetStatusV1::Activated(14)
+        );
+        assert_eq!(record(&world).status, MigrationStatusV1::CutOver(14));
+        let (old, new) = rows(&world);
+        assert_eq!(new, copied(&old));
+    });
+}
+
+#[test]
 fn a_failing_stage_faults_the_migration_without_writing() {
     with_migration(|| {
         let world = world();
         let accounts = accounts();
-        // A row no stage accepts lies in the second batch.
+        // A copying-stage fault sentinel lies in the second batch. The shared row transform
+        // remains total so the barrier can still mirror every already-staged source row.
         let mut block = world.block();
         block.tx_sequences.insert(accounts[3].clone(), u64::MAX);
         block.commit();

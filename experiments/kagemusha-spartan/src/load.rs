@@ -23,7 +23,7 @@ use crate::{
     receipt::{self, AuthenticatedReceipt, PaymentDigest},
     send_arithmetic::Source,
     statement::{self, Kind, StatementCells},
-    uniform::{constant, own, plus, scaled},
+    uniform::{Lin, constant, own, plus, scaled},
 };
 
 pub const ORDINARY_BYTES: usize = 282;
@@ -307,63 +307,187 @@ fn append_relation(
     let credential =
         operation_auth::append_current(w, family, &input.credential, &before, predecessor)?;
     let statement = statement::append_statement(w, family, Kind::Load, &input.statement);
-    let ordinary = append_ordinary(w, family, &input.ordinary);
+    let entry = append_branch(
+        w,
+        family,
+        &input.ordinary,
+        [&before, &after],
+        &statement,
+        predecessor,
+        &Placement::Alone,
+    );
+    let insertion = indexed_map::append_insert(w, family, &input.recovery);
+    join_recovery(w, family, &insertion, entry, None);
+    let lineage = lineage(&after, predecessor);
+    Ok(LoadOperation {
+        before,
+        after,
+        statement,
+        credential,
+        receipt: (),
+        lineage,
+        context: predecessor.context(),
+        table: predecessor.table(),
+    })
+}
+
+/// Successor lineage ports: lifecycle, policy epoch and enabled controls of
+/// the successor, and the predecessor's verified burn and roots unchanged.
+pub(crate) fn lineage(
+    after: &StateCells,
+    predecessor: &VerifiedPredecessor,
+) -> [Source; context::LINEAGE_FIELDS] {
+    let af = |i| source(after.local, after.core[i]);
+    let prior = predecessor.lineage();
+    [
+        af(0),
+        af(27),
+        af(22),
+        prior[context::BURNED_TOTAL],
+        prior[context::PENDING_ROOT],
+        prior[context::CREDIT_ROOT],
+    ]
+}
+
+/// Where the Load relation is placed.
+///
+/// `Alone` is the Load program: every row is hard. `Branch` is the Load half
+/// of the one fixed Control program: each row that the other Control branch
+/// contradicts (the Load-only original/statement/recovery joins, Load's own
+/// changed fields, and the preservation of the fields only the other branch
+/// changes, `core`/`rest`) becomes `enable·(a - b) = 0`, where `enable` is the
+/// constrained `1 - control_mode`. With `enable = 1` those rows are exactly
+/// Load's. Every Load-internal row (the ordinary receipt parser and digest,
+/// the recovery key and entry, the map insertion) stays hard in both
+/// placements: the inactive branch proves `dummy_ordinary` and
+/// `dummy_recovery`, joined to nothing.
+pub(crate) enum Placement {
+    Alone,
+    Branch {
+        enable: Lin<Fp>,
+        core: &'static [usize],
+        rest: &'static [usize],
+    },
+}
+
+/// Canonical inactive-branch ordinary receipt: satisfies every parser row
+/// (version 1, nonzero identities, positive amount, no charge, height 2).
+pub(crate) fn dummy_ordinary() -> [u8; ORDINARY_BYTES] {
+    let mut bytes = [0; ORDINARY_BYTES];
+    bytes[0] = 1;
+    for (start, len) in [(2, 128), (210, 32), (250, 32)] {
+        bytes[start..start + len].fill(1);
+    }
+    bytes[146] = 1;
+    bytes[242] = 2;
+    bytes
+}
+/// Canonical inactive-branch recovery insertion (empty map, key and value 1).
+pub(crate) fn dummy_recovery() -> InsertWitness<32> {
+    indexed_map::empty_insert(Fp::ONE, Fp::ONE).0
+}
+
+/// The Load relation over already-opened states and statement: the exact
+/// ordinary original, its value/ordinal/recovery effects and every
+/// state/statement/original join. The caller authenticates the credential
+/// and appends the statement and own receipt.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_branch(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    ordinary_bytes: &[u8; ORDINARY_BYTES],
+    [before, after]: [&StateCells; 2],
+    statement: &StatementCells,
+    predecessor: &VerifiedPredecessor,
+    placement: &Placement,
+) -> RecoveryEntry {
+    let ordinary = append_ordinary(w, family, ordinary_bytes);
     let prior = predecessor.lineage();
     let bf = |i| source(before.local, before.core[i]);
     let af = |i| source(after.local, after.core[i]);
     let sf = |i| source(statement.local, statement.fields[i]);
     let of = |i| source(ordinary.local, ordinary.words[i]);
     let digest = source(ordinary.local, ordinary.digest);
+    // A Load-only row `a = b`: hard alone, `enable·(a - b) = 0` as a branch.
+    let join = |c: &mut Cells, a: Lin<Fp>, b: Lin<Fp>, load_only: bool| match placement {
+        Placement::Branch { enable, .. } if load_only => {
+            c.a.rows
+                .push([enable.clone(), plus(&a, &scaled(&b, -Fp::ONE)), vec![]])
+        }
+        _ => c.eq(a, b),
+    };
+    let (contested_core, contested_rest): (&[usize], &[usize]) = match placement {
+        Placement::Alone => (&[], &[]),
+        Placement::Branch { core, rest, .. } => (core, rest),
+    };
     let mut c = Cells::new(family);
     c.a.name = "complete Load monetary and original joins";
-    for (a, b) in [
-        (source(before.local, before.commitment), predecessor.head()),
-        (bf(0), prior[context::LIFECYCLE]),
-        (bf(27), prior[context::POLICY_EPOCH]),
-        (bf(22), prior[context::ENABLED_CONTROLS]),
-        (sf(1), predecessor.context()[context::RELATION]),
-        (sf(2), predecessor.context()[context::RELATION + 1]),
-        (sf(3), af(1)),
-        (sf(4), af(2)),
-        (sf(5), af(3)),
-        (sf(6), af(4)),
-        (sf(7), af(7)),
-        (sf(8), af(0)),
-        (sf(9), af(11)),
-        (sf(10), af(13)),
-        (sf(11), bf(22)),
-        (sf(14), source(before.local, before.commitment)),
-        (sf(15), source(after.local, after.commitment)),
-        (sf(17), digest),
-        (sf(18), of(9)),
-        (sf(19), of(10)),
-        (sf(20), of(11)),
-        (of(1), bf(1)),
-        (of(2), bf(2)),
-        (of(3), bf(3)),
-        (of(4), bf(4)),
-        (of(5), bf(5)),
-        (of(6), bf(6)),
-        (bf(13), of(9)),
+    for (a, b, load_only) in [
+        (
+            source(before.local, before.commitment),
+            predecessor.head(),
+            false,
+        ),
+        (bf(0), prior[context::LIFECYCLE], false),
+        (bf(27), prior[context::POLICY_EPOCH], false),
+        (bf(22), prior[context::ENABLED_CONTROLS], false),
+        (sf(1), predecessor.context()[context::RELATION], false),
+        (sf(2), predecessor.context()[context::RELATION + 1], false),
+        (sf(3), af(1), false),
+        (sf(4), af(2), false),
+        (sf(5), af(3), false),
+        (sf(6), af(4), false),
+        (sf(7), af(7), false),
+        (sf(8), af(0), false),
+        (sf(9), af(11), false),
+        (sf(10), af(13), false),
+        (sf(11), bf(22), false),
+        (sf(14), source(before.local, before.commitment), false),
+        (sf(15), source(after.local, after.commitment), false),
+        (sf(17), digest, true),
+        (sf(18), of(9), true),
+        (sf(19), of(10), true),
+        (sf(20), of(11), true),
+        (of(1), bf(1), true),
+        (of(2), bf(2), true),
+        (of(3), bf(3), true),
+        (of(4), bf(4), true),
+        (of(5), bf(5), true),
+        (of(6), bf(6), true),
+        (bf(13), of(9), true),
     ] {
-        c.eq(a.linear(), b.linear());
+        join(&mut c, a.linear(), b.linear(), load_only);
     }
-    c.eq(af(9).linear(), plus(&bf(9).linear(), &of(10).linear()));
+    join(
+        &mut c,
+        af(9).linear(),
+        plus(&bf(9).linear(), &of(10).linear()),
+        true,
+    );
     for i in [11, 13] {
-        c.eq(
+        join(
+            &mut c,
             af(i).linear(),
             plus(&bf(i).linear(), &constant(vec![Fp::ONE])),
+            i == 13,
         );
     }
     for i in 0..30 {
         if ![9, 11, 13, 19, 29].contains(&i) {
-            c.eq(af(i).linear(), bf(i).linear());
+            join(
+                &mut c,
+                af(i).linear(),
+                bf(i).linear(),
+                contested_core.contains(&i),
+            );
         }
     }
     for i in 0..6 {
-        c.eq(
+        join(
+            &mut c,
             source(before.local, before.rest[i]).linear(),
             source(after.local, after.rest[i]).linear(),
+            contested_rest.contains(&i),
         );
     }
     let two128 = Fp::from_u128(1u128 << 127).double();
@@ -394,42 +518,51 @@ fn append_relation(
         outputs,
         &mut SpikeRng::new(b"Load ordinal recovery entry"),
     );
-    let insertion = indexed_map::append_insert(w, family, &input.recovery);
+    RecoveryEntry {
+        old_root: bf(19),
+        key: source(local, recovery_key),
+        value: source(local, outputs[1]),
+        new_root: af(19),
+    }
+}
+
+/// Authenticated state roots and the semantic entry inserted by Load or Unload.
+pub(crate) struct RecoveryEntry {
+    pub old_root: Source,
+    pub key: Source,
+    pub value: Source,
+    pub new_root: Source,
+}
+
+/// Join a previously built insertion to this mode's descriptor. A Control
+/// program shares one insertion between all modes. Refresh has no active join.
+pub(crate) fn join_recovery(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    insertion: &indexed_map::InsertCells,
+    entry: RecoveryEntry,
+    enable: Option<Lin<Fp>>,
+) {
     let mut joins = Cells::new(family);
-    joins.a.name = "complete Load recovery joins";
-    for (a, b) in [
-        (source(insertion.local, insertion.old_root), bf(19)),
-        (
-            source(insertion.local, insertion.key),
-            source(local, recovery_key),
-        ),
-        (
-            source(insertion.local, insertion.value),
-            source(local, outputs[1]),
-        ),
-        (source(insertion.local, insertion.new_root), af(19)),
+    joins.a.name = "monetary recovery joins";
+    for (cell, expected) in [
+        (insertion.old_root, entry.old_root),
+        (insertion.key, entry.key),
+        (insertion.value, entry.value),
+        (insertion.new_root, entry.new_root),
     ] {
-        joins.eq(a.linear(), b.linear());
+        let actual = source(insertion.local, cell).linear();
+        if let Some(enable) = &enable {
+            joins.a.rows.push([
+                enable.clone(),
+                plus(&actual, &scaled(&expected.linear(), -Fp::ONE)),
+                vec![],
+            ]);
+        } else {
+            joins.eq(actual, expected.linear());
+        }
     }
     w.push(joins.a);
-    let lineage = [
-        af(0),
-        af(27),
-        af(22),
-        prior[context::BURNED_TOTAL],
-        prior[context::PENDING_ROOT],
-        prior[context::CREDIT_ROOT],
-    ];
-    Ok(LoadOperation {
-        before,
-        after,
-        statement,
-        credential,
-        receipt: (),
-        lineage,
-        context: predecessor.context(),
-        table: predecessor.table(),
-    })
 }
 
 #[cfg(test)]

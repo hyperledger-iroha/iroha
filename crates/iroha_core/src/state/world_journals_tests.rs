@@ -28,6 +28,12 @@ use std::{
 
 // Publish an untouched replacement through each field's ordinary writer.
 macro_rules! commit_untouched_fixture_field {
+    ($world:ident, runtime_generic_artifacts) => {
+        commit_untouched_fixture_field!(@admitted $world, runtime_generic_artifacts)
+    };
+    ($world:ident, runtime_generic_values) => {
+        commit_untouched_fixture_field!(@admitted $world, runtime_generic_values)
+    };
     ($world:ident, sccp_light_client_sets) => {
         $world
             .sccp_light_client_sets

@@ -32,6 +32,8 @@ pub struct Witness {
     pub after_rest: [Fp; 6],
     pub credential: Credential,
     pub request: CompletedRequest,
+    /// Exact receiver credential and signer set retained with the private Send capsule.
+    pub request_originals: crate::request::Originals,
     pub fee_schedule: SignedFeeSchedule,
     pub quota: QuotaWitness,
     pub lower: u64,
@@ -430,6 +432,10 @@ pub(crate) mod tests {
             before_rest,
             after_core,
             after_rest: before_rest,
+            request_originals: crate::request::Originals {
+                receiver: credential.clone(),
+                certificates: vec![initial.certificate],
+            },
             credential,
             request,
             fee_schedule: schedule,

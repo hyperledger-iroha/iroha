@@ -97,6 +97,7 @@ mod tests {
     //! Canonical empty/tail/zero leaves and the actual ordinary parallel producer.
 
     use super::*;
+    use crate::error::VmTrap;
     use crate::vector::{Sha256Backend, SimdChoice};
     use sha2::{Digest, Sha256};
 
@@ -154,7 +155,7 @@ mod tests {
         for chunk in [0, 33] {
             assert!(matches!(
                 ByteMerkleTree::from_bytes_parallel_in_context(&[1], chunk, context),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
         }
     }

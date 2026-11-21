@@ -150,7 +150,7 @@ impl CompactProofBundle {
 /// Build a `CompactProofBundle` for a memory address using the in‑process compact builder.
 ///
 /// # Errors
-/// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in the memory image.
+/// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in the memory image.
 pub fn memory_compact_bundle(
     mem: &mut Memory,
     addr: u64,
@@ -181,7 +181,7 @@ pub fn memory_compact_bundle(
 /// Build a `CompactProofBundle` for a register index using the in-process compact builder.
 ///
 /// # Errors
-/// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
+/// Returns [`crate::error::VmTrap::RegisterOutOfBounds`] when `idx` is not a register index.
 pub fn registers_compact_bundle(
     regs: &Registers,
     idx: usize,

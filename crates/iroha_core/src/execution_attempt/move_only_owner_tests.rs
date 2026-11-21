@@ -7,6 +7,7 @@ use crate::{
     state::{State, World, storage_transactions::TransactionsBlockError},
 };
 use iroha_data_model::{Registrable, block::BlockHeader, prelude::Domain};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use mv::storage::StorageReadOnly as _;
 
 fn state() -> State {
@@ -39,9 +40,10 @@ fn exported_first_refusal_blocks_reuse_state_apply_and_block_commit() {
             domain.clone(),
             Domain::new(domain.clone()).build(&iroha_test_samples::ALICE_ID),
         );
-        transaction.vm_error_to_validation_fail(VMError::AllocationDeferred(original), |_| {
-            panic!("the actual allocation refusal is not a deterministic rejection")
-        });
+        transaction.vm_error_to_validation_fail(
+            VMError::Deferred(VmDeferral::AllocationDeferred(original)),
+            |_| panic!("the actual allocation refusal is not a deterministic rejection"),
+        );
         transaction.defer_execution(ExecutionDeferral::AllocationUnavailable);
         {
             let borrowed = transaction.borrow_execution_deferral().unwrap();
@@ -118,14 +120,11 @@ fn exported_owner_cannot_reenable_raw_world_apply() {
 
 #[test]
 fn consuming_vm_projection_keeps_completed_metered_error_intact() {
-    let original = VMError::Metered {
-        gas: 19,
-        source: Box::new(VMError::UnknownSyscall(0xdead)),
-    };
+    let original = VMError::metered(19, VMError::Trap(VmTrap::UnknownSyscall(0xdead)));
     let returned = ExecutionDeferred::try_from_vm_error(original).unwrap_err();
-    let VMError::Metered { gas, source } = returned else {
+    let VMError::Trap(VmTrap::Metered { gas, trap }) = returned else {
         panic!("a completed error must keep its original metering wrapper")
     };
     assert_eq!(gas, 19);
-    assert!(matches!(*source, VMError::UnknownSyscall(0xdead)));
+    assert!(matches!(*trap, VmTrap::UnknownSyscall(0xdead)));
 }

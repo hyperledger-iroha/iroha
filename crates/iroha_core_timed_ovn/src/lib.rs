@@ -7,4 +7,6 @@ pub mod casting;
 pub mod evidence;
 #[cfg(test)]
 mod frame_test_support;
+#[cfg(test)]
+mod schema_tests;
 pub mod tle;

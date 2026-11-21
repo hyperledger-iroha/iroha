@@ -135,9 +135,9 @@ impl State {
             return Err(FinalizedAxtSourceTransferErrorV1::DuplicateSourceExecution);
         }
         let (_, output) = block
-            .network_output_at(claimed.source_tx_index)
+            .network_execution_output_at(claimed.source_tx_index)
             .ok_or(FinalizedAxtSourceTransferErrorV1::SourceExecution)?;
-        if !output.result.is_ok() {
+        if !output.result().is_ok() {
             return Err(FinalizedAxtSourceTransferErrorV1::RejectedExecution);
         }
         let source_hash = Hash::from(source_hash);

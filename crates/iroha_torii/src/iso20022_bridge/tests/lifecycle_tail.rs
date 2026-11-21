@@ -127,7 +127,7 @@ fn transaction_rejection_marks_message() {
     let reason = TransactionRejectionReason::LimitCheck(TransactionLimitError {
         reason: "too many instructions".to_owned(),
     });
-    runtime.mark_transaction_rejected("tx-reject", Some(&reason));
+    runtime.mark_profiled_transaction_rejected("tx-reject", Some((&reason).into()));
     let status = runtime.message_status(message_id).expect("status");
     assert_eq!(status.pacs002_code(), "RJCT");
     assert_eq!(status.transaction_hash(), Some("tx-reject"));
@@ -155,7 +155,7 @@ fn axt_rejection_produces_prtry_code_and_detail() {
         next_handle_counter: Some(4),
     };
     let reason = TransactionRejectionReason::Validation(ValidationFail::AxtReject(ctx));
-    runtime.mark_transaction_rejected("tx-axt", Some(&reason));
+    runtime.mark_profiled_transaction_rejected("tx-axt", Some((&reason).into()));
     let status = runtime.message_status(message_id).expect("status");
     assert_eq!(status.pacs002_code(), "RJCT");
     assert_eq!(status.rejection_reason_code(), Some("PRTRY:AXT_HANDLE_ERA"));

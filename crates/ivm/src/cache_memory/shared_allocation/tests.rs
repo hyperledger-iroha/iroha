@@ -1,6 +1,7 @@
 //! Original admission, retained borrowers and final shared-allocation release.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{VMError, error::ExecutionDeferral};
 use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
 use std::{
@@ -28,9 +29,9 @@ fn funded_iterator_reserves_before_evaluating_and_keeps_the_original_pool() {
     };
     assert!(matches!(
         SharedAllocation::try_from_iter_with_memory_budget(values(), &budget),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(evaluated.get(), 0);
     assert_eq!(budget.peak_reserved_bytes(), 0);
@@ -38,9 +39,9 @@ fn funded_iterator_reserves_before_evaluating_and_keeps_the_original_pool() {
     let occupied = budget.try_reserve_bytes(bytes).unwrap();
     assert!(matches!(
         SharedAllocation::try_from_iter_with_memory_budget(values(), &budget),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(evaluated.get(), 0);
     drop(occupied);
@@ -84,18 +85,18 @@ fn funded_iterator_refunds_partial_values_and_rejects_inexact_lengths() {
         };
         assert!(matches!(
             SharedAllocation::try_from_iter_with_budgets(values, &budget, &retention),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         assert_eq!(retention.stats().measured_resident_bytes(), 0);
     }
     assert!(matches!(
         SharedAllocation::try_from_iter_with_budgets(
-            [Ok(7_u64), Err(VMError::InvalidMetadata)].into_iter(),
+            [Ok(7_u64), Err(VMError::Trap(VmTrap::InvalidMetadata))].into_iter(),
             &budget,
             &retention,
         ),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(retention.stats().measured_resident_bytes(), 0);
@@ -108,10 +109,10 @@ fn funded_copy_refuses_before_allocation_and_preserves_original_retry_source() {
     let retention = MemoryBudget::new(bytes);
     assert!(matches!(
         SharedAllocation::try_copy_with_budgets(&[7_u64, 8], &budget, &retention),
-        Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes,
             limit_bytes: 0,
-        })) if requested_bytes == bytes
+        }))) if requested_bytes == bytes
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     assert_eq!(retention.stats().peak_reserved_bytes, 0);
@@ -125,8 +126,10 @@ fn funded_copy_refuses_before_allocation_and_preserves_original_retry_source() {
     .unwrap();
     assert!(registration.belongs_to(&budget));
     let occupied = budget.try_reserve_bytes(bytes).unwrap();
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. })) =
-        SharedAllocation::try_copy_with_budgets(&[7_u64, 8], &budget, &retention)
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    }))) = SharedAllocation::try_copy_with_budgets(&[7_u64, 8], &budget, &retention)
     else {
         panic!("original pool must supply capacity refusal");
     };
@@ -213,9 +216,9 @@ fn admitted_control_and_buffer_allocation_failures_refund_before_retry() {
         }
         assert!(matches!(
             SharedAllocation::try_copy_with_budgets(&[2_u32, 3, 5], &budget, &retention),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         assert_eq!(budget.peak_reserved_bytes(), bytes);

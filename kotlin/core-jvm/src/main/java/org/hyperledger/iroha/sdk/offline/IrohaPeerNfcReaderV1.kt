@@ -100,7 +100,13 @@ class IrohaPeerNfcSenderCheckpointV1 @JvmOverloads constructor(
     }
 
     init {
-        nfcRequireWalletExchange(this.receiveRequest, this.payment, this.durableAcknowledgement)
+        // The Payment is at most the protocol's Payment message for every profile, before any byte is written.
+        if (this.payment.byteCount > IrohaPeerNfcV1.MAXIMUM_PAYMENT_BYTES) {
+            nfcMessageTooLarge(this.payment.byteCount, IrohaPeerNfcV1.MAXIMUM_PAYMENT_BYTES)
+        }
+        // Bound on every construction and restoration: by reading the wallet V1 messages, or by the
+        // wallet's own verifier where only it can bind the profile's exchange.
+        nfcRequireSenderExchange(this.profilePolicy, this.receiveRequest, this.payment, this.durableAcknowledgement)
     }
 
     @JvmField val identity: IrohaPeerNfcRequestIdentityV1 = IrohaPeerNfcRequestIdentityV1(
@@ -248,6 +254,13 @@ class IrohaPeerNfcTwoTapReducerV1 @JvmOverloads constructor(
     private var expectedAcknowledgementLength: Int? = null
     private var expectedAcknowledgementHash: ByteArray? = null
 
+    /**
+     * The checkpoint carrying the complete acknowledgement, once that acknowledgement was bound to this
+     * exact Request and Payment. Kept so the binding, a wallet verification for a wallet-bound profile,
+     * runs once per received acknowledgement.
+     */
+    private var acknowledgementCandidate: IrohaPeerNfcSenderCheckpointV1? = null
+
     fun requireSamePeer(info: IrohaPeerNfcInfoV1) {
         if (info.identity != checkpoint.identity || info.requestLength != checkpoint.requestBytes.size) {
             nfcFail(IrohaPeerNfcErrorV1.CONTINUITY_MISMATCH)
@@ -366,7 +379,13 @@ class IrohaPeerNfcTwoTapReducerV1 @JvmOverloads constructor(
         ) {
             nfcFail(IrohaPeerNfcErrorV1.INVALID_HASH)
         }
-        nfcRequireWalletExchange(checkpoint.receiveRequest, checkpoint.payment, acknowledgement)
+        // The complete acknowledgement is bound here, before it can be persisted, confirmed or reported:
+        // constructing the checkpoint that carries it reads the wallet V1 exchange, or asks the wallet of
+        // a wallet-bound profile to verify the status against its exact retained Payment. A refused
+        // acknowledgement leaves no candidate.
+        acknowledgementCandidate = null
+        acknowledgementCandidate =
+            checkpoint.addingDurableAcknowledgement(acknowledgementBuffer.copyOf(acknowledgementReceived), limits)
         return true
     }
 
@@ -387,7 +406,11 @@ class IrohaPeerNfcTwoTapReducerV1 @JvmOverloads constructor(
         if (expectedLength == null || expectedHash == null || acknowledgementReceived != expectedLength) {
             nfcFail(IrohaPeerNfcErrorV1.STATE_MISMATCH)
         }
-        val candidate = checkpoint.addingDurableAcknowledgement(acknowledgementBuffer.copyOf(acknowledgementReceived), limits)
+        // The candidate bound when its last chunk arrived. Without one the binding was refused then, and
+        // constructing it again binds it again: an unbound acknowledgement is never returned.
+        val candidate = acknowledgementCandidate
+            ?: checkpoint.addingDurableAcknowledgement(acknowledgementBuffer.copyOf(acknowledgementReceived), limits)
+                .also { acknowledgementCandidate = it }
         if (candidate.durableAcknowledgement?.wireHash?.contentEquals(expectedHash) != true) {
             nfcFail(IrohaPeerNfcErrorV1.INVALID_HASH)
         }
@@ -426,6 +449,7 @@ class IrohaPeerNfcTwoTapReducerV1 @JvmOverloads constructor(
             acknowledgementReceived = 0
             expectedAcknowledgementLength = status.acknowledgementLength
             expectedAcknowledgementHash = status.acknowledgementWireHash
+            acknowledgementCandidate = null
         }
     }
 
@@ -434,6 +458,7 @@ class IrohaPeerNfcTwoTapReducerV1 @JvmOverloads constructor(
         acknowledgementReceived = 0
         expectedAcknowledgementLength = null
         expectedAcknowledgementHash = null
+        acknowledgementCandidate = null
     }
 }
 
@@ -544,6 +569,9 @@ object IrohaPeerNfcReaderExchangeV1 {
             info,
             limits,
         )
+        // A wallet-bound profile's Request must name its wallet's signed selection before the payer
+        // reviews it: another scheme's or asset's Request never reaches approval.
+        nfcRequireExchangeRequest(profilePolicy, request)
         return IrohaPeerNfcRequestReadV1(intake, info, request)
     }
 
@@ -588,6 +616,8 @@ object IrohaPeerNfcReaderExchangeV1 {
             }
         } else {
             val request = readBudgetedRequest(info, limits, budget, transceive)
+            // No value is created for a Request outside the wallet's signed selection.
+            nfcRequireExchangeRequest(profilePolicy, request)
             // Loading or atomically creating the mandatory pre-BEGIN_PAYMENT checkpoint is one
             // application transition. Charge it before invoking application code, so a hostile
             // one-byte peer cannot exhaust the budget only after value has been created.
@@ -799,12 +829,25 @@ class IrohaPeerNfcRequestReadV1(
     fun senderCheckpoint(
         payment: ByteArray,
         limits: IrohaPeerNfcLimitsV1 = IrohaPeerNfcLimitsV1.DEFAULT,
+    ): IrohaPeerNfcSenderCheckpointV1 =
+        senderCheckpoint(payment, IrohaPeerNfcProfilePolicyV1(info.identity.profile), limits)
+
+    /**
+     * The same checkpoint under [profilePolicy], the policy the Request was read with. A wallet-bound
+     * profile needs it: its [IrohaPeerNfcProfilePolicyV1.exchangeVerifier] must accept [payment] as the
+     * wallet's exact retained Payment for this Request, or no checkpoint exists and nothing is sent.
+     */
+    @JvmOverloads
+    fun senderCheckpoint(
+        payment: ByteArray,
+        profilePolicy: IrohaPeerNfcProfilePolicyV1,
+        limits: IrohaPeerNfcLimitsV1 = IrohaPeerNfcLimitsV1.DEFAULT,
     ): IrohaPeerNfcSenderCheckpointV1 = IrohaPeerNfcSenderCheckpointV1(
         info.identity.sessionId,
         request.encode(),
         payment,
         null,
-        IrohaPeerNfcProfilePolicyV1(info.identity.profile),
+        profilePolicy,
         limits,
     )
 

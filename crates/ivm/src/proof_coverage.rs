@@ -54,7 +54,7 @@ pub use traps::{
     NUMERIC_FAULTS, NumericFaultEntry, OriginGroup, POINTER_ABI_FAULTS, PointerAbiFaultEntry,
     ProducerFile, TRAP_KINDS, TrapEvidence, TrapKindEntry, TrapOrigin,
     VM_ERROR_PRODUCER_EXCLUSIONS, VM_ERROR_PRODUCER_SCOPE, VM_ERROR_PRODUCERS, VM_ERRORS,
-    VmErrorEntry, trap_kind_name, vm_error_variant_name,
+    VmErrorEntry, VmErrorFamily, trap_kind_name, vm_error_variant_name,
 };
 
 /// Schema identifier written into the rendered inventory artifact.
@@ -377,7 +377,7 @@ pub const OPEN_SEMANTICS: &[OpenSemantic] = &[
                 "max_instructions: self.pipeline.overlay_max_instructions",
             ),
             evidence(ROOT_EFFECTS, "max_bytes: self.pipeline.overlay_max_bytes"),
-            evidence(CORE_HOST, "ivm::VMError::HostOutputBudgetExceeded"),
+            evidence(CORE_HOST, "VmTrap::HostOutputBudgetExceeded"),
         ],
     },
 ];

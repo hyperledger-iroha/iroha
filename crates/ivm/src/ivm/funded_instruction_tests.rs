@@ -1,6 +1,7 @@
 //! State-owned instruction arrays never borrow diagnostic or foreign-pool credit.
 
 use super::*;
+use crate::error::VmDeferral;
 
 const LIMIT: usize = 128 * 1024 * 1024;
 
@@ -22,7 +23,7 @@ fn funded_generic_loading_cannot_borrow_a_warm_diagnostic_cache() {
     budget.set_limit_bytes(original);
     assert!(matches!(
         funded.load_program(&program),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), original);
     budget.set_limit_bytes(LIMIT);
@@ -57,7 +58,7 @@ fn prepared_loading_rebinds_foreign_arrays_to_the_actual_vm_pool() {
     second.set_limit_bytes(original);
     assert!(matches!(
         vm.load_prepared(&contract),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(second.reserved_bytes(), original);
     assert_eq!(first.reserved_bytes(), first_charge);
@@ -153,7 +154,10 @@ fn both_profiles_scan_and_execute_the_single_prepared_word_stream() {
         limited.load_prepared(&contract).unwrap();
         limited.select_entrypoint("answer").unwrap();
         let entry = limited.pc();
-        assert!(matches!(limited.run(), Err(VMError::OutOfGas)));
+        assert!(matches!(
+            limited.run(),
+            Err(VMError::Trap(VmTrap::OutOfGas))
+        ));
         assert_eq!(limited.remaining_gas(), 0);
         assert_eq!(limited.get_cycle_count(), 2);
         // The entry thunk transfers to the function body, whose second word faults.
@@ -162,7 +166,10 @@ fn both_profiles_scan_and_execute_the_single_prepared_word_stream() {
         reference.load_program_for_profile(&bytes, profile).unwrap();
         reference.select_entrypoint("answer").unwrap();
         assert_eq!(reference.pc(), entry);
-        assert!(matches!(reference.run(), Err(VMError::OutOfGas)));
+        assert!(matches!(
+            reference.run(),
+            Err(VMError::Trap(VmTrap::OutOfGas))
+        ));
         assert_eq!(limited.pc(), reference.pc());
         drop((contract, vm, limited));
         assert_eq!(pool.reserved_bytes(), 0);

@@ -715,46 +715,22 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 return Err("retained source records differ from completed output rows".into());
             }
             for (row, original) in self.rows.iter().zip(&self.source_entries) {
-                let call = match row {
-                    ExecutionOutputV1::Network(output)
-                    | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
-                        execution: output,
-                        ..
-                    }) => {
-                        let index = usize::try_from(output.input_index)
-                            .map_err(|_| "source index exceeds host width")?;
-                        let input = self
-                            .source
-                            .network_entrypoint_at(index)
-                            .ok_or("retained Network source is absent")?;
-                        let route = self
-                            .source_routes
-                            .get(index)
-                            .ok_or("retained Network route is absent")?;
-                        if original.lane() != Some(route.lane_id)
-                            || original.dataspace() != route.dataspace_id
-                        {
-                            return Err(
-                                "retained Network record differs from its frozen route".into()
-                            );
-                        }
-                        Hash::from(input.execution_call_hash())
+                if let Some(index) = row.network_index() {
+                    let index =
+                        usize::try_from(index).map_err(|_| "source index exceeds host width")?;
+                    let route = self
+                        .source_routes
+                        .get(index)
+                        .ok_or("retained Network route is absent")?;
+                    if original.lane() != Some(route.lane_id)
+                        || original.dataspace() != route.dataspace_id
+                    {
+                        return Err("retained Network record differs from its frozen route".into());
                     }
-                    ExecutionOutputV1::Pipeline(output)
-                    | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
-                        execution: output,
-                        ..
-                    }) => output.invocation.execution_call_hash(self.source.hash())?,
-                    ExecutionOutputV1::Time(output)
-                    | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
-                        execution: output,
-                        ..
-                    }) => output.invocation.execution_call_hash(self.source.hash())?,
-                    // The seal attaches the block-start rows; the producer owns none.
-                    ExecutionOutputV1::GovernanceBlockStart(_) => {
-                        return Err("a governance block-start row has no execution source".into());
-                    }
-                };
+                }
+                // The seal attaches block-start rows. Every producer-owned row has an
+                // authenticated Network, Pipeline or Time source in its own family.
+                let call = row.execution_call_hash(self.source.hash(), &self.source)?;
                 if original.call() != call {
                     return Err("retained output row differs from its original invocation".into());
                 }

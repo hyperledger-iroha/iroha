@@ -177,12 +177,27 @@ public struct IrohaPeerNfcLimitsV1: Equatable, Sendable {
 
 /// One immutable application profile for every IPM1 phase in an NFC session.
 /// Receive request, payment, and acknowledgement (Credited) must all use this profile.
+///
+/// The KAGEMUSHA wallet V1 profile binds its exchange structurally, as before. A profile whose
+/// originals only its installed wallet can authenticate (`kagemushaSpartanPaymentV3`) binds an
+/// exchange only through that wallet's verified binding (`KagemushaSpartanPeerNfcBindingV1`):
+/// `init(profile:)` alone still reads its Request, but every Payment, checkpoint and
+/// acknowledgement fails closed.
 public struct IrohaPeerNfcProfilePolicyV1: Equatable, Sendable {
     public let profile: IrohaPeerPayloadProfile
+    /// The wallet authority that decides this profile's exchange bindings. Only SDK wallet bindings conform.
+    let binder: (any IrohaPeerNfcExchangeBinderV1)?
 
     public init(profile: IrohaPeerPayloadProfile) {
         precondition(profile != .reject)
         self.profile = profile
+        self.binder = nil
+    }
+
+    init(binder: any IrohaPeerNfcExchangeBinderV1) {
+        precondition(binder.profile != .reject)
+        self.profile = binder.profile
+        self.binder = binder
     }
 
     /// Convenience spelling equivalent to `init(profile:)`.
@@ -195,6 +210,32 @@ public struct IrohaPeerNfcProfilePolicyV1: Equatable, Sendable {
     public func accepts(_ candidate: IrohaPeerPayloadProfile) -> Bool {
         profile == candidate
     }
+
+    /// True when this policy can bind a Payment and acknowledgement to its Request: wallet V1
+    /// structurally, any other profile only with its wallet's verified binding.
+    public var bindsExchanges: Bool { binder != nil || profile == .kagemushaWalletV1 }
+
+    /// The same profile under the same binding authority: a value validated under one wallet
+    /// binding is never accepted as validated under another.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.profile == rhs.profile
+            && lhs.binder.map { ObjectIdentifier($0) } == rhs.binder.map { ObjectIdentifier($0) }
+    }
+}
+
+/// The installed wallet's verified exchange authority for one profile. The NFC transport keeps exact
+/// bytes and continuity; every authorization verdict here comes from the wallet's Native operations.
+/// Internal: applications obtain one only from an SDK wallet binding, never by conforming.
+protocol IrohaPeerNfcExchangeBinderV1: AnyObject, Sendable {
+    var profile: IrohaPeerPayloadProfile { get }
+    /// The Request is this binding's exact retained signed Request.
+    func requireRequest(_ request: IrohaPeerWireMessageV1) throws
+    /// The Payment binds exactly that Request, including the payer's specialization.
+    func requirePayment(_ payment: IrohaPeerWireMessageV1, boundTo request: IrohaPeerWireMessageV1) throws
+    /// The acknowledgement is verified delivery evidence for that Request and the Payment with
+    /// `paymentWireHash`; `payment` is supplied whenever its exact bytes are at hand.
+    func requireAcknowledgement(_ acknowledgement: IrohaPeerWireMessageV1, request: IrohaPeerWireMessageV1,
+                                paymentWireHash: Data, payment: IrohaPeerWireMessageV1?) throws
 }
 
 public enum IrohaPeerNfcErrorV1: Error, Equatable, LocalizedError, Sendable {
@@ -1263,7 +1304,7 @@ public struct IrohaPeerNfcCommitContextV1: Equatable, Sendable {
               receiveRequest.wireHash == identity.requestWireHash else {
             throw IrohaPeerNfcErrorV1.continuityMismatch
         }
-        try nfcRequireWalletExchange(request: receiveRequest, payment: payment)
+        try nfcRequireExchange(profilePolicy, request: receiveRequest, payment: payment)
 
         self.identity = identity
         self.profilePolicy = profilePolicy
@@ -1304,7 +1345,7 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
         guard context.profilePolicy.accepts(decoded.profile) else {
             throw IrohaPeerNfcErrorV1.invalidProfile
         }
-        try nfcRequireWalletExchange(
+        try nfcRequireExchange(context.profilePolicy,
             request: context.receiveRequest, payment: context.payment, credited: decoded)
         self.identity = context.identity
         self.paymentProfile = context.payment.profile
@@ -1470,9 +1511,11 @@ public struct IrohaPeerNfcReceiverSessionV1: Sendable {
             requestWireHash: request.wireHash
         )
         let effectivePolicy = profilePolicy ?? .init(profile: request.profile)
-        guard effectivePolicy.profile == request.profile else {
+        guard effectivePolicy.profile == request.profile, effectivePolicy.bindsExchanges else {
             throw IrohaPeerNfcErrorV1.invalidProfile
         }
+        // A verified binding hosts only its wallet's own exact Request.
+        try nfcRequireHostedRequest(effectivePolicy, request: request)
         if let durableAcknowledgement {
             guard durableAcknowledgement.identity == identity,
                   effectivePolicy.accepts(durableAcknowledgement.paymentProfile),
@@ -1483,7 +1526,9 @@ public struct IrohaPeerNfcReceiverSessionV1: Sendable {
             }
         }
         if let durableAcknowledgement {
-            try nfcRequireCreditedScheme(request: request, credited: durableAcknowledgement.acknowledgement)
+            try nfcRequireAcknowledgement(effectivePolicy, request: request,
+                credited: durableAcknowledgement.acknowledgement,
+                paymentWireHash: durableAcknowledgement.paymentWireHash)
         }
         var initialPendingPayment: PendingPayment?
         if let restoredPaymentAdmission {
@@ -1766,7 +1811,8 @@ public struct IrohaPeerNfcReceiverSessionV1: Sendable {
               profilePolicy.accepts(record.acknowledgement.profile) else {
             throw IrohaPeerNfcErrorV1.invalidProfile
         }
-        try nfcRequireCreditedScheme(request: receiveRequest, credited: record.acknowledgement)
+        try nfcRequireAcknowledgement(profilePolicy, request: receiveRequest,
+            credited: record.acknowledgement, paymentWireHash: record.paymentWireHash)
         if let durableAcknowledgement {
             guard durableAcknowledgement == record else {
                 throw IrohaPeerNfcErrorV1.conflictingReplay
@@ -2133,7 +2179,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
             limits: limits
         )
         let effectivePolicy = profilePolicy ?? .init(profile: requestMessage.profile)
-        guard effectivePolicy.profile == requestMessage.profile else {
+        guard effectivePolicy.profile == requestMessage.profile, effectivePolicy.bindsExchanges else {
             throw IrohaPeerNfcErrorV1.invalidProfile
         }
         let paymentMessage = try nfcDecodeMessage(
@@ -2159,7 +2205,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
         } else {
             ackMessage = nil
         }
-        try nfcRequireWalletExchange(
+        try nfcRequireExchange(effectivePolicy,
             request: requestMessage, payment: paymentMessage, credited: ackMessage)
         self.identity = try IrohaPeerNfcRequestIdentityV1(
             profile: requestMessage.profile,
@@ -2410,7 +2456,9 @@ public struct IrohaPeerNfcTwoTapReducerV1: Sendable {
               acknowledgement.wireHash == expectedAcknowledgementHash else {
             throw IrohaPeerNfcErrorV1.invalidHash
         }
-        try nfcRequireWalletExchange(
+        // A verified binding decides the status against the exact retained outgoing Payment
+        // before it can be persisted or confirmed.
+        try nfcRequireExchange(checkpoint.profilePolicy,
             request: checkpoint.receiveRequest, payment: checkpoint.payment, credited: acknowledgement)
         return true
     }
@@ -2498,12 +2546,25 @@ public struct IrohaPeerNfcTwoTapReducerV1: Sendable {
     }
 }
 
-// Carrier checks preserve exact bytes; only Native can authenticate monetary effects.
-private func nfcRequireWalletExchange(
+// Carrier checks preserve exact bytes; only Native can authenticate monetary effects. Wallet V1 keeps
+// its structural binding. Any other profile is decided only by its wallet's verified binding: without
+// one, every exchange fails closed and no shape check stands in for authorization.
+private func nfcRequireExchange(
+    _ policy: IrohaPeerNfcProfilePolicyV1,
     request: IrohaPeerWireMessageV1, payment: IrohaPeerWireMessageV1,
     credited: IrohaPeerWireMessageV1? = nil
 ) throws {
     do {
+        if let binder = policy.binder {
+            try binder.requireRequest(request)
+            try binder.requirePayment(payment, boundTo: request)
+            if let credited {
+                try binder.requireAcknowledgement(credited, request: request,
+                    paymentWireHash: payment.wireHash, payment: payment)
+            }
+            return
+        }
+        guard policy.profile == .kagemushaWalletV1 else { throw IrohaPeerNfcErrorV1.continuityMismatch }
         try KagemushaWalletWireV1.requireExchangeBinding(
             request: IrohaPeerKagemushaWalletAdapterV1.decode(request),
             payment: IrohaPeerKagemushaWalletAdapterV1.decode(payment),
@@ -2511,14 +2572,33 @@ private func nfcRequireWalletExchange(
     } catch { throw IrohaPeerNfcErrorV1.continuityMismatch }
 }
 
-private func nfcRequireCreditedScheme(
-    request: IrohaPeerWireMessageV1, credited: IrohaPeerWireMessageV1
+/// A persisted acknowledgement whose Payment bytes are no longer at hand. Wallet V1 compares its readable
+/// scheme with the Request's. A folded status with no readable scheme is decided by its wallet binding
+/// under that wallet's exact operation scope and scheme.
+private func nfcRequireAcknowledgement(
+    _ policy: IrohaPeerNfcProfilePolicyV1,
+    request: IrohaPeerWireMessageV1, credited: IrohaPeerWireMessageV1, paymentWireHash: Data
 ) throws {
     do {
+        if let binder = policy.binder {
+            try binder.requireRequest(request)
+            try binder.requireAcknowledgement(credited, request: request,
+                paymentWireHash: paymentWireHash, payment: nil)
+            return
+        }
+        guard policy.profile == .kagemushaWalletV1 else { throw IrohaPeerNfcErrorV1.continuityMismatch }
         try KagemushaWalletWireV1.requireCreditedScheme(
             request: IrohaPeerKagemushaWalletAdapterV1.decode(request),
             credited: IrohaPeerKagemushaWalletAdapterV1.decode(credited))
     } catch { throw IrohaPeerNfcErrorV1.continuityMismatch }
+}
+
+/// A card under a verified binding hosts only that wallet's exact Request. Wallet V1 hosting is unchanged.
+private func nfcRequireHostedRequest(
+    _ policy: IrohaPeerNfcProfilePolicyV1, request: IrohaPeerWireMessageV1
+) throws {
+    guard let binder = policy.binder else { return }
+    do { try binder.requireRequest(request) } catch { throw IrohaPeerNfcErrorV1.continuityMismatch }
 }
 
 private func nfcDecodeMessage(
@@ -2639,6 +2719,8 @@ public enum IrohaPeerNfcReaderExchangeV1 {
         updateDurableCheckpoint: UpdateDurableCheckpoint
     ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
         precondition(maximumActions > 0)
+        // A policy that cannot bind the exchange never reaches value creation or delivery.
+        guard profilePolicy.bindsExchanges else { throw IrohaPeerNfcErrorV1.invalidProfile }
         var actionBudget = ActionBudget(remaining: maximumActions)
 
         try actionBudget.consume()
@@ -3053,17 +3135,26 @@ public struct IrohaPeerNfcRequestReadV1: Equatable, Sendable {
               request.wireHash == info.identity.requestWireHash else {
             throw IrohaPeerNfcErrorV1.invalidHash
         }
-        let carrier: IrohaPeerWalletRequestV1
         do {
-            carrier = try IrohaPeerWalletRequestV1.decode(request.canonicalPayload)
+            switch request.profile {
+            case .kagemushaSpartanPaymentV3:
+                // The schema-3 `KWRQAC1` originals; the payer's Native review authenticates them.
+                let originals = try IrohaPeerSpartanOpenRequestV3(canonicalPayload: request.canonicalPayload)
+                let payload = Data(request.canonicalPayload)
+                self.requestEnvelope = payload.subdata(
+                    in: IrohaPeerWalletRequestV1.headerBytes..<(payload.count - originals.destinationAccountOriginal.count))
+                self.destinationAccountOriginal = originals.destinationAccountOriginal
+            case .kagemushaWalletV1, .reject:
+                let carrier = try IrohaPeerWalletRequestV1.decode(request.canonicalPayload)
+                self.requestEnvelope = carrier.requestEnvelope
+                self.destinationAccountOriginal = carrier.destinationAccountOriginal
+            }
         } catch {
             throw IrohaPeerNfcErrorV1.invalidIPM1
         }
         self.intake = intake
         self.info = info
         self.request = request
-        self.requestEnvelope = carrier.requestEnvelope
-        self.destinationAccountOriginal = carrier.destinationAccountOriginal
     }
 }
 

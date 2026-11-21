@@ -116,6 +116,36 @@ impl<F: Scalar> FixedValues<F> {
         }
     }
 
+    /// Expand a range through its last nonzero public coefficient. A compact
+    /// tail can locate the first and last intersecting literal runs directly.
+    pub fn nonzero_prefix(&self, range: std::ops::Range<usize>) -> Vec<F> {
+        assert!(range.start <= range.end && range.end <= self.len());
+        match self {
+            Self::Dense(values) => {
+                let row = &values[range];
+                let end = row.iter().rposition(|value| *value != F::ZERO);
+                end.map_or_else(Vec::new, |at| row[..=at].to_vec())
+            }
+            Self::Runs { spans, literals, .. } => {
+                let first = spans.partition_point(|s| s.start + s.len <= range.start);
+                let past = spans.partition_point(|s| s.start < range.end);
+                let Some(last) = spans[first..past].last() else {
+                    return Vec::new();
+                };
+                let end = range.end.min(last.start + last.len);
+                let mut row = vec![F::ZERO; end - range.start];
+                for span in &spans[first..past] {
+                    let lo = range.start.max(span.start);
+                    let hi = end.min(span.start + span.len);
+                    let offset = span.offset + (lo - span.start);
+                    row[lo - range.start..hi - range.start]
+                        .copy_from_slice(&literals[offset..offset + (hi - lo)]);
+                }
+                row
+            }
+        }
+    }
+
     /// Visit the same maximal alternating runs used by the existing wire codec.
     pub fn visit_runs<E>(
         &self,
@@ -246,10 +276,26 @@ mod tests {
                 expected.update(&value.to_repr());
             }
             let dense = FixedValues::Dense(values.clone());
+            let check_ranges = |stored: &FixedValues<F>| {
+                let cuts = [0, 1, 2, 4, 5, values.len().saturating_sub(1), values.len()];
+                for &start in &cuts {
+                    for &end in &cuts {
+                        if start <= end && end <= values.len() {
+                            let mut expected = values[start..end].to_vec();
+                            while expected.last() == Some(&F::ZERO) {
+                                expected.pop();
+                            }
+                            assert_eq!(stored.nonzero_prefix(start..end), expected);
+                        }
+                    }
+                }
+            };
+            check_ranges(&dense);
             let mut dense_hash = blake3::Hasher::new();
             dense.hash_into(&mut dense_hash);
             assert_eq!(expected.finalize(), dense_hash.finalize());
             let compact = dense.compact();
+            check_ranges(&compact);
             assert_eq!(compact.expanded(), values);
             assert_eq!(compact.iter().collect::<Vec<_>>(), values);
             for (i, value) in values.iter().enumerate() {

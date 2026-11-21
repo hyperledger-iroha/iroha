@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -104,9 +105,9 @@ public struct KagemushaWalletAppleSlotV1: Equatable, Hashable, Sendable {
   }
 
   /// Strict parse of a payment key's application tag (``keychainName``).
-  init?(applicationTag tag: Data) {
+  init?(applicationTag tag: Data, namePrefix: String = Self.keychainNamePrefix) {
     let bytes = Array(tag)
-    let prefix = Array(Self.keychainNamePrefix.utf8)
+    let prefix = Array(namePrefix.utf8)
     guard bytes.count == prefix.count + 64, bytes.starts(with: prefix),
       let raw = kagemushaWalletAppleParseHex(bytes[prefix.count...])
     else { return nil }
@@ -271,6 +272,8 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   let accessGroup: String
   let system: KagemushaWalletAppleSystemV1
   let appAttest: any KagemushaWalletAppAttestServiceV1
+  private let paymentKeyTagPrefix: String
+  private let markerAnchorService: String
   private let generationLock = NSLock()
   // Only actual successful SecKeyCreateRandomKey returns enter this map. A Keychain
   // lookup never reconstructs an original, and this same platform object owns its lifetime.
@@ -321,8 +324,18 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
 
   init(
     appAttest: any KagemushaWalletAppAttestServiceV1, accessGroup: String,
-    system: KagemushaWalletAppleSystemV1
+    system: KagemushaWalletAppleSystemV1, keychainNamespace: SHA256.Digest? = nil
   ) {
+    if let keychainNamespace {
+      let digest = kagemushaWalletAppleHex(keychainNamespace)
+      // A scoped prefix must be disjoint from the original wallet prefix. A malformed
+      // tag in a wallet's own namespace correctly refuses its entire inventory.
+      paymentKeyTagPrefix = "kgm-ns-w1-" + digest + "-"
+      markerAnchorService = Self.anchorService + "." + digest
+    } else {
+      paymentKeyTagPrefix = KagemushaWalletAppleSlotV1.keychainNamePrefix
+      markerAnchorService = Self.anchorService
+    }
     self.appAttest = appAttest
     self.accessGroup = accessGroup
     self.system = system
@@ -414,10 +427,14 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     ]
   }
 
+  private func paymentKeyTag(_ slot: KagemushaWalletAppleSlotV1) -> Data {
+    Data((paymentKeyTagPrefix + kagemushaWalletAppleHex(slot.bytes)).utf8)
+  }
+
   /// Keychain query matching the slot's payment key.
   func paymentKeyQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
     var query = paymentKeyClassQuery()
-    query[kSecAttrApplicationTag as String] = slot.applicationTag
+    query[kSecAttrApplicationTag as String] = paymentKeyTag(slot)
     return query
   }
 
@@ -433,7 +450,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
       kSecUseDataProtectionKeychain as String: true,
       kSecPrivateKeyAttrs as String: [
         kSecAttrIsPermanent as String: true,
-        kSecAttrApplicationTag as String: slot.applicationTag,
+        kSecAttrApplicationTag as String: paymentKeyTag(slot),
         kSecAttrLabel as String: request.label,
         kSecAttrAccessGroup as String: accessGroup,
         kSecAttrAccessControl as String: accessControl,
@@ -669,7 +686,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// delete and reinstall). Every successful inventory, including an empty class query or
   /// `errSecItemNotFound`, requires protected storage before and after querying.
   /// Tags are parsed strictly; a key with another tag is not a wallet key, and a
-  /// malformed `kgm-w1-` tag refuses the complete inventory: it may name surviving custody
+  /// malformed tag with this adapter’s prefix refuses the complete inventory: it may name surviving custody
   /// and must never be silently omitted. Native consumes this through callback operation10.
   func keyEnumerate() -> Result<[KagemushaWalletAppleSlotV1], KagemushaWalletAppleUnavailableV1> {
     let answer = bracketed { () -> KagemushaWalletAppleProbeV1<[KagemushaWalletAppleSlotV1]> in
@@ -687,10 +704,10 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
         return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
       }
       var slots = Set<KagemushaWalletAppleSlotV1>()
-      let walletPrefix = Data(KagemushaWalletAppleSlotV1.keychainNamePrefix.utf8)
+      let walletPrefix = Data(paymentKeyTagPrefix.utf8)
       for item in items {
         guard let tag = item[kSecAttrApplicationTag as String] as? Data else { continue }
-        if let slot = KagemushaWalletAppleSlotV1(applicationTag: tag) {
+        if let slot = KagemushaWalletAppleSlotV1(applicationTag: tag, namePrefix: paymentKeyTagPrefix) {
           slots.insert(slot)
           guard slots.count <= Self.keyEnumerationMaxSlots else {
             diagnose("payment-key enumeration exceeds resource bound")
@@ -722,7 +739,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   func anchorQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
     [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.anchorService,
+      kSecAttrService as String: markerAnchorService,
       kSecAttrAccount as String: slot.keychainName,
       kSecAttrAccessGroup as String: accessGroup,
       kSecAttrSynchronizable as String: false,

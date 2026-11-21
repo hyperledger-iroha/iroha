@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+pub(crate) mod anonymous;
+
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     isi::error::InstructionExecutionError as Error,
@@ -97,6 +99,25 @@ where
         })
         .collect();
     due.sort_by_key(|(id, record)| (record.change_set.effective_height, **id));
+    project_ordered_records(current, &due, published)
+}
+
+// The baseline owner retains its existing collection and sorting above. New callers may fund
+// their own borrowed ordered index without cloning every historical record and its payload.
+fn project_ordered_records<S>(
+    current: &RootSelectionV1,
+    due: &[(&ChangeSetId, &ChangeSetRecordV1)],
+    published: &PublishedDefinitions<'_, S>,
+) -> Result<
+    (
+        RootSelectionV1,
+        BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    ),
+    Error,
+>
+where
+    S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+{
     let mut selection = current.clone();
     let mut added = BTreeMap::new();
     for (id, record) in due {
@@ -161,8 +182,8 @@ where
         ));
     }
     if change_set.root != RootScopeV1::Universal {
-        // TODO(live_runtime_upgrades.md §11): independently rooted data spaces own their own
-        // selections; this release implements only the universal root.
+        // Preserve the installed Parliament admission contract. The separately selected
+        // child-admin handler authenticates its own root and invokes successor resolution.
         return Err(Error::InvariantViolation(
             "this release implements change sets of the universal root only".into(),
         ));
@@ -198,8 +219,97 @@ pub fn successor<S>(
 where
     S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
 {
+    successor_with_definitions(change_set, id, current, scheduled, published)
+        .map(|projection| projection.selection)
+}
+
+/// The original scheduled and target publications retained for selection-aware support.
+pub(super) struct SuccessorProjection {
+    pub(super) selection: RootSelectionV1,
+    staged: BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    added: BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+}
+impl SuccessorProjection {
+    pub(super) fn definitions<'a>(
+        &'a self,
+        published: &'a impl DefinitionLookup,
+    ) -> impl DefinitionLookup + 'a {
+        struct Original<'a, L> {
+            published: &'a L,
+            staged: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+            added: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+        }
+        impl<L: DefinitionLookup> DefinitionLookup for Original<'_, L> {
+            fn definition(&self, id: &DefinitionId) -> Option<&DefinitionDescriptorV1> {
+                self.added
+                    .get(id)
+                    .or_else(|| self.staged.get(id))
+                    .or_else(|| self.published.definition(id))
+            }
+        }
+        Original {
+            published,
+            staged: &self.staged,
+            added: &self.added,
+        }
+    }
+}
+
+pub(super) fn successor_with_definitions<S>(
+    change_set: &ChangeSetV1,
+    id: ChangeSetId,
+    current: &RootSelectionV1,
+    scheduled: &BTreeMap<ChangeSetId, ChangeSetRecordV1>,
+    published: &PublishedDefinitions<'_, S>,
+) -> Result<SuccessorProjection, Error>
+where
+    S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+{
     let (meets, staged) =
         projected_selection(current, scheduled, change_set.effective_height, published)?;
+    successor_at_projection(change_set, id, current, meets, staged, published)
+}
+
+/// New owners may supply a funded borrowed index instead of cloning the scheduled table.
+/// The index must contain only due scheduled records, strictly ordered by height then identity.
+/// Completeness remains the original committed-table reader's responsibility.
+pub(super) fn successor_from_ordered_records<S>(
+    change_set: &ChangeSetV1,
+    id: ChangeSetId,
+    current: &RootSelectionV1,
+    due: &[(&ChangeSetId, &ChangeSetRecordV1)],
+    published: &PublishedDefinitions<'_, S>,
+) -> Result<RootSelectionV1, Error>
+where
+    S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+{
+    if due.iter().any(|(_, record)| {
+        record.status != ChangeSetStatusV1::Scheduled
+            || record.change_set.effective_height >= change_set.effective_height
+    }) || due.windows(2).any(|pair| {
+        (pair[0].1.change_set.effective_height, *pair[0].0)
+            >= (pair[1].1.change_set.effective_height, *pair[1].0)
+    }) {
+        return Err(Error::InvariantViolation(
+            "scheduled record index is not canonical".into(),
+        ));
+    }
+    let (meets, staged) = project_ordered_records(current, due, published)?;
+    successor_at_projection(change_set, id, current, meets, staged, published)
+        .map(|projection| projection.selection)
+}
+
+fn successor_at_projection<S>(
+    change_set: &ChangeSetV1,
+    id: ChangeSetId,
+    current: &RootSelectionV1,
+    meets: RootSelectionV1,
+    staged: BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    published: &PublishedDefinitions<'_, S>,
+) -> Result<SuccessorProjection, Error>
+where
+    S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+{
     let lookup = Staged {
         published,
         added: &staged,
@@ -208,21 +318,27 @@ where
         .apply(&meets, &lookup)
         .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
     check_transition_support(change_set, current, &meets, &applied, &lookup)?;
-    // The predecessor's generic publication semantics stay unchanged. Once Ironwood has
-    // activated, reject an incompatible successor during proposal/approval, before attestation.
-    if super::ironwood::enabled_with_definitions(&meets, &lookup) {
-        let mut definitions = staged;
-        definitions.extend(applied.published.clone());
+    let projection = SuccessorProjection {
+        selection: applied.selection,
+        staged,
+        added: applied.published,
+    };
+    // Keep the same immutable publications in a borrowed layered lookup. No second complete
+    // descriptor map is constructed just to check the admitted successor.
+    if super::ironwood::enabled_with_definitions(
+        &meets,
+        &Staged {
+            published,
+            added: &projection.staged,
+        },
+    ) {
         super::ironwood::validate_admitted_successor(
-            &applied.selection,
-            &Staged {
-                published,
-                added: &definitions,
-            },
+            &projection.selection,
+            &projection.definitions(published),
         )
         .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
     }
-    Ok(applied.selection)
+    Ok(projection)
 }
 
 /// Reject transitions whose effects the lifecycle engine of this root cannot perform (§14.8).
@@ -257,8 +373,38 @@ fn check_transition_support(
             self.added.get(id).or_else(|| self.published.definition(id))
         }
     }
-    super::keyed_state::validate_transition(previous, &applied.selection)
+    super::catalog::ivm_c10::validate_transition(previous, &applied.selection)
         .map_err(|reason| Error::InvariantViolation(reason.into()))?;
+    super::keyed_state::validate_transition_with_definitions(
+        previous,
+        &applied.selection,
+        &WithPublished {
+            published,
+            added: &applied.published,
+        },
+    )
+    .map_err(|reason| Error::InvariantViolation(reason.into()))?;
+    check_transition_support_after_keyed(change_set, committed, previous, applied, published)
+}
+
+// The same post-keyed rules serve the new typed admission owner. No encoding occurs here.
+fn check_transition_support_after_keyed(
+    change_set: &ChangeSetV1,
+    committed: &RootSelectionV1,
+    previous: &RootSelectionV1,
+    applied: &AppliedChangeSet,
+    published: &impl DefinitionLookup,
+) -> Result<(), Error> {
+    /// Published definitions with those the change set itself publishes.
+    struct WithPublished<'a, L> {
+        published: &'a L,
+        added: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    }
+    impl<L: DefinitionLookup> DefinitionLookup for WithPublished<'_, L> {
+        fn definition(&self, id: &DefinitionId) -> Option<&DefinitionDescriptorV1> {
+            self.added.get(id).or_else(|| self.published.definition(id))
+        }
+    }
     if change_set.transitions.iter().any(|transition| {
         matches!(
             transition,
@@ -457,6 +603,7 @@ pub fn activate_due(
             continue;
         };
         let current = wtx.runtime_selection.get().clone();
+        let mut support_refusal = None;
         let applied = if ready(&record, id, height, now_ms, committee) {
             record
                 .change_set
@@ -512,10 +659,16 @@ pub fn activate_due(
                     // A fully attested future release owns unknown codec semantics. Preserve
                     // the foundation's UnsupportedRuntime stop below; never turn another
                     // release's successful activation into a locally invented lapse.
-                    if super::release_catalog()
-                        .is_ok_and(|catalog| catalog.unsupported(&applied.selection).is_some())
-                    {
-                        return true;
+                    match super::attestation::release_support_with_definitions(
+                        catalog, &applied.selection,
+                        &Staged { published: &PublishedDefinitions(&wtx.runtime_definitions), added: &applied.published },
+                    ) {
+                        Ok(super::attestation::ReleaseSupport::Missing(_)) => return true,
+                        Ok(super::attestation::ReleaseSupport::Supported) => {},
+                        Err(original) => {
+                            support_refusal = Some(original);
+                            return false;
+                        }
                     }
                     let scoped_before = super::state_scope_permission::selected(&current);
                     let scoped_after = super::state_scope_permission::selected(&applied.selection);
@@ -557,6 +710,12 @@ pub fn activate_due(
                             iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                             return false;
                         }
+                    }
+                    if let Err(reason) = crate::kagemusha_wallet_v1::spartan::validate_cutover(&current, &applied.selection, record.change_set.effective_height)
+                        .and_then(|()| crate::kagemusha_wallet_v1::spartan::check_transition(&*wtx, &applied.selection))
+                    {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set violates the Spartan reserve binding");
+                        return false;
                     }
                     if let Err(reason) = super::deferred_consent::check_transition(&*wtx, &current, &applied.selection) {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
@@ -615,6 +774,10 @@ pub fn activate_due(
         } else {
             None
         };
+        // An incomplete local support check does not lapse or publish the governed change.
+        if let Some(original) = support_refusal {
+            return Err(original.into_block_start(height));
+        }
         let event = if let Some(applied) = applied {
             for (definition, descriptor) in applied.published {
                 wtx.runtime_definitions.insert(definition, descriptor);
@@ -645,7 +808,13 @@ pub fn activate_due(
     }
     super::containment::resolve_taken_over(wtx, height, &holding);
     let selection = wtx.runtime_selection.get();
-    if let Some(definition) = catalog.unsupported(selection) {
+    let support = super::attestation::release_support_with_definitions(
+        catalog,
+        selection,
+        &PublishedDefinitions(&wtx.runtime_definitions),
+    )
+    .map_err(|original| original.into_block_start(height))?;
+    if let super::attestation::ReleaseSupport::Missing(definition) = support {
         let named = selection.id().map_or_else(
             |error| format!("whose identity cannot be encoded ({error})"),
             |id| id.to_string(),

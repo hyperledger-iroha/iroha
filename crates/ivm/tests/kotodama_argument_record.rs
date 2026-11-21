@@ -8,6 +8,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     pointer_abi::PointerType,
 };
+use ivm_abi::error::VmTrap;
 use std::{collections::BTreeMap, fs};
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -275,7 +276,7 @@ seiyaku JsonArgumentRecordRuntime {
     // A present JSON number token is malformed input for the exact int getter:
     // the call aborts instead of reading the field as absent.
     assert!(
-        matches!(vm.run(), Err(ivm::VMError::DecodeError)),
+        matches!(vm.run(), Err(ivm::VMError::Trap(VmTrap::DecodeError))),
         "typed int getter must reject a JSON number token"
     );
 }

@@ -756,8 +756,12 @@ not a date: it happens once everything its first selection needs is implemented 
    whose storage the selection does not install and each member of a nested owner whose storage
    it does not install, and a restore reads it as its empty default. The keyed transition
    preserves the pinned predecessor root and imports the registered State owners. Work remains
-   on governing changes to node-supplied semantic policy, authenticated accelerated restore,
-   storage capabilities and generic carriers.
+   on governing changes to node-supplied semantic policy and authenticated accelerated restore.
+   The sealed one-source/one-successor migration adapter implements distinct point-read/scan,
+   successor-write and source-drain capabilities; same-candidate qualification, additional
+   migration shapes and broader instruction storage capabilities remain open. Generic carrier
+   execution and staging are implemented as a dormant profile whose support and activation remain
+   refused pending qualification.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -805,17 +809,25 @@ not a date: it happens once everything its first selection needs is implemented 
    Only the certified import acknowledgement releases an exported source capture. Certified
    pre-export cancellation releases the original reservation; permanent identities and tombstones
    prevent replay. Its two-root, substitution, restriction, resource-refusal and restore regressions
-   require current-candidate qualification. Still open: narrower authenticated dynamic-call manifests.
-4. **Governance.** Parliament's Core integration (still a TODO in
-   `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
-   panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
+   require current-candidate qualification. The independent `iroha.runtime.child_admin.v1`
+   corridor implements explicit threshold administration founded only by the original signed
+   child genesis, with action certificates and all-validator release support. Same-candidate and
+   real-network qualification remain open; existing children receive no inferred authority or live
+   initializer. Still open: narrower authenticated dynamic-call manifests.
+4. **Governance.** Qualify Parliament's committed governance-clock and anonymous-ballot
+   integration. The dormant family implements a distinct original-signed runtime creator,
+   frozen admission metadata, exact retry content and runtime-only G3 certificate/head-checked
+   enactment with atomic refusal handling. Its production qualification remains `None`;
+   candidate certificates never enact, and other proposal effects remain open. Neither this
+   corridor nor the runtime emergency panel gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound
    ratification case: governance proposals and approvals that address a contained definition
    record review progress, a renewal needs it, and the containment resolves once change sets take
    over every restriction it held. `SetParameter` validates the canonical lifecycle policy, including
-   its millisecond and body-sizing bounds. Runtime consumption still depends on the frozen
-   governance-clock/anonymous-ballot migration in `parliament_ballot_implementation_goals.md` E2;
-   converting its millisecond windows to node-configured block counts would not implement it.
+   its millisecond and body-sizing bounds. Same-candidate validation and live runtime use still
+   depend on the governance-clock/anonymous-ballot qualification in
+   `parliament_ballot_implementation_goals.md` E2; node-configured block counts cannot substitute
+   for its committed millisecond windows.
 5. **Checkpoints, anchor and deletion.** Checkpoint export and certificate-chain bootstrap, the
    startup floor and its advancement, the deletion rule and its guard, Taira's trust anchor in
    committed State (section 13), and a rehearsal that physically deletes retired code and then
@@ -823,11 +835,15 @@ not a date: it happens once everything its first selection needs is implemented 
    Taira and deleted with the predecessor's root rule; the upgrade checkpoint as the history
    boundary that Kura checks against the stored block and below which no snapshot is restored;
    the committed checkpoint policy; the adoption anchor and the startup floor as committed
-   records that every validator signs after checking them against its own certified history;
+   records requiring every validator's statement against its own certified history;
    the boundary they set; checkpoint production at the heights the committed policy names and
    retention of what it keeps, in a checkpoint store beside the rolling snapshots; and the
-   operator routes and CLI that have a node sign its statement of the anchor or a floor and
-   relay every validator's statements. Exact finalized-overlay capture now retains the original
+   operator routes and CLI for anchor statements and relaying every validator's statements.
+   The explicit stopped-node `--attest-runtime-floor` command now connects a sealed owner of
+   exact-checkpoint complete-State restore and certified catch-up through signing; combined-candidate
+   qualification remains open. The live floor-attestation route continues to refuse artifact-only
+   evidence. Retained signed artifacts alone cannot authorize a floor statement.
+   Exact finalized-overlay capture now retains the original
    publication through a bounded nonblocking durability request. Signed private pending artifacts
    must be synced before State visibility; only original visibility or strict post-recovery
    complete-State authentication permits atomic promotion and committed retention. Pending quota is
@@ -850,8 +866,9 @@ not a date: it happens once everything its first selection needs is implemented 
    private root; missing child authority or receipts block coverage. This does not authorize
    source removal. Still open: current-candidate replay, staging and pending-spool crash
    qualification; portable transfer, sparse restart and catch-up qualification; peer delivery;
-   retirement qualification, code-identity alias/source ownership coverage, independently governed
-   child-root upgrades, and the deletion guard and oldest-floor rehearsal.
+   retirement qualification, code-identity alias/source ownership coverage, same-candidate and
+   real-network qualification of child-root administration, and the deletion guard and oldest-floor
+   rehearsal.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the

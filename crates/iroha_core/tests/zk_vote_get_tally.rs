@@ -11,6 +11,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::prelude::*;
 use iroha_primitives::nonzero;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
+use ivm_abi::error::VmTrap;
 use mv::storage::StorageReadOnly;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -80,7 +81,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
             election_id.clone(),
             (2, true, Vec::new()),
         )])),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     // Build request TLV and call syscall
     let req = zk_verify::VoteGetTallyRequest { election_id };

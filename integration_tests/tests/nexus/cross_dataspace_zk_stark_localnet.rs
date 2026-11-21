@@ -143,9 +143,7 @@ enum CommittedTxOutcome {
     Applied,
     Rejected(String),
 }
-fn render_rejection_reason(
-    reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
-) -> String {
+fn render_rejection_reason(reason: &(impl std::fmt::Display + std::fmt::Debug)) -> String {
     let display = reason.to_string();
     let debug = format!("{reason:?}");
     if display == debug {
@@ -170,9 +168,15 @@ fn query_committed_tx_outcome(
         .with_fetch_size(FetchSize::new(Some(one)))
         .execute_all()
         .map(|snapshot| {
-            snapshot.first().map(|tx| match &tx.result().0 {
+            use iroha::data_model::block::execution_output::TransactionRejectionRef;
+            snapshot.first().map(|tx| match tx.result().as_ref() {
                 Ok(_) => CommittedTxOutcome::Applied,
-                Err(reason) => CommittedTxOutcome::Rejected(render_rejection_reason(reason)),
+                Err(TransactionRejectionRef::Baseline(reason)) => {
+                    CommittedTxOutcome::Rejected(render_rejection_reason(reason))
+                }
+                Err(TransactionRejectionRef::C10(reason)) => {
+                    CommittedTxOutcome::Rejected(render_rejection_reason(reason))
+                }
             })
         })
 }

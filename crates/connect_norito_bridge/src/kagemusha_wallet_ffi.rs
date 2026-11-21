@@ -193,6 +193,9 @@ impl From<advance::KagemushaWalletProviderErrorV1> for Failure {
             E::NoSpace => Self::code(NOT_ENOUGH_STORAGE),
             E::DecodeResource(_) => Self::code(RESOURCE),
             E::NoReplaceUnsupported => Self::invalid(236),
+            E::Invalid {
+                field: "future locally blocked counterparty",
+            } => Self::code(BLOCKED),
             E::Invalid { field } => Self::invalid(match field {
                 "provider handle poisoned" => 207,
                 "archive.manifest_size" => 220,

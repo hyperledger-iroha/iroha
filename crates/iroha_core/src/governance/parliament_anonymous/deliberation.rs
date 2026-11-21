@@ -29,7 +29,7 @@ use iroha_data_model::{
         types::{
             AssignmentId, BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptId,
             GovernanceStageV1, ParliamentBody, ParliamentPublicFindingCertificateBindingV1,
-            ParliamentSeatAssignmentV1, parliament_public_finding_endorsement_root_v1,
+            ParliamentSeatAssignmentV1, checked_parliament_public_finding_endorsement_root_v1,
             parliament_quorum_seats_v1,
         },
     },
@@ -60,6 +60,7 @@ use super::{
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousQualificationV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousQualificationV1 {
     /// Time of the block that created the attempt: `StartQualification` is due at it.
     pub(super) created_at_ms: u64,
@@ -122,6 +123,7 @@ impl AnonymousQualificationV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousPhaseV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousPhaseV1 {
     /// The phase.
     pub phase: DeliberationPhaseV1,
@@ -145,6 +147,7 @@ pub struct AnonymousPhaseV1 {
 )]
 #[norito(tag = "verdict", content = "details", deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousFindingVerdictV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousFindingVerdictV1 {
     /// One root reached quorum: the root and exactly its quorum of endorsing assignments,
     /// in canonical order.
@@ -174,6 +177,7 @@ pub enum AnonymousFindingVerdictV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousFindingDecisionV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousFindingDecisionV1 {
     /// What decided the body.
     pub verdict: AnonymousFindingVerdictV1,
@@ -196,6 +200,7 @@ pub struct AnonymousFindingDecisionV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousFindingV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousFindingV1 {
     /// Seats whose members declared their own absence.
     pub(super) excluded: BTreeSet<AssignmentId>,
@@ -302,6 +307,7 @@ impl AnonymousFindingV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousBodyStateV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousBodyStateV1 {
     /// The immutable seal.
     pub(super) sealed: AnonymousSealedBodyV1,
@@ -915,12 +921,12 @@ impl AnonymousParliamentAttemptStateV1 {
         Ok(AnonymousPublicFindingResultV1 {
             result_root,
             finding: ParliamentPublicFindingCertificateBindingV1 {
-                endorsement_root: parliament_public_finding_endorsement_root_v1(
+                endorsement_root: checked_parliament_public_finding_endorsement_root_v1(
                     self.attempt.id,
                     sealed.body_instance_id,
                     result_root,
                     witness,
-                ),
+                )?,
                 endorsing_assignments: witness.to_vec(),
                 endorsements,
                 quorum,

@@ -3,15 +3,20 @@
 //! A list is not a pointer-ABI envelope. Its handle is the base address of one owned heap
 //! allocation whose exact element shape and capacity come from the compiler-emitted schema. Hosts
 //! must therefore validate the complete range against that schema before reading it.
-use crate::{IVM, VMError};
+use crate::VMError;
+use crate::error::VmTrap;
 #[cfg(test)]
 use ivm_abi::list::LIST_HEADER_WORDS_V1;
 use ivm_abi::list::LIST_WORD_BYTES_V1;
 pub use ivm_abi::list::ListLayoutV1;
 fn layout_error() -> VMError {
-    VMError::DecodeError
+    VMError::Trap(VmTrap::DecodeError)
 }
-fn validate_header(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VMError> {
+fn validate_header(
+    vm: &dyn crate::host::SyscallContext,
+    base: u64,
+    layout: ListLayoutV1,
+) -> Result<u64, VMError> {
     if !base.is_multiple_of(LIST_WORD_BYTES_V1) {
         return Err(layout_error());
     }
@@ -30,7 +35,11 @@ fn element_slot(base: u64, layout: ListLayoutV1, index: u64) -> Result<u64, VMEr
     base.checked_add(layout.slot_offset(index).map_err(|_| layout_error())?)
         .ok_or_else(layout_error)
 }
-fn read_element(vm: &IVM, slot: u64, element_words: u64) -> Result<Vec<u64>, VMError> {
+fn read_element(
+    vm: &dyn crate::host::SyscallContext,
+    slot: u64,
+    element_words: u64,
+) -> Result<Vec<u64>, VMError> {
     let mut element =
         Vec::with_capacity(usize::try_from(element_words).map_err(|_| layout_error())?);
     for word_index in 0..element_words {
@@ -45,7 +54,11 @@ fn read_element(vm: &IVM, slot: u64, element_words: u64) -> Result<Vec<u64>, VME
     }
     Ok(element)
 }
-fn write_element(vm: &mut IVM, slot: u64, element: &[u64]) -> Result<(), VMError> {
+fn write_element(
+    vm: &mut dyn crate::host::SyscallContext,
+    slot: u64,
+    element: &[u64],
+) -> Result<(), VMError> {
     for (word_index, word) in element.iter().copied().enumerate() {
         let address = slot
             .checked_add(
@@ -65,7 +78,7 @@ fn write_element(vm: &mut IVM, slot: u64, element: &[u64]) -> Result<(), VMError
 /// placeholder value, although the whole bounded allocation is reserved up
 /// front so `try_push` cannot allocate or partially mutate later.
 pub fn allocate_words(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     layout: ListLayoutV1,
     elements: &[Vec<u64>],
 ) -> Result<u64, VMError> {
@@ -110,7 +123,11 @@ pub fn allocate_words(
     Ok(base)
 }
 /// Validate and read the active elements of one compiler-owned list.
-pub fn read_words(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<Vec<Vec<u64>>, VMError> {
+pub fn read_words(
+    vm: &dyn crate::host::SyscallContext,
+    base: u64,
+    layout: ListLayoutV1,
+) -> Result<Vec<Vec<u64>>, VMError> {
     let len = validate_header(vm, base, layout)?;
     let mut elements = Vec::with_capacity(usize::try_from(len).map_err(|_| layout_error())?);
     for index in 0..len {
@@ -123,12 +140,16 @@ pub fn read_words(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<Vec<Vec<u
     Ok(elements)
 }
 /// Return the validated active length of a compiler-owned list.
-pub fn len(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VMError> {
+pub fn len(
+    vm: &dyn crate::host::SyscallContext,
+    base: u64,
+    layout: ListLayoutV1,
+) -> Result<u64, VMError> {
     validate_header(vm, base, layout)
 }
 /// Read one present element, returning `None` for an out-of-range index.
 pub fn get_words(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     base: u64,
     layout: ListLayoutV1,
     index: u64,
@@ -142,7 +163,7 @@ pub fn get_words(
 }
 /// Replace one present element without changing the list on failure.
 pub fn try_set_words(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     base: u64,
     layout: ListLayoutV1,
     index: u64,
@@ -164,7 +185,7 @@ pub fn try_set_words(
 /// The length word is committed last, so a failed precondition leaves every
 /// word of the list unchanged.
 pub fn try_push_words(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     base: u64,
     layout: ListLayoutV1,
     element: &[u64],
@@ -183,7 +204,7 @@ pub fn try_push_words(
 }
 /// Remove and return the last element, or `None` when the list is empty.
 pub fn pop_words(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     base: u64,
     layout: ListLayoutV1,
 ) -> Result<Option<Vec<u64>>, VMError> {
@@ -200,7 +221,7 @@ pub fn pop_words(
 }
 /// Test whether an active element has exactly the supplied flattened words.
 pub fn contains_words(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     base: u64,
     layout: ListLayoutV1,
     element: &[u64],
@@ -221,6 +242,8 @@ pub(crate) const fn capacity_word_offset() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
+    use crate::error::VmTrap;
     use crate::memory::Memory;
     #[test]
     fn list_roundtrip_uses_one_owned_allocation() {
@@ -246,11 +269,11 @@ mod tests {
         let layout = ListLayoutV1::try_new(2, 2).expect("layout");
         assert!(matches!(
             allocate_words(&mut vm, layout, &[vec![1], vec![2, 3]]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             allocate_words(&mut vm, layout, &[vec![1, 2], vec![3, 4], vec![5, 6]]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             (allocate_words(&mut vm, layout, &[])).expect("expected successful fixture result"),
@@ -266,22 +289,22 @@ mod tests {
             .expect("forge capacity");
         assert!(matches!(
             read_words(&vm, base, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         vm.store_u64(base + capacity_word_offset(), 2)
             .expect("restore capacity");
         vm.store_u64(base, 3).expect("forge length");
         assert!(matches!(
             read_words(&vm, base, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, Memory::HEAP_START + 4096, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             read_words(&vm, base + 1, layout),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -490,11 +513,11 @@ mod tests {
         let before = read_words(&vm, base, layout).expect("read before");
         assert!(matches!(
             try_set_words(&mut vm, base, layout, 0, &[9]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             try_push_words(&mut vm, base, layout, &[9]),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             (read_words(&vm, base, layout)).expect("expected successful fixture result"),

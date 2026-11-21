@@ -1597,11 +1597,11 @@ fn soracloud_json_pointer_abi_rejects_unframed_json_payloads() {
     let input_tlv = make_pointer_tlv(PointerType::Json, raw_json);
     assert!(matches!(
         json_value_from_tlv(&input_tlv),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(matches!(
         json_pointer_response_payload(raw_json),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(
         soracloud_echo_vm(&input_tlv, EntrypointValueKindV1::Json).is_err(),
@@ -1700,7 +1700,8 @@ fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
     let mut vm = IVM::new(u64::MAX);
     let request_ptr = vm.alloc_input_tlv(&request_tlv)?;
     vm.set_register(10, request_ptr);
-    let quoted = host.prepare_syscall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE, &vm)?;
+    let quoted =
+        host.prepare_syscall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE, vm.syscall_quote())?;
     assert!(
         host.local_read_bindings().is_empty(),
         "syscall preparation must not record a committed-state observation"
@@ -1714,6 +1715,39 @@ fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
     assert_eq!(bindings[0], state_entry_binding(&entry));
     assert_eq!(host.metering_query_count(), 1);
     assert_eq!(host.metering_allocation_count(), 1);
+    Ok(())
+}
+#[test]
+fn ivm_host_refuses_tagged_service_input_before_query_or_allocation() -> Result<()> {
+    let bundle = load_deployment_bundle_fixture()?;
+    let temp_dir = canonical_runtime_fixture_tempdir()?;
+    let request = sample_ordered_mailbox_request(
+        &bundle,
+        "query",
+        sample_mailbox_message(&bundle, "query", b"public-query".to_vec()),
+    );
+    let input_name: Name = "_request_body".parse()?;
+    let input_tlv = make_pointer_tlv(PointerType::Name, &norito::to_bytes(&input_name)?);
+    let mut host = SoracloudIvmHost::new(request, temp_dir.path().to_path_buf(), BTreeMap::new())
+        .with_public_inputs(BTreeMap::from([(input_name, input_tlv.clone())]));
+    let mut vm = IVM::new(10_000);
+    vm.set_zk_mode(true)?;
+    let address = vm.alloc_input_tlv(&input_tlv)?;
+    vm.set_register(10, address);
+    vm.registers.set_tag(10, true);
+    for number in [
+        ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT,
+        SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+    ] {
+        let error = host.syscall(number, &mut vm).unwrap_err();
+        assert!(matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::PrivacyViolation)
+        ));
+        assert_eq!(vm.register(10), address);
+        assert_eq!(host.metering_query_count(), 0);
+        assert_eq!(host.metering_allocation_count(), 0);
+    }
     Ok(())
 }
 #[test]
@@ -1735,7 +1769,7 @@ fn ivm_host_out_of_gas_does_not_query_or_allocate_public_input() -> Result<()> {
         PointerType::Name,
         &input_name_payload,
     )?;
-    assert!(matches!(error, VMError::OutOfGas));
+    assert!(matches!(error, VMError::Trap(VmTrap::OutOfGas)));
     assert_eq!(host.metering_query_count(), 0);
     assert_eq!(host.metering_allocation_count(), 0);
     assert!(host.local_read_bindings().is_empty());
@@ -1801,7 +1835,10 @@ fn ivm_host_out_of_gas_does_not_query_state_or_materialize_side_effects() -> Res
             PointerType::SoracloudRequest,
             &request_payload,
         )?;
-        assert!(matches!(error, VMError::OutOfGas), "syscall {syscall:#x}");
+        assert!(
+            matches!(error, VMError::Trap(VmTrap::OutOfGas)),
+            "syscall {syscall:#x}"
+        );
         assert_eq!(host.metering_query_count(), 0, "syscall {syscall:#x}");
         assert_eq!(host.metering_allocation_count(), 0, "syscall {syscall:#x}");
         assert!(host.local_read_bindings().is_empty());
@@ -2911,7 +2948,7 @@ fn soracloud_canonical_argument_tables_preserve_full_width_context_and_reject_un
                 observed_height: 11
             }
         ),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(denied.call_result_word_count().is_err());
     Ok(())
@@ -3021,7 +3058,7 @@ fn soracloud_completed_json_decode_refusal_stays_unavailable_without_mailbox_fai
     corrupt[0] ^= 1;
     assert!(matches!(
         json_pointer_response_payload(&corrupt),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     Ok(())
 }
@@ -3066,7 +3103,9 @@ fn soracloud_public_input_json_refusal_is_local_and_retryable() -> Result<()> {
         .expect_err("original trigger JSON destination honors the enclosing quota");
         assert!(matches!(
             error,
-            VMError::ExecutionDeferred(ivm::ExecutionDeferral::ActiveMemoryCapacity)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::ExecutionDeferral::ActiveMemoryCapacity
+            ))
         ));
         let error = ordered_mailbox_vm_failure(&request, &error)
             .expect_err("public-input refusal cannot create a deterministic mailbox receipt");
@@ -3085,7 +3124,9 @@ fn soracloud_public_input_json_refusal_is_local_and_retryable() -> Result<()> {
         .expect_err("exact frame debit leaves no credit for its subsequent Value parse");
         assert!(matches!(
             error,
-            VMError::ExecutionDeferred(ivm::ExecutionDeferral::ActiveMemoryCapacity)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ivm::ExecutionDeferral::ActiveMemoryCapacity
+            ))
         ));
         assert_eq!(pool.reserved_bytes(), baseline);
         assert_eq!(json_value_from_tlv(&metadata)?, value);
@@ -3097,7 +3138,7 @@ fn soracloud_public_input_json_refusal_is_local_and_retryable() -> Result<()> {
         invalid_frame[0] ^= 1;
         let invalid = ivm::pointer_abi::encode_tlv(PointerType::Json, &invalid_frame)?;
         let invalid = json_value_from_tlv(&invalid).expect_err("corrupt framing stays terminal");
-        assert!(matches!(invalid, VMError::DecodeError));
+        assert!(matches!(invalid, VMError::Trap(VmTrap::DecodeError)));
         assert!(ordered_mailbox_vm_failure(&request, &invalid).is_ok());
         Ok::<_, eyre::Report>(())
     })?;

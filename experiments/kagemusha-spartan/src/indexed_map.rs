@@ -45,6 +45,21 @@ pub struct InsertWitness<const D: usize> {
     pub slot: Path<D>,
 }
 
+impl<const D: usize> zeroize::Zeroize for InsertWitness<D> {
+    fn zeroize(&mut self) {
+        self.old_root.zeroize();
+        self.key.zeroize();
+        self.value.zeroize();
+        self.low.key.zeroize();
+        self.low.value.zeroize();
+        self.low.next.zeroize();
+        self.low_path.index.zeroize();
+        self.low_path.siblings.zeroize();
+        self.slot.index.zeroize();
+        self.slot.siblings.zeroize();
+    }
+}
+
 /// Cells that the caller must join to authenticated operation/state sources.
 pub struct InsertCells {
     pub local: usize,

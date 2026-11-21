@@ -10,6 +10,7 @@
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
+pub(crate) mod anonymous_drafts;
 pub(crate) mod sorafs_authority;
 
 use crate::{

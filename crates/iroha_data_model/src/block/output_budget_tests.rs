@@ -339,6 +339,7 @@ fn reservation_binds_complete_internal_origin_not_just_row_kind() {
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::C10(_)
             | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
             }
@@ -470,7 +471,7 @@ fn actual_network_rejection_uses_distinct_bounded_diagnostic_and_roundtrips() {
                 assert_eq!(row, actual);
             } else {
                 assert!(
-                    matches!(row.result().as_ref(), Err(TransactionRejectionReason::LimitCheck(error))
+                    matches!(row.result().as_ref(), Err(crate::block::execution_output::TransactionRejectionRef::Baseline(TransactionRejectionReason::LimitCheck(error)))
                     if error.reason == NETWORK_REJECTION_DIAGNOSTIC_OMITTED)
                 );
                 assert!(output_bytes(&row).unwrap() <= unit);
@@ -679,6 +680,7 @@ mod internal_rejection {
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::C10(_)
             | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
             }
@@ -718,7 +720,10 @@ mod internal_rejection {
     }
 
     fn diagnostic_pointers(row: &ExecutionOutputV1) -> (*const u8, *const u8) {
-        let Err(TransactionRejectionReason::LimitCheck(error)) = row.result().as_ref() else {
+        let Err(crate::block::execution_output::TransactionRejectionRef::Baseline(
+            TransactionRejectionReason::LimitCheck(error),
+        )) = row.result().as_ref()
+        else {
             panic!("bounded diagnostic")
         };
         let TriggerCompletedOutcome::Failure(completion) = &row.completions()[0].outcome else {
@@ -786,6 +791,7 @@ mod internal_rejection {
                 ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
                 | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::C10(_)
                 | ExecutionOutputV1::GovernanceBlockStart(_) => {
                     unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                 }
@@ -879,6 +885,7 @@ mod internal_rejection {
                     ExecutionOutputV1::NetworkWithLifecycle(_)
                     | ExecutionOutputV1::PipelineWithLifecycle(_)
                     | ExecutionOutputV1::TimeWithLifecycle(_)
+                    | ExecutionOutputV1::C10(_)
                     | ExecutionOutputV1::GovernanceBlockStart(_) => {
                         unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                     }

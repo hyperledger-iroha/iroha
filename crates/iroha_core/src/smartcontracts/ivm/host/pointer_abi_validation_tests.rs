@@ -27,7 +27,7 @@ fn get_public_input_rejects_registry_type_mismatch() {
     let err = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
         .expect_err("mismatched registry entry should error");
-    assert!(matches!(err, VMError::PermissionDenied));
+    assert!(matches!(err, VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn set_account_detail_rejects_tlv_with_bad_hash() {
@@ -74,7 +74,7 @@ fn set_account_detail_rejects_tlv_with_bad_hash() {
         .run()
         .expect_err("invalid TLV hash should reject the syscall");
     assert!(
-        matches!(err, ivm::VMError::NoritoInvalid),
+        matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         "expected NoritoInvalid when TLV hash is tampered, got {err:?}"
     );
 }
@@ -96,7 +96,7 @@ fn decode_tlv_typed_respects_pointer_policy_guard() {
     assert!(
         matches!(
             err,
-            ivm::VMError::AbiTypeNotAllowed { abi, type_id }
+            ivm::VMError::Trap(VmTrap::AbiTypeNotAllowed { abi, type_id })
                 if abi == 9 && type_id == PointerType::DomainId as u16
         ),
         "expected AbiTypeNotAllowed with annotated abi/type, got {err:?}"
@@ -222,9 +222,12 @@ fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
                 ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
                 &mut invalid_vm,
             )),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
 }
 #[test]

@@ -1,0 +1,223 @@
+{
+  "changed_input_files": {
+    "Cargo.lock": {
+      "current_sha256": "c3777c709293c014b6b913dfb47a0053b5e9e512573cca37fb7da1d637b7d4f0",
+      "previous_sha256": "eee6edbd0c0c7ee334e617cbf3e4e6d20d0ba3d552a508495ef2fec9675b8384"
+    },
+    "Cargo.toml": {
+      "current_sha256": "12c0c7c9f99575ab85cc006fdd780281afd59284b5b4bb5979ccce9b15600ddf",
+      "previous_sha256": "c9f95c23e5150f0406471d6f364f283f72eb24056fc4bd0df5a7cf7986e416b1"
+    }
+  },
+  "crosscheck": {
+    "check_parliament_ballot_request_accounting": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "accounting_artifact_sha256",
+        "reviewed_source_manifest_sha256",
+        "source_manifest_sha256",
+        "source_sha256"
+      ],
+      "prior": "docs/validation/parliament_ballot_request_accounting_20261104/report.json",
+      "qualified": false
+    },
+    "ideal_sampler_accounting": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "loaded_model_sha256",
+        "source_manifest_sha256",
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/report.json",
+      "qualified": false
+    },
+    "oracle_log_circuit": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_oracle_log_circuit_20261104_model_refresh/report.json",
+      "qualified": false
+    },
+    "parliament_ballot_frontend_accounting": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "accounting_artifact_sha256",
+        "source"
+      ],
+      "prior": "docs/validation/parliament_ballot_frontend_prover_accounting_20261104/frontend.json",
+      "qualified": false
+    },
+    "parliament_ballot_prover_accounting": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "artifact_sha256",
+        "helper_loaded_sha256",
+        "reviewed_source_manifest_sha256",
+        "source_manifest_sha256",
+        "source_sha256"
+      ],
+      "prior": "docs/validation/parliament_ballot_frontend_prover_accounting_20261104/prover.json",
+      "qualified": false
+    },
+    "static_overlay/candidate-registration": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_static_overlay/candidate-registration.json",
+      "qualified": false
+    },
+    "static_overlay/candidate-vote": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_static_overlay/candidate-vote.json",
+      "qualified": false
+    },
+    "static_overlay/comparator-registration": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_static_overlay/comparator-registration.json",
+      "qualified": false
+    },
+    "static_overlay/comparator-vote": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_static_overlay/comparator-vote.json",
+      "qualified": false
+    },
+    "write_framing": {
+      "all_other_fields_equal": true,
+      "metadata_fields_changed": [
+        "source_sha256_after",
+        "source_sha256_before"
+      ],
+      "prior": "docs/validation/parliament_ballot_write_framing_20261104_model_refresh/report.json",
+      "qualified": false
+    }
+  },
+  "current_aggregate": "324363393751f2276632aa4c080c8872351734c74fdbd315d2942879c2cac5b4",
+  "focused_checks": "135 passed, 297 subtests passed",
+  "fresh_llvm_equal_except_module_identifier": true,
+  "optimized_provider_layouts": [
+    {
+      "constants": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "portable",
+      "output_sha256": "c76cefe9cbec0ad7af97fe11d6662bb59c3001754c98c5eec412ba38ffa4f96f",
+      "seconds": 8.211,
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "accel",
+      "output_sha256": "ac306a127c783d31b4d4ac6d57f015dd0fda17b013125f6162f87b574cd9adc3",
+      "seconds": 1.255,
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "portable",
+      "output_sha256": "6f129011a6d5b7721486f6941e62f369abbba3542883b536f2d332602eef69aa",
+      "seconds": 4.332,
+      "target": "aarch64-apple-ios"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "accel",
+      "output_sha256": "0444eddf5b22fe0e0c56ad09eaee6dd3af56ac095480979c143139f1aba2f2a0",
+      "seconds": 1.208,
+      "target": "aarch64-apple-ios"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "portable",
+      "output_sha256": "a9ffb3141271a59eaaf16b23ebf3f32def55e1a01c817372ddfaa2107a667f39",
+      "seconds": 4.472,
+      "target": "aarch64-linux-android"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "accel",
+      "output_sha256": "4c3ec0b0323cb0eebcb69e655192520fc9dff1ab4064ce8f64d758785b06ca53",
+      "seconds": 1.276,
+      "target": "aarch64-linux-android"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "portable",
+      "output_sha256": "6c8baa07732a6ceeabe8e924854dbef380bf59e6b448e9b2575e0ca56b023fbd",
+      "seconds": 4.206,
+      "target": "x86_64-unknown-linux-musl"
+    },
+    {
+      "constants": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "mode": "accel",
+      "output_sha256": "c53ffa28bc00a3e1f234531ac5cd06e22b7da9dfa6f678533dcdcb0c7ae47893",
+      "seconds": 1.219,
+      "target": "x86_64-unknown-linux-musl"
+    }
+  ],
+  "physical_or_cryptographic_profile_qualified": false,
+  "prior_aggregate": "b3756c955e8592372fa2d1ec8871fc5066f2a5411400ee8a5e0a924446e146ba",
+  "prior_provider_build_inputs": 683,
+  "provider_projection_lock_sha256": "6a36b355f5a6c4bc8509c01fd207b92e7407657d75f917dc22abdddc222b200f",
+  "require_complete_exit": 1,
+  "require_qualified_exit_for_downstream_logical_models": 2,
+  "reviewed_revision": "77d1cf33dd45c1568c929b430467e5af73f72ddd",
+  "schema": "parliament-ballot-candidate-resource-source-review-v1",
+  "source_inventory_count": 91,
+  "symbolic_numeric_results_equal": true,
+  "unchanged_provider_build_inputs": 681
+}

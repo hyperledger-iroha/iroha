@@ -33,7 +33,10 @@ use crate::p256;
 use crate::sha::{self, Sha};
 #[cfg(test)]
 #[path = "backend_chain_tests.rs"]
-mod backend_chain_tests;
+pub(crate) mod backend_chain_tests;
+#[cfg(test)]
+#[path = "io_binding_tests.rs"]
+mod io_binding_tests;
 use crate::uniform::{
     self, Array, ChallengeRows, Copies, Export, Import, Lin, RP_FULL, RP_INPUT, constant, link,
     own, plus, scaled,
@@ -1792,6 +1795,40 @@ mod tests {
     use crate::uniform::UniformCircuit;
     use iroha_pasta::Eq as Vesta;
 
+    #[test]
+    fn semantic_mode_io_is_bound_to_the_pair_and_zero_outside_control() {
+        use crate::{control::Mode, operation_auth::tests as harness};
+        let build = |mode: Option<Mode>, shared_bits: [u64; 2], public: [u64; 2]| {
+            let mut w = Wiring::default();
+            let family = w.family(0, 1);
+            let shared = w.push(Array {
+                name: "fixed test link words",
+                family,
+                rho: 1,
+                r_count: 2,
+                fixed: true,
+                lookups: vec![],
+                widths: vec![1],
+                rows: vec![],
+                values: vec![shared_bits.map(Fp::from).to_vec()],
+            });
+            let io = bind_mode_io(&mut w, family, mode.map(|m| (m, shared, 0)));
+            w.arrays[io].values[0] = public.map(Fp::from).to_vec();
+            harness::holds(&harness::finish(w, 10))
+        };
+        for mode in [Mode::Load, Mode::RefreshTimeAnchor, Mode::Unload] {
+            let bits = mode.bits();
+            assert!(build(Some(mode), bits, bits));
+            assert!(!build(Some(mode), bits, [1 - bits[0], bits[1]]));
+        }
+        for invalid in [[1, 1], [0, 2], [2, 0]] {
+            assert!(!build(Some(Mode::Load), invalid, invalid));
+        }
+        assert!(build(None, [0, 0], [0, 0]));
+        assert!(!build(None, [0, 0], [0, 1]));
+        assert!(!build(None, [0, 0], [1, 0]));
+    }
+
     fn accepted(
         c: &UniformCircuit<Fp>,
         inst: &Instance<Fp>,
@@ -2025,6 +2062,77 @@ mod tests {
         assert!(!tamper(bytes, 40, 3), "changed canonicity chunk refused");
     }
 
+    #[test]
+    fn linked_binding_range_checks_every_shared_limb() {
+        use crate::uniform::Src;
+
+        let values = [0, 1u128 << 127, u128::MAX];
+        let mut w = Wiring::default();
+        let gfam = w.family(0, 1);
+        let shared = p_binding(&mut w, gfam, &binding_mu(&values), &values);
+        let a = &w.arrays[shared];
+        let range = w.tables.iter().find(|(_, id)| *id == nonnative::RANGE_TABLE)
+            .expect("fixed range table").0;
+        let table = &w.arrays[range];
+        assert!(table.fixed && !w.link.arrays.contains(&shared));
+        assert_eq!(
+            table.values,
+            vec![(0..2048).map(Fp::from).collect::<Vec<_>>()]
+        );
+
+        // Evaluate the actual first-phase recomposition rows and fixed-table queries.
+        // Width declarations alone cannot reject an out-of-range field element.
+        let check = |r: usize, cells: &[Fp]| {
+            let eval = |lin: &Lin<Fp>| -> Fp {
+                lin.iter().map(|term| {
+                    let cell = match &term.src {
+                        Src::One => Fp::ONE,
+                        Src::Own(k) => cells[*k],
+                        src => panic!("unexpected shared-limb source {src:?}"),
+                    };
+                    cell * term.coef[r]
+                }).sum()
+            };
+            let recomposes = a.rows.iter().all(|[x, y, z]| eval(x) * eval(y) == eval(z));
+            let in_table = a.lookups.iter().all(|(id, tuple)| {
+                assert_eq!((*id, tuple.len()), (nonnative::RANGE_TABLE, 1));
+                table.values[0].contains(&eval(&tuple[0]))
+            });
+            (recomposes, in_table)
+        };
+        for (r, value) in values.into_iter().enumerate() {
+            let mut cells: Vec<_> = a.values.iter().map(|column| column[r]).collect();
+            assert_eq!(cells[0], Fp::from_u128(value));
+            assert_eq!(check(r, &cells), (true, true));
+            cells[0] += Fp::ONE;
+            assert_eq!(check(r, &cells), (false, true));
+
+            // Eleven full 11-bit chunks and one 7-bit chunk. With exact recomposition,
+            // the first value outside each chunk's range must fail a lookup. For the
+            // last chunk this is the integer 2^128, one above the largest shared limb.
+            for (j, width) in [11u64; 11].into_iter().chain([7]).enumerate() {
+                cells.fill(Fp::ZERO);
+                cells[j + 1] = Fp::from(1u64 << width);
+                cells[0] = Fp::from(2).pow_vartime([j as u64 * 11 + width]);
+                assert_eq!(check(r, &cells), (true, false), "chunk {j}, instance {r}");
+            }
+        }
+
+        // S reads each matching first-phase cell in its link-phase Horner step.
+        let mut s = Wiring::default();
+        let gfam = s.family(0, 1);
+        let shared_s = native_binding(&mut s, gfam, Fq::ONE, &values);
+        let (ends, _) = s.link.binding.as_ref().unwrap();
+        let [(acc, 0, last)] = ends.as_slice() else { panic!("S binding endpoint") };
+        assert_eq!(*last, values.len() - 1);
+        assert!(s.link.arrays.contains(acc) && !s.link.arrays.contains(&shared_s));
+        let step = &s.arrays[*acc].rows[0][2];
+        assert!(step.iter().any(|term| matches!(&term.src,
+            Src::Link { array, cell: 0, map } if *array == shared_s
+                && (0..values.len()).all(|i| map[i] == Some(i) && term.coef[i] == -Fq::ONE)
+        )));
+    }
+
     /// The pair's binding chains in the link phase, P's non-native (with the
     /// link range table and the word gadgets) and S's native, over the same
     /// shared values and mu, linked as the runner links them (P's first
@@ -2037,7 +2145,8 @@ mod tests {
         use crate::spartan::{Link, prove_linked_circuit, verify_linked_circuit};
         use crate::verifier::Fq;
         use iroha_pasta::Ep as Pallas;
-        let (_, _, values) = nonnative::sample_binding(20);
+        let (_, _, mut values) = nonnative::sample_binding(20);
+        values[..3].copy_from_slice(&[0, 1u128 << 127, u128::MAX]);
         let mu = binding_mu(&values);
         let fq = |x: &BigUint| Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(x))).unwrap();
         let p_of = |values: &[u128], mu: &BigUint| {
@@ -2172,7 +2281,7 @@ mod tests {
         let (_, _, v) = pair(&cs, &is, &ws);
         assert_eq!(v[..2], [true, false], "S with another mu: P refuses");
         let mut other = values.clone();
-        other[7] ^= 1;
+        other[2] -= 1;
         let (cs, is, ws) = s_of(&other, fq(&mu));
         let (_, _, v) = pair(&cs, &is, &ws);
         assert_eq!(v[..2], [true, false], "S over another value: P refuses");
@@ -2265,7 +2374,7 @@ mod tests {
         let (w, bs) = s_boot(&gens);
         let (arrays, pi, counts, tables, copies) = w.finish();
         let (cs, is, ws) = UniformCircuit::build_with_copies(
-            "boot-s", arrays, pi, counts, tables, copies, 10, 62, b"boot s",
+            "boot-s", arrays, pi, counts, tables, copies, 10, 64, b"boot s",
         );
         let (gp, gs) = (
             crate::ipa::Gens::<Vesta>::new(cp.shape.cols()),
@@ -2329,12 +2438,40 @@ mod tests {
             .is_ok_and(|x| x == d),
             "P-boot verifies"
         );
+        // Late io: the accumulator claim (n point coordinates and the value),
+        // then the exact empty generator claim (g[0]'s four coordinate limbs
+        // and an all-zero u).
+        fn empty_generator_claim<C: iroha_pasta::PastaCurve>(
+            gens: &crate::ipa::Gens<C>,
+        ) -> Vec<crate::ipa::F<C>> {
+            use iroha_pasta::PastaAffine;
+            let (x, y) = Option::from(gens.g[0].coordinates()).expect("g[0] is finite");
+            let (x, y): (C::Base, C::Base) = (x, y);
+            let (x, y) = (x.to_repr(), y.to_repr());
+            let mut v: Vec<crate::ipa::F<C>> = [&x[..16], &x[16..], &y[..16], &y[16..]]
+                .into_iter()
+                .map(|h| crate::ipa::F::<C>::from_u128(u128::from_le_bytes(h.try_into().unwrap())))
+                .collect();
+            v.resize(4 + gens.g.len().ilog2() as usize, crate::ipa::F::<C>::ZERO);
+            v
+        }
+        let (np, ns) = (gens.defer_p.n(), gens.defer_s.n());
         let (ap, as_) = (
-            crate::deferral::claim_of(&pp.late),
-            crate::deferral::claim_of(&ps.late),
+            crate::deferral::claim_of(&pp.late[..=np]),
+            crate::deferral::claim_of(&ps.late[..=ns]),
         );
         assert_eq!(ap, gens.defer_p.empty_claim(), "P-boot's accumulator");
         assert_eq!(as_, gens.defer_s.empty_claim(), "S-boot's accumulator");
+        assert_eq!(
+            pp.late[np + 1..],
+            empty_generator_claim(&gens.p)[..],
+            "P-boot's empty generator claim"
+        );
+        assert_eq!(
+            ps.late[ns + 1..],
+            empty_generator_claim(&gens.s)[..],
+            "S-boot's empty generator claim"
+        );
         assert!(
             gens.defer_p.eval(&ap.point) == ap.value && gens.defer_s.eval(&as_.point) == as_.value,
             "the empty claims hold"
@@ -2663,15 +2800,19 @@ where
         let _link = take(Kind::Full);
     }
     if let Some(ct) = &tr.circuit {
-        for k in 0..ct.phase2.len() {
-            glue_feed.push((scalar::PH0 + k, Feed::Raw(shared_at[take(Kind::Raw)])));
+        for (k, expected) in ct.phase2.iter().enumerate() {
+            let source = full(shared_at[take(Kind::Full)]);
+            assert_eq!(&source.2, expected, "LogUp challenge from its limbs");
+            glue_feed.push((scalar::PH0 + k, Feed::Full(limb_src.len())));
+            limb_src.push(source);
         }
     }
     if lean {
         let i = take(Kind::Full);
-        limb_src.push(full(shared_at[i]));
-        assert!(limb_src[0].2 == tr.tau[0], "tau from its limbs");
-        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(0));
+        let source = full(shared_at[i]);
+        assert_eq!(source.2, tr.tau[0], "tau from its limbs");
+        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(limb_src.len()));
+        limb_src.push(source);
     } else {
         for s in 0..mo {
             for v in 0..slots[s].k {
@@ -2976,8 +3117,8 @@ pub const SEND: usize = 1;
 /// The chain's first link: no predecessor slot, the empty claim as its
 /// accumulator (`p_boot`, `s_boot`).
 pub const BOOTSTRAP: usize = 2;
-/// An ordinary, finalized online-to-offline Load into the existing wallet.
-pub const LOAD: usize = 3;
+/// One program for Load, RefreshTimeAnchor and Unload, selected by ordinary IO.
+pub const CONTROL: usize = 3;
 
 /// Generators of the two proof shapes (P: Vesta 2^14, S: Pallas 2^13).
 pub struct PairGens {
@@ -3070,6 +3211,57 @@ fn kind_pin<S: Scalar>(w: &mut Wiring<S>, gfam: usize, kind: usize) -> (usize, u
         values: vec![bits],
     });
     (io, pin)
+}
+
+/// Expose the semantic mode in ordinary IO on either side of the pair. For
+/// Control the selected bits must equal the shared, first-phase link words.
+/// Every other authenticated program pins both words to zero.
+fn bind_mode_io<S: Scalar>(
+    w: &mut Wiring<S>,
+    family: usize,
+    control: Option<(crate::control::Mode, usize, usize)>,
+) -> usize {
+    let bits = control.map_or([0, 0], |(mode, _, _)| mode.bits());
+    let io = w.push(Array {
+        name: "ordinary semantic mode",
+        family,
+        rho: 1,
+        r_count: 2,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![1],
+        rows: Vec::new(),
+        values: vec![bits.map(S::from).to_vec()],
+    });
+    w.io_arrays.push((io, crate::control::MODE_IO));
+    let word = |i| link(io, 0, vec![Some(i)], S::ONE);
+    let mut rows = Vec::new();
+    for i in 0..2 {
+        let mut constraint = word(i);
+        if let Some((_, shared, offset)) = control {
+            constraint = plus(
+                &constraint,
+                &link(shared, 0, vec![Some(offset + i)], -S::ONE),
+            );
+            rows.push([word(i), plus(&word(i), &constant(vec![-S::ONE])), vec![]]);
+        }
+        rows.push([constraint, constant(vec![S::ONE]), vec![]]);
+    }
+    if control.is_some() {
+        rows.push([word(0), word(1), vec![]]);
+    }
+    w.push(Array {
+        name: "public semantic mode bindings",
+        family,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![],
+        rows,
+        values: vec![],
+    });
+    io
 }
 
 /// A toy circuit kind of the combined matrix polynomial.
@@ -3315,28 +3507,28 @@ pub fn next_gens(
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
 ) -> PairGens {
-    next_gens_with_load(recv, send, boot, None)
+    next_gens_with_control(recv, send, boot, None)
 }
 
-/// Include the actual Load relation in the fixed recursive program. A Load
+/// Include the three-mode Control relation in the fixed recursive program. A Control
 /// predecessor is selected by the fourth two-bit corner, never represented by
 /// a fabricated funded Bootstrap.
-pub fn next_gens_with_load(
+pub fn next_gens_with_control(
     recv: &UniformPair,
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
-    load: Option<&UniformPair>,
+    control: Option<&UniformPair>,
 ) -> PairGens {
-    next_gens_with_load_at(recv, send, boot, load, FP_DIMS)
+    next_gens_with_control_at(recv, send, boot, control, FP_DIMS)
 }
 
 /// A full backend fixes its accumulator dimensions independently of temporary
 /// seed circuits. Every subsequent operation must fit this selected program.
-pub fn next_gens_with_load_at(
+pub fn next_gens_with_control_at(
     recv: &UniformPair,
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
-    load: Option<&UniformPair>,
+    control: Option<&UniformPair>,
     dimensions: ((usize, usize), (usize, usize)),
 ) -> PairGens {
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
@@ -3359,8 +3551,8 @@ pub fn next_gens_with_load_at(
     let (boot_p, boot_s) = kinds_of(boot, BOOTSTRAP, 0);
     let mut p_kinds = vec![uniform_kind(recv.cp.clone()), send_p, boot_p];
     let mut s_kinds = vec![uniform_kind(recv.cs.clone()), send_s, boot_s];
-    if let Some(load) = load {
-        let (lp, ls) = kinds_of(Some(load), LOAD, 0);
+    if let Some(control) = control {
+        let (lp, ls) = kinds_of(Some(control), CONTROL, 0);
         p_kinds.push(lp);
         s_kinds.push(ls);
     }
@@ -3383,7 +3575,7 @@ pub fn next_gens_with_load_at(
             && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len)
     };
     let (keys_p, keys_s) = match (send, boot) {
-        (Some(t), Some(b)) if same(t) && same(b) && load.is_none_or(same) => {
+        (Some(t), Some(b)) if same(t) && same(b) && control.is_none_or(same) => {
             let key = |c: &crate::uniform::UniformCircuit<Fp>| {
                 crate::spartan::fixed_commitments(&c.shape, &p, c)
             };
@@ -3392,9 +3584,9 @@ pub fn next_gens_with_load_at(
             };
             let mut kp = vec![key(&recv.cp), key(&t.cp), key(&b.cp)];
             let mut ks = vec![key_s(&recv.cs), key_s(&t.cs), key_s(&b.cs)];
-            if let Some(load) = load {
-                kp.push(key(&load.cp));
-                ks.push(key_s(&load.cs));
+            if let Some(control) = control {
+                kp.push(key(&control.cp));
+                ks.push(key_s(&control.cs));
             }
             (Some(kp), Some(ks))
         }
@@ -3499,13 +3691,17 @@ pub struct PRecvIdx {
 /// Exact monetary witnesses; this selection is part of the circuit program.
 pub enum OperationWitness<'a> {
     Send(&'a crate::send::Witness),
-    Load(&'a crate::load::Witness),
+    Control {
+        /// Installed scheme root, a constant in the Control program.
+        root: &'a p256::Point,
+        witness: &'a crate::control::Witness,
+    },
     Receive(&'a crate::receive::Witness),
 }
 
 pub enum CompleteOperation {
     Send(crate::send::CompleteSend),
-    Load(crate::load::CompleteLoad),
+    Control(crate::control::CompleteControl),
     Receive(crate::receive::CompleteReceive),
 }
 
@@ -3513,7 +3709,7 @@ impl OperationWitness<'_> {
     pub fn kind(&self) -> usize {
         match self {
             Self::Send(_) => SEND,
-            Self::Load(_) => LOAD,
+            Self::Control { .. } => CONTROL,
             Self::Receive(_) => RECEIVE,
         }
     }
@@ -3539,7 +3735,7 @@ impl CompleteOperation {
                 op.context(),
                 op.lineage(),
             ),
-            Self::Load(op) => (
+            Self::Control(op) => (
                 [op.head(), statement(op.statement()), op.receipt().digest()],
                 op.context(),
                 op.lineage(),
@@ -3553,7 +3749,20 @@ impl CompleteOperation {
     }
 }
 
-fn expose_operation(w: &mut Wiring<Fp>, family: usize, operation: &CompleteOperation) {
+fn expose_operation(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    operation: &CompleteOperation,
+    modes: usize,
+) {
+    if let CompleteOperation::Control(op) = operation {
+        let mut binding = crate::certificate::Cells::new(family);
+        binding.a.name = "Control relation mode joins";
+        for (index, source) in op.mode().inputs().into_iter().enumerate() {
+            binding.eq(source.linear(), link(modes, 0, vec![Some(index)], Fp::ONE));
+        }
+        w.push(binding.a);
+    }
     let (head, context, lineage) = operation.public_sources();
     for (offset, sources) in [
         (HEAD_IO, head.as_slice()),
@@ -3604,8 +3813,22 @@ pub fn p_operation(
         pairs[0].inst_p.io[HEAD_IO],
         Some(witness),
         Some(generators),
+        OPERATION_IDENTITY,
     )
 }
+
+/// The monetary backend's identity rule, for its total slot (Receive's
+/// incoming pair) and its hard slots (every predecessor) alike: the native
+/// rule, whatever the generator folding. Its hard slots then agree with
+/// native verification on identity points too.
+pub(crate) const OPERATION_IDENTITY: crate::points::IdentityPoints =
+    crate::points::IdentityPoints::Native;
+
+/// The benchmark relations' identity rule (`p_circuit`, `s_circuit`: hard
+/// slots only, no generator fold and no verdict): hard-slot strictness, as
+/// their incomplete ladders always had.
+pub(crate) const BENCHMARK_IDENTITY: crate::points::IdentityPoints =
+    crate::points::IdentityPoints::Refused;
 
 /// P-recv in the uniform layout: the own relation; for each incoming pair the
 /// P proof's scalar side (with its io digest) and the S proof's points side;
@@ -3708,7 +3931,17 @@ fn p_circuit_with_predecessor(
     key: &WalletKey,
     predecessor: Fp,
 ) -> (Wiring<Fp>, PRecvIdx) {
-    p_circuit_impl(op, gens, pairs, Some(key), predecessor, None, None).expect("benchmark relation")
+    p_circuit_impl(
+        op,
+        gens,
+        pairs,
+        Some(key),
+        predecessor,
+        None,
+        None,
+        BENCHMARK_IDENTITY,
+    )
+    .expect("benchmark relation")
 }
 
 fn p_circuit_impl(
@@ -3719,10 +3952,15 @@ fn p_circuit_impl(
     predecessor: Fp,
     operation: Option<OperationWitness<'_>>,
     generators: Option<&GeneratorFolds>,
+    identity: crate::points::IdentityPoints,
 ) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
     let total_incoming = matches!(&operation, Some(OperationWitness::Receive(_)));
+    let mode = match &operation {
+        Some(OperationWitness::Control { witness, .. }) => Some(witness.mode),
+        _ => None,
+    };
     if total_incoming && pairs.len() != 2 {
         return Err("Receive needs predecessor and incoming Send");
     }
@@ -3758,6 +3996,10 @@ fn p_circuit_impl(
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    let mode_at = values.len();
+    if let Some(mode) = mode {
+        values.extend(mode.bits().map(u128::from));
+    }
     let table_offs = table_values(pairs, &mut values);
     let generator_offsets = generators.map(|g| g.append_shared(&mut values));
     let incoming_wire = total_incoming.then(|| incoming_encoding(&pairs[1]));
@@ -3771,7 +4013,7 @@ fn p_circuit_impl(
     }
     // The S proofs' points sides; a slot taking any kind pins the S proof's
     // fixed rows to the key its kind bits select.
-    let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero, identity);
     let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_p + link_word_at(&pr.tr_p);
@@ -3838,6 +4080,9 @@ fn p_circuit_impl(
         |g| BigUint::from_bytes_le(&g.mu.to_repr()),
     );
     let shared = p_binding(&mut w, gfam, &mu, &values);
+    let modes = operation
+        .as_ref()
+        .map(|_| bind_mode_io(&mut w, gfam, mode.map(|m| (m, shared, mode_at))));
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     // The P proofs' scalar sides and their io digests.
@@ -3891,6 +4136,9 @@ fn p_circuit_impl(
             v
         })
         .collect();
+    for (pr, sc) in pairs.iter().zip(&scalars) {
+        assert_io_bound(&pr.inst_p, &pr.tr_p, &items, sc.io, true);
+    }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
     // The verified P proofs' matrix claims, deferred: folded into the
     // circuit's accumulator (no in-circuit matrix evaluation).
@@ -4044,9 +4292,9 @@ fn p_circuit_impl(
             OperationWitness::Send(witness) => {
                 CompleteOperation::Send(crate::send::append(&mut w, gfam, witness, &predecessor)?)
             }
-            OperationWitness::Load(witness) => {
-                CompleteOperation::Load(crate::load::append(&mut w, gfam, witness, &predecessor)?)
-            }
+            OperationWitness::Control { root, witness } => CompleteOperation::Control(
+                crate::control::append(&mut w, gfam, root, witness, &predecessor)?,
+            ),
             OperationWitness::Receive(witness) => {
                 CompleteOperation::Receive(crate::receive::append(
                     &mut w,
@@ -4057,7 +4305,12 @@ fn p_circuit_impl(
                 )?)
             }
         };
-        expose_operation(&mut w, gfam, &complete);
+        expose_operation(
+            &mut w,
+            gfam,
+            &complete,
+            modes.expect("monetary mode profile"),
+        );
         Some(complete)
     } else {
         None
@@ -4137,6 +4390,43 @@ fn link_ties<S: Scalar>(
     }
 }
 
+/// The io slots `link_ties` binds in a linked proof's io fold: rho's and R's
+/// limbs (`split`, P) or their values (S).
+fn link_tie_slots(split: bool) -> Vec<usize> {
+    if split {
+        vec![LINK_RHO_IO, LINK_RHO_IO + 1, LINK_R_IO, LINK_R_IO + 1]
+    } else {
+        vec![LINK_RHO_IO, LINK_R_IO]
+    }
+}
+
+/// Every io fold leaf of a verified proof that its scalar side leaves
+/// unpinned (`scalar::bound_io_slots`) is bound by this circuit: by the
+/// proof's io digests (`items` reading `fold`) or by its link ties. Any other
+/// leaf the native verifier reads as zero, and so does the scalar side.
+fn assert_io_bound<C: iroha_pasta::PastaCurve>(
+    inst: &crate::r1cs::Instance<crate::ipa::F<C>>,
+    tr: &crate::verifier::Trace<C>,
+    items: &[IoDigest<crate::ipa::F<C>>],
+    fold: usize,
+    split: bool,
+) {
+    let mut covered: Vec<usize> = items
+        .iter()
+        .filter(|it| it.fold == fold)
+        .flat_map(|it| it.slots.iter().copied())
+        .collect();
+    if has_link_io(tr) {
+        covered.extend(link_tie_slots(split));
+    }
+    covered.sort_unstable();
+    assert_eq!(
+        covered,
+        crate::scalar::bound_io_slots(inst, tr),
+        "the io digests and link ties bind exactly the unpinned io fold leaves"
+    );
+}
+
 /// The deferred matrix claims of the verified proofs whose scalar sides a
 /// circuit holds (the pairs' P proofs in P-recv, their S proofs in S-recv),
 /// folded into the circuit's accumulator.
@@ -4180,7 +4470,7 @@ struct IncomingEncoding {
 
 fn incoming_encoding(pair: &TracedPair) -> IncomingEncoding {
     use crate::bootstrap_context::{CONTEXT_IO, RELATION};
-    let mut bytes = b"KGSPPR1\0".to_vec();
+    let mut bytes = crate::carrier::PROJECTED_MAGIC.to_vec();
     bytes.extend_from_slice(&[1, 0]);
     for i in 0..2 {
         let value = pair.inst_p.io[CONTEXT_IO + RELATION + i].to_repr();
@@ -4446,7 +4736,11 @@ fn incoming_facts(
     let leaves = (1usize << w.arrays[io].rho) / 2;
     let mut c = Cells::new(family);
     c.a.name = "exact incoming pair header and derived verifier conjunction";
-    for (i, b) in b"KGSPPR1\0\x01\x00".iter().enumerate() {
+    for (i, b) in crate::carrier::PROJECTED_MAGIC
+        .iter()
+        .chain(&[1, 0])
+        .enumerate()
+    {
         c.eq(bytes.byte(i).linear(), constant(vec![Fp::from(*b as u64)]));
     }
     for i in 0..2 {
@@ -4506,24 +4800,31 @@ fn incoming_facts(
 /// global family.
 ///
 /// The fold takes four claims, two slots of two. Receive verifies two proofs,
-/// one per slot. Send verifies one, whose two claims fill both slots: a
+/// one per slot. Send and Load verify one, whose two claims fill both slots: a
 /// repeated true claim folds into a true claim, and a false one still makes
-/// the folded claim false (except with probability `deg q / |F|`), so the
-/// repetition is sound; it only spends the second slot's fold work.
+/// the folded claim false except when the fold challenge hits a root of the
+/// nonzero error polynomial `q - P(gamma)`: probability at most
+/// `deg q` times the maximum atom of the full-width second-phase challenge
+/// `ch[1]` (2/q on P or 1/p on S in the idealized model). The repetition is sound;
+/// it only spends the second slot's fold work.
 ///
-/// Kinds: a slot of `(kind, false)` takes kind `kind` (the fresh claim's
-/// selector bits c0, c1 are its constants). A slot of `(kind, true)` takes
-/// any kind (Receive, Send or Bootstrap): c0 and c1 are the verified proof's
-/// io values at `KIND_IO` and `KIND_IO + 1`, each held boolean and not both
-/// one (the corner (1, 1) is the empty claim's, no kind's), and the proof's
-/// kind bits in the shared values (`kind_shared` = the shared array and the
-/// pairs' first kind-bit index) equal them, so the other circuit of the pair
-/// sees the same kind (and selects the same key). A constant slot's kind
+/// Kinds: four, at selector corners Receive (0, 0), Send (1, 0), Bootstrap
+/// (0, 1) and Load (1, 1). A slot of `(kind, false)` takes kind `kind` (the
+/// fresh claim's selector bits c0, c1 are its constants). A slot of
+/// `(kind, true)` takes any kind: c0 and c1 are the verified proof's io values
+/// at `KIND_IO` and `KIND_IO + 1`, each held boolean, and the proof's kind bits
+/// in the shared values (`kind_shared` = the shared array and the pairs' first
+/// kind-bit index) equal them, so the other circuit of the pair sees the same
+/// kind (and selects the same key). Only a polynomial of fewer than four kinds
+/// also forbids (1, 1), which then selects no kind. A constant slot's kind
 /// bits equal its constants.
 ///
 /// No flag replaces an incoming accumulator: a chain starts at a Bootstrap
-/// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`), so every
-/// Send and Receive folds its predecessor's accumulator as it is.
+/// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`). That
+/// claim sits at corner (1, 1), Control's corner, but its `r` coordinate is zero,
+/// so every term `r A + r^2 B + r^3 C` vanishes and it holds with value zero on
+/// any combined polynomial. Every other kind folds its predecessor's
+/// accumulator as it is.
 #[allow(clippy::type_complexity)]
 pub fn defer_into<C: iroha_pasta::PastaCurve>(
     w: &mut Wiring<crate::ipa::F<C>>,
@@ -5083,9 +5384,14 @@ pub fn word_scalar<S: Scalar>(word: &[u8; 32]) -> S {
     S::from_u128(lo) + S::from(2u64).pow_vartime([128u64]) * S::from_u128(hi)
 }
 
-/// The binding chain's mask mu, one value for both circuits of a pair. A
-/// prover samples it fresh per pair; the experiment derives it from the
-/// pair's shared values, so the pair's two circuits agree without a channel.
+/// The binding chain's mask mu, one value for both circuits of a pair,
+/// derived from the pair's shared values so the two circuits agree without a
+/// channel. Receive, Send and Load take a fresh mu from the native prover's
+/// entropy instead (`GeneratorFolds`); this derivation remains for Bootstrap,
+/// whose only shared value is its kind, so its mu is the same public constant
+/// in every Bootstrap pair, and for research fixtures. A deterministic mu is
+/// still fixed before rho, which is all the link's soundness uses; it hides
+/// nothing, and a Bootstrap pair shares nothing private.
 pub fn binding_mu(values: &[u128]) -> BigUint {
     let tag = values.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
         (h ^ (*v as u64) ^ ((*v >> 64) as u64)).wrapping_mul(0x0100_0000_01b3)
@@ -5306,26 +5612,42 @@ pub fn s_circuit(
     gens: &PairGens,
     pairs: &[TracedPair],
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, gens, pairs, false, None)
+    s_circuit_impl(own_kind, None, gens, pairs, false, None, BENCHMARK_IDENTITY)
 }
 
 /// Secondary half of the complete monetary backend. Receive's incoming slot
 /// produces a total verdict and folds corrected matrix claims on this side.
 pub fn s_operation(
     own_kind: usize,
+    mode: Option<crate::control::Mode>,
     gens: &PairGens,
     pairs: &[TracedPair],
     generators: &GeneratorFolds,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, gens, pairs, own_kind == RECEIVE, Some(generators))
+    assert_eq!(
+        own_kind == CONTROL,
+        mode.is_some(),
+        "one mode for the Control program"
+    );
+    s_circuit_impl(
+        own_kind,
+        mode,
+        gens,
+        pairs,
+        own_kind == RECEIVE,
+        Some(generators),
+        OPERATION_IDENTITY,
+    )
 }
 
 fn s_circuit_impl(
     own_kind: usize,
+    mode: Option<crate::control::Mode>,
     gens: &PairGens,
     pairs: &[TracedPair],
     total_incoming: bool,
     generators: Option<&GeneratorFolds>,
+    identity: crate::points::IdentityPoints,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use crate::verifier::Fq;
@@ -5341,6 +5663,10 @@ fn s_circuit_impl(
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    let mode_at = values.len();
+    if let Some(mode) = mode {
+        values.extend(mode.bits().map(u128::from));
+    }
     // The P proofs' table commitments (as in the P circuit): each P proof's
     // wallet row is pinned to its own.
     let table_offs = table_values(pairs, &mut values);
@@ -5354,7 +5680,7 @@ fn s_circuit_impl(
     if total_incoming {
         values.extend(incoming_verdict_values(gens, &pairs[1]));
     }
-    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero, identity);
     let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_s + link_word_at(&pr.tr_s);
@@ -5424,6 +5750,9 @@ fn s_circuit_impl(
         |g| *g.mu,
     );
     let shared = native_binding(&mut w, gfam, mu, &values);
+    if generators.is_some() {
+        bind_mode_io(&mut w, gfam, mode.map(|m| (m, shared, mode_at)));
+    }
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     let _table = endo_table(&mut w, gfam);
@@ -5476,6 +5805,9 @@ fn s_circuit_impl(
             v
         })
         .collect();
+    for (pr, sc) in pairs.iter().zip(&scalars) {
+        assert_io_bound(&pr.inst_s, &pr.tr_s, &items, sc.io, false);
+    }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
     let proofs: Vec<_> = pairs
         .iter()
@@ -5636,7 +5968,10 @@ pub fn p_boot_from_inputs(
     let prepared = crate::bootstrap::prepare(context, input)?;
     let (mut w, gfam) = (prepared.wiring, prepared.gfam);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    bind_mode_io(&mut w, gfam, None);
     let values = boot_values();
+    // Bootstrap's pair mask is deterministic: binding_mu([BOOTSTRAP]), one
+    // public constant fixed before rho (see `binding_mu`).
     let _ = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let (_, empty) =
         crate::deferral::expose_constant(&mut w, gfam, &gens.defer_p.empty_claim(), LATE_IO);
@@ -5668,6 +6003,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     let mut w = Wiring::<Fq>::default();
     let gfam = w.family(0, 1);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    bind_mode_io(&mut w, gfam, None);
     let bits = w.push(Array {
         name: "bit table",
         family: gfam,
@@ -5682,6 +6018,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     w.tables.push((bits, BIT_TABLE));
     w.arrays[pin].lookups.push((BIT_TABLE, vec![own(0, 2)]));
     let values = boot_values();
+    // The same deterministic public Bootstrap mask as P-boot's (`binding_mu`).
     let mu = Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(&binding_mu(&values))))
         .expect("mu below q");
     let _ = native_binding(&mut w, gfam, mu, &values);

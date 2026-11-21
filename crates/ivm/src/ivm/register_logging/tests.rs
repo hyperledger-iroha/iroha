@@ -1,6 +1,7 @@
 //! Real VM logger admission, detached custody and final TLS release regressions.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{ProgramMetadata, cache_memory, error::ExecutionDeferral, host::DefaultHost};
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
 use std::{
@@ -66,7 +67,7 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
     let shell = zk::SharedRegLog::allocation_layout().size();
     budget.set_limit_bytes(baseline + shell - 1);
     assert!(matches!(vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(budget.reserved_bytes(), baseline);
     assert_eq!(vm.execution_summary().unwrap(), before);
@@ -86,9 +87,9 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
     cache_memory::with_refused_shared_allocation_for_test(|| {
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(budget.reserved_bytes(), baseline);
@@ -124,14 +125,15 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     vm.host_trace_log_detached = true;
     vm.host_trace_invocation_log = Some(invocation.clone());
     let events = invocation.lock().as_slice().to_vec();
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = budget.reserved_bytes();
     budget.set_limit_bytes(0);
     cache_memory::with_refused_shared_allocation_for_test(|| {
         assert!(matches!(
             vm.run_with_host(&mut DefaultHost::default()),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation
-            ))
+            )))
         ));
         assert!(vm.reg_log.is_none());
         assert!(vm.host_trace_invocation_log.is_none());
@@ -139,9 +141,9 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
         // The failure path never attempted even an untracked replacement shell.
         assert!(matches!(
             zk::SharedRegLog::try_new(None),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(budget.reserved_bytes(), baseline);
@@ -149,7 +151,7 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     assert_eq!(vm.execution_summary().unwrap().register_log_len, 0);
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     drop(vm);
     assert_eq!(
@@ -248,4 +250,27 @@ fn final_tls_refund_can_reenter_after_normal_scope_exit() {
 #[test]
 fn final_tls_refund_can_reenter_after_scope_unwind() {
     assert_final_tls_release_reenters(true);
+}
+
+#[test]
+fn competing_trace_custody_failure_preserves_the_first_local_owner() {
+    let pool = AllocationBudget::new(8);
+    let _lease = pool.try_reserve_bytes(8).unwrap();
+    let original = pool.try_reserve_bytes(1).unwrap_err();
+    let local = VMError::Deferred(VmDeferral::AllocationDeferred(original.clone()));
+    let restore = || {
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable,
+        ))
+    };
+    assert!(matches!(
+        first_local_host_refusal(Err(local), restore()),
+        VMError::Deferred(VmDeferral::AllocationDeferred(owner)) if owner == original
+    ));
+    assert!(matches!(
+        first_local_host_refusal(Ok(0), restore()),
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable
+        ))
+    ));
 }

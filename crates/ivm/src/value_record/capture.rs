@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::VMError;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_data_model::smart_contract::entrypoint::{
     EntrypointArgumentRecordV1, EntrypointArgumentSchemaV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
     entrypoint_argument_schema_hash_v1,
@@ -62,14 +63,14 @@ pub(super) fn prepaid_error(error: iroha_allocation::PrepaidBufferError) -> VMEr
     use iroha_allocation::{ChargedBufferError, PrepaidBufferError};
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(reason)) => {
-            VMError::AllocationDeferred(reason)
+            VMError::Deferred(VmDeferral::AllocationDeferred(reason))
         }
-        PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. }) => {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
-        }
-        PrepaidBufferError::Reservation(_) => {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::LocalInvariantViolation)
-        }
+        PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. }) => VMError::Deferred(
+            VmDeferral::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable),
+        ),
+        PrepaidBufferError::Reservation(_) => VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::LocalInvariantViolation,
+        )),
     }
 }
 
@@ -81,14 +82,19 @@ struct Visit {
     stride: u64,
 }
 
-fn table(vm: &IVM, schema: &EntrypointValueTypeV1, base: u64, words: usize) -> Result<(), VMError> {
+fn table(
+    vm: &dyn crate::host::SyscallContext,
+    schema: &EntrypointValueTypeV1,
+    base: u64,
+    words: usize,
+) -> Result<(), VMError> {
     if !schema.validate() || schema.word_count() != Some(words) || !base.is_multiple_of(8) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let bytes = u64::try_from(words)
         .ok()
         .and_then(|words| words.checked_mul(8))
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     vm.ensure_owned_heap_range(base, bytes)?;
     vm.ensure_public_memory(base, bytes)
 }
@@ -105,7 +111,7 @@ fn table(vm: &IVM, schema: &EntrypointValueTypeV1, base: u64, words: usize) -> R
 /// visited (capped at this allowance); callers add their earlier boundary work.
 /// Original local memory refusals remain unmetered deferrals.
 pub fn quote_value_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -113,7 +119,7 @@ pub fn quote_value_record(
 ) -> Result<ValueRecordCaptureQuote, VMError> {
     let mut gas = 32_u64;
     if gas > gas_limit {
-        return Err(VMError::metered(gas_limit, VMError::OutOfGas));
+        return Err(VMError::metered(gas_limit, VMError::Trap(VmTrap::OutOfGas)));
     }
     let result = (|| {
         table(vm, schema, base, words)?;
@@ -125,9 +131,11 @@ pub fn quote_value_record(
                     let mut next = index + 1;
                     let mut sum = 0_usize;
                     for _ in 0..return_node_child_count(node) {
-                        sum = sum.checked_add(widths[next]).ok_or(VMError::DecodeError)?;
+                        sum = sum
+                            .checked_add(widths[next])
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         next = entrypoint_value_subtree_range_v1(&schema.nodes, next)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .end;
                     }
                     sum.max(1)
@@ -152,7 +160,8 @@ pub fn quote_value_record(
         let mut pointer_bytes = 0_usize;
         let mut pointers = 0_usize;
         let mut aggregate_bytes = 0_usize;
-        let schema_bytes = norito::canonical_frame_len(schema).map_err(|_| VMError::DecodeError)?;
+        let schema_bytes =
+            norito::canonical_frame_len(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         gas = gas.saturating_add(schema_bytes as u64);
         let mut record_lower_bound = norito::core::Header::SIZE + 32;
         while pending_len != 0 {
@@ -160,10 +169,12 @@ pub fn quote_value_record(
             let visit = pending[pending_len];
             gas = gas.saturating_add(32);
             if gas > gas_limit {
-                return Err(VMError::OutOfGas);
+                return Err(VMError::Trap(VmTrap::OutOfGas));
             }
             let mut push = |task: Visit| -> Result<(), VMError> {
-                *pending.get_mut(pending_len).ok_or(VMError::DecodeError)? = task;
+                *pending
+                    .get_mut(pending_len)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))? = task;
                 pending_len += 1;
                 Ok(())
             };
@@ -172,12 +183,15 @@ pub fn quote_value_record(
                     base: visit
                         .base
                         .checked_add(visit.stride)
-                        .ok_or(VMError::DecodeError)?,
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                     count: visit.count - 1,
                     ..visit
                 })?;
             }
-            let node = schema.nodes.get(visit.node).ok_or(VMError::DecodeError)?;
+            let node = schema
+                .nodes
+                .get(visit.node)
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             match node {
                 EntrypointValueTypeNodeV1::Struct(_) | EntrypointValueTypeNodeV1::Tuple(_) => {
                     let mut next = visit.node + 1;
@@ -193,15 +207,15 @@ pub fn quote_value_record(
                             .checked_add(
                                 (widths[next] as u64)
                                     .checked_mul(8)
-                                    .ok_or(VMError::DecodeError)?,
+                                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             )
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         next = entrypoint_value_subtree_range_v1(&schema.nodes, next)
-                            .ok_or(VMError::DecodeError)?
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?
                             .end;
                     }
                     if return_node_child_count(node) == 0 && vm.load_u64(visit.base)? != 0 {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                 }
                 EntrypointValueTypeNodeV1::Option | EntrypointValueTypeNodeV1::Result => {
@@ -209,7 +223,7 @@ pub fn quote_value_record(
                     let pointer = vm.load_u64(visit.base)?;
                     let first = visit.node + 1;
                     let second = entrypoint_value_subtree_range_v1(&schema.nodes, first)
-                        .ok_or(VMError::DecodeError)?
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
                         .end;
                     let option = matches!(node, EntrypointValueTypeNodeV1::Option);
                     let layout = if option {
@@ -217,30 +231,34 @@ pub fn quote_value_record(
                     } else {
                         SumLayoutV1::try_new(widths[second] as u64, widths[first] as u64)
                     }
-                    .map_err(|_| VMError::DecodeError)?;
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     if !pointer.is_multiple_of(8) {
-                        return Err(VMError::DecodeError);
+                        return Err(VMError::Trap(VmTrap::DecodeError));
                     }
                     vm.ensure_owned_heap_range(
                         pointer,
                         layout
                             .allocation_bytes()
-                            .map_err(|_| VMError::DecodeError)?,
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                     )?;
                     let tag = vm.load_u64(pointer)?;
-                    let active = layout.active_words(tag).map_err(|_| VMError::DecodeError)?;
+                    let active = layout
+                        .active_words(tag)
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     aggregate_bytes = aggregate_bytes
                         .checked_add(
                             usize::try_from(active)
-                                .map_err(|_| VMError::DecodeError)?
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                                 .checked_mul(8)
-                                .ok_or(VMError::DecodeError)?,
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if !option || tag == 1 {
                         push(Visit {
                             node: if tag == 1 { first } else { second },
-                            base: pointer.checked_add(8).ok_or(VMError::DecodeError)?,
+                            base: pointer
+                                .checked_add(8)
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             count: 1,
                             stride: 0,
                         })?;
@@ -252,35 +270,37 @@ pub fn quote_value_record(
                     let element = visit.node + 1;
                     let layout =
                         ListLayoutV1::try_new(u64::from(list.capacity), widths[element] as u64)
-                            .map_err(|_| VMError::DecodeError)?;
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                     let len = crate::list::len(vm, pointer, layout)?;
                     aggregate_bytes = aggregate_bytes
                         .checked_add(
                             usize::try_from(len)
-                                .map_err(|_| VMError::DecodeError)?
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                                 .checked_mul(
                                     widths[element]
                                         .checked_mul(8)
                                         .and_then(|bytes| {
                                             bytes.checked_add(std::mem::size_of::<Vec<u64>>())
                                         })
-                                        .ok_or(VMError::DecodeError)?,
+                                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                                 )
-                                .ok_or(VMError::DecodeError)?,
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     if len != 0 {
                         push(Visit {
                             node: element,
                             base: pointer
                                 .checked_add(
-                                    layout.slot_offset(0).map_err(|_| VMError::DecodeError)?,
+                                    layout
+                                        .slot_offset(0)
+                                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                                 )
-                                .ok_or(VMError::DecodeError)?,
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                             count: len,
                             stride: (widths[element] as u64)
                                 .checked_mul(8)
-                                .ok_or(VMError::DecodeError)?,
+                                .ok_or(VMError::Trap(VmTrap::DecodeError))?,
                         })?;
                     }
                 }
@@ -288,14 +308,15 @@ pub fn quote_value_record(
                     atoms += 1;
                     pointers += 1;
                     let pointer = vm.load_u64(visit.base)?;
-                    let expected = expected_pointer_type(*kind).ok_or(VMError::DecodeError)?;
+                    let expected =
+                        expected_pointer_type(*kind).ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     let payload = crate::host::quote_tlv_payload_len_at(vm, pointer, expected)?;
                     let bytes = payload
                         .checked_add(ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1)
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     pointer_bytes = pointer_bytes
                         .checked_add(bytes)
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     gas = gas.saturating_add(bytes as u64);
                 }
                 EntrypointValueTypeNodeV1::StateCursor(_) => {
@@ -309,10 +330,10 @@ pub fn quote_value_record(
                     )?;
                     let bytes = payload
                         .checked_add(ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1)
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     pointer_bytes = pointer_bytes
                         .checked_add(bytes)
-                        .ok_or(VMError::DecodeError)?;
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     gas = gas.saturating_add(bytes as u64);
                 }
                 _ => {
@@ -323,17 +344,17 @@ pub fn quote_value_record(
             record_lower_bound =
                 record_lower_bound.max(norito::core::Header::SIZE + 32 + atoms + pointer_bytes);
             if record_lower_bound > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             if gas > gas_limit {
-                return Err(VMError::OutOfGas);
+                return Err(VMError::Trap(VmTrap::OutOfGas));
             }
         }
         let retained_bytes = atoms
             .checked_mul(std::mem::size_of::<EntrypointValueAtomV1>())
             .and_then(|bytes| bytes.checked_add(pointer_bytes))
             .and_then(|bytes| bytes.checked_add(aggregate_bytes))
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         Ok(ValueRecordCaptureQuote {
             gas,
             retained_bytes,
@@ -353,7 +374,7 @@ pub fn quote_value_record(
 /// # Errors
 /// Preserves original allocation refusals and rejects malformed schema or guest data.
 pub fn capture_value_record_funded(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -367,23 +388,30 @@ pub fn capture_value_record_funded(
         iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_SCHEMA_HASH_DOMAIN_V1,
         budget,
     )?;
-    let ledger_count = quote.pointers.checked_add(1).ok_or(VMError::DecodeError)?;
+    let ledger_count = quote
+        .pointers
+        .checked_add(1)
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let ledger_layout = Layout::array::<AllocationCharge>(ledger_count).map_err(|_| {
-        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+        VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::DemandOverflow,
+        ))
     })?;
     let atom_layout = Layout::array::<EntrypointValueAtomV1>(quote.atoms).map_err(|_| {
-        VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+        VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::DemandOverflow,
+        ))
     })?;
     let demand = ledger_layout
         .size()
         .checked_add(atom_layout.size())
         .and_then(|bytes| bytes.checked_add(quote.pointer_bytes))
-        .ok_or(VMError::AllocationDeferred(
+        .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
             iroha_allocation::AllocationRefusal::DemandOverflow,
-        ))?;
+        )))?;
     let mut reservation = budget
         .try_reserve_bytes(demand)
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
     let mut charges =
         ChargedBuffer::from_reservation(ledger_count, &mut reservation).map_err(prepaid_error)?;
     let buffer =
@@ -408,8 +436,7 @@ pub fn capture_value_record_funded(
         },
     };
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut construction.budget,
     };
@@ -426,19 +453,19 @@ pub fn capture_value_record_funded(
         || construction.atoms.len() != quote.atoms
         || construction.atoms.capacity() != quote.atoms
     {
-        return Err(VMError::ExecutionDeferred(
+        return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::LocalInvariantViolation,
-        ));
+        )));
     }
     let record = EntrypointReturnRecordV1 {
         schema_hash: hash,
         atoms: construction.atoms,
     };
-    if norito::canonical_frame_len(&record).map_err(|_| VMError::DecodeError)?
+    if norito::canonical_frame_len(&record).map_err(|_| VMError::Trap(VmTrap::DecodeError))?
         > MAX_ENTRYPOINT_RETURN_RECORD_BYTES
     {
         drop(record);
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let charges = construction
         .budget
@@ -448,9 +475,9 @@ pub fn capture_value_record_funded(
     if charges.as_slice().len() != ledger_count {
         drop(record);
         drop(charges);
-        return Err(VMError::ExecutionDeferred(
+        return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::LocalInvariantViolation,
-        ));
+        )));
     }
     Ok(CapturedValueRecord { record, charges })
 }
@@ -461,7 +488,7 @@ pub fn capture_value_record_funded(
 /// Rejects malformed/private values and oversize records. Callers must quote and
 /// prepay their gas and retained backing before invoking this materialization step.
 pub fn capture_value_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointValueTypeV1,
     base: u64,
     words: usize,
@@ -470,12 +497,13 @@ pub fn capture_value_record(
     let quote = quote_value_record(vm, schema, base, words, u64::MAX)?;
     let mut atoms = Vec::new();
     atoms.try_reserve_exact(quote.atoms).map_err(|_| {
-        VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::error::ExecutionDeferral::AllocationUnavailable,
+        ))
     })?;
     let mut budget = ReturnRecordBudget::default();
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut budget,
     };
@@ -483,16 +511,17 @@ pub fn capture_value_record(
     collect_node(&schema.nodes, &mut node, &mut cursor, &mut atoms)
         .map_err(EntrypointReturnDecodeError::into_nested_vm_error)?;
     if node != schema.nodes.len() || cursor.word_index != words || atoms.len() != quote.atoms {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let record = EntrypointReturnRecordV1 {
         schema_hash: schema_hash(schema)
             .map_err(EntrypointReturnDecodeError::into_nested_vm_error)?,
         atoms,
     };
-    let bytes = norito::canonical_frame_len(&record).map_err(|_| VMError::DecodeError)?;
+    let bytes =
+        norito::canonical_frame_len(&record).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if bytes > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(record)
 }
@@ -502,24 +531,33 @@ pub fn capture_value_record(
 /// # Errors
 /// Rejects schema/table mismatches, private or malformed values, and allocation refusals.
 pub fn capture_argument_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
 ) -> Result<EntrypointArgumentRecordV1, VMError> {
     if !schema.validate() || schema.word_count() != Some(words) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut atoms = Vec::new();
     let mut offset = 0_usize;
     for field in &schema.fields {
-        let count = field.ty.word_count().ok_or(VMError::DecodeError)?;
+        let count = field
+            .ty
+            .word_count()
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let address = base
-            .checked_add((offset as u64).checked_mul(8).ok_or(VMError::DecodeError)?)
-            .ok_or(VMError::DecodeError)?;
+            .checked_add(
+                (offset as u64)
+                    .checked_mul(8)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            )
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let record = capture_value_record(vm, &field.ty, address, count)?;
         atoms.try_reserve(record.atoms.len()).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         atoms.extend(record.atoms);
         offset += count;
@@ -568,11 +606,11 @@ impl CapturedArgumentRecord {
 pub(super) fn buffer_error(error: iroha_allocation::ChargedBufferError) -> VMError {
     match error {
         iroha_allocation::ChargedBufferError::Admission(reason) => {
-            VMError::AllocationDeferred(reason)
+            VMError::Deferred(VmDeferral::AllocationDeferred(reason))
         }
-        iroha_allocation::ChargedBufferError::Allocator { .. } => {
-            VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
-        }
+        iroha_allocation::ChargedBufferError::Allocator { .. } => VMError::Deferred(
+            VmDeferral::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable),
+        ),
     }
 }
 
@@ -584,10 +622,11 @@ pub(super) fn funded_schema_hash<T: norito::NoritoSerialize>(
     domain: &[u8],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<[u8; 32], VMError> {
-    let length = norito::canonical_frame_len(schema).map_err(|_| VMError::DecodeError)?;
+    let length =
+        norito::canonical_frame_len(schema).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     let total = length
         .checked_add(domain.len())
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let mut scratch =
         iroha_allocation::ChargedBuffer::<u8>::new(total, budget).map_err(buffer_error)?;
     for byte in domain {
@@ -598,9 +637,9 @@ pub(super) fn funded_schema_hash<T: norito::NoritoSerialize>(
     }
     let mut writer = std::io::Cursor::new(&mut scratch.as_mut_slice()[domain.len()..]);
     norito::core::write_canonical_to_writer(schema, &mut writer)
-        .map_err(|_| VMError::DecodeError)?;
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if writer.position() != length as u64 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(iroha_crypto::Hash::new(scratch.as_slice()).into())
 }
@@ -618,7 +657,7 @@ fn meter_quote_error(gas: u64, limit: u64, error: VMError) -> VMError {
 /// # Errors
 /// Rejects noncanonical tables, invalid schemas, excessive records or unaffordable work.
 pub fn quote_argument_record(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
@@ -632,18 +671,23 @@ pub fn quote_argument_record(
         pointer_bytes: 0,
     };
     if quote.gas > gas_limit {
-        return Err(VMError::metered(gas_limit, VMError::OutOfGas));
+        return Err(VMError::metered(gas_limit, VMError::Trap(VmTrap::OutOfGas)));
     }
     let result = (|| {
         if !schema.validate() || schema.word_count() != Some(words) || !base.is_multiple_of(8) {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
-        let bytes = (words as u64).checked_mul(8).ok_or(VMError::DecodeError)?;
+        let bytes = (words as u64)
+            .checked_mul(8)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         vm.ensure_owned_heap_range(base, bytes)?;
         vm.ensure_public_memory(base, bytes)?;
         let mut offset = 0;
         for field in &schema.fields {
-            let count = field.ty.word_count().ok_or(VMError::DecodeError)?;
+            let count = field
+                .ty
+                .word_count()
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             let next = quote_value_record(
                 vm,
                 &field.ty,
@@ -651,37 +695,41 @@ pub fn quote_argument_record(
                 count,
                 gas_limit.saturating_sub(quote.gas),
             )?;
-            quote.gas = quote.gas.checked_add(next.gas).ok_or(VMError::OutOfGas)?;
+            quote.gas = quote
+                .gas
+                .checked_add(next.gas)
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             quote.atoms = quote
                 .atoms
                 .checked_add(next.atoms)
-                .ok_or(VMError::DecodeError)?;
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             quote.pointers = quote
                 .pointers
                 .checked_add(next.pointers)
-                .ok_or(VMError::DecodeError)?;
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             quote.pointer_bytes = quote
                 .pointer_bytes
                 .checked_add(next.pointer_bytes)
-                .ok_or(VMError::DecodeError)?;
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?;
             offset += count;
         }
         quote.gas = quote
             .gas
             .checked_add(
-                norito::canonical_frame_len(schema).map_err(|_| VMError::DecodeError)? as u64,
+                norito::canonical_frame_len(schema)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))? as u64,
             )
-            .ok_or(VMError::OutOfGas)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
         quote.retained_bytes = quote
             .atoms
             .checked_mul(std::mem::size_of::<EntrypointValueAtomV1>())
             .and_then(|size| size.checked_add(quote.pointer_bytes))
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         if quote.gas > gas_limit {
-            return Err(VMError::OutOfGas);
+            return Err(VMError::Trap(VmTrap::OutOfGas));
         }
         if quote.pointer_bytes.saturating_add(quote.atoms) > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(quote)
     })();
@@ -693,7 +741,7 @@ pub fn quote_argument_record(
 /// # Errors
 /// Returns canonical boundary errors or the original local allocation deferral.
 pub fn capture_argument_record_funded(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &EntrypointArgumentSchemaV1,
     base: u64,
     words: usize,
@@ -706,20 +754,23 @@ pub fn capture_argument_record_funded(
         iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_ARGUMENT_SCHEMA_HASH_DOMAIN_V1,
         budget,
     )?;
-    let ledger_count = quote.pointers.checked_add(1).ok_or(VMError::DecodeError)?;
+    let ledger_count = quote
+        .pointers
+        .checked_add(1)
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let demand = std::alloc::Layout::array::<AllocationCharge>(ledger_count)
-        .map_err(|_| VMError::DecodeError)?
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
         .size()
         .checked_add(
             std::alloc::Layout::array::<EntrypointValueAtomV1>(quote.atoms)
-                .map_err(|_| VMError::DecodeError)?
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                 .size(),
         )
         .and_then(|size| size.checked_add(quote.pointer_bytes))
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let mut reservation = budget
         .try_reserve_bytes(demand)
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
     let mut charges =
         ChargedBuffer::from_reservation(ledger_count, &mut reservation).map_err(prepaid_error)?;
     let buffer =
@@ -744,8 +795,7 @@ pub fn capture_argument_record_funded(
         },
     };
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: Some(base),
+        source: super::ResultTableSource::Live { context: vm, base },
         word_index: 0,
         budget: &mut construction.budget,
     };
@@ -759,21 +809,21 @@ pub fn capture_argument_record_funded(
         )
         .map_err(EntrypointReturnDecodeError::into_nested_vm_error)?;
         if node != field.ty.nodes.len() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
     }
     if cursor.word_index != words || construction.atoms.len() != quote.atoms {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let record = EntrypointArgumentRecordV1 {
         schema_hash,
         atoms: construction.atoms,
     };
-    if norito::canonical_frame_len(&record).map_err(|_| VMError::DecodeError)?
+    if norito::canonical_frame_len(&record).map_err(|_| VMError::Trap(VmTrap::DecodeError))?
         > MAX_ENTRYPOINT_RETURN_RECORD_BYTES
     {
         drop(record);
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let charges = construction
         .budget
@@ -794,18 +844,18 @@ pub fn quote_completed_return_record(
 ) -> Result<ValueRecordCaptureQuote, VMError> {
     let mut gas = 32_u64;
     if gas > gas_limit {
-        return Err(VMError::metered(gas_limit, VMError::OutOfGas));
+        return Err(VMError::metered(gas_limit, VMError::Trap(VmTrap::OutOfGas)));
     }
     let result = (|| {
         let words = vm.call_result_word_count()?;
         if schema.word_count() != Some(words) || words == 0 {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let base = vm.memory.call_frames.completed_result_word(0)?;
         for index in 0..words {
             gas = gas.saturating_add(8);
             if gas > gas_limit {
-                return Err(VMError::OutOfGas);
+                return Err(VMError::Trap(VmTrap::OutOfGas));
             }
             vm.public_call_result_word(index)?;
         }
@@ -827,7 +877,7 @@ pub fn capture_completed_return_funded(
 ) -> Result<CapturedValueRecord, VMError> {
     let words = vm.call_result_word_count()?;
     if schema.word_count() != Some(words) || words == 0 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let base = vm.memory.call_frames.completed_result_word(0)?;
     // Every slot is checked against interpreter-owned completion and privacy,
@@ -841,6 +891,7 @@ pub fn capture_completed_return_funded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmErrorRef, VmTrap};
     use iroha_data_model::smart_contract::entrypoint::EntrypointStructTypeNodeV1;
 
     #[test]
@@ -866,7 +917,7 @@ mod tests {
         );
         assert!(matches!(
             quote_value_record(&vm, &schema, base, 1, quote.gas - 1),
-            Err(error) if matches!(error.as_unmetered(), VMError::OutOfGas)
+            Err(error) if matches!(error.as_unmetered(), VmErrorRef::Trap(VmTrap::OutOfGas))
         ));
         vm.store_u64(base, 1).unwrap();
         assert!(capture_value_record(&vm, &schema, base, 1).is_err());
@@ -920,7 +971,7 @@ mod tests {
         budget.set_limit_bytes(retained);
         assert!(matches!(
             capture_value_record_funded(&vm, &schema, base, 1, &budget),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), retained);
         drop(owned);
@@ -943,10 +994,16 @@ mod tests {
         vm.store_u64(base + 8, 1).unwrap();
         let schema_bytes = norito::canonical_frame_len(&schema).unwrap() as u64;
         let failure = quote_value_record(&vm, &schema, base, 1, u64::MAX).unwrap_err();
-        assert!(matches!(failure.as_unmetered(), VMError::DecodeError));
+        assert!(matches!(
+            failure.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::DecodeError)
+        ));
         assert_eq!(failure.metered_gas(), Some(64 + schema_bytes));
         let limited = quote_value_record(&vm, &schema, base, 1, 33).unwrap_err();
-        assert!(matches!(limited.as_unmetered(), VMError::OutOfGas));
+        assert!(matches!(
+            limited.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::OutOfGas)
+        ));
         assert_eq!(limited.metered_gas(), Some(33));
         let first = EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)],
@@ -967,7 +1024,10 @@ mod tests {
             ],
         };
         let failure = quote_argument_record(&vm, &arguments, base, 2, u64::MAX).unwrap_err();
-        assert!(matches!(failure.as_unmetered(), VMError::DecodeError));
+        assert!(matches!(
+            failure.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::DecodeError)
+        ));
         assert_eq!(
             failure.metered_gas(),
             Some(32 + first_gas + 64 + schema_bytes)
@@ -976,11 +1036,15 @@ mod tests {
 
     #[test]
     fn quote_metering_preserves_local_refusal_without_a_gas_wrapper() {
-        let error = VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable);
+        let error = VMError::Deferred(VmDeferral::ExecutionDeferred(
+            crate::ExecutionDeferral::AllocationUnavailable,
+        ));
         let actual = meter_quote_error(77, 100, error);
         assert!(matches!(
             actual,
-            VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::ExecutionDeferral::AllocationUnavailable
+            ))
         ));
         assert_eq!(actual.metered_gas(), None);
     }

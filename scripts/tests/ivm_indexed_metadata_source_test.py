@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "crates/ivm/src/ivm.rs"
-REGION_SHA256 = "0b09cf2e764dcc176ad7de50b472f6b5bfb5435191c35774e740a4ae35edb92e"
+REGION_SHA256 = "0d0880d0459766d59545429cfb4df803ff688c7fc22ded4d59459e4aff9a6dca"
 CASE_IDS = (
     "indexed_i64_out_of_range_is_rejected_at_load",
     "indexed_literal_opcode_kind_mismatch_is_rejected_at_load",
@@ -38,7 +38,7 @@ REQUIRED_MATRIX_SNIPPETS = (
     'assert_eq!(case_groups.len(), 7, "indexed admission case inventory")',
     "for (case_id, programs) in case_groups",
     "for program in programs",
-    "Err(VMError::InvalidMetadata)",
+    "Err(VMError::Trap(VmTrap::InvalidMetadata))",
     '"indexed admission case {case_id} did not fail closed"',
 )
 FORBIDDEN_MATRIX_SNIPPETS = (
@@ -142,13 +142,13 @@ class IndexedMetadataSourceTest(unittest.TestCase):
         self.assert_rejected(self.source.replace(CASE_IDS[1], CASE_IDS[0], 1))
 
     def test_error_category_drift_is_rejected(self) -> None:
-        self.assert_rejected(
-            self.source.replace(
-                "matches!(vm.load_program(&program), Err(VMError::InvalidMetadata))",
-                "matches!(vm.load_program(&program), Err(VMError::DecodeError))",
-                1,
-            )
+        admission = (
+            "vm.load_program(&program),\n"
+            "                        Err(VMError::Trap(VmTrap::InvalidMetadata))"
         )
+        self.assertEqual(self.source.count(admission), 1)
+        wrong_trap = admission.replace("InvalidMetadata", "DecodeError")
+        self.assert_rejected(self.source.replace(admission, wrong_trap))
 
     def test_adversarial_hash_mutation_drift_is_rejected(self) -> None:
         self.assert_rejected(

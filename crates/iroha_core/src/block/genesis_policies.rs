@@ -1,8 +1,8 @@
-//! Atomic installation of both original signed-genesis policy capabilities.
+//! Atomic installation of original signed-genesis policies and optional child authority.
 //!
 //! Validate the pristine State once for the complete bootstrap operation. Each
-//! source-specific validator runs before either projection changes. Decode into
-//! a disposable candidate, then move both capabilities and the candidate together.
+//! source-specific validator runs before any projection changes. Decode into
+//! disposable candidates, then move their capabilities and candidates together.
 //! Every unpublished parameter graph is funded from the original World pool.
 //! TODO(original-source-admission): original signed-input retention and capability-selection backing remain with
 //! the authenticated source owner; they are not retroactively admitted here.
@@ -21,11 +21,12 @@ use super::{
 };
 use crate::state::{State, StateBlock};
 
-/// Both policies selected from the same original authenticated signed source.
+/// Mandatory policies and optional child foundation from one authenticated signed source.
 #[derive(Debug)]
 pub(crate) struct GenesisPolicies {
     crypto: GenesisCryptoPolicy,
     staking: GenesisStakingPolicy,
+    child_runtime: Option<super::genesis_child_runtime::GenesisChildRuntime>,
 }
 
 impl AuthenticatedGenesisOutputSource {
@@ -54,14 +55,18 @@ impl AuthenticatedGenesisOutputSource {
         Ok(Some(GenesisPolicies {
             crypto: self.initial_crypto_policy(block)?,
             staking: self.initial_staking_policy(block)?,
+            child_runtime: self.initial_child_runtime(block)?,
         }))
     }
 }
 
-/// Whether any original instruction assigns the crypto or staking policy parameter.
+/// Whether an original instruction assigns either mandatory policy or a child foundation.
 fn signs_policy(block: &SignedBlock) -> bool {
     let crypto = CryptoAdmissionPolicyV1::parameter_id();
     let staking = PublicLaneStakingPolicy::parameter_id();
+    let child =
+        iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id(
+        );
     block.external_transactions().any(|transaction| {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return false;
@@ -72,15 +77,15 @@ fn signs_policy(block: &SignedBlock) -> bool {
                 .downcast_ref::<SetParameter>()
                 .is_some_and(|set| {
                     matches!(set.inner(), Parameter::Custom(custom)
-                        if custom.id() == &crypto || custom.id() == &staking)
+                        if custom.id() == &crypto || custom.id() == &staking || custom.id() == child)
                 })
         })
     })
 }
 
 impl GenesisPolicies {
-    /// Install both projections at one verified original pristine State cut.
-    /// Any source or decoder refusal leaves State and both source capabilities intact.
+    /// Install policy projections and optional child authority at one verified pristine cut.
+    /// Any source or decoder refusal leaves State and all source capabilities intact.
     pub(crate) fn install(
         original: &mut Option<Self>,
         block: &SignedBlock,
@@ -91,7 +96,10 @@ impl GenesisPolicies {
         let invalid = |message: &str| {
             BlockValidationError::from(InvalidGenesisError::StakingPolicy(message.into()))
         };
-        if overlay.genesis_crypto_policy.is_some() || overlay.genesis_staking_policy.is_some() {
+        if overlay.genesis_crypto_policy.is_some()
+            || overlay.genesis_staking_policy.is_some()
+            || overlay.genesis_child_runtime.is_some()
+        {
             return Err(invalid(
                 "genesis overlay already retains an initial policy capability",
             ));
@@ -107,6 +115,11 @@ impl GenesisPolicies {
         selected
             .staking
             .validate_installation(block, overlay, state, generation)?;
+        let child_runtime = selected
+            .child_runtime
+            .as_ref()
+            .map(|child| child.prepare_installation(block, overlay, state, generation))
+            .transpose()?;
         let predecessor = overlay.world.parameters.get().clone();
         let budget = overlay.world.sccp_committee_generations.allocation_budget();
         let crypto = selected
@@ -129,13 +142,17 @@ impl GenesisPolicies {
             ));
         }
         // No fallible decoder or source check follows the first overlay write.
-        // Both retained source owners move with their exact validated projections.
+        // All retained source owners move with their exact validated projections.
         *overlay.world.parameters.get_mut() = candidate;
+        if let Some(child) = child_runtime {
+            child.install(overlay);
+        }
         let selected = original
             .take()
             .expect("checked original combined capability");
         overlay.genesis_crypto_policy = Some(selected.crypto);
         overlay.genesis_staking_policy = Some(selected.staking);
+        overlay.genesis_child_runtime = selected.child_runtime;
         Ok(())
     }
 }

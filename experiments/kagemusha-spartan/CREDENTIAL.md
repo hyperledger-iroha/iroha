@@ -8,6 +8,13 @@ key-table commitment. They remain untouched; a 532-byte research vector is
 derived and signed separately. A native 468-byte credential is not accepted
 as an equivalent input to this relation.
 
+The future issuer codec takes the wallet protocol's validated enrollment fields
+and derives the 64-byte table from the payment key and the authenticated
+generation's generators. Native reconstructs the same enrollment fields for a
+new Bootstrap and a receiver's signed Request. Incoming proof verdicts and
+recovery of an already selected head continue to use their relation-defined
+credential predicate. [Native issuer and wallet codec](src/native_credential.rs)
+
 The combined public statement retains the certificate outputs and trusted
 scheme at slots 128–225. It exposes the payment key bytes at 256–320, signed
 table-commitment bytes at 321–384, and credential object digest at 385. The

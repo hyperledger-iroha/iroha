@@ -1,3 +1,4 @@
+export { AnonymousBallotClientV1, AnonymousBallotRefusal } from "./anonymousBallot.js";
 export {
   AccountAddress,
   AccountAddressError,

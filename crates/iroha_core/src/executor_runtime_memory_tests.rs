@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseFuture};
+use ivm_abi::error::VmDeferral;
 use std::{
     future::Future,
     pin::Pin,
@@ -72,9 +73,9 @@ fn executor_refuses_zero_and_exhausted_original_pool_then_retries() {
     let budget = AllocationBudget::new(0);
     assert!(matches!(
         loaded.checkout_runtime_for_gas_limit(GAS, HEAP, &budget),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. }
-        ))
+        )))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     assert_eq!(loaded.runtime_pool_snapshot().0.program_loads, 0);
@@ -82,9 +83,9 @@ fn executor_refuses_zero_and_exhausted_original_pool_then_retries() {
     let occupied = budget.try_reserve_bytes(LIMIT).unwrap();
     assert!(matches!(
         loaded.checkout_runtime_for_gas_limit(GAS, HEAP, &budget),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), LIMIT);
     drop(occupied);
@@ -113,7 +114,7 @@ fn executor_template_refusal_releases_unpublished_vm_before_retry() {
     budget.set_limit_bytes(vm_bytes);
     assert!(matches!(
         loaded.checkout_runtime_for_gas_limit(GAS, HEAP, &budget),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(loaded.runtime_pool_snapshot().0.template_builds, 0);
@@ -182,9 +183,9 @@ fn foreign_state_cannot_borrow_or_refund_original_pool_credit() {
     let foreign = AllocationBudget::new(0);
     assert!(matches!(
         loaded.checkout_runtime_for_gas_limit(GAS, HEAP, &foreign),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. }
-        ))
+        )))
     ));
     assert_eq!(original.reserved_bytes(), reserved);
     foreign.set_limit_bytes(LIMIT);

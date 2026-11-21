@@ -96,6 +96,11 @@ pub fn receiver_credential() -> Signed {
     sign(ObjectKind::Credential, body, 17, 53)
 }
 fn request(body: &RequestBody) -> Signed {
+    sign(ObjectKind::Request, request_body_bytes(body), 43, 59)
+}
+
+/// Encode the full instantiated Request, including its payer-selected fields.
+pub fn request_body_bytes(body: &RequestBody) -> Vec<u8> {
     let mut bytes = 1u16.to_le_bytes().to_vec();
     for id in [
         body.scheme_id,
@@ -117,7 +122,7 @@ fn request(body: &RequestBody) -> Signed {
     bytes.extend(body.terms.request_time.to_le_bytes());
     bytes.extend(body.terms.certificates);
     bytes.extend(body.terms.nonce);
-    sign(ObjectKind::Request, bytes, 43, 59)
+    bytes
 }
 pub fn from_load(before: &StateWitness) -> SendFixture {
     build(before, None, &receiver_credential())
@@ -211,11 +216,11 @@ fn build(before: &StateWitness, schedule: Option<&Signed>, receiver: &Signed) ->
             slot_siblings: fee_tree.siblings(0),
         }
     };
-    let step = StepWitness {
-        relation_id: pair(&before.lineage[3..5]),
+    let step = StepWitness::new(
+        pair(&before.lineage[3..5]),
         predecessor,
-        successor_nonce: Fp::from(202),
-        inputs: StepInputs::Send(Box::new(SendInputs {
+        Fp::from(202),
+        StepInputs::Send(Box::new(SendInputs {
             payer_account_digest: body.payer_account,
             receiver_wallet: body.receiver_wallet,
             receiver_account_digest: body.receiver_account,
@@ -232,7 +237,7 @@ fn build(before: &StateWitness, schedule: Option<&Signed>, receiver: &Signed) ->
             successor_fee_claim: fee_tree.root(),
             quota: Box::new(QuotaWitness::unused()),
         })),
-    };
+    );
     let evaluation = step.evaluate(SigmaRelation::SEND);
     assert!(
         evaluation.violations.is_empty(),

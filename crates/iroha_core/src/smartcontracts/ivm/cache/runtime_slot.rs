@@ -3,6 +3,7 @@
 use super::PooledRuntime;
 use iroha_allocation::AllocationBudget;
 use ivm::execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan};
+use ivm_abi::error::VmDeferral;
 
 // Storage drops before its pool identity; ExecutionBuffer deallocates before refunding credit.
 pub(super) struct IdleRuntimeBacking {
@@ -14,13 +15,13 @@ impl IdleRuntimeBacking {
     pub(super) fn try_new(original_pool: &AllocationBudget) -> Result<Self, ivm::VMError> {
         original_pool.with_deferred_refund_notifications(|_| {
             let plan = ExecutionMemoryPlan::array::<PooledRuntime>(1)
-                .map_err(ivm::VMError::AllocationDeferred)?;
+                .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             let mut lease = ExecutionMemoryLease::reserve(original_pool, plan)
-                .map_err(ivm::VMError::AllocationDeferred)?;
+                .map_err(|cause| ivm::VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             let storage = ExecutionBuffer::new(1, &mut lease).map_err(|_| {
-                ivm::VMError::ExecutionDeferred(
+                ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ivm::error::ExecutionDeferral::AllocationUnavailable,
-                )
+                ))
             })?;
             Ok(Self {
                 storage,

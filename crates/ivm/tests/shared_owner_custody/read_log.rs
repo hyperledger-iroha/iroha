@@ -2,6 +2,7 @@
 
 use super::{Layout, SERIAL, SeqCst, memory_stats};
 use iroha_allocation::AllocationBudget;
+use ivm_abi::error::VmDeferral;
 use std::{
     cell::Cell,
     sync::{Arc, OnceLock, atomic::AtomicUsize},
@@ -92,7 +93,10 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = vm.memory.load_bytes(ivm::Memory::OUTPUT_START, &mut output);
     assert_eq!(stop(), 0, "admission precedes the first backing request");
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(output, [0xa5; 2]);
     assert_eq!(budget.reserved_bytes(), base);
     assert_eq!(vm.remaining_gas(), gas);
@@ -102,7 +106,10 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = vm.memory.load_bytes(ivm::Memory::OUTPUT_START, &mut output);
     assert_eq!(stop(), 1, "real null allocation of the initial row array");
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(output, [0xa5; 2]);
     assert_eq!(budget.reserved_bytes(), base);
     start();
@@ -124,7 +131,10 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = vm.memory.load_bytes(ivm::Memory::OUTPUT_START, &mut output);
     assert_eq!(stop(), 0, "nonempty overlap admitted before allocation");
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(WATCHED_POINTER.load(SeqCst), original);
     assert_eq!(output, [0x5a; 2]);
     budget.set_limit_bytes(occupied + 8 * row);
@@ -132,7 +142,10 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = vm.memory.load_bytes(ivm::Memory::OUTPUT_START, &mut output);
     assert_eq!(stop(), 1);
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(WATCHED_POINTER.load(SeqCst), original);
     assert_eq!(budget.reserved_bytes(), occupied);
     assert_eq!(output, [0x5a; 2]);
@@ -154,13 +167,19 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = vm.memory.try_read_log_snapshot();
     assert_eq!(stop(), 0);
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     budget.set_limit_bytes(occupied + snapshot_bytes);
     FAIL_SIZE.set(Some(snapshot_bytes));
     start();
     let refused = vm.memory.try_read_log_snapshot();
     assert_eq!(stop(), 1);
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(budget.reserved_bytes(), occupied);
     start();
     let snapshot = vm.memory.try_read_log_snapshot().unwrap();
@@ -175,7 +194,10 @@ fn read_rows_reserve_before_allocating_and_free_before_original_and_retention_re
     start();
     let refused = snapshot.try_clone();
     assert_eq!(stop(), 0);
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     budget.set_limit_bytes(occupied + 2 * snapshot_bytes);
     start();
     let copy = snapshot.try_clone().unwrap();

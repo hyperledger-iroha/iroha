@@ -359,6 +359,7 @@ impl<F> LoadedAction<F> {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::triggers::specialized::TimeTriggerRetryState"
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub struct TimeTriggerRetryState {
     /// Number of automatic retries already consumed.
     pub retries_used: u32,

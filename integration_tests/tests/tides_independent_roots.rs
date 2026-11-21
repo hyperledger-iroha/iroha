@@ -6,6 +6,7 @@
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::blocking::Client;
+use iroha_core::smartcontracts::isi::game_partition::unit_step;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
@@ -273,7 +274,7 @@ async fn run() -> Result<()> {
             vec![
                 InstallGamePartitionV1 {
                     world_id: world,
-                    kernel_hash: ivm::game_unit_step::kernel_hash(),
+                    kernel_hash: unit_step::kernel_hash(),
                 }
                 .into(),
             ],

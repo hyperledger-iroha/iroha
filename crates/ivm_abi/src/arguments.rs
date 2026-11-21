@@ -1,6 +1,7 @@
 //! Canonical schema-bound JSON conversion for public Kotodama call arguments.
 //!
 //! Producers convert before signing. The VM owns metered decoding and materialization.
+use crate::error::VmTrap;
 use crate::{
     VMError,
     codec::encode_canonical_norito as canonical_norito_frame,
@@ -31,17 +32,19 @@ use std::str::FromStr;
 /// The firing-event JSON uses its separate `trigger_event_json` input.
 pub const ENTRYPOINT_ARGUMENT_RECORD_PUBLIC_INPUT_KEY: &str = "entrypoint_argument_record";
 fn decode_int(value: &njson::Value) -> Result<BigInt, VMError> {
-    let raw = value.as_str().ok_or(VMError::DecodeError)?;
-    let parsed: BigInt = raw.parse().map_err(|_| VMError::DecodeError)?;
+    let raw = value.as_str().ok_or(VMError::Trap(VmTrap::DecodeError))?;
+    let parsed: BigInt = raw
+        .parse()
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if parsed.to_string() != raw {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(parsed)
 }
 fn decode_u64(value: &njson::Value) -> Result<u64, VMError> {
     match value {
-        njson::Value::Number(number) => number.as_u64().ok_or(VMError::DecodeError),
-        _ => Err(VMError::DecodeError),
+        njson::Value::Number(number) => number.as_u64().ok_or(VMError::Trap(VmTrap::DecodeError)),
+        _ => Err(VMError::Trap(VmTrap::DecodeError)),
     }
 }
 fn decode_canonical_string<T>(
@@ -49,34 +52,38 @@ fn decode_canonical_string<T>(
     parse: impl FnOnce(&str) -> Result<T, VMError>,
     canonical: impl FnOnce(&T) -> String,
 ) -> Result<T, VMError> {
-    let raw = value.as_str().ok_or(VMError::DecodeError)?;
+    let raw = value.as_str().ok_or(VMError::Trap(VmTrap::DecodeError))?;
     let parsed = parse(raw)?;
     if canonical(&parsed) != raw {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(parsed)
 }
 fn decode_numeric(value: &njson::Value) -> Result<Numeric, VMError> {
-    let raw = value.as_str().ok_or(VMError::DecodeError)?;
-    let parsed: Numeric = raw.parse().map_err(|_| VMError::DecodeError)?;
+    let raw = value.as_str().ok_or(VMError::Trap(VmTrap::DecodeError))?;
+    let parsed: Numeric = raw
+        .parse()
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if parsed.to_string() != raw {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok(parsed)
 }
 fn decode_blob(value: &njson::Value) -> Result<Vec<u8>, VMError> {
-    let raw = value.as_str().ok_or(VMError::DecodeError)?;
-    let hex_body = raw.strip_prefix("0x").ok_or(VMError::DecodeError)?;
+    let raw = value.as_str().ok_or(VMError::Trap(VmTrap::DecodeError))?;
+    let hex_body = raw
+        .strip_prefix("0x")
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     if hex_body.len() % 2 != 0 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     if hex_body
         .bytes()
         .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
     {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    hex::decode(hex_body).map_err(|_| VMError::DecodeError)
+    hex::decode(hex_body).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 fn encode_leaf_atom(
     kind: &EntrypointValueKindV1,
@@ -91,108 +98,120 @@ fn encode_leaf_atom(
         }
         EntrypointValueKindV1::Decimal => {
             let decimal = DecimalValueV1::try_from_numeric(decode_numeric(value)?)
-                .map_err(|_| VMError::DecodeError)?;
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
             EntrypointValueAtomV1::Pointer(crate::numeric_tlv::encode_decimal(
                 decimal.as_numeric(),
             )?)
         }
         EntrypointValueKindV1::Quantity => {
             let quantity = Quantity::try_from_numeric(decode_numeric(value)?)
-                .map_err(|_| VMError::DecodeError)?;
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
             EntrypointValueAtomV1::Pointer(crate::numeric_tlv::encode_quantity(&quantity)?)
         }
         EntrypointValueKindV1::Bool => {
-            EntrypointValueAtomV1::Bool(value.as_bool().ok_or(VMError::DecodeError)?)
+            EntrypointValueAtomV1::Bool(value.as_bool().ok_or(VMError::Trap(VmTrap::DecodeError))?)
         }
         EntrypointValueKindV1::String => encoded_pointer(
             PointerType::Blob,
             value
                 .as_str()
-                .ok_or(VMError::DecodeError)?
+                .ok_or(VMError::Trap(VmTrap::DecodeError))?
                 .as_bytes()
                 .to_vec(),
         )?,
         EntrypointValueKindV1::Json => encoded_pointer(
             PointerType::Json,
             canonical_norito_frame(
-                &Json::from_norito_value_ref(value).map_err(|_| VMError::DecodeError)?,
+                &Json::from_norito_value_ref(value)
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
             )
-            .map_err(|_| VMError::NoritoInvalid)?,
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
         )?,
         EntrypointValueKindV1::Name => {
             let name = decode_canonical_string(
                 value,
-                |raw| Name::from_str(raw).map_err(|_| VMError::DecodeError),
+                |raw| Name::from_str(raw).map_err(|_| VMError::Trap(VmTrap::DecodeError)),
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::Name,
-                canonical_norito_frame(&name).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&name).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::AccountId => {
-            let raw = value.as_str().ok_or(VMError::DecodeError)?;
-            let parsed = AccountId::parse_encoded(raw).map_err(|_| VMError::DecodeError)?;
+            let raw = value.as_str().ok_or(VMError::Trap(VmTrap::DecodeError))?;
+            let parsed =
+                AccountId::parse_encoded(raw).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
             if parsed.to_string() != raw {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             let account_id = parsed;
             encoded_pointer(
                 PointerType::AccountId,
-                canonical_norito_frame(&account_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&account_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::AssetDefinitionId => {
             let asset_definition_id = decode_canonical_string(
                 value,
                 |raw| {
-                    AssetDefinitionId::parse_address_literal(raw).map_err(|_| VMError::DecodeError)
+                    AssetDefinitionId::parse_address_literal(raw)
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))
                 },
                 AssetDefinitionId::canonical_address,
             )?;
             encoded_pointer(
                 PointerType::AssetDefinitionId,
-                canonical_norito_frame(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_definition_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::AssetId => {
             let asset_id = decode_canonical_string(
                 value,
-                |raw| AssetId::parse_literal(raw).map_err(|_| VMError::DecodeError),
+                |raw| AssetId::parse_literal(raw).map_err(|_| VMError::Trap(VmTrap::DecodeError)),
                 AssetId::canonical_literal,
             )?;
             encoded_pointer(
                 PointerType::AssetId,
-                canonical_norito_frame(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::DomainId => {
             let domain_id = decode_canonical_string(
                 value,
-                |raw| DomainId::parse_fully_qualified(raw).map_err(|_| VMError::DecodeError),
+                |raw| {
+                    DomainId::parse_fully_qualified(raw)
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))
+                },
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::DomainId,
-                canonical_norito_frame(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&domain_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::NftId => {
             let nft_id = decode_canonical_string(
                 value,
-                |raw| NftId::from_str(raw).map_err(|_| VMError::DecodeError),
+                |raw| NftId::from_str(raw).map_err(|_| VMError::Trap(VmTrap::DecodeError)),
                 ToString::to_string,
             )?;
             encoded_pointer(
                 PointerType::NftId,
-                canonical_norito_frame(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&nft_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::DataSpaceId => {
             let dataspace_id = DataSpaceId::new(decode_u64(value)?);
             encoded_pointer(
                 PointerType::DataSpaceId,
-                canonical_norito_frame(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&dataspace_id)
+                    .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             )?
         }
         EntrypointValueKindV1::Blob => encoded_pointer(PointerType::Blob, decode_blob(value)?)?,
@@ -379,7 +398,7 @@ fn object_shape_error<'a>(
             &child_path(path, missing),
             "a value for this declared field",
             "no value",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         );
     }
     if let Some(extra) = object
@@ -390,10 +409,15 @@ fn object_shape_error<'a>(
             &child_path(path, extra),
             "no value; the schema declares no field with this name",
             "an unexpected field",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         );
     }
-    ArgumentDecodeError::at(path, expected, "an inexact object", VMError::DecodeError)
+    ArgumentDecodeError::at(
+        path,
+        expected,
+        "an inexact object",
+        VMError::Trap(VmTrap::DecodeError),
+    )
 }
 #[allow(
     clippy::too_many_lines,
@@ -427,7 +451,7 @@ fn decode_argument_node(
             path,
             "a value described by a valid V1 argument schema",
             "an invalid schema node",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         )
     };
     let start = *node_index;
@@ -460,14 +484,14 @@ fn decode_argument_node(
                             .and_then(|bytes| encode_tlv(PointerType::NoritoBytes, &bytes))
                             .map_err(mismatch)?;
                         let key_hash = crate::entrypoint::state_key_schema_hash_v1(key)
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         crate::state_cursor::validate_cursor_envelope(key_hash, &envelope)
                             .map_err(mismatch)?;
                         results.push(vec![EntrypointValueAtomV1::Pointer(envelope)]);
                     }
                     EntrypointValueTypeNodeV1::Unit => {
                         if !matches!(value, njson::Value::Null) {
-                            return Err(mismatch(VMError::DecodeError));
+                            return Err(mismatch(VMError::Trap(VmTrap::DecodeError)));
                         }
                         results.push(vec![EntrypointValueAtomV1::Unit]);
                     }
@@ -477,7 +501,7 @@ fn decode_argument_node(
                             .and_then(|name| {
                                 error.variants.iter().find(|variant| variant.name == name)
                             })
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         results.push(vec![EntrypointValueAtomV1::ErrorCode(variant.code)]);
                     }
                     EntrypointValueTypeNodeV1::Enum(error) => {
@@ -486,13 +510,13 @@ fn decode_argument_node(
                             .and_then(|name| {
                                 error.variants.iter().find(|variant| variant.name == name)
                             })
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         results.push(vec![EntrypointValueAtomV1::EnumCode(variant.code)]);
                     }
                     EntrypointValueTypeNodeV1::Struct(struct_node) => {
                         let object = value
                             .as_object()
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         let fields = struct_node.fields.iter().map(String::as_str);
                         if object.len() != struct_node.fields.len()
                             || fields.clone().any(|field| object.get(field).is_none())
@@ -522,7 +546,7 @@ fn decode_argument_node(
                         let values = value
                             .as_array()
                             .filter(|values| values.len() == usize::from(*arity))
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         let starts = argument_child_starts(nodes, node_start, values.len())
                             .map_err(|_| schema_error(&path))?;
                         tasks.push(Task::FinishProduct {
@@ -540,7 +564,7 @@ fn decode_argument_node(
                         let object = value
                             .as_object()
                             .filter(|object| object.len() == 1)
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         if let Some(value) = object.get("some") {
                             tasks.push(Task::FinishSum { tag: true });
                             tasks.push(Task::Visit {
@@ -553,14 +577,14 @@ fn decode_argument_node(
                         } else if object.get("none") == Some(&njson::Value::Bool(true)) {
                             results.push(vec![EntrypointValueAtomV1::Tag(false)]);
                         } else {
-                            return Err(mismatch(VMError::DecodeError));
+                            return Err(mismatch(VMError::Trap(VmTrap::DecodeError)));
                         }
                     }
                     EntrypointValueTypeNodeV1::Result => {
                         let object = value
                             .as_object()
                             .filter(|object| object.len() == 1)
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         let ok_start = node_start
                             .checked_add(1)
                             .ok_or_else(|| schema_error(&path))?;
@@ -581,14 +605,14 @@ fn decode_argument_node(
                                 path: child_path(&path, "err"),
                             });
                         } else {
-                            return Err(mismatch(VMError::DecodeError));
+                            return Err(mismatch(VMError::Trap(VmTrap::DecodeError)));
                         }
                     }
                     EntrypointValueTypeNodeV1::List(list) => {
                         let values = value
                             .as_array()
                             .filter(|values| values.len() <= usize::from(list.capacity))
-                            .ok_or_else(|| mismatch(VMError::DecodeError))?;
+                            .ok_or_else(|| mismatch(VMError::Trap(VmTrap::DecodeError)))?;
                         let element_start = node_start
                             .checked_add(1)
                             .ok_or_else(|| schema_error(&path))?;
@@ -672,7 +696,7 @@ fn decode_argument_value(
             path,
             "a value described by a valid V1 argument schema",
             "an invalid schema",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         )
     };
     if !ty.validate() {
@@ -701,7 +725,7 @@ pub fn argument_record_from_json_detailed(
             "",
             "arguments described by a valid V1 argument schema",
             "an invalid schema",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         )
     };
     if !schema.validate() {
@@ -723,7 +747,7 @@ pub fn argument_record_from_json_detailed(
             "",
             expected_object(),
             "malformed JSON",
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         )
     })?;
     let object = value.as_object().ok_or_else(|| {
@@ -731,7 +755,7 @@ pub fn argument_record_from_json_detailed(
             "",
             expected_object(),
             describe_found(&value),
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         )
     })?;
     let fields = schema.fields.iter().map(|field| field.name.as_str());
@@ -754,7 +778,7 @@ pub fn argument_record_from_json_detailed(
             "",
             "a canonically encodable argument schema",
             "an unencodable schema",
-            VMError::NoritoInvalid,
+            VMError::Trap(VmTrap::NoritoInvalid),
         )
     })?;
     Ok(EntrypointArgumentRecordV1 {
@@ -791,7 +815,7 @@ pub fn encode_argument_record_from_json_detailed(
                 "arguments whose canonical record fits {MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES} bytes"
             ),
             "an oversized record",
-            VMError::NoritoInvalid,
+            VMError::Trap(VmTrap::NoritoInvalid),
         )
     };
     let bytes = canonical_norito_frame(&record).map_err(|_| oversized())?;
@@ -815,6 +839,7 @@ pub fn encode_argument_record_from_json(
 mod tests {
     use super::*;
     use crate::entrypoint::EntrypointArgumentFieldV1;
+    use crate::error::VmTrap;
     #[test]
     fn numeric_argument_atoms_require_canonical_decimal_strings() {
         assert_eq!(
@@ -832,7 +857,10 @@ mod tests {
             norito::json!("07"),
             norito::json!("-0"),
         ] {
-            assert!(matches!(decode_int(&value), Err(VMError::DecodeError)));
+            assert!(matches!(
+                decode_int(&value),
+                Err(VMError::Trap(VmTrap::DecodeError))
+            ));
         }
         for value in [
             norito::json!(1.25),
@@ -841,7 +869,10 @@ mod tests {
             norito::json!("1.250"),
             norito::json!("1e0"),
         ] {
-            assert!(matches!(decode_numeric(&value), Err(VMError::DecodeError)));
+            assert!(matches!(
+                decode_numeric(&value),
+                Err(VMError::Trap(VmTrap::DecodeError))
+            ));
         }
     }
     #[test]
@@ -869,7 +900,7 @@ mod tests {
             let payload = Json::from(norito::json!({ "value": value }));
             assert!(matches!(
                 argument_record_from_json(&schema, &payload),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ));
         }
     }
@@ -916,7 +947,7 @@ mod tests {
             .insert("unknown".to_owned(), njson::Value::Bool(true));
         assert!(matches!(
             argument_record_from_json(&schema, &Json::from(extra)),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let mut noncanonical: njson::Value =
             payload.try_into_any_norito().expect("boundary object");
@@ -926,7 +957,7 @@ mod tests {
             .insert("count".to_owned(), njson::Value::String("-0".to_owned()));
         assert!(matches!(
             argument_record_from_json(&schema, &Json::from(noncanonical)),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     fn leaf(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
@@ -951,17 +982,20 @@ mod tests {
         )
         .expect_err("JSON numbers are not int arguments");
         assert_eq!(error.path, "amount");
-        assert!(matches!(error.error, VMError::DecodeError));
+        assert!(matches!(error.error, VMError::Trap(VmTrap::DecodeError)));
         assert!(error.expected.starts_with("int as"), "{}", error.expected);
         assert_eq!(error.found, "JSON number 5");
         assert_eq!(
             error.to_string(),
             "argument `amount` expects int as a canonical decimal integer string such as \"5\", found JSON number 5"
         );
-        assert!(matches!(VMError::from(error), VMError::DecodeError));
+        assert!(matches!(
+            VMError::from(error),
+            VMError::Trap(VmTrap::DecodeError)
+        ));
         assert!(matches!(
             argument_record_from_json(&schema, &Json::from(norito::json!({ "amount": 5 }))),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(
             argument_record_from_json_detailed(
@@ -1046,7 +1080,7 @@ mod tests {
         assert_eq!(error.found, "string \"7\"");
         assert!(matches!(
             encode_argument_record_from_json(&schema, &wrong),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -1074,7 +1108,7 @@ mod tests {
         assert!(complete.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES);
         assert!(matches!(
             encode_argument_record_from_json(&schema, &payload),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
 }

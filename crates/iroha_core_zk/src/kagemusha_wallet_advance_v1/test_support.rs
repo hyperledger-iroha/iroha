@@ -44,6 +44,25 @@ use super::{
 pub(super) const PROFILE: KagemushaWalletKeyProfileV1 =
     KagemushaWalletKeyProfileV1::SecureElementOrTee;
 
+/// Relative filenames of the two canonical completion copies for host-simulator fault injection.
+#[must_use]
+#[cfg(feature = "kagemusha-simulator")]
+pub fn completion_copy_paths(
+    slot: &KagemushaWalletSlotIdV1,
+    operation: &[u8; 32],
+) -> [std::path::PathBuf; 2] {
+    use super::layout::{
+        KagemushaWalletCopyV1, kagemusha_wallet_completion_dir_v1,
+        kagemusha_wallet_completion_name_v1,
+    };
+    let directory: std::path::PathBuf = kagemusha_wallet_completion_dir_v1(slot)
+        .components()
+        .iter()
+        .collect();
+    KagemushaWalletCopyV1::BOTH
+        .map(|copy| directory.join(kagemusha_wallet_completion_name_v1(operation, copy).as_str()))
+}
+
 /// Simulated store sharing state with the returned simulator handle.
 pub(super) type SimStoreV1 = KagemushaWalletDurableStoreV1<KagemushaWalletSimFsV1>;
 

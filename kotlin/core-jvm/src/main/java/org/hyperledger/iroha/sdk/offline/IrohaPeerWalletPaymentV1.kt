@@ -38,12 +38,17 @@ class IrohaPeerWalletPaymentV1(paymentEnvelope: ByteArray, payerCompanion: ByteA
         @JvmStatic fun decode(original: ByteArray): IrohaPeerWalletPaymentV1 {
             require(original.size in (HEADER_BYTES + 2)..MAXIMUM_BYTES)
             val bytes = original.copyOf()
+            val end = envelopeEnd(bytes)
+            return IrohaPeerWalletPaymentV1(bytes.copyOfRange(HEADER_BYTES, end), bytes.copyOfRange(end, bytes.size))
+        }
+        /** Shared KWPYPC1 framing. The selected profile owns its embedded envelopes. */
+        internal fun envelopeEnd(bytes: ByteArray): Int {
+            require(bytes.size in (HEADER_BYTES + 2)..MAXIMUM_BYTES)
             require(bytes.copyOfRange(0, 8).contentEquals(MAGIC)) { "Payment payer companion is mandatory" }
             val envelopeLength = readLength(bytes, 8, KagemushaWalletWireV1.MESSAGE_MAX_BYTES)
             val companionLength = readLength(bytes, 12, MAXIMUM_COMPANION_BYTES)
             require(bytes.size == HEADER_BYTES + envelopeLength + companionLength) { "Payment carrier length differs" }
-            return IrohaPeerWalletPaymentV1(bytes.copyOfRange(HEADER_BYTES, HEADER_BYTES + envelopeLength),
-                bytes.copyOfRange(HEADER_BYTES + envelopeLength, bytes.size))
+            return HEADER_BYTES + envelopeLength
         }
         private fun readLength(bytes: ByteArray, offset: Int, maximum: Int): Int {
             var value = 0L

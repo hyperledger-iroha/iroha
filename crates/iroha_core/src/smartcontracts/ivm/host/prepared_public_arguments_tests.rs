@@ -82,8 +82,14 @@ seiyaku PreparedArguments { permission Invoke;
         .unwrap();
     unpaid.set_program_counter(entry_pc).unwrap();
     assert!(matches!(
-        (&(unpaid.run_with_host(&mut host)), &(VMError::DecodeError)),
-        (Err(VMError::DecodeError), VMError::DecodeError)
+        (
+            &(unpaid.run_with_host(&mut host)),
+            &(VMError::Trap(ivm_abi::error::VmTrap::DecodeError))
+        ),
+        (
+            Err(VMError::Trap(ivm_abi::error::VmTrap::DecodeError)),
+            VMError::Trap(ivm_abi::error::VmTrap::DecodeError)
+        )
     ));
     assert!(unpaid.call_result_word_count().is_err());
     assert_eq!(ivm::argument_record_decode_count(), 1);
@@ -160,7 +166,7 @@ seiyaku PreparedArgumentEventProbe {
     let name_ptr = store_tlv(&mut event_vm, PointerType::Name, &norito_blob(&name));
     event_vm.set_register(10, name_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &event_vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, event_vm.syscall_quote())
         .expect("quote actual firing event");
     let gas = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut event_vm)
@@ -203,14 +209,17 @@ seiyaku PreparedArgumentEventProbe {
     let name_ptr = store_tlv(&mut absent_vm, PointerType::Name, &norito_blob(&name));
     absent_vm.set_register(10, name_ptr);
     record_only_host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &absent_vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, absent_vm.syscall_quote())
         .expect("quote missing event");
     assert!(matches!(
         (
             &(record_only_host.syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut absent_vm)),
-            &(VMError::PermissionDenied)
+            &(VMError::Trap(ivm_abi::error::VmTrap::PermissionDenied))
         ),
-        (Err(VMError::PermissionDenied), VMError::PermissionDenied)
+        (
+            Err(VMError::Trap(ivm_abi::error::VmTrap::PermissionDenied)),
+            VMError::Trap(ivm_abi::error::VmTrap::PermissionDenied)
+        )
     ));
     assert_eq!(ivm::argument_record_decode_count(), 1);
 }

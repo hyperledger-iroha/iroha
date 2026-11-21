@@ -201,6 +201,23 @@ class AdapterControls(unittest.TestCase):
                                                    images={'worker': self.image})
         self.events = []
 
+    def test_native_session_uses_its_authenticated_release_build_environment(self):
+        runtime_root = self.root / 'runtime'
+        runtime_root.mkdir(mode=0o700)
+        forged = {'CARGO_BUILD_JOBS': '99', 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS': '16',
+                  'CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS': '8', 'RUSTFLAGS': '-Copt-level=0'}
+        with mock.patch.dict(os.environ, forged), mock.patch.object(adapter, 'NativeWorker') as native:
+            adapter.spawn_native_session(self.prepared, self.start, records=self.records, cwd=ROOT,
+                images={'worker': self.image, 'validator': self.image}, runtime_root=runtime_root,
+                outer_timeout_ms=60000)
+        command, environment = native.call_args.args
+        self.assertIn(adapter.WORKER_TEST, command)
+        self.assertEqual(environment['CARGO_BUILD_JOBS'], str(runner.CARGO_BUILD_JOBS))
+        self.assertEqual(environment['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'], str(runner.CARGO_RELEASE_CODEGEN_UNITS))
+        self.assertEqual(environment['CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS'], str(runner.CARGO_RELEASE_CODEGEN_UNITS))
+        self.assertEqual(environment['CARGO_INCREMENTAL'], '0')
+        self.assertNotIn('RUSTFLAGS', environment)
+
     def drive(self, **options):
         config = self.root/'native-fixture-input.json'
         config.write_bytes(control.canonical({'prepared': self.prepared, 'start': self.start,

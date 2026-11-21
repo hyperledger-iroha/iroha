@@ -129,6 +129,28 @@ pub struct SharedMap {
     pub r: Option<[usize; 2]>,
 }
 
+/// How a verifier treats identity proof points. Every builder of a verified
+/// proof chooses one on purpose (`PointsBuilder::new`); nothing else, such as
+/// whether the circuit happens to run a private generator fold, selects it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityPoints {
+    /// The native rule, for total and hard slots alike: any proof point may
+    /// be the identity (32 zero bytes, absorbed as (0, 0)) except the IPA's
+    /// Schnorr commitment A, which `ipa::verify` refuses and these slots mask
+    /// finite. Complete arithmetic throughout (identity-capable input check,
+    /// complete additions, endoscalings and multiplications). Required for a
+    /// total slot and for the private generator fold.
+    Native,
+    /// Hard-slot strictness: every proof point must be finite, on incomplete
+    /// ladders. Stricter than native verification, never more accepting. Only
+    /// for builders with no verdict to agree on, whose hard slots verify the
+    /// wallet's own predecessor (its prover blinds every committed point, so an
+    /// honest wallet never meets the refusal) or, in the benchmark relations
+    /// without the monetary backend, a pair whose refusal leaves the prover
+    /// without a witness. Never for a total slot or a generator fold.
+    Refused,
+}
+
 /// Exports the builder reserves up front (the pool's lane reads name them).
 #[derive(Clone, Copy, Debug)]
 pub struct Exports {
@@ -145,7 +167,6 @@ pub struct Exports {
     pub pairs: usize,
     pub embed: usize,
     pub header: usize,
-    pub valid: usize,
 }
 
 pub struct PointsBuilder<C: PastaCurve> {
@@ -161,11 +182,16 @@ pub struct PointsBuilder<C: PastaCurve> {
     squeezes: Vec<SqueezeSpec<C::Base>>,
     equal: Vec<(usize, usize)>,
     soft_equal: Vec<(usize, usize, Option<usize>)>,
-    total: bool,
+    /// The builder's identity rule, chosen by its caller.
+    identity: IdentityPoints,
     /// (binding index, the challenge it equals).
     v_from: Vec<(usize, ChRef)>,
     /// (input point, binding indices of x lo, x hi, y lo, y hi).
     claim_limbs: Vec<(usize, [usize; 4])>,
+    /// Full-width values that cross between the two fields as two shared
+    /// 128-bit limbs: (binding index of the low limb, the value's modulus).
+    /// Each pair must be the value's canonical encoding (`canonical_limbs`).
+    full_limbs: Vec<(usize, num_bigint::BigUint)>,
     embeds: Vec<usize>,
     headers: Vec<[C::Base; 3]>,
     /// Inputs that are constants (a circuit proof's fixed rows: the key's
@@ -189,7 +215,16 @@ impl<C: PastaCurve> PointsBuilder<C>
 where
     C::Base: Scalar + PoseidonField,
 {
-    pub fn new(w: &mut Wiring<C::Base>, e_out: usize, e_v: usize, e_zero: usize) -> Self {
+    /// A builder over the exports `e_out` (the pool's outputs), `e_v` (the
+    /// shared values) and `e_zero` (a zero word). `identity` is the identity
+    /// rule of every slot it verifies; see `IdentityPoints`.
+    pub fn new(
+        w: &mut Wiring<C::Base>,
+        e_out: usize,
+        e_v: usize,
+        e_zero: usize,
+        identity: IdentityPoints,
+    ) -> Self {
         let mut r = || w.reserve();
         let e = Exports {
             x: r(),
@@ -205,7 +240,6 @@ where
             pairs: r(),
             embed: r(),
             header: r(),
-            valid: r(),
         };
         PointsBuilder {
             e,
@@ -219,15 +253,37 @@ where
             squeezes: Vec::new(),
             equal: Vec::new(),
             soft_equal: Vec::new(),
-            total: false,
+            identity,
             v_from: Vec::new(),
             claim_limbs: Vec::new(),
+            full_limbs: Vec::new(),
             embeds: Vec::new(),
             headers: Vec::new(),
             consts: Vec::new(),
             finite: Vec::new(),
             perms: 0,
         }
+    }
+
+    /// The builder's identity rule.
+    pub fn identity(&self) -> IdentityPoints {
+        self.identity
+    }
+
+    /// Whether the builder lays out complete (identity-capable) arithmetic:
+    /// exactly when its caller chose the native identity rule.
+    fn complete(&self) -> bool {
+        self.identity == IdentityPoints::Native
+    }
+
+    /// Panics unless the caller chose the native identity rule: `what` must
+    /// agree with native verification on identity points.
+    pub(crate) fn require_native(&self, what: &str) {
+        assert_eq!(
+            self.identity,
+            IdentityPoints::Native,
+            "{what} follows the native identity rule"
+        );
     }
 
     fn word_src(&self, wd: Word) -> (usize, usize) {
@@ -266,6 +322,10 @@ where
 
     fn input(&mut self, pool: &mut Pool<C::Base>, sp: &mut Sp<C::Base>, p: &Aff<C>) -> (PtRef, C) {
         let pt = C::from(*p);
+        assert!(
+            self.complete() || !bool::from(pt.is_identity()),
+            "an identity proof point in a builder whose rule refuses it (IdentityPoints::Refused)"
+        );
         let (x, y) = coords(&pt);
         let i = self.inputs.len();
         self.inputs.push((x, y, None));
@@ -380,7 +440,7 @@ where
         keys: Option<&KeySelect<C>>,
         wallet: Option<usize>,
     ) -> TotalPoints {
-        self.total = true;
+        self.require_native("a total slot");
         let start = self.inputs.len();
         let verdict = self.soft_equal.len();
         self.verify_keyed_inner(pool, shape, gens, proof, claims, tr, sm, keys, wallet, true);
@@ -434,6 +494,27 @@ where
         }
         let full_base = at;
         let claims_base = full_base + 18;
+        // The proof's full-width scalars (io digest, v_A, v_B, v_C, kappa',
+        // kappa' zeta, c(z1), z1 b_final zeta, z2), a circuit proof's late io
+        // digest, and the pair link's R (once per pair, in its first proof):
+        // their shared limbs must be the canonical encodings the native
+        // transcript absorbs, or this side would absorb (and multiply by) an
+        // alias value + modulus that the scalar side cannot tell apart.
+        let scalar_modulus = modulus::<F<C>>();
+        for i in 0..9 {
+            self.full_limbs
+                .push((full_base + 2 * i, scalar_modulus.clone()));
+        }
+        if tr.circuit.as_ref().is_some_and(|c| c.late_digest.is_some()) {
+            self.full_limbs
+                .push((claims_base + 4 * claims.len(), scalar_modulus));
+        }
+        if let Some((true, _, _, _)) = tr.link {
+            let rl = sm.r.expect("R's limbs");
+            assert_eq!(rl[1], rl[0] + 1, "R's limbs are adjacent");
+            self.full_limbs
+                .push((rl[0], modulus::<crate::verifier::Fq>()));
+        }
         let k_header = self.headers.len();
         self.headers.push(tr.header.0);
         let mut sp = Sp {
@@ -908,6 +989,99 @@ fn neg<Fb: PrimeField>(l: &Lin<Fb>) -> Lin<Fb> {
     scaled(l, -Fb::ONE)
 }
 
+/// Canonical full-width limb pairs. For each `(lo, m)`, the shared values
+/// `lo` and `lo + 1` (128-bit limbs: P's binding chain range-checks every
+/// shared value, and the linked chains make S's the same integers) encode an
+/// integer `x = lo + 2^128 hi` below `m`, as the native transcript's
+/// canonical encodings do. With `m - 1 = P_lo + 2^128
+/// P_hi`, one instance per pair holds `e_lo` (128-bit chunks), `e_hi`
+/// (127-bit chunks) and a Boolean borrow `b` with `lo + e_lo = P_lo + 2^128 b`
+/// and `hi + e_hi + b = P_hi`, so `x = m - 1 - e_lo - 2^128 e_hi`. Every
+/// quantity is below 2^130, so these field equations are integer equations:
+/// an alias `x + m` (any `x >= m`) would need `e_lo + 2^128 e_hi < 0`.
+pub(crate) fn canonical_limbs<Fb: Scalar>(
+    w: &mut Wiring<Fb>,
+    gfam: usize,
+    shared: usize,
+    pairs: &[(usize, num_bigint::BigUint)],
+) {
+    use num_bigint::BigUint;
+    if pairs.is_empty() {
+        return;
+    }
+    let count = pairs.len();
+    let rho = bits_for(count);
+    let n = 1usize << rho;
+    let (lo_w, hi_w) = (chunk_ws(128), chunk_ws(127));
+    let (lo_at, hi_at) = (0, lo_w.len());
+    let b_at = hi_at + hi_w.len();
+    let mut values = vec![vec![Fb::ZERO; n]; b_at + 1];
+    let low_mask = (BigUint::from(1u32) << 128) - 1u32;
+    let wide = BigUint::from(1u32) << 256;
+    let (mut p_lo, mut p_hi) = (vec![Fb::ZERO; n], vec![Fb::ZERO; n]);
+    let (mut lo_map, mut hi_map) = (vec![None; n], vec![None; n]);
+    for (i, (lo, m)) in pairs.iter().enumerate() {
+        let pm1 = m - 1u32;
+        assert!(pm1.bits() <= 255, "a modulus below 2^255");
+        p_lo[i] = big(&(&pm1 & &low_mask));
+        p_hi[i] = big(&(&pm1 >> 128));
+        let limb = |k: usize| to_big(w.arrays[shared].values[0][lo + k]);
+        let (l, h) = (limb(0), limb(1));
+        // A canonical x gives the honest difference; any other wraps, and no
+        // witness holds its rows.
+        let d = (&wide + &pm1 - (&l + (&h << 128))) % &wide;
+        let (e_lo, e_hi) = (&d & &low_mask, &d >> 128);
+        for (c, v) in chunk_vals::<Fb>(&e_lo, &lo_w).into_iter().enumerate() {
+            values[lo_at + c][i] = v;
+        }
+        for (c, v) in chunk_vals::<Fb>(&e_hi, &hi_w).into_iter().enumerate() {
+            values[hi_at + c][i] = v;
+        }
+        values[b_at][i] = big(&((&l + &e_lo) >> 128));
+        lo_map[i] = Some(*lo);
+        hi_map[i] = Some(lo + 1);
+    }
+    let one = Fb::ONE;
+    let b = own::<Fb>(b_at, n);
+    let rows = vec![
+        lin_row(
+            plus(
+                &plus(&link(shared, 0, lo_map, one), &rec(lo_at, &lo_w, n)),
+                &plus(&neg(&constant(p_lo)), &scaled(&b, -p2::<Fb>(128))),
+            ),
+            n,
+        ),
+        lin_row(
+            plus(
+                &plus(&link(shared, 0, hi_map, one), &rec(hi_at, &hi_w, n)),
+                &plus(&b, &neg(&constant(p_hi))),
+            ),
+            n,
+        ),
+        [b.clone(), b.clone(), b],
+    ];
+    let mut lookups = Vec::new();
+    let mut widths = Vec::new();
+    for (start, ws) in [(lo_at, &lo_w), (hi_at, &hi_w)] {
+        for (j, width) in ws.iter().enumerate() {
+            range_lk(&mut lookups, start + j, *width, n);
+            widths.push(*width as u16);
+        }
+    }
+    widths.push(1);
+    w.push(Array {
+        name: "canonical full-width limbs",
+        family: gfam,
+        rho,
+        r_count: count,
+        fixed: false,
+        lookups,
+        widths,
+        rows,
+        values,
+    });
+}
+
 /// A global array with no cells and one export of per-instance tuples.
 fn link_entries<Fb: Scalar>(
     w: &mut Wiring<Fb>,
@@ -997,7 +1171,7 @@ where
             [o(2), o(0), o(3)],
             [o(1), o(1), plus(&o(3), &constant(vec![C::b(); n_p]))],
         ];
-        if self.total {
+        if self.complete() {
             pv.extend((0..5).map(|_| vec![Fb::<C>::ZERO; n_p]));
             for i in 0..np {
                 let x = pv[0][i];
@@ -1165,6 +1339,14 @@ where
             .collect();
         w.import(points, vec![o(0), o(1)], back);
         self.build_claim_canonical(w, gfam, shared_a);
+        for (lo, m) in &self.full_limbs {
+            let limb = |k: usize| to_big(w.arrays[shared_a].values[0][lo + k]);
+            assert!(
+                limb(0) + (limb(1) << 128) < *m,
+                "a full-width value's shared limbs are its canonical encoding"
+            );
+        }
+        canonical_limbs(w, gfam, shared_a, &self.full_limbs);
         // Additions.
         let na = self.adds.len();
         let rho_a = bits_for(na);
@@ -1175,7 +1357,7 @@ where
             .collect();
         for (i, s) in self.adds.iter().enumerate() {
             let qy = if s.neg { -s.qv.1 } else { s.qv.1 };
-            let [l, sq, pq, x3, y3] = if self.total {
+            let [l, sq, pq, x3, y3] = if self.complete() {
                 [Fb::<C>::ZERO; 5]
             } else {
                 ladders::n_add(s.pv, (s.qv.0, qy))
@@ -1216,7 +1398,7 @@ where
             [l.clone(), l.clone(), plus(&plus(&x3, &px), &qx)],
             [l.clone(), plus(&px, &neg(&x3)), plus(&y3, &py)],
         ];
-        if self.total {
+        if self.complete() {
             let completed = complete::additions(
                 gfam,
                 rho_a,
@@ -1310,7 +1492,7 @@ where
             .iter()
             .map(|e| (e.point, e.bits.clone()))
             .collect();
-        let lad = if self.total {
+        let lad = if self.complete() {
             complete::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
         } else {
             ladders::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
@@ -1345,7 +1527,7 @@ where
             .iter()
             .map(|m| (m.point, m.bits.clone(), m.fixed))
             .collect();
-        let lad = if self.total {
+        let lad = if self.complete() {
             complete::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
         } else {
             ladders::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
@@ -1361,7 +1543,7 @@ where
                 for (p, r) in results.iter().enumerate() {
                     col[p] = if k == 0 { r.0 } else { r.1 };
                 }
-                if self.total {
+                if self.complete() {
                     end.values[5 + k] = col;
                 } else {
                     end.values.push(col);
@@ -1504,7 +1686,8 @@ where
                 rows,
                 values,
             });
-            w.set_export(self.e.valid, array, vec![own(0, n)]);
+            // Verdict readers link this array's cell 0 directly
+            // (`PointsIdx::validity`); it exports nothing.
             Some(array)
         };
         PointsIdx {
@@ -1855,7 +2038,8 @@ mod tests {
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
         let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-        let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
+        let mut pb =
+            PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Refused);
         pb.verify_keyed(
             &mut pool,
             &shape,

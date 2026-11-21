@@ -1,4 +1,5 @@
 //! State-free canonical pointer encoding for Kotodama V1 exact numbers.
+use crate::error::VmTrap;
 use crate::{VMError, pointer_abi::PointerType};
 use iroha_primitives::{
     bigint::BigInt,
@@ -10,13 +11,13 @@ const OUTER_HASH_BYTES: usize = iroha_crypto::Hash::LENGTH;
 /// Encode an exact V1 pointer envelope around a prevalidated numeric or private-input frame.
 ///
 /// # Errors
-/// Returns [`VMError::GasCostOverflow`] when header length or allocation size overflows.
+/// Returns [`crate::error::VmTrap::GasCostOverflow`] when header length or allocation size overflows.
 pub fn encode_envelope(pointer_type: PointerType, frame: &[u8]) -> Result<Vec<u8>, VMError> {
-    let length = u32::try_from(frame.len()).map_err(|_| VMError::GasCostOverflow)?;
+    let length = u32::try_from(frame.len()).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
     let capacity = OUTER_HEADER_BYTES
         .checked_add(frame.len())
         .and_then(|bytes| bytes.checked_add(OUTER_HASH_BYTES))
-        .ok_or(VMError::GasCostOverflow)?;
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))?;
     let mut envelope = Vec::with_capacity(capacity);
     envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     envelope.push(1);
@@ -60,6 +61,7 @@ pub fn encode_quantity(value: &Quantity) -> Result<Vec<u8>, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn integer_encoding_rejects_both_signed_domain_overflows() {
         use crate::numeric::PointerAbiFaultV1;
@@ -72,7 +74,7 @@ mod tests {
         for bytes in [&above, &below] {
             let value = BigInt::from_twos_bytes(bytes).expect("arbitrary-width integer");
             assert!(
-                matches!(encode_int(&value), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
+                matches!(encode_int(&value), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::NonCanonical))
             );
         }
     }

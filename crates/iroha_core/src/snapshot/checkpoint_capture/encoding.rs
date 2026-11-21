@@ -244,12 +244,14 @@ mod tests {
     fn overlay_world_members_use_the_exact_committed_schema_order() {
         let order =
             <crate::state::World as json::FastJsonWrite>::json_object_field_order().unwrap();
+        let overlay =
+            <crate::state::WorldBlock<'_> as json::FastJsonWrite>::json_object_field_order()
+                .unwrap();
         let reversed = format!(
             "{{{}}}",
-            order
+            overlay
                 .iter()
                 .rev()
-                .filter(|key| **key != "external_event_buf")
                 .map(|key| format!("\"{key}\":null"))
                 .collect::<Vec<_>>()
                 .join(",")
@@ -267,6 +269,25 @@ mod tests {
         );
         assert!(canonical_world_members("{}").is_err());
         assert!(canonical_world_members("{\"unknown\":null}").is_err());
+    }
+
+    #[test]
+    fn unmodified_world_checkpoint_preserves_every_committed_value() {
+        let world = crate::state::World::new();
+        let limit = 16 * 1024 * 1024;
+        let committed = json::to_json_bounded(&world, limit).unwrap();
+        let overlay = json::to_json_bounded(&world.block(), limit).unwrap();
+        let expected = crate::state::deserialize::json_object_members(&committed).unwrap();
+        let members = canonical_world_members(&overlay).unwrap();
+        assert_eq!(members.len(), expected.len());
+        for ((key, raw), (expected_key, expected_raw)) in members.into_iter().zip(expected) {
+            assert_eq!(key, expected_key);
+            if key == "external_event_buf" {
+                assert_eq!(raw, None);
+            } else {
+                assert_eq!(raw, Some(expected_raw), "checkpoint member {key}");
+            }
+        }
     }
 
     #[test]

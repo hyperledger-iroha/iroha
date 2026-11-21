@@ -28,7 +28,8 @@ module ContractFlowTests {
         test::assert(counter == 5);
         test::invoke_kotoage_as(actor: "issuer", kotoage: "remember_caller", arguments: {});
         test::assert(
-            last_actor == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"),
+            last_actor
+                == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"),
         );
     }
 

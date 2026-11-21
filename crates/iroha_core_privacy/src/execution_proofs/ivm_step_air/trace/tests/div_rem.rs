@@ -1,5 +1,6 @@
 //! Interpreter parity and adversarial attempted-step division boundaries.
 
+use ivm_abi::error::VmTrap;
 mod attacks;
 mod native;
 
@@ -51,16 +52,15 @@ pub(super) fn attempted(
     let outcome = match records[steps - 1].outcome {
         DiagnosticStepOutcome::Completed => SegmentOutcome::Continue,
         DiagnosticStepOutcome::Trapped(VmTrapKind::OutOfGas) => {
-            assert!(matches!(actual, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(actual, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             SegmentOutcome::OutOfGas
         }
         DiagnosticStepOutcome::Trapped(VmTrapKind::NumericFault) => {
             assert!(matches!(
                 actual,
-                Err(
-                    ivm::VMError::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero)
-                        | ivm::VMError::RegisterIntegerOverflow
-                )
+                Err(ivm::VMError::Trap(VmTrap::NumericFault(
+                    ivm::numeric::NumericFaultV1::DivisionByZero
+                )) | ivm::VMError::Trap(VmTrap::RegisterIntegerOverflow))
             ));
             SegmentOutcome::NumericFault
         }
@@ -266,7 +266,7 @@ fn authenticated_root_gas_is_distinct_from_recorded_division_budget() {
         let mut recorder = DiagnosticStepRecorder::try_new(128, &budget).unwrap();
         assert!(matches!(
             vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-            Err(ivm::VMError::OutOfGas)
+            Err(ivm::VMError::Trap(VmTrap::OutOfGas))
         ));
         if invocation_gas < root_gas {
             assert!(recorder.records().is_empty());

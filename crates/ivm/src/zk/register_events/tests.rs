@@ -1,6 +1,7 @@
 //! Original row admission, exact overlapping growth and real scrub-before-refund.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_crypto::{Hash, HashOf};
 use std::{alloc::Layout, mem::size_of};
 
@@ -39,9 +40,9 @@ fn exact_original_growth_keeps_both_backings_and_preserves_refused_rows() {
     let original = AllocationBudget::new(0);
     let mut log = RegLog::new(Some(&original));
     assert!(
-        matches!(prepare(&mut log, 1, &original), Err(VMError::AllocationDeferred(
+        matches!(prepare(&mut log, 1, &original), Err(VMError::Deferred(VmDeferral::AllocationDeferred(
         AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }
-    )) if requested_bytes == 4 * size)
+    ))) if requested_bytes == 4 * size)
     );
     assert_eq!(original.peak_reserved_bytes(), 0);
     original.set_limit_bytes(4 * size);
@@ -50,11 +51,11 @@ fn exact_original_growth_keeps_both_backings_and_preserves_refused_rows() {
     }
     let pointer = log.as_slice().as_ptr();
     original.set_limit_bytes(12 * size - 1);
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
         requested_bytes,
         release,
         ..
-    })) = prepare(&mut log, 1, &original)
+    }))) = prepare(&mut log, 1, &original)
     else {
         panic!("original overlap must refuse before allocation");
     };
@@ -102,20 +103,20 @@ fn missing_or_foreign_scope_cannot_grow_reset_or_copy_even_with_equal_limits() {
     let pointer = log.as_slice().as_ptr();
     assert!(matches!(
         log.prepare_events(0, None),
-        Err(VMError::HostUnavailable)
+        Err(VMError::Deferred(VmDeferral::HostUnavailable))
     ));
     foreign.with_deferred_refund_notifications(|scope| {
         assert!(matches!(
             log.prepare_events(8, Some(scope)),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         assert!(matches!(
             log.reset(Some(scope)),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         assert!(matches!(
             log.try_clone_allocation(Some(scope)),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
     });
     assert_eq!(log.as_slice(), &[event(17, true)]);
@@ -133,15 +134,15 @@ fn allocator_refusal_overflow_and_copy_unwind_preserve_original_owner() {
     REFUSE_NEXT_ALLOCATION.set(true);
     assert!(matches!(
         prepare(&mut log, 7, &original),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert!(matches!(
         prepare(&mut log, usize::MAX, &original),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::DemandOverflow
-        ))
+        )))
     ));
     PANIC_AFTER_COPY.set(true);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -174,7 +175,7 @@ fn clear_reuses_original_credit_and_reset_never_rebinds_the_pool() {
     assert_eq!(original.reserved_bytes(), 0);
     assert!(matches!(
         prepare(&mut log, 1, &original),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
 }
 
@@ -187,7 +188,7 @@ fn independent_copy_and_final_borrower_each_keep_their_original_rows_alive() {
     append(&mut log, 13, &original);
     assert!(matches!(
         original.with_deferred_refund_notifications(|scope| log.try_clone_allocation(Some(scope))),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     original.set_limit_bytes(8 * size);
     let copy = original
@@ -212,9 +213,9 @@ fn standalone_growth_is_fallible_without_creating_a_state_pool() {
     crate::cache_memory::refuse_next_owned_vec_growth_for_test();
     assert!(matches!(
         log.prepare_events(1, None),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     for value in 0..12 {
         log.prepare_events(1, None).unwrap();

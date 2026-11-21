@@ -4,6 +4,7 @@
 //! retain their original funded owner; detached captures prepay their own backing.
 
 use super::{DeltaTraceLog, MemEvent, RegEvent, RegisterState, StepEntry};
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     error::ExecutionDeferral,
@@ -96,7 +97,9 @@ pub struct DiagnosticTraceSnapshot {
 }
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn memory_parts(event: &MemEvent) -> (bool, u64, u128, u8, &[[u8; 32]], &[u8; 32]) {
     match event {
@@ -167,7 +170,7 @@ impl DiagnosticTraceSource<'_> {
                     .any(|(index, _, _)| *index >= crate::parallel::REGISTER_COUNT)
             })
         {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         let mut plan = ExecutionMemoryPlan::array::<RegisterState>(self.state_count())
             .map_err(|_| unavailable())?;
@@ -191,8 +194,8 @@ impl DiagnosticTraceSource<'_> {
         budget: &AllocationBudget,
     ) -> Result<DiagnosticTraceSnapshot, VMError> {
         let plan = self.allocation_plan()?;
-        let mut parent =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let mut parent = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         self.try_snapshot_from_parent(&mut parent)
     }
     /// Partition this complete capture from an already admitted original parent.

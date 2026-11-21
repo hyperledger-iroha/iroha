@@ -14,6 +14,7 @@ use ivm::{
     syscall_metering::SyscallCompletion,
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
     let Some((&mode, payload)) = data.split_first() else {
@@ -366,7 +367,7 @@ fn fuzz_staged_out_of_gas(payload: &[u8]) {
         return;
     }
     match outcome {
-        Err(VMError::SyscallOutOfGas { syscall, .. }) => {
+        Err(VMError::Trap(VmTrap::SyscallOutOfGas { syscall, .. })) => {
             assert_eq!(syscall, syscalls::SYSCALL_INT_WRAP_ADD);
             assert_eq!(candidate.register(10), original_result_pointer);
             assert_eq!(
@@ -377,7 +378,7 @@ fn fuzz_staged_out_of_gas(payload: &[u8]) {
                 Some(SyscallCompletion::Trap)
             );
         }
-        Err(VMError::OutOfGas) => {
+        Err(VMError::Trap(VmTrap::OutOfGas)) => {
             // Plain instruction OOG may occur before the syscall or at HALT
             // after a completed atomic syscall. It must expose either the
             // untouched input pointer or the complete canonical result.

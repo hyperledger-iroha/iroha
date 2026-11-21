@@ -1,6 +1,7 @@
 //! Exact instance permission delegation in the local WSV host.
 
 use super::*;
+use crate::error::VmTrap;
 
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(7 + payload.len() + CryptoHash::LENGTH);
@@ -69,13 +70,13 @@ fn contract_permission_delegation_requires_instance_and_exact_effect_authority()
     let grant = syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION;
     assert!(matches!(
         call(&mut host, &mut vm, &actor, "Member", grant),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     host.bind_contract_runtime_context(actor.clone(), contract.clone(), "manage".into())
         .unwrap();
     assert!(matches!(
         call(&mut host, &mut vm, &actor, "Member", grant),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     let token = PermissionToken::ContractPermission {
         contract: contract.clone(),
@@ -84,7 +85,7 @@ fn contract_permission_delegation_requires_instance_and_exact_effect_authority()
     host.wsv.grant_permission(&actor, token.clone());
     assert!(matches!(
         call(&mut host, &mut vm, &actor, "Member", grant),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     host.wsv.revoke_permission(&actor, &token);
     host.wsv
@@ -93,7 +94,7 @@ fn contract_permission_delegation_requires_instance_and_exact_effect_authority()
     assert!(host.wsv.has_permission(&actor, &token));
     assert!(matches!(
         call(&mut host, &mut vm, &actor, "Member", grant),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     call(
         &mut host,
@@ -112,7 +113,7 @@ fn contract_permission_delegation_requires_instance_and_exact_effect_authority()
             "Member",
             syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION
         ),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
 }
 
@@ -137,7 +138,7 @@ fn contract_permission_delegation_rejects_shared_and_undeclared_names() {
                 name,
                 syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION
             ),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
     let wrong_type = vm
@@ -146,7 +147,7 @@ fn contract_permission_delegation_rejects_shared_and_undeclared_names() {
     vm.set_register(11, wrong_type);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_GRANT_CONTRACT_PERMISSION, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 
@@ -206,7 +207,7 @@ fn exact_transfer_json_delegation_uses_effect_subject_and_can_be_revoked() {
             &permission,
             syscalls::SYSCALL_GRANT_PERMISSION,
         ),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     transfer_permission_call(
         &mut host,
@@ -225,7 +226,7 @@ fn exact_transfer_json_delegation_uses_effect_subject_and_can_be_revoked() {
             &permission,
             syscalls::SYSCALL_REVOKE_PERMISSION,
         ),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
 }
 
@@ -254,7 +255,7 @@ fn exact_transfer_json_delegation_rejects_foreign_source_and_broad_tokens() {
         ] {
             assert!(matches!(
                 transfer_permission_call(&mut host, &mut vm, &actor, &permission, syscall),
-                Err(VMError::PermissionDenied)
+                Err(VMError::Trap(VmTrap::PermissionDenied))
             ));
         }
     }
@@ -314,7 +315,7 @@ fn exact_trigger_json_delegation_requires_owner_and_can_be_revoked() {
                 &permission,
                 syscalls::SYSCALL_GRANT_PERMISSION
             ),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
     }
 }
@@ -339,7 +340,7 @@ fn exact_trigger_json_delegation_rejects_missing_malformed_and_broad_tokens() {
         ] {
             assert!(matches!(
                 transfer_permission_call(&mut host, &mut vm, &actor, &permission, syscall),
-                Err(VMError::PermissionDenied | VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::PermissionDenied) | VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }

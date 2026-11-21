@@ -8,6 +8,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -145,14 +146,20 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN]);
     vm.load_program(&prog_udom).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Attempt to unregister asset def -> should fail (balances exist)
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_uad = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ASSET]);
     vm.load_program(&prog_uad).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Burn 7 units from bob to clear balances
     let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_asset_definition_norito_tlv(&rose);

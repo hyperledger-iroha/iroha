@@ -79,8 +79,10 @@ pub fn resolve_credential_registration_v1<'a>(
     let TransactionEntrypoint::External(signed) = input else {
         return Err(Error::Instruction);
     };
-    let (_, output) = block.network_output_at(index).ok_or(Error::NotApplied)?;
-    if output.result.is_err() {
+    let (_, output) = block
+        .network_execution_output_at(index)
+        .ok_or(Error::NotApplied)?;
+    if output.result().is_err() {
         return Err(Error::NotApplied);
     }
     let Executable::Instructions(instructions) = signed.instructions() else {

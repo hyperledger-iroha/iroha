@@ -4,18 +4,22 @@
 //! committing. The kernel ([`crate::runtime::migration`]) drives it; the release supplies the
 //! code that knows the two layouts:
 //!
-//! - [`MigrationAddition::stage`] copies at most a bounded number of old rows after the cursor
+//! - The stage copies at most a bounded number of old rows after the cursor
 //!   into the successor and returns the new cursor;
-//! - [`MigrationAddition::barrier`] mirrors, at the end of every block, the old rows that block
+//! - The barrier mirrors, at the end of every block, the old rows that block
 //!   touched at or before the cursor, so the staged part of the successor stays exact;
-//! - [`MigrationAddition::drain`] deletes a bounded number of old rows after the cutover;
-//! - [`MigrationAddition::stale`] reports a write to the old storage after the cutover.
+//! - The drain deletes a bounded number of old rows after the cutover;
+//! - The stale-write check reports a write to the old storage after the cutover.
 //!
 //! The catalog publishes one migration definition per declaration and execution services
 //! profile it compiles, so a root running any of them can activate the migration. The successor
 //! storage is storage an addition adds ([`super::additions`]); this release declares none.
+//! Callbacks receive only pre-bound storage capabilities from an engine-owned typed adapter
+//! ([`crate::runtime::migration::storage`]). The first adapter supports one source and one
+//! successor table. Declaring another field or shape fails before the code can run; no callback
+//! receives the World or an arbitrary projection, and no table can be opened after writes start.
 
-use crate::state::{WorldBlock, WorldTransaction};
+use crate::runtime::migration::storage::MigrationProgram;
 
 /// One native migration between World fields.
 #[derive(Clone, Copy, Debug)]
@@ -30,14 +34,8 @@ pub struct MigrationAddition {
     pub(crate) cursor: &'static str,
     /// Most old rows one stage copies or drains.
     pub(crate) rows_per_stage: u32,
-    /// Copy at most `limit` old rows after `cursor` into the successor.
-    pub(crate) stage: MigrationStage,
-    /// Mirror the old rows the block touched at or before `cursor` into the successor.
-    pub(crate) barrier: MigrationBarrier,
-    /// Delete at most `limit` old rows.
-    pub(crate) drain: MigrationDrain,
-    /// Whether the block wrote a row of the old storage rather than deleting one.
-    pub(crate) stale: MigrationStaleWrite,
+    /// Sealed engine adapter issuing only this declaration's typed storage capabilities.
+    pub(crate) code: &'static dyn MigrationProgram,
 }
 
 /// What one copying stage did.
@@ -60,31 +58,19 @@ pub struct DrainOutcome {
     pub empty: bool,
 }
 
-/// Copies one bounded stage. It writes the successor only, and on an error it has written
-/// nothing: it transforms the rows it will copy before it writes the first, because the kernel
-/// keeps the committed cursor and the write barrier of a faulted migration for the replacement
-/// that takes them over.
-pub type MigrationStage =
-    fn(&mut WorldTransaction<'_, '_>, &[u8], u32) -> Result<StageOutcome, String>;
-/// Mirrors a block's writes of the old storage. It is total over the rows a stage accepts.
-pub type MigrationBarrier = fn(&mut WorldBlock<'_>, &[u8]);
-/// Drains one bounded stage of the old storage.
-pub type MigrationDrain = fn(&mut WorldTransaction<'_, '_>, u32) -> DrainOutcome;
-/// Reports a write that reached the old storage in the block.
-pub type MigrationStaleWrite = fn(&WorldBlock<'_>) -> bool;
-
 /// The native migrations of this release.
 pub const MIGRATIONS: &[MigrationAddition] = &[];
 
 /// A migration of a hypothetical later release, over World fields the real baseline holds.
 #[cfg(test)]
 pub mod test_migrations {
+    use super::{DrainOutcome, MigrationAddition, StageOutcome};
+    use crate::runtime::migration::storage::{
+        BarrierStorage, PointAndScan, SEQUENCE_TABLES, SourceChanges, SourceDrain, StageStorage,
+        TableMigration,
+    };
     use iroha_crypto::Hash;
     use iroha_data_model::account::AccountId;
-    use mv::storage::StorageReadOnly as _;
-
-    use super::{DrainOutcome, MigrationAddition, StageOutcome};
-    use crate::state::{WorldBlock, WorldTransaction};
 
     /// Module of [`SEQUENCES`].
     pub const MODULE: &str = "iroha.test.migration.sequences";
@@ -95,13 +81,9 @@ pub mod test_migrations {
     pub const TO: &str = "world.viral_bonus_paid";
 
     /// The successor row of one old row: the hash of the account, and whether its sequence is
-    /// odd. A sequence of `u64::MAX` is a row no stage accepts.
+    /// odd. Every sequence has a successor, including the copying stage's fault sentinel, so
+    /// later source writes remain representable while the barrier holds.
     pub fn successor(account: &AccountId, sequence: u64) -> Result<(Hash, bool), String> {
-        if sequence == u64::MAX {
-            return Err(format!(
-                "{account} holds a sequence no successor row represents"
-            ));
-        }
         let key = norito::encode_canonical(account).map_err(|error| error.to_string())?;
         Ok((Hash::new(key), sequence % 2 == 1))
     }
@@ -116,7 +98,7 @@ pub mod test_migrations {
     }
 
     fn stage(
-        world: &mut WorldTransaction<'_, '_>,
+        mut storage: StageStorage<'_, '_, PointAndScan, AccountId, u64, Hash, bool>,
         cursor: &[u8],
         limit: u32,
     ) -> Result<StageOutcome, String> {
@@ -124,13 +106,18 @@ pub mod test_migrations {
         let limit = usize::try_from(limit).map_err(|error| error.to_string())?;
         let mut batch = Vec::new();
         let mut done = true;
-        for (account, sequence) in world.tx_sequences.iter() {
-            if after.as_ref().is_some_and(|after| account <= after) {
-                continue;
-            }
+        for (account, sequence) in storage
+            .source
+            .scan_after(after.as_ref(), limit.saturating_add(1))
+        {
             if batch.len() == limit {
                 done = false;
                 break;
+            }
+            // Inject a deterministic copying-stage failure before any successor write. This
+            // tests stage atomicity without making the live barrier's row transform partial.
+            if *sequence == u64::MAX {
+                return Err(format!("{account} holds the copying-stage fault sentinel"));
             }
             batch.push((account.clone(), successor(account, *sequence)?));
         }
@@ -142,17 +129,17 @@ pub mod test_migrations {
         };
         let rows = u32::try_from(batch.len()).map_err(|error| error.to_string())?;
         for (_, (key, value)) in batch {
-            world.viral_bonus_paid.insert(key, value);
+            storage.successor.insert(key, value);
         }
         Ok(StageOutcome { cursor, rows, done })
     }
 
-    fn barrier(world: &mut WorldBlock<'_>, cursor: &[u8]) {
+    fn barrier(mut storage: BarrierStorage<'_, '_, AccountId, u64, Hash, bool>, cursor: &[u8]) {
         let Ok(Some(staged)) = cursor_account(cursor) else {
             return;
         };
-        let mirrored: Vec<(Hash, Option<bool>)> = world
-            .tx_sequences
+        let mirrored: Vec<(Hash, Option<bool>)> = storage
+            .source
             .touched_entries()
             .filter(|entry| *entry.key <= staged)
             .filter_map(|entry| {
@@ -163,39 +150,34 @@ pub mod test_migrations {
         for (key, value) in mirrored {
             match value {
                 Some(value) => {
-                    world.viral_bonus_paid.insert(key, value);
+                    storage.successor.insert(key, value);
                 }
                 None => {
-                    world.viral_bonus_paid.remove(key);
+                    storage.successor.remove(key);
                 }
             }
         }
     }
 
-    fn drain(world: &mut WorldTransaction<'_, '_>, limit: u32) -> DrainOutcome {
+    fn drain(mut source: SourceDrain<'_, '_, AccountId, u64>, limit: u32) -> DrainOutcome {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let batch: Vec<AccountId> = world
-            .tx_sequences
-            .iter()
-            .take(limit)
-            .map(|(account, _)| account.clone())
-            .collect();
+        let batch: Vec<AccountId> = source.keys(limit).cloned().collect();
         let rows = u32::try_from(batch.len()).unwrap_or(u32::MAX);
         for account in batch {
-            world.tx_sequences.remove(account);
+            source.remove(account);
         }
         DrainOutcome {
             rows,
-            empty: world.tx_sequences.iter().next().is_none(),
+            empty: source.is_empty(),
         }
     }
 
-    fn stale(world: &WorldBlock<'_>) -> bool {
-        world
-            .tx_sequences
-            .touched_entries()
-            .any(|entry| entry.after.is_some())
+    fn stale(source: SourceChanges<'_, '_, AccountId, u64>) -> bool {
+        source.touched_entries().any(|entry| entry.after.is_some())
     }
+
+    static CODE: TableMigration<PointAndScan, AccountId, u64, Hash, bool> =
+        SEQUENCE_TABLES.migration(stage, barrier, drain, stale);
 
     /// Moves `world.tx_sequences` into `world.viral_bonus_paid`, two rows a stage.
     pub const SEQUENCES: MigrationAddition = MigrationAddition {
@@ -204,9 +186,6 @@ pub mod test_migrations {
         to: &[TO],
         cursor: "norito:iroha_data_model::account::AccountId@test",
         rows_per_stage: 2,
-        stage,
-        barrier,
-        drain,
-        stale,
+        code: &CODE,
     };
 }

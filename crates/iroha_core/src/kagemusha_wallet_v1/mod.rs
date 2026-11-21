@@ -20,6 +20,7 @@ pub use committed::{CommittedLoadEventEvidenceV1, CommittedLoadReceipts};
 pub use event_evidence::KagemushaLoadEventPathV1;
 mod ledger;
 pub(crate) mod routing;
+pub(crate) mod spartan;
 mod storage;
 /// Native-suffix Unload stages: Begin, order-independent Appends and Finalize.
 pub mod suffix;

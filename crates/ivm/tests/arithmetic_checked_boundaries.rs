@@ -1,6 +1,7 @@
 //! Exhaustive signed-boundary checks for trapping IVM arithmetic opcodes.
 use crate::common;
 use ivm::{IVM, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 const DESTINATION_SENTINEL: u64 = 0xCAFE_BABE_DEAD_BEEF;
 const BOUNDARY_VALUES: [i64; 7] = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX];
@@ -56,10 +57,12 @@ fn assert_checked_result(
             let zero_divisor = right == Some(0);
             assert!(
                 match &result {
-                    Err(VMError::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero)) => {
+                    Err(VMError::Trap(VmTrap::NumericFault(
+                        ivm::numeric::NumericFaultV1::DivisionByZero,
+                    ))) => {
                         zero_divisor
                     }
-                    Err(VMError::RegisterIntegerOverflow) => !zero_divisor,
+                    Err(VMError::Trap(VmTrap::RegisterIntegerOverflow)) => !zero_divisor,
                     _ => false,
                 },
                 "{operation} must trap with the C10 fault for {left} and {right:?}, got {result:?}"

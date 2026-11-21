@@ -5,6 +5,7 @@ use crate::state::{State, World};
 use iroha_data_model::transaction::{Executable, IvmBytecode, TransactionBuilder};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
+use ivm_abi::error::VmDeferral;
 
 pub(super) fn retention() -> ivm::ivm_cache::CacheLimitsGuard {
     ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
@@ -104,7 +105,7 @@ fn final_key_publication_refusal_keeps_original_state_fence_and_retries() {
     budget.set_limit_bytes(baseline + demand - 1);
     assert!(matches!(
         ivm::analysis::analyze_prepared_static_state_accesses(&prepared, Some("write_one"), budget),
-        Err(ivm::VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == output_bytes
     ));
     assert_eq!(budget.reserved_bytes(), baseline);
@@ -293,14 +294,14 @@ fn canonical_text_index_refusal_keeps_the_actual_state_fence_and_retries() {
         )
         .unwrap_err();
         let requested = match error {
-            ivm::VMError::AllocationDeferred(
+            ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::ExceedsLimit {
                     requested_bytes, ..
                 }
                 | iroha_allocation::AllocationRefusal::Capacity {
                     requested_bytes, ..
                 },
-            ) => requested_bytes,
+            )) => requested_bytes,
             error => panic!("unexpected analysis refusal: {error}"),
         };
         assert!(requested > 0);
@@ -317,7 +318,7 @@ fn canonical_text_index_refusal_keeps_the_actual_state_fence_and_retries() {
     budget.set_limit_bytes(baseline + preceding + text_bytes - 1);
     assert!(matches!(
         ivm::analysis::analyze_prepared_static_state_accesses(&prepared, Some("write_one"), budget),
-        Err(ivm::VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })))
             if requested_bytes == text_bytes
     ));
     assert_eq!(budget.reserved_bytes(), baseline);
