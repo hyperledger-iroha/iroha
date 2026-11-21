@@ -65,7 +65,9 @@ mod progress;
 mod purpose;
 mod qualification;
 mod registration_input;
+mod runtime_enactment;
 mod runtime_upgrade;
+pub use runtime_enactment::{RuntimeEnactmentReceiptErrorV1, RuntimeEnactmentReceiptV1};
 pub use runtime_upgrade::{
     AnonymousRuntimeUpgradeRequestV1, CreateAnonymousRuntimeUpgradeAttemptV1,
 };

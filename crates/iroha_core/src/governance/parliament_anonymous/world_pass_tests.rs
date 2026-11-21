@@ -948,7 +948,7 @@ fn an_item_whose_rows_do_not_fit_the_partition_stays_due() {
             GovernanceStartItemCeilingV1::ReceiptAndOutput,
         ),
     ] {
-        assert_eq!(output_ceiling(item), ceiling);
+        assert_eq!(output_ceiling(item), Some(ceiling));
     }
 }
 

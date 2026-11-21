@@ -1540,3 +1540,87 @@ fn sccp_pairing_payload_refusal_preserves_actual_allocator_cause_without_release
         "actual physical cause survives the producer classifier"
     );
 }
+
+#[test]
+fn missing_g3_result_profile_requires_recovery_with_the_original_diagnostic() {
+    use crate::{
+        governance::parliament_anonymous::world_pass::AnonymousPassWorldErrorV1,
+        state::{StateStorageAdmissionError, governance_start::parliament_error},
+    };
+    let original = StateStorageAdmissionError::UnsupportedRuntime {
+        height: 57,
+        reason: "runtime enactment requires a distinct selected governed result profile".into(),
+    };
+    let expected = original.to_string();
+    let error = BlockValidationError::from(parliament_error::<BlockValidationError>(
+        AnonymousPassWorldErrorV1::Storage(original),
+    ));
+    let PublicationError::RecoveryRequired(reason) = validation_failure(error).unwrap() else {
+        panic!("missing selected result authority needs recovery, never a wakeup or verdict");
+    };
+    assert_eq!(reason, expected);
+}
+
+#[test]
+fn g3_codec_and_storage_refusals_keep_their_original_publication_owners() {
+    use crate::{
+        governance::parliament_anonymous::{
+            AnonymousParliamentErrorV1 as Error, world_pass::AnonymousPassWorldErrorV1,
+        },
+        state::{StateStorageAdmissionError, governance_start::parliament_error},
+    };
+    use norito::core::{PreparedDecodeWorkspace, classify_decode_attempt};
+
+    let pool = AllocationBudget::new(4096);
+    let mut workspace = PreparedDecodeWorkspace::from_reservation(
+        &pool,
+        &mut pool
+            .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
+            .unwrap(),
+    )
+    .unwrap();
+    let narrow = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let original_error = workspace
+        .with_limits(narrow, narrow, || {
+            classify_decode_attempt(|| norito::core::reserve_decode_allocation(29))
+        })
+        .unwrap()
+        .unwrap_err();
+    let expected = original_error.local_refusal().unwrap();
+    let error = BlockValidationError::from(parliament_error::<BlockValidationError>(
+        AnonymousPassWorldErrorV1::from(Error::from(original_error)),
+    ));
+    let PublicationError::Deferred(PublicationDeferral::Execution(retained)) =
+        validation_failure(error).unwrap()
+    else {
+        panic!("the original codec retry owner survives the complete block-start path");
+    };
+    assert_eq!(retained.decode_refusal(), Some(&expected));
+    drop(workspace);
+    assert_eq!(
+        pool.reserved_bytes(),
+        PreparedDecodeWorkspace::allocation_layouts()[0].size()
+    );
+    drop(expected);
+    assert!(pool.reserved_bytes() > 0);
+    drop(retained);
+    assert_eq!(pool.reserved_bytes(), 0);
+
+    let occupied = pool.try_reserve_bytes(pool.limit_bytes()).unwrap();
+    let original = pool.try_reserve_bytes(1).unwrap_err();
+    let AllocationRefusal::Capacity { release, .. } = &original else {
+        panic!("actual original pool capacity refusal");
+    };
+    let error = BlockValidationError::from(parliament_error::<BlockValidationError>(
+        AnonymousPassWorldErrorV1::Storage(StateStorageAdmissionError::World(
+            mv::storage::AdmittedStorageError::Allocation(original.clone()),
+        )),
+    ));
+    let PublicationError::Deferred(retained) = validation_failure(error).unwrap() else {
+        panic!("actual storage capacity retains its own release source");
+    };
+    assert_eq!(retained.allocation_refusal(), Some(&original));
+    assert_eq!(retained.release_wait(), Some(release));
+    drop(occupied);
+    assert!(pool.try_reserve_bytes(1).is_ok());
+}

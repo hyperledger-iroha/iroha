@@ -1115,11 +1115,13 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
 
 The dormant anonymous Parliament family now has a distinct original-signed runtime creator:
 Core derives the operator, notice, provenance verdict and proposal time from the admitted action
-and committed policy; retries retain the exact predecessor content. Its runtime-only G3 item
-uses the shared governance clock, budget and output partition, checks the production certificate
-and compare-and-set head, and rolls back rejected effects before recording failure. Checked
-identity/policy adapters retain original local refusals. This source candidate still needs
-same-candidate validation and the governance-clock/ballot qualification owned by
+and committed policy; retries retain the exact predecessor content. Runtime-only G3 effect
+preparation checks the production certificate and compare-and-set head, and rolls back rejected
+effects before preparing failure. Its receipt is a distinct standalone type: native block outputs
+remain closed, and G3 application refuses as unsupported before effects until a new selected
+immutable result profile can authenticate and commit that receipt. Checked identity/policy
+adapters retain original local refusals. This source candidate still needs the result-profile
+implementation, same-candidate validation and the governance-clock/ballot qualification owned by
 [`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
 `PARLIAMENT_BALLOT_QUALIFICATION_V1` remains `None`: candidate certificates never enact, other
 proposal effects remain open, and the frozen baseline handlers are unchanged.
