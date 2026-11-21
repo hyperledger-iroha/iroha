@@ -38,6 +38,13 @@ int32_t spartan_fixture_run_apple_v1(
     void *context, SpartanFixtureCollectAppleV1 collect,
     SpartanFixtureConfirmV1 confirm,
     uint8_t *output, size_t capacity, size_t *output_len);
+/* Development-only diagnostic namespace preimage of this build, from the debug branch of
+ * connect_norito_bridge's apple_debit_key.m (which scopes Native approval keys by it):
+ * "kagemusha-spartan-fixture-build-namespace-v1" || 0x00 || SHA-256(signed main executable file)
+ * || SHA-256(native-device/parameter-manifest.norito). The namespace is its SHA-256. Writes
+ * *written bytes; returns 0, or an OSStatus when absent or capacity is too small. */
+int32_t kagemusha_apple_fixture_namespace_preimage_v1(uint8_t *output, size_t capacity,
+    size_t *written);
 #ifdef __cplusplus
 }
 #endif

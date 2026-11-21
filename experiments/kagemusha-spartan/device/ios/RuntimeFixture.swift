@@ -95,8 +95,7 @@ private func hex(_ bytes: Data) -> String { bytes.map { String(format: "%02x", $
 
 private final class RuntimeBridge: @unchecked Sendable {
   let platform: KagemushaWalletApplePlatformV1
-  let manifestDigest: String
-  private let manifest: Data
+  let namespace: FixtureNamespace
   private let resources: URL
   let update: @Sendable (String) -> Void
   let showReview: @MainActor @Sendable (KagemushaSpartanReviewProjectionV1, Data, Int, FixtureWait<Bool>) -> Void
@@ -109,13 +108,15 @@ private final class RuntimeBridge: @unchecked Sendable {
         FileManager.default.fileExists(atPath: resources.appendingPathComponent($0).path)
       }) else { throw FixtureFailure("Complete authenticated program artifacts are absent") }
     self.resources = resources
-    manifest = try Data(contentsOf: resources.appendingPathComponent("parameter-manifest.norito"))
-    let digest = SHA256.hash(data: manifest)
-    manifestDigest = kagemushaWalletAppleHex(digest)
+    let manifest = try Data(contentsOf: resources.appendingPathComponent("parameter-manifest.norito"))
+    guard let namespace = FixtureNamespace.running(), namespace.manifest == Data(SHA256.hash(data: manifest)) else {
+      throw FixtureFailure("No signed build namespace for the embedded signed manifest")
+    }
+    self.namespace = namespace
     let group = try KagemushaWalletApplePlatformV1.keychainAccessGroup(
       applicationIdentifierPrefix: "YLWWUD25VZ", bundleIdentifier: Bundle.main.bundleIdentifier)
     platform = .init(appAttest: KagemushaWalletAppleAppAttestServiceV1(),
-      accessGroup: group, system: .live, keychainNamespace: digest)
+      accessGroup: group, system: .live, keychainNamespace: namespace.scope)
     self.update = update; self.showReview = showReview
   }
   private func callbackFailed(_ error: any Error) {
@@ -156,8 +157,7 @@ private final class RuntimeBridge: @unchecked Sendable {
     case .success(let path): rootPath = path
     case .failure(let reason): throw FixtureFailure("Protected custody unavailable: \(reason)")
     }
-    let root = fixtureCustodyDirectory(
-      root: URL(fileURLWithPath: rootPath, isDirectory: true), manifest: manifest)
+    let root = namespace.custodyDirectory(root: URL(fileURLWithPath: rootPath, isDirectory: true))
     var isDirectory: ObjCBool = false
     if FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) {
       guard isDirectory.boolValue else { throw FixtureFailure("Custody root is not a directory") }
@@ -243,13 +243,15 @@ private final class RuntimeBridge: @unchecked Sendable {
         Task { @MainActor in
           UIApplication.shared.isIdleTimerDisabled = false
           self?.status = result; self?.running = false
-          let record: [String: String] = ["schema": "kagemusha-spartan-device-runtime-v1",
-            "manifest_sha256": bridge.manifestDigest, "result": result,
+          let namespace = bridge.namespace
+          let record: [String: String] = ["schema": "kagemusha-spartan-device-runtime-v2",
+            "manifest_sha256": namespace.manifestHex, "build_executable_sha256": namespace.executableHex,
+            "fixture_namespace": namespace.scopeHex, "result": result,
             "finished": ISO8601DateFormatter().string(from: Date())]
           do {
             let data = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
-            let name = "spartan-runtime-result-" + bridge.manifestDigest + ".json"
-            try data.write(to: URL.documentsDirectory.appendingPathComponent(name), options: [.atomic, .completeFileProtection])
+            try data.write(to: URL.documentsDirectory.appendingPathComponent(namespace.reportName),
+              options: [.atomic, .completeFileProtection])
           } catch {
             self?.status = "FAILED: Could not retain fixture report: \(error)"
           }
