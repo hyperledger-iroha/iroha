@@ -50,7 +50,7 @@ pub(crate) fn validate_stored(
             .to_owned()
             .into());
     }
-    let mut verifier = ivm::IVM::try_new_with_memory_budget(0, budget)
+    let mut verifier = ivm::IVM::try_new_for_external_host_with_memory_budget(0, budget)
         .map_err(|error| vm_attempt_error(error, |error| error.to_string()))?;
     verifier
         .load_program_for_profile(bytes, ivm::IvmProfileId::C10_GENERIC_CARRIER)
@@ -138,11 +138,12 @@ pub(crate) fn execute_original(
     // Use the same explicit profile parser and verifier as invocation, with original VM
     // allocation custody. This accepts no CNTR contract or ordinary-profile fallback.
     let budget = state.execution_budget();
-    let mut verifier = ivm::IVM::try_new_with_memory_budget(0, &budget).map_err(|error| {
-        state.attempt_error_to_instruction_error(vm_attempt_error(error, |error| {
-            denied(error.to_string())
-        }))
-    })?;
+    let mut verifier =
+        ivm::IVM::try_new_for_external_host_with_memory_budget(0, &budget).map_err(|error| {
+            state.attempt_error_to_instruction_error(vm_attempt_error(error, |error| {
+                denied(error.to_string())
+            }))
+        })?;
     verifier
         .load_program_for_profile(&instruction.code, ivm::IvmProfileId::C10_GENERIC_CARRIER)
         .map_err(|error| {

@@ -33,8 +33,11 @@ mod acquisition;
 pub use acquisition::BlockAcquisitionSlot;
 #[path = "storage/capture.rs"]
 mod capture;
+#[path = "storage/suspension.rs"]
+mod suspension;
 pub use capture::BlockCaptureSlot;
 pub use physical::PublicationRetirement;
+pub use suspension::{BlockResumptionSlot, BlockSuspensionSlot, SuspendedBlock};
 
 /// An original physical map writer joined to its release notification.
 type MapWriter<'a, K, V, M> = ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>;

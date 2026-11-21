@@ -161,6 +161,10 @@ pub trait SyscallContext: sealed::Sealed {
     /// Copy an authenticated public guest envelope.
     fn clone_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError>;
 
+    /// Copy an authenticated public TLV with its original VM memory-pool reservation.
+    /// The returned owner frees the bytes before refunding the same pool.
+    fn clone_tlv_with_original_memory(&self, ptr: u64) -> Result<super::FundedPublicTlv, VMError>;
+
     /// Check a guest address range for private bytes.
     fn ensure_public_memory(&self, addr: u64, len: u64) -> Result<(), VMError>;
 
@@ -359,6 +363,10 @@ impl SyscallContext for IVM {
 
     fn clone_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
         IVM::clone_tlv(self, ptr)
+    }
+
+    fn clone_tlv_with_original_memory(&self, ptr: u64) -> Result<super::FundedPublicTlv, VMError> {
+        IVM::clone_tlv_with_original_memory(self, ptr)
     }
 
     fn ensure_public_memory(&self, addr: u64, len: u64) -> Result<(), VMError> {

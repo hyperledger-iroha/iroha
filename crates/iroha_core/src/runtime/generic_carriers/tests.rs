@@ -336,12 +336,25 @@ fn malformed_and_dense_frames_are_stable_rejections_but_local_refusals_stay_orig
         )))
     ));
     fixture.instruction = original;
-    // Borrowed validation does not materialize a value or schema frame. Exercise
-    // its actual enclosing field bound, rather than demanding an allocation.
+    // Borrowing avoids materializing a value graph, but Norito's framed-field reads
+    // still debit the original cumulative allocation counter. A zero counter must
+    // therefore retain the original refusal for the first 32-byte schema-hash field.
+    let schema = payload_schema();
+    let frame = fixture.instruction.as_opaque().unwrap().frame();
+    assert_eq!(
+        validated_carrier_payload_v1(&schema, frame).unwrap(),
+        [0, 1]
+    );
     let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
-    norito::with_decode_limits_scope(no_allocation, || {
-        assert!(decode(&fixture).unwrap().is_some());
-    });
+    let result = norito::with_decode_limits_scope(no_allocation, || decode(&fixture));
+    let Err(Error::Codec(original)) = result else {
+        panic!("borrowed field validation must keep its original counter refusal");
+    };
+    assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert!(matches!(
+        original.into_local_refusal().unwrap().resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. }
+    ));
     let limits = norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 64);
     norito::with_decode_limits_scope(limits, || {
         assert!(

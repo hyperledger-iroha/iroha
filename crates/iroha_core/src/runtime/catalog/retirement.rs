@@ -104,6 +104,58 @@ mod tests {
             assert!(after.services.contains(&service));
         }
     }
+
+    #[test]
+    fn retirement_composes_after_signed_child_foundation_in_either_service_order() {
+        let catalog = release_catalog().unwrap();
+        let (foundation, published) = catalog.child_foundation().unwrap();
+        let original = foundation.clone();
+        let baseline = catalog.baseline.clone();
+        let change = catalog
+            .activation(
+                additions::RUNTIME_RETIREMENT.module,
+                &foundation,
+                &published,
+                network(),
+                50,
+                [5; 32],
+            )
+            .unwrap();
+        let after = change.apply(&foundation, &published).unwrap();
+        let mut actual = published;
+        actual.extend(after.published);
+        after.selection.check_closure(&actual).unwrap();
+
+        let lifecycle = select(catalog, &baseline, additions::RUNTIME_LIFECYCLE.module);
+        let retirement = select(catalog, &lifecycle, additions::RUNTIME_RETIREMENT.module);
+        let reversed = select(catalog, &retirement, additions::CHILD_ADMIN.module);
+        assert_eq!(after.selection, reversed);
+        assert_eq!(catalog.unsupported(&after.selection), None);
+        assert_eq!(catalog.child_foundation().unwrap().0, original);
+        assert_eq!(catalog.baseline, baseline);
+        assert!(
+            after
+                .selection
+                .installed_storage
+                .contains(&catalog.world_storage["world.runtime_child_admin_state"])
+        );
+        assert!(
+            after
+                .selection
+                .installed_storage
+                .contains(&catalog.world_storage["world.runtime_retirements"])
+        );
+        // Compiling this native composition never advertises the unfinished carrier kernel.
+        let generic = catalog.generic_carriers.unwrap();
+        for id in [
+            generic.kernel,
+            generic.host,
+            generic.backing,
+            generic.commitment,
+        ] {
+            assert!(!catalog.executes_definition(&id));
+        }
+    }
 }
 
 fn failure(reason: impl Into<String>) -> CatalogError {

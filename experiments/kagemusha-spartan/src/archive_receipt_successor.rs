@@ -1,6 +1,10 @@
 //! Incoming folded-status receipt constraints for the ArchiveSent successor.
 //! The quoted key uses its own derived table. The payer's wallet table remains available
 //! for its own future hardware receipt.
+//! One fixed relation opens either receipt form. A public form bit selects the Receive
+//! receipt of this Payment (bit 0) or a later receiver Send head receipt (bit 1). The bit
+//! sets the signed operation kind and subject and the receipt's Payment-digest field.
+//! Every other check applies to both forms.
 use super::*;
 use crate::{
     bootstrap::Receipt, certificate, credential::Credential, credential_policy, nonnative,
@@ -18,12 +22,18 @@ pub(super) struct ReceiverReceipt {
     // Authenticated quoted credential, receiver folded receipt/head/statement, original Payment and exact source receipt digest.
     // The final six fields are the wallet ID and payment key of the folded receiver.
     pub(super) expected: [Fp; 12],
+    // Public form bit: false for the Receive receipt of this Payment, true for a later
+    // receiver Send head whose credit root covers its credit.
+    pub(super) send: bool,
+    // Public credit named by the head's signed operation id. The Receive form fixes it to
+    // this Payment's credit. The Send form takes it from the later Send statement.
+    pub(super) subject: Fp,
 }
 
 pub(super) struct ReceiptResults {
     pub(super) evidence: Source,
     pub(super) signature: Source,
-    pub(super) public: [Source; 12],
+    pub(super) public: [Source; 14],
     pub(super) request: Option<super::request_original::RequestResults>,
     pub(super) opening: Vec<Source>,
 }
@@ -84,6 +94,15 @@ fn receiver_table(
 }
 
 impl ReceiverReceipt {
+    /// Public words 64..78: the twelve expected words, the form bit and the subject.
+    pub(super) fn public_words(&self) -> [Fp; 14] {
+        std::array::from_fn(|i| match i {
+            12 => Fp::from(u64::from(self.send)),
+            13 => self.subject,
+            _ => self.expected[i],
+        })
+    }
+
     pub(super) fn append(
         &self,
         w: &mut Wiring<Fp>,
@@ -113,6 +132,25 @@ impl ReceiverReceipt {
         let mut c = Cells::new(family);
         c.a.name = "ArchiveSent receiver receipt and exact Payment bindings";
         let expected = self.expected.map(|v| c.cell(v, 255));
+        let form = c.bit(self.send);
+        let subject = c.cell(self.subject, 255);
+        let receive_form = plus(&constant(vec![Fp::ONE]), &scaled(&own(form, 1), -Fp::ONE));
+        // A Receive receipt names this Payment's credit. Only a later Send names its own.
+        c.a.rows.push([
+            receive_form.clone(),
+            plus(&own(subject, 1), &scaled(&credit.linear(), -Fp::ONE)),
+            vec![],
+        ]);
+        // The Receive receipt carries this Payment's digest. A Send head receipt carries
+        // zero, and only its credit opening binds this Payment.
+        let carried_value = if self.send {
+            Fp::ZERO
+        } else {
+            self.expected[4]
+        };
+        let carried = c.cell(carried_value, 255);
+        c.a.rows
+            .push([receive_form, own(expected[4], 1), own(carried, 1)]);
         // The locally authenticated Request must supply the exact quoted receiver credential.
         c.eq(quoted.digest().linear(), own(expected[0], 1));
         c.eq(quoted.valid().linear(), constant(vec![Fp::ONE]));
@@ -120,13 +158,17 @@ impl ReceiverReceipt {
         // agreement with the incoming folded head. A prover cannot substitute a
         // failing signature to elect a no-op on authentic delivery.
         c.eq(original.digest().linear(), own(expected[5], 1));
-        let kind = Fp::from(u64::from(KagemushaWalletOperationKindV1::Receive.tag()));
+        let receive = Fp::from(u64::from(KagemushaWalletOperationKindV1::Receive.tag()));
+        let send = Fp::from(u64::from(KagemushaWalletOperationKindV1::Send.tag()));
         let wallet = quoted.wallet();
         let op_inputs = [
             (wallet[0].value(w), wallet[0].linear()),
             (wallet[1].value(w), wallet[1].linear()),
-            (kind, constant(vec![kind])),
-            (credit.value(w), credit.linear()),
+            (
+                if self.send { send } else { receive },
+                plus(&constant(vec![receive]), &scaled(&own(form, 1), send - receive)),
+            ),
+            (self.subject, own(subject, 1)),
         ];
         let operation = poseidon::hash_with_domain(
             u64::from_le_bytes(*b"kgwopid1"),
@@ -147,7 +189,7 @@ impl ReceiverReceipt {
             (original.digest(), expected[1], self.expected[1]),
             (original.successor(), expected[2], self.expected[2]),
             (original.statement_digest(), expected[3], self.expected[3]),
-            (original.payment_digest(), expected[4], self.expected[4]),
+            (original.payment_digest(), carried, carried_value),
             (original.operation_id(), op_hash[1], operation),
         ] {
             evidence.push(credential_policy::zero_predicate(
@@ -221,12 +263,17 @@ impl ReceiverReceipt {
             ),
             None => (source(local, evidence), Vec::new()),
         };
+        let ports: [usize; 14] = std::array::from_fn(|i| match i {
+            12 => form,
+            13 => subject,
+            _ => expected[i],
+        });
         ReceiptResults {
             evidence,
             opening,
             signature: signed,
             request,
-            public: expected.map(|i| source(local, i)),
+            public: ports.map(|i| source(local, i)),
         }
     }
 }

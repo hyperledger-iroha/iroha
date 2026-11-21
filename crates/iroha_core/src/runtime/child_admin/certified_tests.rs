@@ -211,7 +211,7 @@ fn draft(chain: &CertifiedTestChain, height: u64, marker: u8) -> ChangeSetV1 {
     crate::runtime::draft_addition(
         chain.state().view().world(),
         chain.network_id(),
-        crate::runtime::catalog::additions::RESTRICTED_DATASPACE_READ.module,
+        crate::runtime::catalog::additions::ACCOUNT_SIGNING_KEYS.module,
         height,
         [marker; 32],
     )

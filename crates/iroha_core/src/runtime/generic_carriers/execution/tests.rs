@@ -221,19 +221,30 @@ fn exact_artifact_bytes_and_captured_storage_scope_are_required_before_execution
 
 #[test]
 fn actual_vm_out_of_gas_retains_the_exact_consumed_allowance() {
-    let (state, instruction, candidate) = fixture(program(&[
-        wide::encode_ri(isa::arithmetic::ADDI, 10, 0, 0),
-        wide::encode_offset24(isa::control::JMP, 0),
-    ]));
-    let mut block = state.block(header());
-    candidate.install(&mut block);
-    let mut transaction = block.transaction();
-    let signed = source(&transaction, &instruction);
-    bind_source(&mut transaction, &signed);
-    let report = execute(&mut transaction, &ALICE_ID, &instruction, 1_000).unwrap();
-    assert!(report.verdict.is_err());
-    assert_eq!(report.gas_used, 1_000);
-    assert_eq!(transaction.world.runtime_generic_values.iter().count(), 0);
+    let initialize = wide::encode_ri(isa::arithmetic::ADDI, 10, 0, 0);
+    let repeat = wide::encode_offset24(isa::control::JMP, 0);
+    let initialization_gas = ivm::gas::cost_of(initialize).unwrap();
+    let repeat_gas = ivm::gas::cost_of(repeat).unwrap();
+    let (state, instruction, candidate) = fixture(program(&[initialize, repeat]));
+    for allowance in [1_000, 1_001] {
+        let mut block = state.block(header());
+        candidate.install(&mut block);
+        let mut transaction = block.transaction();
+        let signed = source(&transaction, &instruction);
+        bind_source(&mut transaction, &signed);
+        let report = execute(&mut transaction, &ALICE_ID, &instruction, allowance).unwrap();
+        assert!(
+            matches!(report.verdict, Err(ValidationFail::IvmFault(fault))
+            if fault.kind == iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas)
+        );
+        // A refused opcode is not charged: ADDI costs one and JMP costs two,
+        // so the even allowance leaves one unit while the odd allowance is exhausted.
+        let expected =
+            initialization_gas + ((allowance - initialization_gas) / repeat_gas) * repeat_gas;
+        assert_eq!(report.gas_used, expected);
+        assert!(allowance - report.gas_used < repeat_gas);
+        assert_eq!(transaction.world.runtime_generic_values.iter().count(), 0);
+    }
 }
 
 #[test]

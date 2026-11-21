@@ -12673,6 +12673,7 @@ dependencies = [
  "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
+ "p256",
  "rayon",
  "sha2 0.11.1",
  "w3f-bls",

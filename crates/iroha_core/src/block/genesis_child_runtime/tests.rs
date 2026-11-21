@@ -4,7 +4,7 @@ use super::*;
 use crate::{block::authenticate_genesis_block_intents, state::World};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    isi::InstructionBox,
+    isi::{InstructionBox, RegisterPeerWithPop},
     runtime::child_admin::ChildRuntimeAdminPolicyV1,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
@@ -40,16 +40,22 @@ fn recipe() -> ChildRuntimeFoundationV1 {
 }
 
 fn source(scope: SumeragiRootScope, recipes: &[ChildRuntimeFoundationV1]) -> SignedBlock {
-    let instructions: Vec<InstructionBox> = std::iter::once(
-        SetParameter::new(crate::sumeragi::lanes::routing::test_support::metadata(
-            scope,
+    // Real signed registrations supply the same four-validator authority required by the
+    // original-genesis route. Structural metadata alone cannot grant execution scope.
+    let registrations = crate::sumeragi::test_chain::fixture_validators()
+        .into_iter()
+        .map(|(peer, pop)| RegisterPeerWithPop::new(peer, pop).into());
+    let instructions: Vec<InstructionBox> = registrations
+        .chain(std::iter::once(
+            SetParameter::new(crate::sumeragi::lanes::routing::test_support::metadata(
+                scope,
+            ))
+            .into(),
         ))
-        .into(),
-    )
-    .chain(recipes.iter().map(|recipe| {
-        SetParameter::new(Parameter::Custom(recipe.to_custom_parameter().unwrap())).into()
-    }))
-    .collect();
+        .chain(recipes.iter().map(|recipe| {
+            SetParameter::new(Parameter::Custom(recipe.to_custom_parameter().unwrap())).into()
+        }))
+        .collect();
     let transactions = instructions
         .into_iter()
         .map(|instruction| {
@@ -114,6 +120,12 @@ fn only_the_unique_original_signed_child_recipe_selects_foundation() {
 fn installation_binds_full_child_identity_and_rolls_back_with_failed_genesis() {
     let value = recipe();
     let block = source(scope(), std::slice::from_ref(&value));
+    let authenticated = iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+        .expect("the original source authenticates its real four-validator committee");
+    assert_eq!(
+        authenticated.network_id(),
+        NetworkId::from_genesis_hash(block.hash())
+    );
     let original = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
     let selected = original.initial_child_runtime(&block).unwrap().unwrap();
     let state = state(&block);
@@ -300,37 +312,89 @@ fn recipe_decoder_refusal_retains_the_original_source_for_retry() {
 }
 
 #[test]
-fn signed_scope_and_selection_encoding_preserve_original_local_refusals() {
+fn signed_scope_preserves_original_field_limit_refusal_and_retries() {
     let block = source(scope(), &[recipe()]);
+    assert_eq!(signed_scope(&block).unwrap(), scope());
+    // This scalar metadata need not allocate scratch. Its actual signed JSON string fields
+    // still cross the enclosing field-length owner, so constrain that real operation.
+    let limit = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        0,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    let error = limit.with(|| signed_scope(&block)).unwrap_err();
+    let BlockValidationError::ExecutionDeferred(refusal) = error else {
+        panic!("original signed-metadata field refusal must not reject genesis");
+    };
+    let original = refusal.decode_refusal().unwrap().clone();
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    drop(limit);
+    assert_eq!(refusal.decode_refusal(), Some(&original));
+    assert_eq!(signed_scope(&block).unwrap(), scope());
+}
+
+#[test]
+fn selection_identity_streams_original_frame_without_output_or_scratch_allocation() {
+    use norito::core::{DecodeBudgetContext, WireLayout, WireLayoutGuard};
     let selection = crate::runtime::release_catalog()
         .unwrap()
         .child_foundation()
         .unwrap()
         .0;
-    assert_eq!(
-        selection_identity(&selection).unwrap(),
-        selection.id().unwrap()
-    );
-    assert_eq!(signed_scope(&block).unwrap(), scope());
-    let attempts: [&dyn Fn() -> Result<(), BlockValidationError>; 2] =
-        [&|| signed_scope(&block).map(|_| ()), &|| {
-            selection_identity(&selection).map(|_| ())
-        }];
-    for attempt in attempts {
-        let zero = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            0,
-            usize::MAX,
-        ));
-        let error = zero.with(attempt).unwrap_err();
-        let BlockValidationError::ExecutionDeferred(refusal) = error else {
-            panic!("local encoding/metadata refusal must not reject genesis");
-        };
-        assert!(refusal.decode_refusal().is_some());
-        attempt().unwrap();
+    let expected = selection.id().unwrap();
+    let zero = DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        0,
+        usize::MAX,
+    ));
+    for layout in [WireLayout::Fixed, WireLayout::Compact, WireLayout::Dense] {
+        let _layout = WireLayoutGuard::enter(layout);
+        let mut actual = None;
+        let allocations = zero.with(|| {
+            crate::test_allocations::allocations_during(|| {
+                actual = Some(selection_identity(&selection));
+            })
+        });
+        assert_eq!(
+            allocations, 0,
+            "identity retained a canonical output buffer or scratch"
+        );
+        assert_eq!(actual.unwrap().unwrap(), expected);
+        assert_eq!(zero.consumed_allocated_bytes(), 0);
     }
+}
+
+#[test]
+fn selection_codec_error_adapter_retains_an_actual_serializer_scratch_refusal() {
+    let payload = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
+    let limit = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        0,
+        usize::MAX,
+    ));
+    let original = limit
+        .with(|| {
+            norito::core::classify_decode_attempt(|| {
+                norito::core::write_canonical_to_writer(&payload, &mut std::io::sink())
+            })
+        })
+        .unwrap_err();
+    let expected = original.local_refusal().unwrap();
+    let BlockValidationError::ExecutionDeferred(refusal) = decoding(original) else {
+        panic!("the actual serializer refusal must retain local retry custody");
+    };
+    drop(limit);
+    assert_eq!(refusal.decode_refusal(), Some(&expected));
+    norito::core::write_canonical_to_writer(&payload, &mut std::io::sink()).unwrap();
 }
 
 #[test]

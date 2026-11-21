@@ -4571,13 +4571,12 @@ impl<F: Scalar> UniformCircuit<F> {
             let keyed = |m: &Memo| (m.len(), m.nodes.capacity() * 17);
             let b = tb.borrow();
             println!(
-                "matrix compile tables {}: ops {} shared {} (cap {}) pool {} known {}; memo x {:?} y {:?} ty {:?}; ty {} psums {} sides {} fixed_y {}; largest array tables {} B (array {})",
+                "matrix compile tables {}: ops {} shared {} (cap {}) pool {}; memo x {:?} y {:?} ty {:?}; ty {} psums {} sides {} fixed_y {}; largest array tables {} B (array {})",
                 self.label,
                 b.ops.len(),
-                b.shared.len(),
-                b.shared.capacity(),
+                b.shared.iter().map(HashMap::len).sum::<usize>(),
+                b.shared.iter().map(HashMap::capacity).sum::<usize>(),
                 b.pool.len(),
-                b.known.len(),
                 keyed(&memo_x),
                 keyed(&memo_y),
                 keyed(&memo_ty),
@@ -4591,10 +4590,9 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         let mut builder = std::mem::replace(&mut *tb.borrow_mut(), Builder::new(0));
         // Only the instructions and the pool remain needed.
-        builder.shared = HashMap::new();
+        builder.shared = Default::default();
         builder.pool_index = HashMap::new();
         builder.const_slot = HashMap::new();
-        builder.known = Vec::new();
         (builder, out)
     }
 
@@ -5840,15 +5838,13 @@ struct Builder<F> {
     pool: Vec<F>,
     pool_index: HashMap<[u8; 32], u32>,
     const_slot: HashMap<u32, Slot>,
-    /// The pool index of each slot that holds a constant ([`UNKNOWN`] for
-    /// the rest): every constant slot's value is in the pool.
-    known: Vec<u32>,
-    shared: HashMap<(u8, Slot, u32), Slot>,
+    // One map per opcode keeps the opcode out of every operand-pair key.
+    shared: [HashMap<(Slot, u32), Slot>; 4],
     /// Products of two slots emitted so far (before dead-code removal).
     muls: usize,
 }
 
-/// A slot whose value is not a known constant.
+/// Sentinel for an instruction removed during slot renumbering.
 const UNKNOWN: u32 = u32::MAX;
 
 impl<F: Scalar> Builder<F> {
@@ -5859,8 +5855,7 @@ impl<F: Scalar> Builder<F> {
             pool: Vec::new(),
             pool_index: HashMap::new(),
             const_slot: HashMap::new(),
-            known: vec![UNKNOWN; inputs],
-            shared: HashMap::new(),
+            shared: Default::default(),
             muls: 0,
         }
     }
@@ -5870,8 +5865,10 @@ impl<F: Scalar> Builder<F> {
     }
 
     fn known(&self, s: Slot) -> Option<F> {
-        let k = self.known[s as usize];
-        (k != UNKNOWN).then(|| self.pool[k as usize])
+        match self.op(s) {
+            Some(Op::Const(k)) => Some(self.pool[k as usize]),
+            _ => None,
+        }
     }
 
     fn pool(&mut self, c: F) -> u32 {
@@ -5885,33 +5882,28 @@ impl<F: Scalar> Builder<F> {
         k
     }
 
-    fn push(&mut self, op: Op, constant: u32) -> Slot {
-        let s = (self.inputs + self.ops.len()) as Slot;
-        self.ops.push(op);
-        self.known.push(constant);
-        s
-    }
-
     fn konst(&mut self, c: F) -> Slot {
         let k = self.pool(c);
         if let Some(&s) = self.const_slot.get(&k) {
             return s;
         }
-        let s = self.push(Op::Const(k), k);
+        let s = (self.inputs + self.ops.len()) as Slot;
+        self.ops.push(Op::Const(k));
         self.const_slot.insert(k, s);
         s
     }
 
     fn shared(&mut self, key: (u8, Slot, u32), op: Op) -> Slot {
-        if let Some(&s) = self.shared.get(&key) {
-            return s;
-        }
-        let s = self.push(op, UNKNOWN);
-        self.shared.insert(key, s);
-        if key.0 == 2 {
-            self.muls += 1;
-        }
-        s
+        *self.shared[usize::from(key.0)]
+            .entry((key.1, key.2))
+            .or_insert_with(|| {
+                let s = (self.inputs + self.ops.len()) as Slot;
+                self.ops.push(op);
+                if matches!(op, Op::Mul(..)) {
+                    self.muls += 1;
+                }
+                s
+            })
     }
 
     fn add(&mut self, a: Slot, b: Slot) -> Slot {

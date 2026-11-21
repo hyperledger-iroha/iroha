@@ -185,10 +185,13 @@ pub(super) fn rehearse() {
             "omitted executable support must never be advertised"
         );
     }
-    let parent = restore(&directory.join("parent"), &inputs.parent, parent_config());
+    let parent = restore(
+        &directory.join("parent"),
+        &inputs.parent,
+        super::daemon::parent_configuration(),
+    );
     let home = crate::sns::dataspace_id_for_sns_alias(ALIAS).unwrap();
-    let mut configuration = child_fixture::config_for_root(inputs.parent.network, home);
-    configuration.genesis_parameters.push(checkpoint_policy());
+    let configuration = super::daemon::child_configuration(inputs.parent.network, home);
     let child = restore(&directory.join("child"), &inputs.child, configuration);
     // Both opaque replay owners stay alive while original complete-State cuts and receipt
     // verifiers inspect the exact parent and its registered child's final anchored cursor.

@@ -7,7 +7,11 @@
 //! The host also exposes basic hardware feature discovery and Merkle-proof
 //! helpers used by some tests.
 use crate::error::{VmDeferral, VmTrap};
+mod stateless_memory;
 mod syscall_context;
+pub use stateless_memory::{
+    FundedPublicTlv, execute_carrier_memory_syscall, quote_carrier_memory_syscall,
+};
 mod syscall_quote;
 pub use syscall_context::SyscallContext;
 pub use syscall_quote::SyscallQuote;
@@ -3451,13 +3455,7 @@ impl IVMHost for DefaultHost {
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
                 Ok(Self::mutation_gas(0))
             }
-            crate::syscalls::SYSCALL_ALLOC => {
-                // Allocate `x10` bytes on the VM heap and return the pointer in `x10`.
-                let size = vm.public_register(10)?;
-                let addr = vm.alloc_heap(size)?;
-                vm.write_register(10, addr)?;
-                Ok(allocation_gas(size))
-            }
+            crate::syscalls::SYSCALL_ALLOC => stateless_memory::allocate(vm),
             crate::syscalls::SYSCALL_VRF_VERIFY => {
                 // Envelope-based syscall: r10 = &NoritoBytes(VrfVerifyRequest)
                 // Return: r10 = &Blob(32 bytes) on success; r11 = status code (0=ok, >0 = error)
@@ -4349,26 +4347,7 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
-                // Validate host-owned public TLVs in place. Immutable code literals are
-                // materialized into the host arena so downstream pointer consumers can
-                // retain the returned pointer after literal resolution.
-                let src = vm.public_register(10)?;
-                if src == 0 {
-                    vm.write_register(10, 0)?;
-                    return Ok(Self::input_publish_gas(0));
-                }
-                if src >= crate::memory::Memory::HEAP_START {
-                    let tlv = vm.public_tlv(src)?;
-                    let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
-                    return Ok(Self::input_publish_gas(envelope_len));
-                }
-                let resolved = Self::resolve_literal_pointer(vm, src)
-                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
-                let bytes_vec = vm.clone_tlv(resolved)?;
-                let total = bytes_vec.len();
-                let dst = vm.alloc_encoded_host_tlv(&bytes_vec)?;
-                vm.write_register(10, dst)?;
-                Ok(Self::input_publish_gas(total))
+                stateless_memory::publish_input(vm, |vm, pointer| vm.clone_tlv(pointer))
             }
             crate::syscalls::SYSCALL_GET_MERKLE_PATH => {
                 vm.write_memory_merkle_path().map(Self::merkle_path_gas)

@@ -562,6 +562,7 @@ const ROOTS: &[Root] = &[
         disposition: "Retained as the governed keyed profile in the same two result slots as its predecessor. Native publication retains execution and published versions; restart rebuilds and cross-checks them by certified replay.",
         defect: None,
         domains: &[
+            r"iroha carrier keyed State profile and schema v1",
             r"iroha keyed State profile and schema v1",
             r"iroha:keyed-state:radix:blake3:v1\0",
             r"iroha:state-keyed-commitment:schema:v1\0",

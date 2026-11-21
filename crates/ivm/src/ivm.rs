@@ -41,6 +41,8 @@ use crate::{
 #[path = "call_runtime.rs"]
 mod call_runtime;
 #[cfg(test)]
+mod external_host_tests;
+#[cfg(test)]
 mod funded_instruction_tests;
 #[cfg(test)]
 #[path = "ivm/tests/hardware_discovery.rs"]
@@ -1338,6 +1340,27 @@ impl IVM {
     ) -> Result<Self, VMError> {
         Self::try_new_from_config_with_memory_budget(IvmConfig::adaptive(gas_limit), Some(budget))
     }
+    /// Construct a funded VM for an explicitly borrowed execution host.
+    ///
+    /// Guest memory, registers and later program storage use the original `budget`,
+    /// exactly as in [`Self::try_new_with_memory_budget`]. This constructor creates
+    /// no default host or owned syscall dispatcher. Execute through
+    /// [`Self::run_with_host`]; [`Self::run`] refuses with
+    /// [`crate::error::VmDeferral::HostUnavailable`] unless the caller explicitly
+    /// installs an owned host. No host is created on demand.
+    ///
+    /// This grants no profile or execution authority: the caller must still load
+    /// the exact selected profile and supply its admitted host capabilities.
+    ///
+    /// # Errors
+    /// Returns the original local allocation refusal before publishing the VM.
+    pub fn try_new_for_external_host_with_memory_budget(
+        gas_limit: u64,
+        budget: &AllocationBudget,
+    ) -> Result<Self, VMError> {
+        Self::try_new_from_config_with_host(IvmConfig::adaptive(gas_limit), Some(budget), false)
+    }
+
     /// Borrow the original allocation pool for host scratch associated with this VM.
     ///
     /// Hosts must retain each admitted scratch reservation until its owned graph is
@@ -1445,6 +1468,14 @@ impl IVM {
         config: IvmConfig,
         memory_budget: Option<&AllocationBudget>,
     ) -> Result<Self, VMError> {
+        Self::try_new_from_config_with_host(config, memory_budget, true)
+    }
+
+    fn try_new_from_config_with_host(
+        config: IvmConfig,
+        memory_budget: Option<&AllocationBudget>,
+        install_default_host: bool,
+    ) -> Result<Self, VMError> {
         // Initially allocate memory for a reasonable code size (can be adjusted upon loading).
         let gas_limit = config.gas_limit();
         let mem = match memory_budget {
@@ -1493,9 +1524,15 @@ impl IVM {
                 PrivateMemoryRanges::with_memory_budget,
             ),
             pc: 0,
-            host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
-                DefaultHost::new(),
-            ))),
+            // Keep ordinary construction at its original point in the field order.
+            // External-host VMs never construct, drop or lazily replace this graph.
+            host: if install_default_host {
+                Some(Box::new(crate::runtime::SyscallDispatcher::new(
+                    DefaultHost::new(),
+                )))
+            } else {
+                None
+            },
             gas_limit,
             gas_remaining: gas_limit,
             syscall_gas_reserve: 0,
@@ -2540,6 +2577,20 @@ impl IVM {
         let hash: [u8; 32] = iroha_crypto::Hash::new(tlv.payload).into();
         out.extend_from_slice(&hash);
         Ok(out)
+    }
+    /// Copy a validated public TLV while retaining this VM's original finite memory pool.
+    ///
+    /// # Errors
+    /// Rejects invalid pointers and standalone VMs, or preserves original pool/allocator refusal.
+    pub fn clone_tlv_with_original_memory(
+        &self,
+        ptr: u64,
+    ) -> Result<crate::host::FundedPublicTlv, VMError> {
+        let tlv = self.validate_tlv(ptr)?;
+        let budget = self
+            .allocation_budget()
+            .ok_or(VMError::Trap(crate::error::VmTrap::PermissionDenied))?;
+        crate::host::FundedPublicTlv::from_validated(tlv, budget)
     }
     /// ABI version extracted from the program header.
     pub fn abi_version(&self) -> u8 {

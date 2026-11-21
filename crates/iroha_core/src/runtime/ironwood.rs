@@ -1251,15 +1251,24 @@ pub(super) fn register_service_compositions(
 /// Install the exact candidate composition in an isolated component fixture.
 /// This grants no governance, deployment or finality authority. Governed activation is tested
 /// separately; production callers cannot access this helper without the explicit test feature.
+/// Retain the World's published history and add only this successor's definitions;
+/// unrelated compiled service compositions are not published by this selection.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn install_for_test(world: &mut crate::state::World) {
+    use crate::state::StorageReadOnly as _;
+
     let catalog = super::release_catalog().expect("catalog");
     let extension = catalog.ironwood.as_ref().expect("Ironwood");
-    world.runtime_definitions = catalog
-        .definitions
+    let mut published: BTreeMap<_, _> = world
+        .runtime_definitions
+        .view()
         .iter()
         .map(|(id, descriptor)| (*id, descriptor.clone()))
         .collect();
+    for id in &extension.definitions {
+        published.insert(*id, catalog.definitions[id].clone());
+    }
+    world.runtime_definitions = published.into_iter().collect();
     world.runtime_selection = mv::cell::Cell::new(extension.selection.clone());
 }
 

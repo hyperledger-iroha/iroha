@@ -2,9 +2,14 @@
 //!
 //! The parent keeps real all-root retirement evidence and reviewed original source handles
 //! alive while compiling an isolated candidate. That candidate restores the original oldest
-//! accepted checkpoints and replays their certified suffixes. Neither an input JSON file nor
+//! accepted checkpoints and replays their certified suffixes. It also builds the actual
+//! removed-source daemon and observes ordinary Strict startup of both exact floors. Neither
+//! an input JSON file nor
 //! a child process's report substitutes for those checks. These engineering-key fixtures do
 //! not qualify a deployed network, a toolchain, or permission to delete shared source.
+//! TODO: Qualify the exact original/removed build pair and both daemon runs. Parent lifecycle
+//! adoption and scheduled approval remain test-owned; this is not Parliament or genesis-from-empty
+//! qualification, and background proof production needs its own original-source completion gate.
 
 use super::*;
 use crate::{
@@ -28,6 +33,7 @@ use std::{
 };
 
 mod build;
+mod daemon;
 mod replay;
 
 const HANDLER: &str = "crates/iroha_core/src/smartcontracts/isi/account_signing_key/execute.rs";
@@ -58,8 +64,8 @@ const REVIEWED: &[(&str, u64, &str)] = &[
     ),
     (
         CATALOG,
-        75597,
-        "3bbb8a533dc0b7fb2976348364fefe5f661d90baa203213acf941673333956cb",
+        75802,
+        "8628f4705352dee7edd6abef1ccd505f9e00d9b87897849d2a2643afad676b67",
     ),
     (
         SUPPORT,
@@ -174,8 +180,9 @@ fn keep(chain: &CertifiedTestChain, directory: &Path) {
     .unwrap();
 }
 
-// The producer is quiescent while copying. The candidate subsequently obtains the actual
-// stopped-store lock through ordinary Fast admission; it has no fixture lock bypass.
+// The producer is quiescent while copying. Its OS lock is never copied. After ordinary
+// Strict initialization closes the private copy, the candidate must obtain its own actual
+// stopped-store lock through Fast admission; it has no fixture lock bypass.
 fn copy_store_files(from: &Path, to: &Path) {
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
@@ -195,6 +202,74 @@ fn copy_store_files(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), destination).unwrap();
         }
     }
+}
+
+fn initialize_copied_store(chain: &CertifiedTestChain, directory: &Path) {
+    let mut configuration = kura_config(directory);
+    configuration.init_mode = InitMode::Strict;
+    let nexus = chain.state().nexus_snapshot();
+    let (initialized, _) = Kura::new_with_configured_lane_catalog(
+        &configuration,
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .unwrap();
+    assert_eq!(
+        initialized.exact_durable_blocks_count().unwrap() as u64,
+        chain.height()
+    );
+    let tip = initialized
+        .get_block(
+            NonZeroUsize::new(chain.height().try_into().unwrap()).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(tip.hash(), chain.committed(chain.height()).block().hash());
+    drop(initialized);
+}
+
+#[test]
+fn copied_store_requires_ordinary_strict_initialization_before_fast_custody() {
+    run(|| {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let directory = tempfile::tempdir().unwrap();
+        copy_store_files(&chain.kura().store_root(), directory.path());
+        let configuration = kura_config(directory.path());
+        let nexus = chain.state().nexus_snapshot();
+        assert!(
+            Kura::new_with_configured_lane_catalog(
+                &configuration,
+                &nexus.lane_config,
+                &nexus.configured_lane_catalog,
+            )
+            .is_err(),
+            "Fast must not create the omitted producer lock"
+        );
+        initialize_copied_store(&chain, directory.path());
+        let (source, _) = Kura::new_with_configured_lane_catalog(
+            &configuration,
+            &nexus.lane_config,
+            &nexus.configured_lane_catalog,
+        )
+        .unwrap();
+        assert!(source.is_locked_read_only_source());
+        assert_eq!(
+            source.exact_durable_blocks_count().unwrap() as u64,
+            chain.height()
+        );
+        assert!(
+            Kura::new_with_configured_lane_catalog(
+                &configuration,
+                &nexus.lane_config,
+                &nexus.configured_lane_catalog,
+            )
+            .is_err(),
+            "the original Fast owner must retain exclusive stopped-store custody"
+        );
+    });
 }
 
 fn kura_config(path: &Path) -> actual::Kura {

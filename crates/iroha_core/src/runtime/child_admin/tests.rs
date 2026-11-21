@@ -317,7 +317,9 @@ fn rejection_preserves_policy_nonce_history_and_original_source_is_one_use() {
     assert_eq!(*tx.world.runtime_child_admin_state.get(), before);
     // A rejected action cannot leak its prepared nonce even if the enclosing transaction applies.
     tx.apply();
-    block.commit();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("publish the enclosing child-admin fixture transaction");
     assert_eq!(*state.world.view().runtime_child_admin_state(), before);
 }
 
@@ -576,7 +578,7 @@ fn actual_child_draft_retains_root_identity_and_refuses_missing_or_foreign_autho
     let mut block = state.block(header());
     let mut tx = block.transaction();
     bind_scope(&mut tx);
-    let module = super::super::catalog::additions::RESTRICTED_DATASPACE_READ.module;
+    let module = super::super::catalog::additions::ACCOUNT_SIGNING_KEYS.module;
     let expected = tx
         .world
         .runtime_child_admin_state

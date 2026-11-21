@@ -19,6 +19,9 @@ use iroha_plonk_recursion::AccumulatorT;
 
 include!("../tests/common/receive_payment_originals.rs");
 
+#[path = "core30_unfolded_credit_test.rs"]
+mod unfolded_credit;
+
 /// Fix both actual terminal keys before rebuilding any wallet's signed objects.
 fn common_owner(
     root: &RootedBootstrapOmega,
@@ -179,7 +182,7 @@ fn prove_incoming_payment() {
     )
     .unwrap();
     assert_eq!(request.digest(), debit.statement[23]);
-    let (verifier, sigma, _) = prove_candidate_step(SigmaRelation::SEND, signed.step, root);
+    let (verifier, sigma, _) = prove_candidate_step(SigmaRelation::SEND, signed.step.clone(), root);
     assert_eq!(sigma.public, debit.public());
     verifier.verify(&sigma.public, &sigma.bytes).unwrap();
 
@@ -249,6 +252,38 @@ fn prove_incoming_payment() {
         &debit.statement,
         digest,
         checked.digest(),
+    );
+    if let Some(dir) = std::env::var_os("KAGEMUSHA_CORE30_UNFOLDED_OUTPUT") {
+        let dir = std::path::PathBuf::from(dir);
+        let statement: Vec<u8> = debit
+            .statement
+            .iter()
+            .flat_map(PrimeField::to_repr)
+            .collect();
+        for (name, original) in [
+            ("first-load-receipt-transcript.bin", raw.as_slice()),
+            ("pre-send-omega.bin", &omega),
+            ("omega.vk", owner.verifying_key().to_bytes()),
+            ("omega.descriptor", owner.binding().encoded()),
+            ("send-statement-fields.bin", &statement),
+            ("send.sigma", &sigma.bytes),
+            ("send.vk", verifier.vk_bytes()),
+            ("send.descriptor", verifier.descriptor_bytes()),
+            ("payer-credential.bin", &signed.objects[0]),
+            ("payer-receipt.bin", &checked.bytes),
+        ] {
+            std::fs::write(dir.join(name), original).unwrap();
+        }
+    }
+    unfolded_credit::verify_receiver(
+        &signed,
+        &receiver.source.state,
+        &debit.statement,
+        &request,
+        &receiver_credential,
+        &payment,
+        root,
+        receiver.source.state.lineage[5],
     );
     let mut substituted = public_bytes(&receiver.source.state.lineage);
     substituted.extend(&receiver.proof);

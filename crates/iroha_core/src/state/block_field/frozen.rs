@@ -163,6 +163,7 @@ where
             matches!(self.phase, Some(Phase::Frozen(_) | Phase::Reading(_))),
             "complete original frozen field required"
         );
+        self.retire_suspension_cleanup();
         drop(self.retry_cleanup.take());
         drop(std::mem::take(&mut self.freeze_cleanup));
     }

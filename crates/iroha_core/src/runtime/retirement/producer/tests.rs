@@ -457,6 +457,8 @@ fn governed_retirement_records_last_use_effective_floor_original_proof_and_perma
                         .is_err()
                     );
                     assert_eq!(missing, Some(missing_alias));
+                    // The retained native file owner detects changed custody before the digest
+                    // comparison. Preserve that original I/O refusal instead of reclassifying it.
                     std::fs::write(directory.path().join("retired.rs"), b"changed").unwrap();
                     assert!(matches!(
                         source_candidate::verify_source_candidate(
@@ -468,8 +470,8 @@ fn governed_retirement_records_last_use_effective_floor_original_proof_and_perma
                             )
                         ),
                         Err(source_candidate::CandidateError::Sources(
-                            Error::PreimageChanged(_)
-                        ))
+                            Error::Io { path, source }
+                        )) if path == "retired.rs" && source.kind() == std::io::ErrorKind::Other
                     ));
                 }
                 assert_eq!(proof.receipt.last_required, Some(3));

@@ -234,6 +234,13 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/pipeline/overlay.rs",
         PrepareRejection: [MaxCyclesWithoutZk],
     ),
+    // The carrier return-register contract is checked only after the VM has
+    // completed successfully. Its rejection is an enclosing instruction verdict,
+    // never an interpreter or syscall terminal trap.
+    producer!(
+        "crates/iroha_core/src/runtime/generic_carriers/execution.rs",
+        OutsideInvocation: [PermissionDenied],
+    ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/cache.rs",
         PrepareRejection: [ArtifactAbiHashMismatch, GenericSyscallNotAllowed, InvalidMetadata],
@@ -293,6 +300,17 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/smartcontracts/ivm/host/fi_link_revision.rs",
         SyscallTrap: [DecodeError, GasCostOverflow, NotImplemented, PermissionDenied],
     ),
+    // One selected carrier capability is captured before execution, used by
+    // storage syscalls, then revalidated by the original artifact owner after
+    // execution. Shared codec/capability failures retain all three origins;
+    // physical pool and allocator refusals remain local at every boundary.
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+        PrepareRejection: [NoritoInvalid, PermissionDenied],
+        SyscallTrap: [NoritoInvalid, PermissionDenied],
+        LocalDeferral: [AllocationDeferred, AllocatorDeferred],
+        OutsideInvocation: [NoritoInvalid, PermissionDenied],
+    ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host/linked_fi.rs",
         SyscallTrap: [PermissionDenied],
@@ -321,6 +339,13 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/smartcontracts/ivm/host/x509_attachment.rs",
         SyscallTrap: [NoritoInvalid, PermissionDenied],
         LocalDeferral: [AllocationDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
+    ),
+    // Retained carrier payloads are admitted while applying successful artifacts
+    // or staging a native code instruction, outside any running VM. Conversion
+    // delegates actual local refusals to their original execution-error owner.
+    producer!(
+        "crates/iroha_core/src/state/generic_carrier_storage.rs",
+        OutsideInvocation: [PermissionDenied],
     ),
     // Core encodes a fee-conversion state value with the VM codec outside any run.
     producer!(
@@ -487,6 +512,15 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         SyscallTrap: [NoritoInvalid],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
+    // Shared ALLOC/INPUT kernels retain native guest-pointer failures. Calling
+    // their carrier-only entry points with another profile violates host setup;
+    // original-pool and physical allocator refusals are never proof outcomes.
+    producer!(
+        "crates/ivm/src/host/stateless_memory.rs",
+        SyscallTrap: [NoritoInvalid],
+        HostInvariant: [PermissionDenied],
+        LocalDeferral: [AllocationDeferred, AllocatorDeferred],
+    ),
     producer!(
         "crates/ivm/src/host/syscall_context.rs",
         SyscallTrap: [MemoryOutOfBounds, NoritoInvalid, PermissionDenied, RegisterOutOfBounds],
@@ -499,6 +533,8 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     // they share. `debit_gas` and the heap preflight serve argument prepayment before the
     // run, root-call initialization and the opcodes or syscalls that call them. A non-ZK
     // run entered with private state is a violated host lifecycle contract.
+    // Likewise, a carrier TLV copy without an original VM allocation pool
+    // violates the explicit host construction contract.
     producer!(
         "crates/ivm/src/ivm.rs",
         PrepareRejection: [
@@ -518,7 +554,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             UnknownSyscall,
         ],
         HostInvariant: [
-            HostUnavailable, SyscallGasQuoteExceeded,
+            HostUnavailable, PermissionDenied, SyscallGasQuoteExceeded,
             SyscallMeteringModeMismatch,
         ],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
@@ -540,7 +576,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/ivm/program_load.rs",
-        PrepareRejection: [InvalidMetadata],
+        PrepareRejection: [InvalidMetadata, UnknownSyscall],
     ),
     // Stale or detached register-logger custody is a violated host lifecycle contract.
     producer!(
@@ -845,7 +881,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         InitializationTrap: [NoritoInvalid],
         InterpreterTrap: [NoritoInvalid],
         SyscallTrap: [NoritoInvalid],
-        LocalDeferral: [ExecutionDeferred],
+        LocalDeferral: [AllocatorDeferred, ExecutionDeferred],
     ),
     producer!(
         "crates/ivm_abi/src/state_cursor.rs",

@@ -214,10 +214,13 @@ fn source_join_requires_original_execution_and_rechecks_source_before_evidence()
         parent.runtime_retirement_cut(),
         Err(crate::state::RetirementCutError::Unexecuted)
     ));
+    // The retained native file owner detects changed custody before the digest
+    // comparison. Preserve that original I/O refusal instead of reclassifying it.
     std::fs::write(directory.path().join("handler.rs"), b"substituted").unwrap();
     assert!(matches!(
         sources.recheck_preimages(),
-        Err(source_ownership::Error::PreimageChanged(_))
+        Err(source_ownership::Error::Io { path, source })
+            if path == "handler.rs" && source.kind() == std::io::ErrorKind::Other
     ));
 }
 
@@ -277,11 +280,8 @@ fn original_child_cut_requires_complete_membership_and_exact_current_registered_
         .spawn(|| {
             let parent = root().network;
             let dataspace = DataSpaceId::new((1_u64 << 43) + 17);
-            let mut config = TestChainConfig::new(World::new(), 1_000);
-            config.root_scope = SumeragiRootScope::Dataspace {
-                parent_network_id: parent,
-                dataspace_id: dataspace,
-            };
+            let config =
+                crate::runtime::child_admin::certified_tests::config_for_root(parent, dataspace);
             let mut chain = CertifiedTestChain::start(config).unwrap();
             let genesis = chain.state().query_view();
             let mut registry = register_child(&chain, dataspace);

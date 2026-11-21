@@ -1,6 +1,12 @@
 //! Private successor component for an authenticated folded CreditStatus.
 //! The host verifies both recursive pairs and all their accumulators before this
-//! adapter can be constructed. It issues no receipt, new wallet head or spending capability.
+//! adapter can be constructed. One proof joins the payer's released custody state and
+//! pending removal to the receiver evidence: its receipt signature, the credit opening
+//! under the folded root and the receiver-signed Request. Every receiver word comes from
+//! the payer's natively verified CreditStatus. That is either the Receive projection or a
+//! later receiver-Send projection whose credit root covers the credit. A public form bit
+//! names which head receipt the one fixed program opens.
+//! It issues no receipt, new wallet head or spending capability.
 use super::*;
 use crate::{
     fs::ProofEntropy,
@@ -25,14 +31,122 @@ struct Inputs<'a> {
 }
 
 // Construct the fixed verifier independently of the proof producer. Only this
-// module can create the candidate circuit accepted by verify.
+// module can create the candidate circuit accepted by verify. Deterministic stand-ins
+// fix the joined shape: the Send fixture's genuine credential, own receipt and completed
+// Request, and an empty credit opening. No payer, receiver or delivered value enters it.
+// The form bit is a public input, so this one program verifies both receipt forms.
 struct Verifier(UniformCircuit<Fp>);
 
 impl Verifier {
     fn new() -> Self {
-        let (circuit, _, _) = Case::credited().build_with_binding(Some([Fp::ZERO; 2]));
+        let send = crate::send::tests::fixture(0, false).input;
+        let shape = super::receiver_signature::ReceiverReceipt {
+            request: Some(send.request.clone()),
+            opening: Some(super::credit_opening::StatusOpening {
+                root: Fp::ZERO,
+                burned: false,
+                next: Fp::ZERO,
+                index: 0,
+                siblings: [Fp::ZERO; 32],
+            }),
+            credential: send.credential.clone(),
+            receipt: send.receipt.clone(),
+            expected: [Fp::ZERO; 12],
+            send: false,
+            subject: Fp::ZERO,
+        };
+        let (circuit, _, _) =
+            Case::credited().build_for_receipt(Some([Fp::ZERO; 2]), Some(&shape));
         Self(circuit.into_verifier_program())
     }
+}
+
+// Receiver words of the joined statement, from originals that the native CreditStatus
+// verifier authenticated: the quoted credential of the recipient-signed open Request, the
+// receiver head receipt checked under its key, the head's statement, the decided folded
+// profile and the exact credit opening. The head is the Receive of this Payment or a later
+// receiver Send whose credit root covers it. Its authenticated kind sets the public form
+// bit. The completed Request is the Payment's own. No counterparty capsule, completion
+// record or caller-supplied expectation is consulted.
+fn delivered_receipt(
+    delivery: &VerifiedSentDelivery<'_>,
+) -> Result<super::receiver_signature::ReceiverReceipt> {
+    use crate::{credential, deferral, full, receipt, statement};
+    let evidence = delivery.receiver_evidence();
+    let p = &evidence.profile;
+    let s = &evidence.statement;
+    let tag = |kind: KagemushaWalletOperationKindV1| Fp::from(u64::from(kind.tag()));
+    let (send, program) = if s[16] == tag(KagemushaWalletOperationKindV1::Receive) {
+        (false, full::RECEIVE)
+    } else if s[16] == tag(KagemushaWalletOperationKindV1::Send) {
+        (true, full::SEND)
+    } else {
+        return Err(Error::AuthorityMismatch("ArchiveSent receiver head kind"));
+    };
+    // Native and in-circuit acceptance must agree. The decided profile names the same
+    // program, and its head and statement digest are this statement's. The head receipt
+    // signs the operation id of this kind and credit. A Receive names this Payment's credit.
+    let (a, b) = deferral::kind_bits(program);
+    let operation = poseidon::hash_with_domain(
+        u64::from_le_bytes(*b"kgwopid1"),
+        &[
+            p[bc::CONTEXT_IO + bc::WALLET],
+            p[bc::CONTEXT_IO + bc::WALLET + 1],
+            s[16],
+            s[17],
+        ],
+    );
+    if [p[full::KIND_IO], p[full::KIND_IO + 1]] != [Fp::from(a), Fp::from(b)]
+        || p[full::HEAD_IO] != s[15]
+        || p[full::STATEMENT_IO] != statement::digest(s)
+        || evidence.receipt.body[114..146] != operation.to_repr()
+        || (!send && s[17] != delivery.payment().statement()[17])
+    {
+        return Err(Error::AuthorityMismatch(
+            "ArchiveSent receiver head evidence",
+        ));
+    }
+    let expected = [
+        credential::digest(&evidence.credential),
+        p[full::RECEIPT_IO],
+        p[full::HEAD_IO],
+        p[full::STATEMENT_IO],
+        delivery.payment().digest(),
+        receipt::digest(&evidence.receipt),
+        p[bc::CONTEXT_IO + bc::WALLET],
+        p[bc::CONTEXT_IO + bc::WALLET + 1],
+        p[bc::CONTEXT_IO + bc::PAYMENT_KEY],
+        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 1],
+        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 2],
+        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 3],
+    ];
+    Ok(super::receiver_signature::ReceiverReceipt {
+        request: Some(delivery.payment().request().clone()),
+        opening: Some(super::credit_opening::StatusOpening {
+            root: p[bc::LINEAGE_IO + bc::CREDIT_ROOT],
+            burned: matches!(delivery.outcome(), native::VerifiedCreditStatus::Burned),
+            next: evidence.next,
+            index: evidence.slot,
+            siblings: evidence.siblings,
+        }),
+        credential: evidence.credential.clone(),
+        receipt: evidence.receipt.clone(),
+        expected,
+        send,
+        subject: s[17],
+    })
+}
+
+fn verify_io(verifier: &Verifier, io: Vec<Fp>, proof: &[u8]) -> Result<()> {
+    let circuit = &verifier.0;
+    spartan::verify_circuit(
+        &circuit.shape,
+        &Gens::<Vesta>::new(circuit.shape.cols()),
+        &Instance { io },
+        proof,
+        circuit,
+    )
+    .map_err(Error::Rejected)
 }
 
 impl Inputs<'_> {
@@ -40,7 +154,7 @@ impl Inputs<'_> {
     // private candidate domain is separate from the ordinary monetary statement.
     fn binding(&self) -> [Fp; 2] {
         let mut h = blake3::Hasher::new_derive_key(
-            "KAGEMUSHA Spartan ArchiveSent accepted pending component v1",
+            "KAGEMUSHA Spartan ArchiveSent joined receiver evidence component v2",
         );
         let delivery = self.delivery;
         let parts: [&[u8]; 7] = [
@@ -116,10 +230,26 @@ impl Inputs<'_> {
         })
     }
 
+    // The complete candidate statement: committed and lineage-adjusted pending effects,
+    // the receiver receipt signature, the credit opening under the folded credit root and
+    // the receiver-signed Request specialized into the retained Payment.
+    fn joined(&self, nonce: Fp) -> Result<Built> {
+        let receiver = delivered_receipt(self.delivery)?;
+        Ok(self
+            .case(nonce)?
+            .build_for_receipt(Some(self.binding()), Some(&receiver)))
+    }
+
     fn prove(&self) -> Result<(Fp, Vec<u8>)> {
         let nonce =
             funding::fresh_state_nonce(Some(self.released.released_core(self.current)?[NONCE]))?;
-        let (c, instance, witness) = self.case(nonce)?.build_with_binding(Some(self.binding()));
+        let (c, instance, witness) = self.joined(nonce)?;
+        // Natively accepted evidence must also select the removal in-circuit.
+        if instance.io[55..59] != [Fp::ONE; 4] {
+            return Err(Error::Rejected(
+                "ArchiveSent in-circuit evidence disagrees with native verification".into(),
+            ));
+        }
         let gens = Gens::<Vesta>::new(c.shape.cols());
         let entropy =
             ProofEntropy::fresh().map_err(|_| Error::Unavailable("archive proof entropy"))?;
@@ -134,11 +264,19 @@ impl Inputs<'_> {
         Ok((nonce, proof.to_bytes()))
     }
 
-    // Only this fixed candidate circuit, verified custody and the exact peer
-    // originals supply the public input. No caller-provided instance or result bits.
-    fn verify(&self, verifier: &Verifier, nonce: Fp, proof: &[u8]) -> Result<()> {
-        let circuit = &verifier.0;
+    // The complete public input. Only verified custody, the verified delivery and the
+    // exact peer originals it borrowed supply it: no caller-provided instance, result
+    // bits or receiver expectation.
+    fn public_io(&self, nonce: Fp, len: usize) -> Result<Vec<Fp>> {
+        use super::request_original::expected_words;
         let case = self.case(nonce)?;
+        let receiver = delivered_receipt(self.delivery)?;
+        let open = native::decode_open_request_peer(self.delivery.open_request())?;
+        let completed = self.delivery.payment().request();
+        let completed = [completed.body.as_slice(), &completed.signature].concat();
+        if open.request.len() != completed.len() {
+            return Err(Error::Malformed("archive open Request original"));
+        }
         let mut io = vec![Fp::ZERO; 32];
         io[0] = Fp::ONE;
         io.extend([
@@ -149,17 +287,27 @@ impl Inputs<'_> {
         io.extend(case.after.lineage);
         io.extend([case.tag, case.credit]);
         io.extend(case.descriptor);
+        // The accepted branch only: authentic delivery cannot elect the no-op.
         io.extend(case.results);
         io.extend(self.binding());
-        io.resize(circuit.io_len, Fp::ZERO);
-        spartan::verify_circuit(
-            &circuit.shape,
-            &Gens::<Vesta>::new(circuit.shape.cols()),
-            &Instance { io },
-            proof,
-            circuit,
-        )
-        .map_err(Error::Rejected)
+        io.resize(64, Fp::ZERO);
+        io.extend(receiver.public_words());
+        io.resize(80, Fp::ZERO);
+        io.extend(expected_words(open.request));
+        io.extend(expected_words(&completed));
+        io.resize(128, Fp::ZERO);
+        if let Some(opening) = &receiver.opening {
+            io.extend(opening.words());
+        }
+        if io.len() > len {
+            return Err(Error::Malformed("archive public input length"));
+        }
+        io.resize(len, Fp::ZERO);
+        Ok(io)
+    }
+
+    fn verify(&self, verifier: &Verifier, nonce: Fp, proof: &[u8]) -> Result<()> {
+        verify_io(verifier, self.public_io(nonce, verifier.0.io_len)?, proof)
     }
 }
 
@@ -280,11 +428,51 @@ fn with_retained_inputs(
 #[test]
 #[ignore = "requires retained inner capsule, completion and signed Request originals and the device fixture"]
 fn successor_archive_authenticated_delivery_proves_at_later_selected_payer_head() {
-    with_retained_inputs(|later_inputs, send, sent, _, _, _| {
+    with_retained_inputs(|later_inputs, send, sent, engine, params, wallet| {
+        // Independent oracle: the counterparty's own released Receive and completion
+        // reproduce every receiver word the payer derived from its verified CreditStatus.
+        let (oracle, root) =
+            retained_receiver_receipt(later_inputs.delivery, engine, params, wallet);
+        let delivered = delivered_receipt(later_inputs.delivery).unwrap();
+        assert_eq!(delivered.expected, oracle.expected);
+        assert_eq!(delivered.credential.body, oracle.credential.body);
+        assert_eq!(delivered.credential.signature, oracle.credential.signature);
+        assert_eq!(delivered.receipt.body, oracle.receipt.body);
+        assert_eq!(delivered.receipt.signature, oracle.receipt.signature);
+        assert_eq!(
+            delivered.opening.as_ref().unwrap().words(),
+            super::credit_opening::StatusOpening::from_verified(later_inputs.delivery, root)
+                .unwrap()
+                .words()
+        );
+        drop((delivered, oracle));
         let (nonce, proof) = later_inputs.prove().unwrap();
         // Construct the verifier from a deterministic, different state fixture.
         let circuit = Verifier::new();
+        let (joined, instance, witness) = later_inputs.joined(nonce).unwrap();
+        drop(witness);
+        assert_eq!(
+            joined.program_digest(),
+            circuit.0.program_digest(),
+            "the fixture-built program verifies the producer's statement"
+        );
+        drop(joined);
+        let io = later_inputs.public_io(nonce, circuit.0.io_len).unwrap();
+        assert_eq!(io, instance.io, "the verifier recomputes the exact public input");
         later_inputs.verify(&circuit, nonce, &proof).unwrap();
+        // Credential digest, folded receipt, head and statement, original Payment, receipt
+        // digest, receiver wallet and key, open and completed Request words, folded credit
+        // root, Burned flag, next key, slot and the last opening sibling are all bound.
+        for offset in [
+            64, 65, 66, 67, 68, 69, 70, 72, 75, 82, 95, 98, 111, 128, 129, 130, 131, 163,
+        ] {
+            let mut changed = io.clone();
+            changed[offset] += Fp::ONE;
+            assert!(
+                verify_io(&circuit, changed, &proof).is_err(),
+                "public receiver word {offset}"
+            );
+        }
         let earlier = Inputs {
             current: send,
             released: sent,
@@ -312,9 +500,12 @@ fn successor_archive_authenticated_delivery_proves_at_later_selected_payer_head(
             "current preparation and completion must match"
         );
         eprintln!(
-            "ArchiveSent authenticated folded delivery proof bytes={} program={}",
+            "ArchiveSent joined receiver evidence proof bytes={} program={} sx={} sz={} cols={}",
             proof.len(),
-            blake3::Hash::from(circuit.0.program_digest()).to_hex()
+            blake3::Hash::from(circuit.0.program_digest()).to_hex(),
+            circuit.0.shape.sx,
+            circuit.0.shape.sz(),
+            circuit.0.shape.cols()
         );
     });
 }
@@ -380,6 +571,8 @@ fn retained_receiver_receipt(
         credential: quoted,
         receipt: raw,
         expected,
+        send: false,
+        subject: delivery.payment().statement()[17],
     };
     assert_eq!(receipt::digest(&receipt.receipt), expected[1]);
     (receipt, projection[bc::LINEAGE_IO + bc::CREDIT_ROOT])

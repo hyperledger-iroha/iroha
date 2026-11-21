@@ -104,11 +104,17 @@ mod tests {
         assert!(admit(&world.view(), 10, &executable).unwrap());
         let no_allocation =
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        // Borrowed field reads still debit Norito's original cumulative allocation
+        // counter; the record's first schema-hash field accounts for 32 bytes.
+        let result = norito::with_decode_limits_scope(no_allocation, || {
+            admit(&world.view(), 10, &executable)
+        });
         assert!(
-            norito::with_decode_limits_scope(no_allocation, || {
-                admit(&world.view(), 10, &executable)
-            })
-            .unwrap()
+            matches!(result, Err(ExecutionAttemptError::Deferred(original))
+            if original.decode_refusal().is_some_and(|refusal| matches!(
+                refusal.resource_error(),
+                norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. }
+            )))
         );
         let no_fields =
             norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, usize::MAX);
@@ -117,6 +123,7 @@ mod tests {
         assert!(
             matches!(result, Err(ExecutionAttemptError::Deferred(original)) if original.decode_refusal().is_some())
         );
+        assert!(admit(&world.view(), 10, &executable).unwrap());
         let repeated =
             Executable::Instructions(vec![fixture.instruction.clone(), fixture.instruction].into());
         assert!(

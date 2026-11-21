@@ -22,6 +22,7 @@ pub(super) struct StateHashFunction {
 }
 
 const BLOCK_HASH: &str = "Reads committed block hashes or the hash of the current block header: authenticated history and block identity, not a digest of State content";
+const RETIREMENT_ROOT_IDENTITY: &str = "Validates the original certified execution tip and returns the network, root scope and consensus instance that own the retirement cut";
 const RECORD_IDENTITY: &str = "Returns the identifier, content hash or stored digest of one record, transaction or message: no digest over a table or cell";
 const DERIVED_SEED: &str =
     "Derives a sampling seed or an identifier from committed records or from the current block";
@@ -266,6 +267,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "receipt_proof",
         1,
         UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/retirement/source_candidate.rs",
+        "original_root",
+        1,
+        UseOwner::Other(Use::Record, RETIREMENT_ROOT_IDENTITY),
     ),
     function(
         "crates/iroha_core/src/runtime/taira_activation.rs",

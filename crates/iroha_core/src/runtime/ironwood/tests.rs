@@ -17,6 +17,61 @@ const PINNED: &str = concat!(
     "/../../specs/runtime_ironwood_catalog.json"
 );
 
+#[test]
+fn fixture_publishes_only_ironwood_owners_and_preserves_original_history() {
+    use crate::state::{StorageReadOnly as _, World};
+
+    let catalog = super::super::release_catalog().unwrap();
+    let extension = catalog.ironwood.as_ref().unwrap();
+    let historical = super::super::state_scope_permission::descriptor();
+    let historical_id = historical.id().unwrap();
+    assert!(!catalog.baseline_definitions.contains(&historical_id));
+    assert!(!extension.definitions.contains(&historical_id));
+    for retain_history in [false, true] {
+        let mut world = World::new();
+        if retain_history {
+            world
+                .runtime_definitions
+                .insert(historical_id, historical.clone());
+        }
+        let mut expected: BTreeMap<_, _> = world
+            .runtime_definitions
+            .view()
+            .iter()
+            .map(|(id, descriptor)| (*id, descriptor.clone()))
+            .collect();
+        for id in &extension.definitions {
+            expected.insert(*id, catalog.definitions[id].clone());
+        }
+        install_for_test(&mut world);
+        let published: BTreeMap<_, _> = world
+            .runtime_definitions
+            .view()
+            .iter()
+            .map(|(id, descriptor)| (*id, descriptor.clone()))
+            .collect();
+        assert_eq!(published, expected);
+        assert!(published.len() < catalog.definitions.len());
+        assert_eq!(published.contains_key(&historical_id), retain_history);
+        assert_eq!(world.runtime_selection.view().get(), &extension.selection);
+        extension.selection.check_closure(&published).unwrap();
+        assert!(published.contains_key(&extension.migration));
+
+        install_for_test(&mut world);
+        assert_eq!(world.runtime_selection.view().get(), &extension.selection);
+        assert_eq!(
+            world
+                .runtime_definitions
+                .view()
+                .iter()
+                .map(|(id, descriptor)| (*id, descriptor.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            published,
+            "reinstalling the same candidate preserves the exact published set"
+        );
+    }
+}
+
 fn catalog_identity() -> String {
     let catalog = super::super::release_catalog().unwrap();
     let extension = catalog.ironwood.as_ref().unwrap();

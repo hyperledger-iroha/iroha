@@ -11,6 +11,8 @@ use iroha_pasta::poseidon;
 use std::sync::LazyLock;
 #[path = "credit_proof_codec.rs"]
 mod proof_codec;
+#[path = "credit_status_identity.rs"]
+mod status_identity;
 #[path = "credit_status_later_send.rs"]
 pub(super) mod later_send;
 
@@ -261,12 +263,29 @@ impl NativeEngine {
         payment: &VerifiedIncomingPayment,
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedCreditStatus> {
+        self.verify_credit_status_evidence(wire, open_request, payment, parameters)
+            .map(|(status, _)| status)
+    }
+
+    /// The same complete verification, also returning the receiver originals that the
+    /// accepted projection authenticated: the Receive head of this Payment, or a later
+    /// receiver Send head whose credit root covers it.
+    pub(crate) fn verify_credit_status_evidence(
+        &self,
+        wire: &[u8],
+        open_request: &[u8],
+        payment: &VerifiedIncomingPayment,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<(
+        VerifiedCreditStatus,
+        crate::native::sent_delivery::ReceiverEvidence,
+    )> {
         payment.require_parameters(parameters)?;
         let mut bytes =
             payment_wire::decode_peer_payload(4, wire, MAX_PAYLOAD).map_err(Error::Rejected)?;
         if later_send::recognizes(bytes) {
             return later_send::verify(self, bytes, payment, open_request, parameters)
-                .map(|verified| verified.outcome);
+                .map(|verified| (verified.outcome, verified.evidence));
         }
         if take(&mut bytes, 8)? != MAGIC {
             return Err(Error::Malformed("credit status magic"));
@@ -299,7 +318,26 @@ impl NativeEngine {
         let decoded = carrier::decode_projected_pair(&trusted, &exact, &projection)
             .map_err(Error::Rejected)?;
         verify_pair(&parameters.inner, full::RECEIVE, decoded)?;
-        Ok(status)
+        // Every word below was an input of the decided pair or of the checked receipt.
+        let profile: [Fp; 64] = projection
+            .primary()
+            .io
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Malformed("credit status projected profile"))?;
+        Ok((
+            status,
+            crate::native::sent_delivery::ReceiverEvidence {
+                credential: receiver,
+                receipt,
+                statement: s,
+                profile,
+                exact_pair: exact,
+                next: opening.next,
+                slot: opening.path.index,
+                siblings: opening.path.siblings,
+            },
+        ))
     }
 
     /// Return the authenticated delivery status for this Released Receive. Caller retains

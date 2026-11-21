@@ -127,7 +127,8 @@ fn execute_attempt(
     )?;
     let limit = gas_limit.min(maximum_gas);
     let budget = state.execution_budget();
-    let mut runtime = IVM::try_new_with_memory_budget(limit, &budget).map_err(vm_failure)?;
+    let mut runtime =
+        IVM::try_new_for_external_host_with_memory_budget(limit, &budget).map_err(vm_failure)?;
     runtime
         .set_heap_max_limit(state.world.parameters.get().smart_contract().memory().get())
         .map_err(vm_failure)?;
@@ -194,3 +195,6 @@ fn execute_attempt(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod vm_owner_tests;
