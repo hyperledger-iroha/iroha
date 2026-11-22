@@ -16,10 +16,24 @@ use crate::governance::{
 pub enum CheckedAnonymousGovernanceCertificateErrorV1 {
     /// The existing certificate rules rejected the supplied record.
     #[error(transparent)]
-    Rejected(#[from] AnonymousGovernanceCertificateErrorV1),
+    Rejected(AnonymousGovernanceCertificateErrorV1),
     /// An original codec attempt failed, preserving its local resource classification.
     #[error(transparent)]
     Codec(#[from] norito::core::DecodeAttemptError),
+    /// The ballot's original allocator or enclosing budget refused its owned closure frame.
+    #[error("ballot closure result is unavailable: {0}")]
+    ClosureUnavailable(norito::core::DecodeLocalRefusal),
+}
+
+impl From<AnonymousGovernanceCertificateErrorV1> for CheckedAnonymousGovernanceCertificateErrorV1 {
+    fn from(error: AnonymousGovernanceCertificateErrorV1) -> Self {
+        match error {
+            AnonymousGovernanceCertificateErrorV1::Ballot(AnonymousBallotBindingErrorV1::Codec(
+                crate::governance::anonymous_ballot::AnonymousBallotCodecErrorV1::DecodeUnavailable(original),
+            )) => Self::ClosureUnavailable(original),
+            error => Self::Rejected(error),
+        }
+    }
 }
 
 pub(super) trait Identities {

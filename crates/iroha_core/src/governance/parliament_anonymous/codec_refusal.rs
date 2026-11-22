@@ -45,7 +45,11 @@ impl AnonymousParliamentErrorV1 {
     /// Semantic errors and unrelated verifier failures never acquire codec authority here.
     pub(crate) fn original_codec_refusal(&self) -> Option<&DecodeLocalRefusal> {
         match self {
-            Self::ProposalFrame(error) => codec(error),
+            Self::ProposalFrame(error)
+            | Self::Ballot(AnonymousBallotBindingErrorV1::Codec(error))
+            | Self::Certificate(AnonymousGovernanceCertificateErrorV1::Ballot(
+                AnonymousBallotBindingErrorV1::Codec(error),
+            )) => codec(error),
             Self::Credential(error) => match error.as_ref() {
                 RegistrationLedgerErrorV1::Context(error) => context(error),
                 RegistrationLedgerErrorV1::Registration(RegistrationErrorV1::Inputs(error)) => {
@@ -92,7 +96,20 @@ mod tests {
         let codec = AnonymousBallotCodecErrorV1::from_attempt(error);
         let structure = BallotContextErrorV1::Codec(codec.clone());
         let input = ProofInputErrorV1::Codec(codec.clone());
+        let ballot = AnonymousBallotBindingErrorV1::Codec(codec.clone());
+        let certificate = AnonymousGovernanceCertificateErrorV1::Ballot(ballot.clone());
+        let from_checked: AnonymousParliamentErrorV1 =
+            CheckedAnonymousGovernanceCertificateErrorV1::from(certificate.clone()).into();
+        assert!(
+            matches!(&from_checked, AnonymousParliamentErrorV1::Certificate(
+            AnonymousGovernanceCertificateErrorV1::Ballot(AnonymousBallotBindingErrorV1::Codec(
+                AnonymousBallotCodecErrorV1::DecodeUnavailable(closure),
+            ))) if closure == &original)
+        );
         let errors = [
+            AnonymousParliamentErrorV1::Ballot(ballot),
+            AnonymousParliamentErrorV1::Certificate(certificate),
+            from_checked,
             AnonymousParliamentErrorV1::ProposalFrame(codec.clone()),
             AnonymousParliamentErrorV1::Credential(Box::new(RegistrationLedgerErrorV1::Context(
                 ContextErrorV1::Structure(structure.clone()),
@@ -127,6 +144,12 @@ mod tests {
             );
         }
         for error in [
+            AnonymousParliamentErrorV1::Ballot(AnonymousBallotBindingErrorV1::ResultRoot),
+            AnonymousParliamentErrorV1::Certificate(AnonymousGovernanceCertificateErrorV1::Ballot(
+                AnonymousBallotBindingErrorV1::Codec(AnonymousBallotCodecErrorV1::Codec(
+                    "invalid closure".into(),
+                )),
+            )),
             AnonymousParliamentErrorV1::ProposalFrame(AnonymousBallotCodecErrorV1::Codec(
                 "invalid encoding".into(),
             )),

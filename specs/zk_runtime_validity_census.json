@@ -6502,7 +6502,7 @@
    "gates": "Canonical anonymous-ballot envelope/context decoding can encounter an original allocator or enclosing local decode refusal.",
    "decided_by": "decode_canonical_for_admission and into_local_refusal retain the original local cause. Malformed bytes and protocol size/schema limits remain deterministic codec errors.",
    "attribution": "read",
-   "note": "framing.rs maps only an authenticated DecodeLocalRefusal into DecodeUnavailable; ballot.rs and context.rs propagate that original cause. This does not implement the missing State/context execution adapter recorded separately by voting.anonymous_entrypoint_unavailable. Checked canonical framing and context constructors use the same original DecodeLocalRefusal owner; the additional adapters do not turn local exhaustion into deterministic rejection.",
+   "note": "framing.rs maps only an authenticated DecodeLocalRefusal into DecodeUnavailable; ballot.rs and context.rs propagate that original cause. This does not implement the missing State/context execution adapter recorded separately by voting.anonymous_entrypoint_unavailable. Checked canonical framing and context constructors use the same original DecodeLocalRefusal owner; the additional adapters do not turn local exhaustion into deterministic rejection. Checked governance certificates preserve the original refusal when the local budget cannot fund the ballot closure frame.",
    "tests": [
     {
      "path": "crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs",
@@ -6511,12 +6511,17 @@
     {
      "path": "crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs",
      "name": "schema_limits_are_invalid_even_when_an_enclosing_limit_has_the_same_ceiling"
+    },
+    {
+     "path": "crates/iroha_data_model/src/governance/anonymous_ballot/governance_certificate.rs",
+     "name": "checked_certificate_validation_preserves_all_nested_rule_verdicts"
     }
    ],
    "sites": [
     ["crates/iroha_data_model/src/governance/anonymous_ballot/ballot.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_data_model/src/governance/anonymous_ballot/context.rs", "unavailable", "unavailable", 4],
-    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 3]
+    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 3],
+    ["crates/iroha_data_model/src/governance/anonymous_ballot/governance_certificate/checked.rs", "unavailable", "unavailable", 3]
    ]
   },
   {
@@ -7472,7 +7477,7 @@
  },
  "summary": {
   "entries": 245,
-  "sites": 1575,
+  "sites": 1576,
   "by_status": {"done": 18, "local_resource": 25, "not_a_gate": 126, "open": 37, "out_of_plan": 21, "unsupported": 18},
   "by_owner": {"-": 147, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 8, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
