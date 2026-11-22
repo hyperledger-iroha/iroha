@@ -12,6 +12,9 @@ use iroha_data_model::{
 };
 
 use super::*;
+
+mod funding_tests;
+mod refusal_tests;
 use crate::{
     runtime::{
         catalog::{
@@ -153,11 +156,31 @@ fn run_block(world: &World, height: u64, writes: impl FnOnce(&mut crate::state::
     let mut transaction = block
         .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
     activate_due(&mut transaction, height, 1_000, &committee()).expect("block start");
-    run_stages(&mut transaction, height);
     transaction.apply();
+    run_stages_for_testing(&mut block, height).expect("migration stages complete");
     writes(&mut block);
-    barrier(&mut block, height);
+    barrier(&mut block, height).expect("migration barrier completes");
     block.commit();
+}
+
+fn run_stages_for_testing(world: &mut WorldBlock<'_>, height: u64) -> MigrationBoundaryResult<()> {
+    let config = iroha_config::parameters::actual::LaneConfig::default();
+    let lane_map = std::collections::BTreeMap::new();
+    let mut quantity_candidate =
+        crate::state::fastpq_quantity_capture::QuantityCandidateArchive::default();
+    run_stages(
+        world,
+        height,
+        &mut MigrationContext {
+            lane_config: &config,
+            current_slot: 0,
+            lane_map: &lane_map,
+            quantity_candidate: &mut quantity_candidate,
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
+            world_lifetime: core::marker::PhantomData,
+        },
+    )
 }
 
 fn migration_id(world: &World) -> DefinitionId {
@@ -304,7 +327,15 @@ fn a_migration_copies_cuts_over_drains_and_retires_its_old_storage() {
             "draining leaves the successor alone"
         );
 
-        // Retirement: the empty old storage leaves the selection with the migration.
+        // Retirement adds exactly the empty old storage to the already omitted members.
+        // Independently dormant owners (including generic carrier backing) stay omitted.
+        let mut omitted =
+            crate::runtime::uninstalled_world_members(world.view().runtime_selection())
+                .unwrap()
+                .members;
+        assert!(!omitted.contains(&"tx_sequences"));
+        omitted.push("tx_sequences");
+        omitted.sort_unstable();
         let migration = migration_id(&world);
         let retire = schedule_step(&world, MigrationStep::Retire, 18);
         run_block(&world, 18, |_| {});
@@ -328,8 +359,8 @@ fn a_migration_copies_cuts_over_drains_and_retires_its_old_storage() {
             crate::runtime::uninstalled_world_members(view.runtime_selection())
                 .unwrap()
                 .members,
-            ["tx_sequences"],
-            "the retired field leaves snapshots"
+            omitted,
+            "only the retired field additionally leaves snapshots"
         );
     });
 }

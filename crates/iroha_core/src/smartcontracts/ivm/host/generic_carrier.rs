@@ -425,7 +425,7 @@ impl<'run> CoreHostImpl<'run, '_, NoQueryState> {
         instruction: &InstructionBox,
     ) -> Result<Self, ivm::VMError> {
         let invocation = Invocation::capture(state, instruction)?;
-        let mut host = Self::new(authority);
+        let mut host = Self::new_carrier_without_native_facilities(authority);
         host.execution_class = HostExecutionClass::Carrier;
         host.set_output_limits_from_parameters(state.world.parameters.get().smart_contract());
         host.restrict_output_limits(HostOutputLimits {
@@ -483,6 +483,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             };
         }
         let context = self.carrier.as_ref().ok_or_else(denied)?;
+        if let Some(gas) = ivm::host::quote_carrier_memory_syscall(number, vm)? {
+            return Ok(Some(gas));
+        }
         if matches!(
             number,
             ivm::syscalls::SYSCALL_STATE_GET
@@ -532,6 +535,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             };
         }
         let context = self.carrier.as_ref().ok_or_else(denied)?;
+        if matches!(
+            number,
+            ivm::syscalls::SYSCALL_ALLOC | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
+        ) {
+            return ivm::host::execute_carrier_memory_syscall(number, vm);
+        }
         let invocation = context.invocation;
         let source = &context.source;
         if !matches!(

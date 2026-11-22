@@ -394,7 +394,7 @@ pub(crate) use output_capacity::{
 };
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
-mod fastpq_quantity_capture;
+pub(crate) mod fastpq_quantity_capture;
 pub(crate) use fastpq_quantity_capture::{
     AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
 };
@@ -24103,7 +24103,7 @@ impl<'world> WorldBlock<'world> {
             axt_lane_map,
         )
     }
-    fn try_transaction_with_axt_lane_map(
+    pub(crate) fn try_transaction_with_axt_lane_map(
         &mut self,
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
@@ -30984,8 +30984,7 @@ impl State {
         // Keep independent transaction phases in separate frames. Unoptimized
         // builds otherwise reserve all of their large overlay temporaries for
         // this entire constructor, even when a phase has no work to apply.
-        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)
-            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)?;
         Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h)
             .map_err(StateBlockStartError::Storage)?;
         Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot)
@@ -31109,15 +31108,14 @@ impl State {
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]
-    fn apply_block_start_world_transitions(
+    fn apply_block_start_world_transitions<E: std::fmt::Debug>(
         sb: &mut StateBlock<'_>,
         now_h: u64,
         current_slot: u64,
-    ) -> Result<(), StateStorageAdmissionError> {
+    ) -> Result<(), StateBlockStartError<E>> {
         let sb = sb.fields.as_mut().expect("original executing State");
         let transitions = collect_confidential_transitions(&sb.world, now_h);
         let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-        let static_policy = sb.runtime_policy.static_inputs();
         let mut wtx = sb.world.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             Some(sb.telemetry),
@@ -31212,7 +31210,51 @@ impl State {
         crate::runtime::containment::expire_due(&mut wtx, now_h, now_ms);
         // One bounded stage of every migration the selection activates, after the height's
         // change sets and containment leases decided which run (§5.4).
-        crate::runtime::migration::run_stages(&mut wtx, now_h);
+        // Keep the baseline's original child and ordering unchanged when no active migration
+        // exists. An actual migration runs after the exact activation/containment prefix, in
+        // independently disposable World children, before the original transition suffix.
+        if wtx
+            .runtime_migrations
+            .iter()
+            .any(|(id, _)| wtx.runtime_selection.get().active.binary_search(id).is_ok())
+        {
+            let axt_lane_map = core::mem::take(&mut wtx.axt_lane_map);
+            let mut quantity_candidate =
+                fastpq_quantity_capture::QuantityCandidateArchive::default();
+            quantity_candidate.observe(&wtx);
+            wtx.apply();
+            sb.fastpq_quantity_candidate.apply(quantity_candidate);
+            let fields = &mut *sb;
+            let mut context = crate::runtime::migration::MigrationContext {
+                lane_config: &fields.nexus.lane_config,
+                current_slot,
+                lane_map: &axt_lane_map,
+                quantity_candidate: &mut fields.fastpq_quantity_candidate,
+                #[cfg(feature = "telemetry")]
+                telemetry: Some(fields.telemetry),
+                world_lifetime: core::marker::PhantomData,
+            };
+            crate::runtime::migration::run_stages(&mut fields.world, now_h, &mut context).map_err(
+                |error| match error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                    ) => StateBlockStartError::ExecutionDeferred(original),
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(reason),
+                    ) => StateBlockStartError::Policy(reason),
+                    crate::runtime::migration::MigrationBoundaryError::Storage(original) => {
+                        StateBlockStartError::Storage(original)
+                    }
+                },
+            )?;
+            wtx = sb.world.try_transaction_with_axt_lane_map(
+                #[cfg(feature = "telemetry")]
+                Some(sb.telemetry),
+                sb.nexus.lane_config.clone(),
+                current_slot,
+                axt_lane_map,
+            )?;
+        }
         // Collect candidates to open (avoid borrow conflicts)
         let to_open: Vec<(String, u64, u64)> = wtx
             .governance_referenda
@@ -31332,6 +31374,7 @@ impl State {
                     },
                 )));
             } else if decision_ready {
+                let static_policy = sb.runtime_policy.static_inputs();
                 let decision =
                     crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
                         rid.clone(),

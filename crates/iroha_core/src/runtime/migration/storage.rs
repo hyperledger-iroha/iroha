@@ -13,7 +13,10 @@ use mv::{
 };
 
 use crate::{
-    runtime::catalog::migrations::{DrainOutcome, StageOutcome},
+    runtime::{
+        catalog::migrations::{DrainOutcome, StageOutcome},
+        migration::{MigrationBoundaryError, MigrationBoundaryResult, MigrationResult},
+    },
     state::{WorldBlock, WorldTransaction},
 };
 
@@ -22,6 +25,28 @@ mod sealed {
     pub trait Lookup {}
     pub trait Scan {}
     pub trait Program {}
+}
+
+/// Fixed scratch backing funded by the exact original World execution pool.
+/// This capability opens no table and grants no persistent write or extra capacity.
+/// Nested payloads and codec/control graphs require their own original admission.
+#[derive(Clone, Copy)]
+pub struct Scratch<'a> {
+    budget: &'a iroha_allocation::AllocationBudget,
+}
+impl Scratch<'_> {
+    /// Admit one exact fixed array before asking the allocator for its backing.
+    /// The returned owner retains the original charge until the backing is destroyed.
+    ///
+    /// # Errors
+    /// Preserves the original pool or physical allocator refusal as a local deferral.
+    pub fn buffer<T>(
+        &self,
+        capacity: usize,
+    ) -> MigrationResult<iroha_allocation::ChargedBuffer<T>> {
+        iroha_allocation::ChargedBuffer::new(capacity, self.budget)
+            .map_err(super::scratch::buffer_error)
+    }
 }
 
 /// Static source authority, committed in the new migration's native reference closure.
@@ -53,9 +78,18 @@ macro_rules! source_access {
         }
     };
 }
-source_access!(PointOnly, b"table-migration.v1/source-point");
-source_access!(ScanOnly, b"table-migration.v1/source-scan");
-source_access!(PointAndScan, b"table-migration.v1/source-point-and-scan");
+source_access!(
+    PointOnly,
+    b"table-migration.v1/original-refusal/fixed-original-scratch/source-point"
+);
+source_access!(
+    ScanOnly,
+    b"table-migration.v1/original-refusal/fixed-original-scratch/source-scan"
+);
+source_access!(
+    PointAndScan,
+    b"table-migration.v1/original-refusal/fixed-original-scratch/source-point-and-scan"
+);
 impl sealed::Lookup for PointOnly {}
 impl sealed::Lookup for PointAndScan {}
 impl LookupAccess for PointOnly {}
@@ -125,6 +159,8 @@ impl<K: Key, V: Value> Successor<'_, '_, K, V> {
 
 /// Exact source reads and successor writes for a copying stage.
 pub struct StageStorage<'a, 'block, A, K: Key, V: Value, K2: Key, V2: Value> {
+    /// Original-pool fixed scratch; it carries no additional storage authority.
+    pub scratch: Scratch<'a>,
     /// The source, with the statically declared point and/or scan authority.
     pub source: Source<'a, 'block, A, K, V>,
     /// The successor, with no source-write or successor-read authority.
@@ -144,8 +180,8 @@ impl<K: Key, V: Value> SourceChanges<'_, '_, K, V> {
 }
 
 /// Successor-only mutation authority for the block barrier.
-pub struct BarrierSuccessor<'a, 'world, K: Key, V: Value> {
-    storage: &'a mut Block<'world, K, V>,
+pub struct BarrierSuccessor<'a, 'block, K: Key, V: Value> {
+    storage: &'a mut Transaction<'block, K, V>,
 }
 
 impl<K: Key, V: Value> BarrierSuccessor<'_, '_, K, V> {
@@ -160,11 +196,13 @@ impl<K: Key, V: Value> BarrierSuccessor<'_, '_, K, V> {
 }
 
 /// Original source journal and successor writes, bound before the barrier callback starts.
-pub struct BarrierStorage<'a, 'world, K: Key, V: Value, K2: Key, V2: Value> {
+pub struct BarrierStorage<'a, 'world, 'successor, K: Key, V: Value, K2: Key, V2: Value> {
+    /// Original-pool fixed scratch retained by each returned buffer.
+    pub scratch: Scratch<'a>,
     /// Changes in the source's original block journal, without ordinary table reads or writes.
     pub source: SourceChanges<'a, 'world, K, V>,
     /// Only the declared successor may be changed.
-    pub successor: BarrierSuccessor<'a, 'world, K2, V2>,
+    pub successor: BarrierSuccessor<'a, 'successor, K2, V2>,
 }
 
 /// Source-only deletion authority after cutover.
@@ -178,9 +216,14 @@ pub struct BarrierStorage<'a, 'world, K: Key, V: Value, K2: Key, V2: Value> {
 /// ```
 pub struct SourceDrain<'a, 'block, K: Key, V: Value> {
     storage: &'a mut Transaction<'block, K, V>,
+    scratch: Scratch<'a>,
 }
 
 impl<K: Key, V: Value> SourceDrain<'_, '_, K, V> {
+    /// Borrow only fixed scratch admission from this original source owner.
+    pub fn scratch(&self) -> Scratch<'_> {
+        self.scratch
+    }
     /// Visit at most `limit` original source keys in canonical order.
     pub fn keys(&self, limit: usize) -> impl Iterator<Item = &K> {
         self.storage.iter().take(limit).map(|(key, _)| key)
@@ -195,13 +238,16 @@ impl<K: Key, V: Value> SourceDrain<'_, '_, K, V> {
     }
 }
 
-/// A native copying stage; failures retain the original no-writes-on-error contract.
+/// A native copying stage in its own original World child. Rejection and local refusal
+/// drop that child before status recording or caller propagation.
 pub type TableStage<A, K, V, K2, V2> =
-    fn(StageStorage<'_, '_, A, K, V, K2, V2>, &[u8], u32) -> Result<StageOutcome, String>;
-/// A total barrier over source rows the copying stage accepted.
-pub type TableBarrier<K, V, K2, V2> = fn(BarrierStorage<'_, '_, K, V, K2, V2>, &[u8]);
+    fn(StageStorage<'_, '_, A, K, V, K2, V2>, &[u8], u32) -> MigrationResult<StageOutcome>;
+/// Mirror all accepted source rows, or refuse the complete unpublished block.
+/// An unfinished codec/allocation operation is never a successful no-op.
+pub type TableBarrier<K, V, K2, V2> =
+    fn(BarrierStorage<'_, '_, '_, K, V, K2, V2>, &[u8]) -> MigrationResult<()>;
 /// A bounded source drain after the governed cutover.
-pub type TableDrain<K, V> = fn(SourceDrain<'_, '_, K, V>, u32) -> DrainOutcome;
+pub type TableDrain<K, V> = fn(SourceDrain<'_, '_, K, V>, u32) -> MigrationResult<DrainOutcome>;
 /// Whether the original source journal contains a post-cutover write.
 pub type TableStale<K, V> = fn(SourceChanges<'_, '_, K, V>) -> bool;
 
@@ -268,11 +314,15 @@ pub(crate) trait MigrationProgram: sealed::Program + Sync {
         world: &mut WorldTransaction<'_, '_>,
         cursor: &[u8],
         limit: u32,
-    ) -> Result<StageOutcome, String>;
+    ) -> MigrationResult<StageOutcome>;
     /// Bind the original source journal and successor before invoking the total barrier.
-    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]);
+    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) -> MigrationBoundaryResult<()>;
     /// Give the drain callback only source deletion authority.
-    fn drain(&self, world: &mut WorldTransaction<'_, '_>, limit: u32) -> DrainOutcome;
+    fn drain(
+        &self,
+        world: &mut WorldTransaction<'_, '_>,
+        limit: u32,
+    ) -> MigrationResult<DrainOutcome>;
     /// Give the stale-write callback only original source-journal read authority.
     fn stale(&self, world: &WorldBlock<'_>) -> bool;
 }
@@ -306,10 +356,12 @@ impl<A: SourceAccess, K: Key, V: Value, K2: Key, V2: Value> MigrationProgram
         world: &mut WorldTransaction<'_, '_>,
         cursor: &[u8],
         limit: u32,
-    ) -> Result<StageOutcome, String> {
+    ) -> MigrationResult<StageOutcome> {
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
         let (source, successor) = (self.pair.transaction)(world);
         (self.stage)(
             StageStorage {
+                scratch: Scratch { budget: &budget },
                 source: Source {
                     storage: source,
                     access: PhantomData,
@@ -321,21 +373,38 @@ impl<A: SourceAccess, K: Key, V: Value, K2: Key, V2: Value> MigrationProgram
         )
     }
 
-    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) {
+    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) -> MigrationBoundaryResult<()> {
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
         let (source, successor) = (self.pair.block)(world);
+        let mut child = successor.try_transaction().map_err(|original| {
+            MigrationBoundaryError::Storage(crate::state::StateStorageAdmissionError::World(
+                mv::storage::AdmittedStorageError::Planning(original),
+            ))
+        })?;
         (self.barrier)(
             BarrierStorage {
+                scratch: Scratch { budget: &budget },
                 source: SourceChanges { storage: source },
-                successor: BarrierSuccessor { storage: successor },
+                successor: BarrierSuccessor {
+                    storage: &mut child,
+                },
             },
             cursor,
-        );
+        )?;
+        child.apply();
+        Ok(())
     }
 
-    fn drain(&self, world: &mut WorldTransaction<'_, '_>, limit: u32) -> DrainOutcome {
+    fn drain(
+        &self,
+        world: &mut WorldTransaction<'_, '_>,
+        limit: u32,
+    ) -> MigrationResult<DrainOutcome> {
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
         (self.drain)(
             SourceDrain {
                 storage: (self.pair.drain)(world),
+                scratch: Scratch { budget: &budget },
             },
             limit,
         )

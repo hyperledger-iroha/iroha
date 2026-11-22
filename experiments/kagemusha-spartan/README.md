@@ -86,9 +86,18 @@ shapes, Native requires at least 939,524,096 available bytes before it will
 start any of the four proof kinds. A phone reporting the target allowance of
 730,144,440 bytes would be refused at that check. The separate accounting for
 the Receive primary prover estimated 741,937,508 bytes from retained capacity
-and projected workspace. The v4 chain did not record process RSS. Physical
-latency and peak memory remain open.
+and projected workspace. The v4 chain did not record process RSS.
 [Full v4 chain](output/production-20261119/chain-v4-final.log)
+
+On 2026-11-21 the physical Pixel 6 completed a holder-confirmed Send, received
+its counterparty’s 10,711-byte return Payment, and recovered both Payments after
+restart. The fresh-process Receive took **323.318487 s** from retained incoming
+bytes to verified durable output. Execute accounted for **309.055566 s**. Both
+its phase peak and the process-lifetime peak were **1,078,714,368 bytes RSS**.
+The third launch recovered all four operations with zero executions or prompts.
+The authenticated fixture APK was `a3812a9c…9a31`. The 3 s and 730,144,440-byte
+targets remain open on this device. The iPhone run is pending.
+[Pixel measurements and original report digests](output/production-20261119/pixel6-v4-protected-result.json)
 
 A separate three-launch v4 custody fixture measured the software counterparty on
 the first Mac launch. Its valid Receive took 263.666 s in finalization alone
@@ -102,7 +111,7 @@ The Payment envelope has 172 bytes of room under the 10,034-byte limit. The thre
 layouts available in the fixture keep the same primary witness size and fail the current
 phone memory admission. Opus 5.5 projected that shrinking the rows enough to
 address latency would exceed the envelope budget with the current construction.
-The 3 s target remains unverified. A different commitment layout or recursive
+The measured Pixel Receive exceeds the 3 s target. A different commitment layout or recursive
 construction would require new signed programs and a new soundness review.
 
 The authenticated manifest-v3 three-mode Mac chain produced a 10,780-byte Payment envelope

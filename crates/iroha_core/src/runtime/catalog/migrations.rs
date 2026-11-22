@@ -65,6 +65,7 @@ pub const MIGRATIONS: &[MigrationAddition] = &[];
 #[cfg(test)]
 pub mod test_migrations {
     use super::{DrainOutcome, MigrationAddition, StageOutcome};
+    use crate::runtime::migration::MigrationResult;
     use crate::runtime::migration::storage::{
         BarrierStorage, PointAndScan, SEQUENCE_TABLES, SourceChanges, SourceDrain, StageStorage,
         TableMigration,
@@ -83,93 +84,109 @@ pub mod test_migrations {
     /// The successor row of one old row: the hash of the account, and whether its sequence is
     /// odd. Every sequence has a successor, including the copying stage's fault sentinel, so
     /// later source writes remain representable while the barrier holds.
-    pub fn successor(account: &AccountId, sequence: u64) -> Result<(Hash, bool), String> {
-        let key = norito::encode_canonical(account).map_err(|error| error.to_string())?;
+    pub fn successor(account: &AccountId, sequence: u64) -> MigrationResult<(Hash, bool)> {
+        let key = codec(|| norito::encode_canonical(account))?;
         Ok((Hash::new(key), sequence % 2 == 1))
     }
 
-    fn cursor_account(cursor: &[u8]) -> Result<Option<AccountId>, String> {
+    fn codec<T>(operation: impl FnOnce() -> Result<T, norito::Error>) -> MigrationResult<T> {
+        norito::core::classify_decode_attempt(operation).map_err(|original| {
+            crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
+                error.to_string()
+            })
+        })
+    }
+
+    fn cursor_account(cursor: &[u8]) -> MigrationResult<Option<AccountId>> {
         if cursor.is_empty() {
             return Ok(None);
         }
-        norito::decode_canonical(cursor)
-            .map(Some)
-            .map_err(|error| error.to_string())
+        codec(|| norito::decode_canonical(cursor)).map(Some)
     }
 
-    fn stage(
+    pub(crate) fn stage(
         mut storage: StageStorage<'_, '_, PointAndScan, AccountId, u64, Hash, bool>,
         cursor: &[u8],
         limit: u32,
-    ) -> Result<StageOutcome, String> {
+    ) -> MigrationResult<StageOutcome> {
         let after = cursor_account(cursor)?;
         let limit = usize::try_from(limit).map_err(|error| error.to_string())?;
-        let mut batch = Vec::new();
+        // Borrow original source accounts: only fixed row slots are owned here.
+        let capacity = storage.source.scan_after(after.as_ref(), limit).count();
+        let mut batch = storage.scratch.buffer(capacity)?;
         let mut done = true;
         for (account, sequence) in storage
             .source
             .scan_after(after.as_ref(), limit.saturating_add(1))
         {
-            if batch.len() == limit {
+            if batch.as_slice().len() == limit {
                 done = false;
                 break;
             }
             // Inject a deterministic copying-stage failure before any successor write. This
             // tests stage atomicity without making the live barrier's row transform partial.
             if *sequence == u64::MAX {
-                return Err(format!("{account} holds the copying-stage fault sentinel"));
+                return Err(format!("{account} holds the copying-stage fault sentinel").into());
             }
-            batch.push((account.clone(), successor(account, *sequence)?));
+            batch.push_reserved((account, successor(account, *sequence)?));
         }
-        let cursor = match batch.last() {
-            Some((account, _)) => {
-                norito::encode_canonical(account).map_err(|error| error.to_string())?
-            }
+        let cursor = match batch.as_slice().last() {
+            Some((account, _)) => codec(|| norito::encode_canonical(*account))?,
             None => cursor.to_vec(),
         };
-        let rows = u32::try_from(batch.len()).map_err(|error| error.to_string())?;
-        for (_, (key, value)) in batch {
-            storage.successor.insert(key, value);
+        let rows = u32::try_from(batch.as_slice().len()).map_err(|error| error.to_string())?;
+        for (_, (key, value)) in batch.as_slice() {
+            storage.successor.insert(*key, *value);
         }
         Ok(StageOutcome { cursor, rows, done })
     }
 
-    fn barrier(mut storage: BarrierStorage<'_, '_, AccountId, u64, Hash, bool>, cursor: &[u8]) {
-        let Ok(Some(staged)) = cursor_account(cursor) else {
-            return;
+    pub(crate) fn barrier(
+        mut storage: BarrierStorage<'_, '_, '_, AccountId, u64, Hash, bool>,
+        cursor: &[u8],
+    ) -> MigrationResult<()> {
+        let Some(staged) = cursor_account(cursor)? else {
+            return Ok(());
         };
-        let mirrored: Vec<(Hash, Option<bool>)> = storage
+        // Every codec operation finishes before the first mutation. Neither malformed
+        // cursor nor a locally unavailable transform becomes an ignored touched row.
+        let capacity = storage
             .source
             .touched_entries()
             .filter(|entry| *entry.key <= staged)
-            .filter_map(|entry| {
-                let (key, value) = successor(entry.key, entry.after.copied().unwrap_or(0)).ok()?;
-                Some((key, entry.after.map(|_| value)))
-            })
-            .collect();
-        for (key, value) in mirrored {
+            .count();
+        let mut mirrored = storage.scratch.buffer(capacity)?;
+        for entry in storage
+            .source
+            .touched_entries()
+            .filter(|entry| *entry.key <= staged)
+        {
+            let (key, value) = successor(entry.key, entry.after.copied().unwrap_or(0))?;
+            mirrored.push_reserved((key, entry.after.map(|_| value)));
+        }
+        for &(key, value) in mirrored.as_slice() {
             match value {
-                Some(value) => {
-                    storage.successor.insert(key, value);
-                }
-                None => {
-                    storage.successor.remove(key);
-                }
+                Some(value) => storage.successor.insert(key, value),
+                None => storage.successor.remove(key),
             }
         }
+        Ok(())
     }
 
-    fn drain(mut source: SourceDrain<'_, '_, AccountId, u64>, limit: u32) -> DrainOutcome {
+    pub(crate) fn drain(
+        mut source: SourceDrain<'_, '_, AccountId, u64>,
+        limit: u32,
+    ) -> MigrationResult<DrainOutcome> {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         let batch: Vec<AccountId> = source.keys(limit).cloned().collect();
         let rows = u32::try_from(batch.len()).unwrap_or(u32::MAX);
         for account in batch {
             source.remove(account);
         }
-        DrainOutcome {
+        Ok(DrainOutcome {
             rows,
             empty: source.is_empty(),
-        }
+        })
     }
 
     fn stale(source: SourceChanges<'_, '_, AccountId, u64>) -> bool {

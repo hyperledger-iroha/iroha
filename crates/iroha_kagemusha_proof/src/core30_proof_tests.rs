@@ -155,6 +155,10 @@ fn prove_incoming_q(
     ordinary_statement: StepPublic<Fp>,
     expected_selector: u8,
     total: Instant,
+) -> (
+    crate::q_sigma::native::QSigmaProof,
+    iroha_plonk::VerifyingKey<iroha_pasta::Ep>,
+    iroha_plonk::DescriptorBinding,
 ) {
     use crate::a_relation::schedule::sigma_selector;
     use crate::q_sigma::{
@@ -256,8 +260,12 @@ fn prove_incoming_q(
         )
         .is_err());
         let rejected_time = started.elapsed();
+        let operation = match relation.step() {
+            crate::StepRelation::Send => "RECEIVE",
+            crate::StepRelation::Receive => "ARCHIVE_RECEIVE",
+        };
         println!(
-            "CORE30_RECEIVE_INCOMING_Q0 selector={selector} k=16 buses=2 workers=4 q_bytes={} \
+            "CORE30_{operation}_INCOMING_Q0 selector={selector} k=16 buses=2 workers=4 q_bytes={} \
              q_prepare_ms={:.3} q_keygen_ms={:.3} q_prove_selfverify_ms={:.3} \
              q_memoized_verify_ms={:.3} q_fresh_verify_ms={:.3} q_fresh_reject_ms={:.3} total_ms={:.3}",
             proof.bytes.len(),
@@ -269,7 +277,8 @@ fn prove_incoming_q(
             rejected_time.as_secs_f64() * 1e3,
             total.elapsed().as_secs_f64() * 1e3,
         );
-    });
+        (proof, q.verifying_key().clone(), q.binding().clone())
+    })
 }
 
 // These existing real-signature and indexed-map fixtures are also used by the
@@ -299,11 +308,11 @@ mod receive_objects;
 mod send_objects;
 
 #[cfg(unix)]
-#[path = "core30_incoming_omega_test.rs"]
-mod incoming_omega;
-#[cfg(unix)]
 #[path = "core30_funded_predecessor_test.rs"]
 mod funded_predecessor;
+#[cfg(unix)]
+#[path = "core30_incoming_omega_test.rs"]
+mod incoming_omega;
 #[cfg(unix)]
 #[path = "../tests/common/ordinary_load_receipt.rs"]
 mod ordinary_load_receipt;

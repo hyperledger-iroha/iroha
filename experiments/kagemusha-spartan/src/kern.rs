@@ -178,6 +178,11 @@ pub struct Split<F> {
     pub written: Option<Vec<u64>>,
 }
 
+#[inline]
+fn run_written(written: Option<&[u64]>, run: usize) -> bool {
+    written.is_none_or(|bits| bits[run / 64] >> (run % 64) & 1 == 1)
+}
+
 impl<F: Field> Split<F> {
     pub fn new(dense: Vec<F>, tail: Vec<F>) -> Self {
         assert!(tail.len() <= dense.len(), "the tail lies in the upper half");
@@ -195,13 +200,6 @@ impl<F: Field> Split<F> {
             ..Split::new(dense, tail)
         }
     }
-    /// Whether dense run `s` (entries `s * SEGMENT..`) may hold anything.
-    #[inline]
-    fn run_written(&self, s: usize) -> bool {
-        self.written
-            .as_ref()
-            .is_none_or(|bits| bits[s / 64] >> (s % 64) & 1 == 1)
-    }
     /// The upper half's nonzero prefix becomes the tail (found by value:
     /// `full` is a public `M(r_x, .)`).
     pub fn from_full(mut full: Vec<F>) -> Self {
@@ -216,6 +214,52 @@ impl<F: Field> Split<F> {
         full.shrink_to_fit();
         Split::new(full, tail)
     }
+    /// Consume the public matrix and fold its first round into its lowest
+    /// corner. Each output row only reads that row from every corner, so
+    /// different rows can overwrite their first-corner values independently.
+    pub fn into_folded(mut self, r: &[F], support: Option<&Support>) -> Vec<F> {
+        let Some(support) = support.filter(|_| !r.is_empty() && !self.dense.is_empty()) else {
+            return fold_top(&self, r, support);
+        };
+        let half = self.dense.len();
+        let low = self.len() >> r.len();
+        assert!(low > 0 && low <= half);
+        let (reductions, runs) = fold_reductions(support, r);
+        let (first, rest) = self.dense.split_at_mut(low);
+        first
+            .par_chunks_mut(support.seg)
+            .zip_eq(runs.par_iter())
+            .enumerate()
+            .for_each_init(
+                || vec![F::ZERO; 1 << r.len()],
+                |scratch, (segment, (chunk, &run))| {
+                    if run == u16::MAX {
+                        chunk.fill(F::ZERO);
+                        return;
+                    }
+                    let reduction = &reductions[usize::from(run)];
+                    for (offset, output) in chunk.iter_mut().enumerate() {
+                        let row = segment * support.seg + offset;
+                        *output = reduction.evaluate(scratch, |corner| {
+                            let index = corner * low + row;
+                            if index >= half {
+                                self.tail.get(index - half).copied().unwrap_or(F::ZERO)
+                            } else if !run_written(self.written.as_deref(), index / SEGMENT) {
+                                F::ZERO
+                            } else if corner == 0 {
+                                *output
+                            } else {
+                                rest[index - low]
+                            }
+                        });
+                    }
+                },
+            );
+        self.dense.truncate(low);
+        self.dense.shrink_to_fit();
+        self.dense
+    }
+
     pub fn to_full(&self) -> Vec<F> {
         let half = self.dense.len();
         let mut full = zeroed(2 * half);
@@ -235,7 +279,7 @@ impl<F: Field> Table<F> for Split<F> {
         let half = self.dense.len();
         if i >= half {
             self.tail.get(i - half).copied().unwrap_or(F::ZERO)
-        } else if self.run_written(i / SEGMENT) {
+        } else if run_written(self.written.as_deref(), i / SEGMENT) {
             self.dense[i]
         } else {
             // Never written: zero, and its page is never touched.
@@ -252,7 +296,9 @@ impl<F: Field> Table<F> for Split<F> {
         while at < low.end {
             let s = at / SEGMENT;
             let end = ((s + 1) * SEGMENT).min(low.end);
-            if self.run_written(s) && !self.dense[at..end].iter().all(|x| x.is_zero_vartime()) {
+            if run_written(self.written.as_deref(), s)
+                && !self.dense[at..end].iter().all(|x| x.is_zero_vartime())
+            {
                 return false;
             }
             at = end;
@@ -1050,6 +1096,50 @@ fn fold_corners<F: Field>(corners: &mut [F], r: &[F]) -> F {
     corners[0]
 }
 
+struct FoldReduction<F> {
+    corners: Vec<usize>,
+    challenges: Vec<F>,
+    factor: Option<F>,
+}
+
+impl<F: Field> FoldReduction<F> {
+    #[inline]
+    fn evaluate(&self, scratch: &mut [F], at: impl Fn(usize) -> F) -> F {
+        let corners = &mut scratch[..self.corners.len()];
+        for (value, &corner) in corners.iter_mut().zip(&self.corners) {
+            *value = at(corner);
+        }
+        let value = fold_corners(corners, &self.challenges);
+        self.factor.map_or(value, |factor| factor * value)
+    }
+}
+
+/// Bind each distinct run mask to the free challenges and fixed-axis factor.
+fn fold_reductions<F: Field>(support: &Support, r: &[F]) -> (Vec<FoldReduction<F>>, Vec<u16>) {
+    assert_eq!(support.k, r.len());
+    let (list, runs) = reductions(support);
+    let bound = list
+        .into_iter()
+        .map(|(_, reduction)| {
+            let challenges = reduction.free.iter().map(|t| r[*t]).collect();
+            let factor = (!reduction.low.is_empty() || !reduction.high.is_empty()).then(|| {
+                reduction
+                    .low
+                    .iter()
+                    .map(|t| F::ONE - r[*t])
+                    .chain(reduction.high.iter().map(|t| r[*t]))
+                    .product()
+            });
+            FoldReduction {
+                corners: reduction.corners,
+                challenges,
+                factor,
+            }
+        })
+        .collect();
+    (bound, runs)
+}
+
 /// Binds the top `r.len()` variables of `table` to `r`.
 ///
 /// With a [`Support`] (of this table and its partner) a run folds its
@@ -1079,25 +1169,7 @@ pub fn fold_top<F: Field, T: Table<F> + ?Sized>(
             )
             .collect();
     };
-    assert_eq!(support.k, k);
-    let (list, runs) = reductions(support);
-    // Per reduction: the challenges of its free variables and the factor of
-    // its other variables.
-    let bound: Vec<(Vec<F>, Option<F>)> = list
-        .iter()
-        .map(|(_, reduction)| {
-            let free = reduction.free.iter().map(|t| r[*t]).collect();
-            let factor = (reduction.low.len() + reduction.high.len() > 0).then(|| {
-                reduction
-                    .low
-                    .iter()
-                    .map(|t| F::ONE - r[*t])
-                    .chain(reduction.high.iter().map(|t| r[*t]))
-                    .product()
-            });
-            (free, factor)
-        })
-        .collect();
+    let (reductions, runs) = fold_reductions(support, r);
     (0..low)
         .into_par_iter()
         .with_min_len(64)
@@ -1109,12 +1181,7 @@ pub fn fold_top<F: Field, T: Table<F> + ?Sized>(
                 if run == u16::MAX {
                     return F::ZERO;
                 }
-                let (reduction, (free, factor)) = (&list[run as usize].1, &bound[run as usize]);
-                for (c, hi) in reduction.corners.iter().enumerate() {
-                    corners[c] = table.at(hi * low + j);
-                }
-                let value = fold_corners(&mut corners[..reduction.corners.len()], free);
-                factor.map_or(value, |f| f * value)
+                reductions[usize::from(run)].evaluate(corners, |hi| table.at(hi * low + j))
             },
         )
         .collect()
@@ -1126,6 +1193,36 @@ mod tests {
     use crate::fs::SpikeRng;
     use crate::grid::{Extender, eq_table};
     use iroha_pasta::Fp;
+
+    #[test]
+    fn consumed_matrix_matches_logical_dense_fold_on_both_fields() {
+        fn check<F: ff::PrimeField>() {
+            for half in [16, 128 * SEGMENT] {
+                // Unwritten segments contain junk to catch any read that bypasses the bitmap.
+                let dense: Vec<F> = (0..half).map(|i| F::from((i % 251 + 1) as u64)).collect();
+                let zero = vec![F::ZERO; 2 * half];
+                let challenges = [F::ZERO, F::ONE, F::from(11), F::from(19), F::from(23)];
+                for (bits, tail_len) in [(None, half), (Some([0, 0]), 0), (Some([1 << 63, 1]), 3)] {
+                    let table = || Split {
+                        dense: dense.clone(),
+                        tail: dense[..tail_len].to_vec(),
+                        written: bits.map(Vec::from),
+                    };
+                    let matrix = table();
+                    let logical: Vec<F> = (0..matrix.len()).map(|i| matrix.at(i)).collect();
+                    for k in 1..=5 {
+                        let r = &challenges[..k];
+                        let expected = fold_top(&logical, r, None);
+                        let runs = support(k, &matrix, &Public(&zero));
+                        assert_eq!(table().into_folded(r, Some(&runs)), expected);
+                        assert_eq!(table().into_folded(r, None), expected);
+                    }
+                }
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
 
     /// The round values the spike's first kernels compute.
     fn reference_round(

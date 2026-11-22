@@ -10496,8 +10496,8 @@ fn zk_snapshot_hydration_rejects_invalid_election_selector_without_partial_repla
         host.set_zk_snapshots_from_world(&world.view(), &zk_cfg),
         Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
-    assert_eq!(host.zk_roots, roots_before);
-    assert_eq!(host.zk_elections, elections_before);
+    assert_eq!(*host.zk_roots, roots_before);
+    assert_eq!(*host.zk_elections, elections_before);
     assert_eq!(host.prepared_verifying_keys, prepared_verifying_keys_before);
     assert_eq!(host.zk_tree_roots_history_len, roots_history_len_before);
 

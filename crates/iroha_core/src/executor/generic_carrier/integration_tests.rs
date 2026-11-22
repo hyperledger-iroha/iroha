@@ -1,8 +1,9 @@
 //! Original Executor body, effect queue and fee-work regression for the dormant candidate.
 //!
 //! Signed genesis supplies the ordinary committed monetary/scope policies. Candidate code and
-//! selection live only in a disposable component block; this does not qualify activation,
-//! Network admission, paid settlement, replay or publication of the unsupported profile.
+//! selection live only in a disposable component block. The existing finite component source
+//! owner proves direct Executor custody, not canonical producer/finality qualification,
+//! activation, Network admission, paid settlement, replay or publication of the unsupported profile.
 
 use super::*;
 use crate::{
@@ -16,6 +17,7 @@ use iroha_data_model::{
         carrier::{CarrierStorageKeyV1, CarrierValueV1, encode_carrier_key_v1, encode_carrier_v1},
         definition::{CarrierNodeV1, CarrierSchemaV1},
     },
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -87,7 +89,18 @@ fn executor_keeps_actual_carrier_work_on_semantic_failure_and_only_applies_succe
         );
         let mut block = state.block(header);
         candidate.install(&mut block);
-        let mut transaction = block.transaction();
+        let original = {
+            let reader = block.transaction();
+            TransactionEntrypoint::External(source(&reader, &instruction))
+        };
+        // Retain this actual signed source's finite invocation before opening the business
+        // overlay. The existing component owner grants no Network/publication authority.
+        let mut transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
+            original.execution_call_hash(),
+        ));
+        let TransactionEntrypoint::External(signed) = &original else {
+            unreachable!("the component retains its original external signed source")
+        };
         let storage = crate::smartcontracts::ivm::host::generic_carrier::tests::table(
             &mut transaction,
             false,
@@ -96,7 +109,6 @@ fn executor_keeps_actual_carrier_work_on_semantic_failure_and_only_applies_succe
         );
         transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-        let signed = source(&transaction, &instruction);
         // This component owns the exact signed input and its direct ordinal. The Executor
         // independently checks network, source hash and signature, then opens its real owners.
         transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
@@ -105,7 +117,7 @@ fn executor_keeps_actual_carrier_work_on_semantic_failure_and_only_applies_succe
         let mut cache =
             IvmCache::with_prepared_contract_cache(64, transaction.prepared_contract_cache());
         let result =
-            Executor::Initial.execute_transaction(&mut transaction, &ALICE_ID, &signed, &mut cache);
+            Executor::Initial.execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache);
         if reject_after_write {
             assert!(
                 matches!(result, Err(ExecutionAttemptError::Rejected(_))),

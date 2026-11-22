@@ -1099,48 +1099,74 @@ fn ecdsa(
 // root key uses constant tables like G.
 
 /// Comb tables of X with `m` bases (8 bases per table, 256 entries each),
-/// computed natively along a Gray code.
+/// computed natively along a Gray code. X is a public key and must be a
+/// canonical affine P-256 point, as every key intake checks. The walk runs
+/// in projective coordinates of the pinned RustCrypto `p256` group and one
+/// batch inversion normalizes every entry to its unique affine point.
 pub fn comb_tables(x: &Point, m: usize) -> Vec<Vec<Point>> {
+    use ::p256::elliptic_curve::{CurveGroup, group::Group, point::AffineCoordinates};
+    use ::p256::{AffinePoint, FieldBytes, ProjectivePoint};
     assert!(m % 8 == 0 && 256 % m == 0);
     let c = 256 / m;
-    let mut bases = vec![x.clone()];
+    let coordinate = |v: &BigUint| {
+        let bytes = v.to_bytes_be();
+        assert!(bytes.len() <= 32, "a canonical P-256 point");
+        let mut out = FieldBytes::default();
+        out[32 - bytes.len()..].copy_from_slice(&bytes);
+        out
+    };
+    let x = AffinePoint::from_coordinates(&coordinate(&x.x), &coordinate(&x.y))
+        .into_option()
+        .expect("a canonical P-256 point");
+    let mut bases = vec![ProjectivePoint::from(x)];
     for _ in 1..m {
-        let mut b = bases.last().unwrap().clone();
+        let mut b = *bases.last().unwrap();
         for _ in 0..c {
-            b = p256::double(&b);
+            b = b.double();
         }
         bases.push(b);
     }
-    (0..m / 8)
-        .map(|j| {
-            let group = &bases[8 * j..8 * j + 8];
-            let twice: Vec<Point> = group.iter().map(p256::double).collect();
-            let mut table: Vec<Option<Point>> = vec![None; 256];
-            let mut cur = group
+    let mut walk = Vec::with_capacity(32 * m);
+    for group in bases.chunks_exact(8) {
+        let twice: Vec<ProjectivePoint> = group.iter().map(Group::double).collect();
+        let mut table = vec![ProjectivePoint::IDENTITY; 256];
+        let mut cur = -group.iter().sum::<ProjectivePoint>();
+        table[0] = cur;
+        let mut prev = 0usize;
+        for t in 1..256usize {
+            let gray = t ^ (t >> 1);
+            let k = (gray ^ prev).trailing_zeros() as usize;
+            cur = if gray & (1 << k) != 0 {
+                cur + twice[k]
+            } else {
+                cur - twice[k]
+            };
+            table[gray] = cur;
+            prev = gray;
+        }
+        walk.extend(table);
+    }
+    let mut affine = vec![AffinePoint::IDENTITY; walk.len()];
+    ProjectivePoint::batch_normalize(&walk, &mut affine);
+    affine
+        .chunks_exact(256)
+        .map(|table| {
+            table
                 .iter()
-                .fold(None, |acc, b| p256::add_any(acc, Some(p256::neg(b))))
-                .expect("nonzero entry");
-            table[0] = Some(cur.clone());
-            let mut prev = 0usize;
-            for t in 1..256usize {
-                let gray = t ^ (t >> 1);
-                let k = (gray ^ prev).trailing_zeros() as usize;
-                let term = if gray & (1 << k) != 0 {
-                    twice[k].clone()
-                } else {
-                    p256::neg(&twice[k])
-                };
-                cur = p256::add_any(Some(cur), Some(term)).expect("nonzero entry");
-                table[gray] = Some(cur.clone());
-                prev = gray;
-            }
-            table.into_iter().map(|e| e.unwrap()).collect()
+                .map(|e| {
+                    assert!(!bool::from(e.is_identity()), "nonzero entry");
+                    Point {
+                        x: BigUint::from_bytes_be(&e.x()),
+                        y: BigUint::from_bytes_be(&e.y()),
+                    }
+                })
+                .collect()
         })
         .collect()
 }
 
 /// The fixed tables of G, cached per base count.
-fn g_comb_tables(m: usize) -> std::sync::Arc<Vec<Vec<Point>>> {
+pub(crate) fn g_comb_tables(m: usize) -> std::sync::Arc<Vec<Vec<Point>>> {
     use std::sync::{Arc, Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<BTreeMap<usize, Arc<Vec<Vec<Point>>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));

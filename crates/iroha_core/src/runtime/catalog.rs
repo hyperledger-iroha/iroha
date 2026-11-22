@@ -922,6 +922,9 @@ impl ReleaseCatalog {
         catalog.compile_ivm_c10()?;
         catalog.compile_kagemusha_spartan()?;
         catalog.compile_child_admin()?;
+        // A signed child foundation must be able to add retirement after its
+        // administrator service. Both orders retain the same immutable service family.
+        catalog.compile_retirement()?;
         catalog.compile_generic_carriers()?;
         catalog.publish_migrations(migrations)?;
 

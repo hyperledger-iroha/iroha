@@ -255,6 +255,51 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
         self.released = true;
     }
 
+    /// Return these exact native writers after checked suspension reacquisition.
+    /// No root, cursor, reader or payload is recreated; actual reader/identity release
+    /// notifications remain in the returned cleanup until the aggregate releases all writers.
+    pub(super) fn resume_execution(
+        mut self,
+    ) -> (StorageWriters<'a, K, V, M>, PublicationCleanup<()>) {
+        assert!(
+            self.complete && !self.released,
+            "original execution pair must be checked"
+        );
+        let mut readers = [None, None];
+        let blocks = self
+            .blocks
+            .take()
+            .expect("original current")
+            .into_held()
+            .map_preserving_release(|slot| {
+                let (writer, notice) = slot.abort_retaining();
+                readers[0] = notice;
+                writer
+            });
+        let revert = self
+            .revert
+            .take()
+            .expect("original undo")
+            .into_held()
+            .map_preserving_release(|slot| {
+                let (writer, notice) = slot.abort_retaining();
+                readers[1] = notice;
+                writer
+            });
+        let identity = self.identity.take().map(PreparedIdentity::abort);
+        self.released = true;
+        (
+            StorageWriters::new(self.target, revert, blocks),
+            PublicationCleanup {
+                _readers: readers,
+                _writers: [None, None],
+                writer_batches: [None, None],
+                identities: [self.probe.take(), identity],
+                installation: Some(()),
+            },
+        )
+    }
+
     pub(super) fn abort<I>(
         mut self,
         installation: I,

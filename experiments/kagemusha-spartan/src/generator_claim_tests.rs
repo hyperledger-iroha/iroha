@@ -20,6 +20,33 @@ fn sources<C: PastaCurve>(gens: &Gens<C>, k: usize) -> Vec<Claim<C>> {
         })
         .collect()
 }
+
+#[test]
+fn weighted_sources_match_the_full_tensor() {
+    fn check<S: PrimeField + Zeroize>() {
+        for k in 0..10 {
+            let mut actual = vec![S::from(7); 1 << k];
+            let mut expected = actual.clone();
+            for source in 0..SOURCE_COUNT {
+                let mut us: Vec<S> = (0..k)
+                    .map(|i| S::from((3 + i + 7 * source) as u64))
+                    .collect();
+                if source == 0 && k > 0 {
+                    us[k / 2] = S::ZERO;
+                }
+                let weight = S::from(source as u64 + 1);
+                add_weighted_source(&mut actual, &us, weight);
+                for (value, factor) in expected.iter_mut().zip(s_vector(&us)) {
+                    *value += weight * factor;
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    check::<iroha_pasta::Fp>();
+    check::<iroha_pasta::Fq>();
+}
+
 fn native<C: PastaCurve>()
 where
     F<C>: Scalar,

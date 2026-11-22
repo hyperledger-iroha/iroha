@@ -50,6 +50,41 @@ macro_rules! trigger_acquisition {
         }
 
         impl<'set> SetBlock<'set> {
+            /// Retain mutable journals without granting ordinary Frozen any execution authority.
+            pub(crate) fn begin_suspension(&mut self) {
+                self.publication.begin_suspension();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.begin_suspension();)+
+            }
+            pub(crate) fn finish_suspension(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.finish_suspension();)+
+                self.publication.finish_suspension();
+            }
+            pub(crate) fn install_suspended_resumption(&mut self, target: &'set Set) {
+                self.publication.begin_resumption();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.install_suspended_resumption(&target.$field);)+
+            }
+            pub(crate) fn try_resume(&mut self) -> Result<(), mv::PublicationPreparationError<core::convert::Infallible>> {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.try_resume()?;)+
+                Ok(())
+            }
+            pub(crate) fn finish_resumption(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.finish_resumption();)+
+                self.publication.finish_resumption();
+            }
+            pub(crate) fn recover_resumption(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.recover_resumption();)+
+                self.publication.recover_resumption();
+            }
+            pub(crate) fn retire_suspension_cleanup(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.retire_suspension_cleanup();)+
+            }
             pub(crate) fn begin_freeze(&mut self) {
                 self.publication.begin_freeze();
                 let fields = self.fields.as_mut().expect("original trigger block fields");

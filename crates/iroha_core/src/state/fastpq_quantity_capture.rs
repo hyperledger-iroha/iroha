@@ -180,6 +180,15 @@ impl std::fmt::Debug for QuantityCandidateArchive {
     }
 }
 impl QuantityCandidateArchive {
+    /// Apply one successful migration child with its actual quantity observation.
+    /// Rejected and deferred children never enter this path.
+    pub(crate) fn apply_migration_child(&mut self, child: Box<WorldTransaction<'_, '_>>) {
+        let mut pending = Self::default();
+        pending.observe(&child);
+        child.apply();
+        self.apply(pending);
+    }
+
     /// Inspect the original optional-capture diagnostic without changing custody.
     #[cfg(test)]
     pub(super) fn issue_for_test(&self) -> Option<QuantityCaptureIssue> {
@@ -1488,3 +1497,38 @@ impl StateTransaction<'_, '_> {
 #[cfg(test)]
 #[path = "fastpq_quantity_capture_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod migration_child_tests {
+    use super::*;
+
+    #[test]
+    fn successful_migration_child_keeps_actual_quantity_observation_and_child_count() {
+        let world = crate::state::World::default();
+        let mut block = world.block();
+        let mut archive = QuantityCandidateArchive::default();
+        let mut child = block.transaction_without_telemetry(Default::default(), 0);
+        // The existing original native observation is what the new apply seam
+        // must consume; this control does not grant a quantity capture receipt.
+        child.quantity_mutation_observation.unowned = true;
+        archive.apply_migration_child(child);
+        assert_eq!(archive.applied_world_transactions, 1);
+        assert_eq!(archive.issue, Some(QuantityCaptureIssue::UnownedMutation));
+        assert_eq!(block.assets.write_observation().1, 1);
+        assert_eq!(block.asset_definitions.write_observation().1, 1);
+    }
+
+    #[test]
+    fn discarded_migration_child_never_advances_quantity_observation() {
+        let world = crate::state::World::default();
+        let mut block = world.block();
+        let archive = QuantityCandidateArchive::default();
+        let mut child = block.transaction_without_telemetry(Default::default(), 0);
+        child.quantity_mutation_observation.unowned = true;
+        drop(child);
+        assert_eq!(archive.applied_world_transactions, 0);
+        assert_eq!(archive.issue, None);
+        assert_eq!(block.assets.write_observation().1, 0);
+        assert_eq!(block.asset_definitions.write_observation().1, 0);
+    }
+}

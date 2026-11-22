@@ -101,7 +101,7 @@ fn no_stage<A>(
     _: StageStorage<'_, '_, A, AccountId, u64, Hash, bool>,
     cursor: &[u8],
     _: u32,
-) -> Result<StageOutcome, String> {
+) -> MigrationResult<StageOutcome> {
     Ok(StageOutcome {
         cursor: cursor.to_vec(),
         rows: 0,
@@ -109,12 +109,17 @@ fn no_stage<A>(
     })
 }
 
-fn no_barrier(_: BarrierStorage<'_, '_, AccountId, u64, Hash, bool>, _: &[u8]) {}
-fn no_drain(source: SourceDrain<'_, '_, AccountId, u64>, _: u32) -> DrainOutcome {
-    DrainOutcome {
+fn no_barrier(
+    _: BarrierStorage<'_, '_, '_, AccountId, u64, Hash, bool>,
+    _: &[u8],
+) -> MigrationResult<()> {
+    Ok(())
+}
+fn no_drain(source: SourceDrain<'_, '_, AccountId, u64>, _: u32) -> MigrationResult<DrainOutcome> {
+    Ok(DrainOutcome {
         rows: 0,
         empty: source.is_empty(),
-    }
+    })
 }
 fn no_stale(source: SourceChanges<'_, '_, AccountId, u64>) -> bool {
     source.touched_entries().any(|entry| entry.after.is_some())

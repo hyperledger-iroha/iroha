@@ -1823,8 +1823,7 @@ fn prove_rows<C: PastaCurve>(
             m = fold_top(&m, &r);
             z = fold_top(&z, &r);
         } else if let Some(m_split) = m_first.take() {
-            m = crate::kern::fold_top(&m_split, &r, support.as_ref());
-            drop(m_split);
+            m = m_split.into_folded(&r, support.as_ref());
             z = crate::kern::fold_top(&zv, &r, support.as_ref());
         } else {
             m = crate::kern::fold_top(&m, &r, support.as_ref());

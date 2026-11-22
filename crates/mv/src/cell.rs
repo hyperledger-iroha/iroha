@@ -49,9 +49,12 @@ mod acquisition;
 pub use acquisition::BlockAcquisitionSlot;
 #[path = "cell/capture.rs"]
 mod capture;
+#[path = "cell/suspension.rs"]
+mod suspension;
 use acquisition::{CellWriters, OriginalCellWriters};
 pub use capture::BlockCaptureSlot;
 pub use physical::PublishedPublication;
+pub use suspension::{BlockResumptionSlot, BlockSuspensionSlot, SuspendedBlock};
 /// Multi-version storage for a single value.
 ///
 /// Charged cells require both original allocation owners before cloning either

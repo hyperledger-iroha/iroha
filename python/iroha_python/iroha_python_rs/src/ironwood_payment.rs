@@ -264,6 +264,16 @@ mod network_outcome_tests {
         );
         let proof: SumeragiFinalityProof = norito::decode_canonical(bytes).unwrap();
         let block = decode_framed_signed_block(&proof.block_wire).unwrap();
+        let outputs = block.execution_outputs();
+        assert!(outputs[0].governance_block_start().is_some());
+        assert_eq!(
+            outputs
+                .iter()
+                .enumerate()
+                .filter_map(|(position, row)| Some((position, row.network_index()?)))
+                .collect::<Vec<_>>(),
+            [(1, 0), (2, 1), (3, 2)]
+        );
         assert_eq!(
             network_outcomes(&block)
                 .map(|(index, result)| (index, result.is_ok()))

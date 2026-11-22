@@ -305,6 +305,19 @@ impl<'a, K: Key, V: Value, A, I, M: StorageMode<K, V>>
             Phase::Empty => panic!("original journal already transferred"),
         }
     }
+    /// Internal exact-owner transfer for a distinct execution-suspension capability.
+    /// The caller retains this emptied slot and all original cleanup beside resumed writers.
+    pub(super) fn take_prepared(&mut self) -> PreparedPublication<'a, K, V, A, I, M> {
+        assert!(
+            self.complete && !self.released,
+            "complete original pair required"
+        );
+        self.released = true;
+        let Phase::Prepared(prepared) = std::mem::replace(&mut self.phase, Phase::Empty) else {
+            unreachable!()
+        };
+        prepared
+    }
     pub(super) fn into_prepared(mut self) -> PreparedPublication<'a, K, V, A, I, M> {
         assert!(
             self.complete && !self.released,
