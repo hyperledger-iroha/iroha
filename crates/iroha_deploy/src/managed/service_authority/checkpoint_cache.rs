@@ -17,7 +17,7 @@ use iroha_data_model::{
 };
 use std::{
     mem::size_of,
-    sync::{Arc, Mutex, OnceLock, RwLock, TryLockError},
+    sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 
 const SLOTS: usize = 3;
@@ -67,14 +67,6 @@ struct Entries {
 }
 
 impl Entries {
-    fn get(&self, bytes: &[u8], network: NetworkId, chain: &str) -> Option<FinalityVerifier> {
-        self.slots
-            .iter()
-            .flatten()
-            .find(|entry| entry.network == network && entry.chain == chain && entry.bytes == bytes)
-            .map(|entry| entry.verifier.clone())
-    }
-
     fn clear(&mut self) {
         for slot in &mut self.slots {
             drop(slot.take());
@@ -137,7 +129,7 @@ impl Entries {
 /// No entry is retained per body, purpose, height or peer, and no failure is remembered.
 #[derive(Default)]
 pub(super) struct CheckpointCache {
-    entry: RwLock<Entries>,
+    entry: Mutex<Entries>,
     first_interval_checkpoint: Option<Box<FirstIntervalCheckpoint>>,
     // Only a lexical graph/census owns this boxed two-context workspace. Standalone authorities
     // retain only this optional pointer, keeping the existing large orchestration frames small.
@@ -402,23 +394,18 @@ impl CheckpointCache {
         let mut start = start;
         // A scope entered after warming still receives its original physical admission.
         let active_owner = norito::core::decode_limits_active();
-        // Independent providers may read different warmed checkpoints at the same time.
-        // A busy writer or active decoder still takes the original physical path.
-        if !active_owner
-            && let Ok(selected) = self.entry.try_read()
-            && let Some(verifier) = selected.get(bytes, network, chain)
-        {
-            return Ok(verifier);
-        }
         let weight = retained_import_envelope(bytes.len());
-        let (may_store, retained_before_import) = match self.entry.try_write() {
+        let (may_store, retained_before_import) = match self.entry.try_lock() {
             Ok(mut selected) => {
                 if active_owner {
                     selected.clear();
                     (false, false)
                 } else {
-                    if let Some(verifier) = selected.get(bytes, network, chain) {
-                        return Ok(verifier);
+                    if let Some(entry) = selected.slots.iter().flatten().find(|entry| {
+                        entry.network == network && entry.chain == chain && entry.bytes == bytes
+                    }) {
+                        // Returning an Arc clone cannot advance this immutable original.
+                        return Ok(entry.verifier.clone());
                     }
                     // Account the incoming decoded envelope before its canonical producer runs.
                     let eligible =
@@ -455,7 +442,7 @@ impl CheckpointCache {
                 // release every accessible optional graph and retry the same canonical producer
                 // once; the two pure epoch contexts may remain, never an authority verdict.
                 let retry = if may_store {
-                    match self.entry.try_write() {
+                    match self.entry.try_lock() {
                         Ok(mut selected) => {
                             let retained = retained_before_import || !selected.is_empty();
                             selected.clear();
@@ -507,7 +494,7 @@ impl CheckpointCache {
                 image.extend_from_slice(bytes);
                 selected_chain.push_str(chain);
                 if let Some(weight) = weight
-                    && let Ok(mut selected) = self.entry.try_write()
+                    && let Ok(mut selected) = self.entry.try_lock()
                 {
                     // Recheck capacities and FIFO admission after concurrent cold work. Avoid
                     // duplicate entries when another importer selected the same original.
@@ -530,7 +517,7 @@ impl CheckpointCache {
     }
 
     fn clear_after_refusal(&self) {
-        match self.entry.try_write() {
+        match self.entry.try_lock() {
             Ok(mut selected) => selected.clear(),
             Err(TryLockError::Poisoned(mut poisoned)) => poisoned.get_mut().clear(),
             Err(TryLockError::WouldBlock) => {}

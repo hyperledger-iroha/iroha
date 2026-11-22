@@ -30,8 +30,9 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     sumeragi_finality::{
         EpochValidationScope, FinalityError as NativeFinalityError, FinalityValidator,
-        ScheduledSlot, SumeragiFinalityAttestation, SumeragiFinalityCheckpoint,
-        SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
+        ScheduledSlot, SumeragiCheckpointWitness, SumeragiFinalityAttestation,
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+        VerifiedSumeragiBlock,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -422,8 +423,10 @@ impl ObservationStart {
             // owner is released. This native state and tip came from the same complete import.
             return Ok(Prefix {
                 native: imported.1,
-                tip: owner.checkpoint.tip().clone(),
-                verified: verified.clone(),
+                selection: PrefixSelection::Independent(
+                    owner.checkpoint.tip().clone(),
+                    verified.clone(),
+                ),
                 start: owner.checkpoint.height(),
             });
         }
@@ -890,7 +893,8 @@ impl FinalityVerifier {
                 // Keep that capability in its existing owner; newly offered witnesses still
                 // require their own native verification. An enclosing decoder keeps the
                 // original cold follow-up read and its physical allocation/refusal behavior.
-                self.verified_tip.get_or_init(|| prefix.verified);
+                self.verified_tip
+                    .get_or_init(|| prefix.selection.into_verified());
             }
             self.pending = None;
             return Ok(report);
@@ -1012,9 +1016,34 @@ fn read_members<S: FinalitySource + ?Sized>(
 /// that height.
 struct Prefix {
     native: SumeragiFinalityVerifier,
-    tip: SumeragiFinalityProof,
-    verified: VerifiedSumeragiBlock,
+    selection: PrefixSelection,
     start: u64,
+}
+
+enum PrefixSelection {
+    Independent(SumeragiFinalityProof, VerifiedSumeragiBlock),
+    Advanced(Arc<SumeragiCheckpointWitness>),
+}
+
+impl PrefixSelection {
+    fn tip(&self) -> &SumeragiFinalityProof {
+        match self {
+            Self::Independent(tip, _) => tip,
+            Self::Advanced(witness) => witness.proof(),
+        }
+    }
+    fn verified(&self) -> &VerifiedSumeragiBlock {
+        match self {
+            Self::Independent(_, result) => result,
+            Self::Advanced(witness) => witness.verified(),
+        }
+    }
+    fn into_verified(self) -> VerifiedSumeragiBlock {
+        match self {
+            Self::Independent(_, result) => result,
+            Self::Advanced(witness) => Arc::unwrap_or_clone(witness).into_verified(),
+        }
+    }
 }
 
 impl Prefix {
@@ -1041,21 +1070,20 @@ impl Prefix {
         };
         Ok(Self {
             native,
-            tip: checkpoint.tip().clone(),
-            verified,
+            selection: PrefixSelection::Independent(checkpoint.tip().clone(), verified),
             start: checkpoint.height(),
         })
     }
     fn height(&self) -> u64 {
-        self.tip.height()
+        self.selection.tip().height()
     }
     fn checkpoint(&self) -> Result<SumeragiFinalityCheckpoint, FinalityError> {
-        Ok(self.native.export_checkpoint(&self.tip)?)
+        Ok(self.native.export_checkpoint(self.selection.tip())?)
     }
     /// The tip's committee and the committee its certified result schedules next.
     fn members(&self) -> Result<Vec<PeerId>, FinalityError> {
-        let mut members = committee_peers(&self.tip);
-        if let ScheduledSlot::Ready(next) = &self.verified.commitment().schedule.next {
+        let mut members = committee_peers(self.selection.tip());
+        if let ScheduledSlot::Ready(next) = &self.selection.verified().commitment().schedule.next {
             CommitteeSize::new(next.epoch.committee.len())?;
             members.extend(
                 next.epoch
@@ -1069,8 +1097,13 @@ impl Prefix {
     /// Admit `proof` as the next block; nothing changes on failure.
     fn push(&mut self, proof: &SumeragiFinalityProof) -> Result<(), FinalityError> {
         CommitteeSize::new(proof.committee.len())?;
-        self.verified = self.native.verify(proof)?;
-        self.tip = proof.clone();
+        self.selection = if norito::core::decode_limits_active() {
+            // The caller's decoder keeps the original independent owned proof and graph.
+            let verified = self.native.verify(proof)?;
+            PrefixSelection::Independent(proof.clone(), verified)
+        } else {
+            PrefixSelection::Advanced(self.native.verify_checkpoint_witness(proof)?)
+        };
         Ok(())
     }
     /// Verify the source's successors through `height`, keeping the verified progress when the
@@ -1165,13 +1198,14 @@ impl Prefix {
         unverified: &mut BTreeMap<PeerId, FinalityError>,
     ) -> Result<AttestationQuorum, FinalityError> {
         let epoch = self
-            .verified
+            .selection
+            .verified()
             .commitment()
             .schedule
             .current
             .authorization
             .epoch;
-        let peers = committee_peers(&self.tip)
+        let peers = committee_peers(self.selection.tip())
             .into_iter()
             .map(|peer| {
                 let outcome = match reads.remove(&peer) {
@@ -1196,9 +1230,9 @@ impl Prefix {
             })
             .collect();
         Ok(AttestationQuorum {
-            height: self.tip.block_header.height(),
-            block_hash: self.tip.block_header.hash(),
-            required: CommitteeSize::new(self.tip.committee.len())?.quorum(),
+            height: self.selection.tip().block_header.height(),
+            block_hash: self.selection.tip().block_header.hash(),
+            required: CommitteeSize::new(self.selection.tip().committee.len())?.quorum(),
             peers,
         })
     }
@@ -1229,22 +1263,24 @@ impl Prefix {
         // Equal block hashes alone cannot reuse it: a different header, canonical body,
         // committee or proof of possession still needs independent native verification.
         // An enclosing decoder keeps the original physical read and allocation charges.
-        let verified_epoch = if !norito::core::decode_limits_active() && proof == &self.tip {
-            self.verified
-                .commitment()
-                .schedule
-                .current
-                .authorization
-                .epoch
-        } else {
-            self.native
-                .verify_retained_decision(proof)?
-                .commitment()
-                .schedule
-                .current
-                .authorization
-                .epoch
-        };
+        let verified_epoch =
+            if !norito::core::decode_limits_active() && proof == self.selection.tip() {
+                self.selection
+                    .verified()
+                    .commitment()
+                    .schedule
+                    .current
+                    .authorization
+                    .epoch
+            } else {
+                self.native
+                    .verify_retained_decision(proof)?
+                    .commitment()
+                    .schedule
+                    .current
+                    .authorization
+                    .epoch
+            };
         if verified_epoch < epoch.saturating_sub(1) {
             return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
         }

@@ -647,41 +647,7 @@ fn enrollment_read_requires_an_admitted_stream_token_revision_before_returning_a
     };
     let limits = DecodeBudgetContext::new(norito::DecodeLimits::new(1, 1, 1, 1, 1));
     limits.with(|| assert!(fixture.gateways[0].read_renderer().is_none()));
-    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3], None).is_err());
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
     fixture.processes.stop().unwrap();
-    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3], None).is_err());
-}
-
-#[test]
-fn maintenance_checkpoint_scope_rechecks_changed_peer_material_between_rounds() {
-    let _resources = crate::managed::native_test_guard();
-    let mut fixture = fixture();
-    let generation =
-        PrivateDirectory::open_exact(fixture.prepared.context.client_config.parent().unwrap())
-            .unwrap();
-    let original = generation.read("peer3.toml", 1024 * 1024).unwrap();
-    let mut changed = original.to_vec();
-    changed.extend_from_slice(b"\n# changed after the admitted launch round\n");
-    {
-        let renderer = fixture.gateways[0].maintenance_renderer().unwrap();
-        let mut reads = renderer.catalog_launch_reads();
-        let mut check = || {
-            OwnedGateway::validate_shared_round(
-                &fixture.prepared,
-                &fixture.gateways,
-                &budget(),
-                Some(&mut reads),
-            )
-        };
-        check().unwrap();
-        generation
-            .write_atomic("peer3.toml", &changed, PublishMode::Replace)
-            .unwrap();
-        assert!(check().is_err());
-        generation
-            .write_atomic("peer3.toml", &original, PublishMode::Replace)
-            .unwrap();
-        check().unwrap();
-    }
-    fixture.processes.stop().unwrap();
+    assert!(OwnedGateway::read_enrollments(&fixture.gateways, [floor; 3]).is_err());
 }
