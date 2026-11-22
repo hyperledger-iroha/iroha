@@ -206,6 +206,7 @@ struct PreparedProviderRuntimeV1 {
 /// identities, public keys, origins, client labels, and paths.
 #[derive(Clone)]
 pub struct PreparedMusubiArchiveFetchConfigV1 {
+    managed_build_deadline: Option<Instant>,
     account_registry: Option<Arc<AccountRegistryV1>>,
     providers: Vec<PreparedProviderRuntimeV1>,
     network_id: NetworkId,
@@ -240,7 +241,7 @@ struct PreparedPlanV1 {
 }
 #[derive(Clone)]
 struct GatewaySessionFactoryV1 {
-    paid_operation_id: Option<[u8; 32]>,
+    token_collection: AccountTokenCollection,
     runtime: ProviderRuntimeV1,
     network_id: NetworkId,
     pin_manifest: ManifestDigest,
@@ -261,6 +262,7 @@ struct GatewaySessionV1 {
 }
 /// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
+    managed_build_deadline: Option<Instant>,
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
     network_id: NetworkId,
     client_id: String,
@@ -375,6 +377,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         }
         Ok(Self {
             providers,
+            managed_build_deadline: None,
             account_registry: None,
             network_id,
             client_id: client_id.to_owned(),
@@ -414,6 +417,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
             );
         }
         Ok(AuthenticatedMusubiArchiveFetchClientV1 {
+            managed_build_deadline: self.managed_build_deadline,
             account_registry: self.account_registry.clone(),
             providers,
             network_id: self.network_id,
@@ -612,8 +616,27 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             .max()
             .filter(|length| *length != 0)
             .ok_or_else(|| integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"))?;
+        let token_collection = match (paid_operation_id, self.managed_build_deadline) {
+            (Some(operation), _) => AccountTokenCollection::Publication(operation),
+            (None, Some(deadline)) => {
+                if runtime.local_transport.is_none()
+                    || !matches!(&runtime.credential, ProviderCredentialV1::Account { .. })
+                {
+                    return Err(control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"));
+                }
+                let operation = blake3::derive_key(
+                    "iroha.musubi.generated-local.build.token.v1",
+                    random_nonce()?.as_bytes(),
+                );
+                AccountTokenCollection::Build {
+                    operation,
+                    deadline,
+                }
+            }
+            (None, None) => AccountTokenCollection::Direct,
+        };
         let sessions = GatewaySessionFactoryV1 {
-            paid_operation_id,
+            token_collection,
             runtime: runtime.clone(),
             network_id: self.network_id,
             pin_manifest: *pin_manifest,
@@ -653,16 +676,71 @@ fn parse_config_document(text: &str) -> Result<toml::Value, MusubiArchiveRuntime
         .map(toml::Value::Table)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
 }
+#[derive(Clone, Copy)]
+enum AccountTokenCollection {
+    Direct,
+    Publication([u8; 32]),
+    Build {
+        operation: [u8; 32],
+        deadline: Instant,
+    },
+}
+
+fn build_time_remaining(deadline: Instant) -> Result<Duration, MusubiArchiveRuntimeErrorV1> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| retryable("MUSUBI_ARCHIVE_BUILD_TOKEN_DEADLINE"))
+}
+impl AccountTokenCollection {
+    fn collect<T>(
+        self,
+        mut mint: impl FnMut(
+            Option<[u8; 32]>,
+            Option<Instant>,
+        ) -> Result<T, MusubiArchiveRuntimeErrorV1>,
+    ) -> Result<T, MusubiArchiveRuntimeErrorV1> {
+        let (operation, deadline) = match self {
+            Self::Direct => return mint(None, None),
+            Self::Publication(operation) => return mint(Some(operation), None),
+            Self::Build {
+                operation,
+                deadline,
+            } => (operation, deadline),
+        };
+        let mut pause = Duration::from_millis(500);
+        loop {
+            build_time_remaining(deadline)?;
+            match mint(Some(operation), Some(deadline)) {
+                Err(error) if error.is_account_token_pending() => {
+                    // Only an authenticated acknowledgement polls. Every attempt repeats native
+                    // discovery and signs a fresh canonical request within the original interval.
+                    thread::sleep(build_time_remaining(deadline)?.min(pause));
+                    pause = (pause * 2).min(Duration::from_secs(2));
+                }
+                Err(error) => return Err(error),
+                Ok(token) => {
+                    build_time_remaining(deadline)?;
+                    return Ok(token);
+                }
+            }
+        }
+    }
+}
+
 impl GatewaySessionFactoryV1 {
     fn open(&self, chunk: usize) -> Result<GatewaySessionV1, MusubiArchiveRuntimeErrorV1> {
-        let token = mint_stream_token_for_operation(
-            &self.runtime,
-            &self.network_id,
-            &self.pin_manifest,
-            &self.client_id,
-            self.max_chunk_bytes,
-            self.paid_operation_id.map(|id| (id, chunk as u64)),
-        )?;
+        let token = self.token_collection.collect(|operation, deadline| {
+            mint_stream_token_for_operation(
+                &self.runtime,
+                &self.network_id,
+                &self.pin_manifest,
+                &self.client_id,
+                self.max_chunk_bytes,
+                operation.map(|id| (id, chunk as u64)),
+                deadline.map(|end| (end, self.request_timeout)),
+            )
+        })?;
         let StreamTokenEvidenceV1 {
             encoded,
             verifying_key_hex,
@@ -1144,6 +1222,7 @@ fn mint_stream_token(
         client_id,
         max_chunk_bytes,
         None,
+        None,
     )
 }
 fn mint_stream_token_for_operation(
@@ -1153,6 +1232,7 @@ fn mint_stream_token_for_operation(
     client_id: &str,
     max_chunk_bytes: u64,
     paid_operation: Option<([u8; 32], u64)>,
+    build_deadline: Option<(Instant, Duration)>,
 ) -> Result<StreamTokenEvidenceV1, MusubiArchiveRuntimeErrorV1> {
     if max_chunk_bytes == 0 || max_chunk_bytes > u64::try_from(MAX_STREAM_CHUNK_BYTES).unwrap_or(0)
     {
@@ -1234,6 +1314,11 @@ fn mint_stream_token_for_operation(
             }
             request.headers(auth)
         }
+    };
+    let request = if let Some((deadline, http_limit)) = build_deadline {
+        request.timeout(build_time_remaining(deadline)?.min(http_limit))
+    } else {
+        request
     };
     let response = request
         .header(CLIENT_HEADER, client_id)
@@ -2293,6 +2378,58 @@ mod tests {
     const TEST_OPERATOR_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     #[test]
+    fn cold_collection_preserves_direct_results_and_refuses_expired_work() {
+        let operation = [9; 32];
+        let pending = MusubiArchiveRuntimeErrorV1 {
+            account_token_pending: true,
+            ..retryable("MUSUBI_ARCHIVE_ACCOUNT_TOKEN_PENDING")
+        };
+        for (mode, expected) in [
+            (AccountTokenCollection::Direct, None),
+            (
+                AccountTokenCollection::Publication(operation),
+                Some(operation),
+            ),
+        ] {
+            let mut calls = 0;
+            let result = mode.collect::<()>(|id, deadline| {
+                calls += 1;
+                assert_eq!(id, expected);
+                assert_eq!(deadline, None);
+                Err(pending)
+            });
+            assert!(result.unwrap_err().is_account_token_pending());
+            assert_eq!(calls, 1);
+        }
+        let expired = AccountTokenCollection::Build {
+            operation,
+            deadline: Instant::now(),
+        };
+        assert_eq!(
+            expired
+                .collect::<()>(|_, _| panic!("expired build reached mint"))
+                .unwrap_err()
+                .code(),
+            "MUSUBI_ARCHIVE_BUILD_TOKEN_DEADLINE"
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut calls = 0;
+        let cutoff = AccountTokenCollection::Build {
+            operation,
+            deadline,
+        };
+        let unauthenticated = retryable("MUSUBI_ARCHIVE_ACCOUNT_TOKEN_PENDING");
+        let result = cutoff.collect::<()>(|id, d| {
+            calls += 1;
+            assert_eq!(id, Some(operation));
+            assert_eq!(d, Some(deadline));
+            Err(unauthenticated)
+        });
+        assert_eq!(result.unwrap_err(), unauthenticated);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
     fn pending_account_token_requires_opt_in_exact_body_and_single_fresh_echoes() {
         let id = [9; 32];
         let provider = [3; 32];
@@ -2379,6 +2516,7 @@ mod tests {
     fn authenticated_fetch_client_exposes_its_fixed_network() {
         let network_id: NetworkId = TEST_NETWORK_ID.parse().expect("test network identity");
         let client = AuthenticatedMusubiArchiveFetchClientV1 {
+            managed_build_deadline: None,
             account_registry: None,
             providers: BTreeMap::new(),
             network_id,

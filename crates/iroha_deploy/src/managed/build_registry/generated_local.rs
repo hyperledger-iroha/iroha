@@ -63,7 +63,7 @@ pub(super) fn prepare(
     // This closure is retained by the prepared configuration and every client built from it.
     // The original operation.lock therefore cannot be released between discovery and use.
     let owner = Mutex::new(authority);
-    let transport = PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+    let transport = PreparedMusubiArchiveFetchConfigV1::from_generated_local_build_registry(
         config.clone(),
         Arc::new(move |provider| {
             check_deadline(deadline)?;
@@ -75,6 +75,7 @@ pub(super) fn prepare(
         }),
         originals,
         DISCOVERY_FRESHNESS,
+        deadline,
     )
     .map_err(|_| invalid("cannot prepare generated build registry"))?;
     require_deadline(deadline)?;
