@@ -1822,7 +1822,8 @@ impl NativeEngine {
             (6, _) => Err(Error::AuthorityMismatch(
                 "protected Unload review confirmation unavailable",
             )),
-            (1 | 2 | 4 | 7, _) => Ok(()),
+            // ArchiveSent proves delivery of an existing debit and moves no value.
+            (1 | 2 | 4 | 5 | 7, _) => Ok(()),
             _ => Err(Error::Malformed("capsule kind")),
         }
     }
@@ -2917,7 +2918,7 @@ fn installed_debits_require_protected_confirmation() {
                 .is_err()
         );
     }
-    for kind in [0, 5, 8, 255] {
+    for kind in [0, 8, 255] {
         for scope in [ConfirmationScope::Installed, ConfirmationScope::FixtureSend] {
             assert!(matches!(
                 engine.require_debit_confirmation(kind, scope),
@@ -2925,10 +2926,10 @@ fn installed_debits_require_protected_confirmation() {
             ));
         }
     }
-    for kind in [1, 2, 4, 7] {
-        engine
-            .require_debit_confirmation(kind, ConfirmationScope::Installed)
-            .unwrap();
+    for kind in [1, 2, 4, 5, 7] {
+        for scope in [ConfirmationScope::Installed, ConfirmationScope::FixtureSend] {
+            engine.require_debit_confirmation(kind, scope).unwrap();
+        }
     }
     engine
         .require_debit_confirmation(3, ConfirmationScope::FixtureSend)

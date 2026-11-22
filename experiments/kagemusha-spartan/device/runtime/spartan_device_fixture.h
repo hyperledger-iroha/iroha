@@ -28,7 +28,8 @@ int32_t spartan_fixture_apple_journal_v1(void *journal, uint32_t operation,
 /* Call on a background thread. root/artifacts are absolute UTF-8 paths. root must
  * be a dedicated new fixture directory; it is reused for exact cold-start recovery.
  * Required artifacts: program-bundle.norito, parameter-manifest.norito,
- * parameter-signature.bin emitted by the real full recursive chain compiler.
+ * parameter-signature.bin. A five-kind fixture also supplies world-manifest-digest.bin,
+ * the 32-byte selection from its independently prepared fixture World.
  * output receives a UTF-8 report; return 0 means all executed assertions passed,
  * negative means failure/pending. Passing this fixture is not FI admission. */
 int32_t spartan_fixture_run_apple_v1(

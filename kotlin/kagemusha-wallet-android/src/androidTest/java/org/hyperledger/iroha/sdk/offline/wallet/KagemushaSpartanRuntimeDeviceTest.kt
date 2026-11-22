@@ -37,7 +37,16 @@ class KagemushaSpartanRuntimeDeviceTest {
         check(selected.programs.mkdirs() || selected.programs.isDirectory) {
             "Unable to open the Spartan fixture program directory"
         }
-        for (name in listOf("program-bundle.norito", "parameter-manifest.norito", "parameter-signature.bin")) {
+        val originals = mutableListOf("program-bundle.norito", "parameter-manifest.norito", "parameter-signature.bin")
+        val worldSelection = "world-manifest-digest.bin"
+        if (worldSelection in assets.list("spartan-artifacts").orEmpty()) {
+            originals.add(worldSelection)
+        } else {
+            check(!File(selected.programs, worldSelection).exists()) {
+                "A previous fixture extraction contains a World selection absent from this APK"
+            }
+        }
+        for (name in originals) {
             assets.open("spartan-artifacts/$name").use { input ->
                 File(selected.programs, name).outputStream().use { output -> input.copyTo(output) }
             }

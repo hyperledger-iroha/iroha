@@ -61,7 +61,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     };
     let (bundle, manifest, signature) = read_artifacts(artifacts)?;
     measurements.program_bundle(&bundle);
-    let parameters = native::device_fixture::install(&bundle, &manifest, signature)
+    let parameters = install_device_parameters(artifacts, &bundle, &manifest, signature)
         .map_err(|e| format!("authenticate signed device parameters: {e:?}"))?;
     let scheme = native::device_fixture::scheme();
     let mut f = advance::engineering_fixture::installed_fixture(
@@ -276,10 +276,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         return host_tests::verify_retained_credit(root, &mut runtime, &slot.0, &verification);
     }
     #[cfg(test)]
-    if std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LAUNCH").as_deref()
-        == Some(std::ffi::OsStr::new("retained-archive-refusal-v4"))
+    if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
+        && matches!(stage.as_str(), "retained-archive-refusal-v4" | "archive-execute-v5" | "archive-recover-v5")
     {
-        return host_tests::verify_unavailable_archive(root, &mut runtime, &slot.0, &verification);
+        return host_tests::verify_retained_archive(root, &mut runtime, &slot.0, &verification, &stage);
     }
     #[cfg(test)]
     drop(verification);
@@ -740,7 +740,7 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
     fn open(&self) -> Result<(SessionAdapter, Arc<native::AuthenticatedParameters>)> {
         let (bundle, manifest, signature) = read_artifacts(self.artifacts)?;
         let parameters =
-            native::device_fixture::install(&bundle, &manifest, signature).map_err(fail)?;
+            install_device_parameters(self.artifacts, &bundle, &manifest, signature)?;
         let provider: NativeProviderV1<_, _> = advance::KagemushaWalletProviderV1::open(
             advance::KagemushaWalletStdFsV1::open(self.custody).map_err(fail)?,
             self.platform.clone(),
@@ -766,6 +766,29 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
         )?;
         Ok((runtime, verification))
     }
+}
+
+fn install_device_parameters(
+    artifacts: &Path,
+    bundle: &[u8],
+    manifest: &[u8],
+    signature: [u8; 64],
+) -> Result<native::AuthenticatedParameters> {
+    use std::io::Read;
+    let selected = if native::AuthenticatedParameters::is_five_manifest(manifest) {
+        let path = artifacts.join("world-manifest-digest.bin");
+        let mut file = std::fs::File::open(path).map_err(|e| format!("fixture World manifest digest: {e}"))?;
+        let mut digest = [0; 32];
+        file.read_exact(&mut digest).map_err(fail)?;
+        if file.read(&mut [0u8; 1]).map_err(fail)? != 0 {
+            return Err("fixture World manifest digest length".into());
+        }
+        Some(digest)
+    } else {
+        None
+    };
+    native::device_fixture::install_selected(bundle, manifest, signature, selected.as_ref())
+        .map_err(fail)
 }
 
 fn read_artifacts(artifacts: &Path) -> Result<(Vec<u8>, Vec<u8>, [u8; 64])> {
