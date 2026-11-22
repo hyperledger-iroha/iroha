@@ -82,6 +82,22 @@ struct AcceptedPayment {
     payment: VerifiedIncomingPayment,
 }
 
+/// A reconstruction accepted the exact predecessor bytes and reproduced the capsule.
+/// Keep the decoded proof only until this owner finalizes that same preparation.
+pub(super) struct ResumedSelection {
+    owner: Arc<()>,
+    installation: Arc<()>,
+    original: Arc<[u8]>,
+    predecessor: Option<full::UniformPair>,
+}
+
+impl ResumedSelection {
+    fn matches(&self, engine: &NativeEngine, parameters: &AuthenticatedParameters) -> bool {
+        Arc::ptr_eq(&self.owner, &engine.selection_owner)
+            && Arc::ptr_eq(&self.installation, &parameters.installation)
+    }
+}
+
 pub(crate) struct Program {
     pub primary: Arc<UniformCircuit<Fp>>,
     pub secondary: Arc<UniformCircuit<Fq>>,
@@ -1633,10 +1649,45 @@ impl NativeEngine {
         prepared: &PreparedOperation,
         parameters: &AuthenticatedParameters,
     ) -> bool {
-        prepared.resumed_under.as_ref().is_some_and(|(owner, installation)| {
-            Arc::ptr_eq(owner, &self.selection_owner)
-                && Arc::ptr_eq(installation, &parameters.installation)
-        })
+        prepared.resumed_under.as_ref().is_some_and(|resume| resume.matches(self, parameters))
+    }
+
+    fn verified_head_and_pair(
+        bytes: &[u8],
+        credential: &Credential,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<(VerifiedWalletHead, full::UniformPair)> {
+        let (_, profile, c, cert, pair) = decode_head(bytes, parameters)?;
+        if !exact_credential(&c, credential) {
+            return Err(Error::AuthorityMismatch("requested head credential"));
+        }
+        let head = VerifiedWalletHead {
+            parameters_id: parameters.id,
+            manifest_digest: parameters.manifest_digest,
+            profile,
+            pair: bytes.into(),
+            credential: c,
+            certificate: cert,
+            custody_digest: [0; 32],
+            enrollment_marker: None,
+        };
+        Ok((head, pair))
+    }
+
+    fn predecessor_for_proof(
+        &self,
+        prepared: &mut PreparedOperation,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<full::UniformPair> {
+        let original = &prepared.predecessor.pair;
+        if let Some(resume) = prepared.resumed_under.as_mut()
+            && resume.matches(self, parameters)
+            && Arc::ptr_eq(&resume.original, original)
+            && let Some(pair) = resume.predecessor.take()
+        {
+            return Ok(pair);
+        }
+        decode_head(original, parameters).map(|(_, _, _, _, pair)| pair)
     }
 
     fn require_minimum_memory(
@@ -2239,20 +2290,7 @@ impl Engine for NativeEngine {
         credential: &Credential,
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedWalletHead> {
-        let (_, profile, c, cert, _) = decode_head(bytes, parameters)?;
-        if !exact_credential(&c, credential) {
-            return Err(Error::AuthorityMismatch("requested head credential"));
-        }
-        Ok(VerifiedWalletHead {
-            parameters_id: parameters.id,
-            manifest_digest: parameters.manifest_digest,
-            profile,
-            pair: bytes.into(),
-            credential: c,
-            certificate: cert,
-            custody_digest: [0; 32],
-            enrollment_marker: None,
-        })
+        Self::verified_head_and_pair(bytes, credential, parameters).map(|(head, _)| head)
     }
     fn verify_payment(
         &self,
@@ -2356,14 +2394,16 @@ impl Engine for NativeEngine {
             .collect::<Result<Vec<_>>>()?
             .try_into()
             .unwrap();
-        let mut head = if let ExactOperationWitness::Bootstrap(b) = &witness {
-            self.enrollment_origin(
+        let (mut head, predecessor) = if let ExactOperationWitness::Bootstrap(b) = &witness {
+            let origin = self.enrollment_origin(
                 b,
                 r.enrollment.ok_or(Error::Malformed("enrollment marker"))?,
                 parameters,
-            )?
+            )?;
+            (origin, None)
         } else {
-            self.verify_head(&r.predecessor, &c, parameters)?
+            let (head, pair) = Self::verified_head_and_pair(&r.predecessor, &c, parameters)?;
+            (head, Some(pair))
         };
         if head.profile != profile
             || !exact_credential(&head.credential, &c)
@@ -2376,15 +2416,17 @@ impl Engine for NativeEngine {
         if prepared.capsule.encode()? != capsule.encode()? {
             return Err(Error::AuthorityMismatch("recovered frozen capsule"));
         }
-        prepared.resumed_under = Some((
-            Arc::clone(&self.selection_owner),
-            Arc::clone(&parameters.installation),
-        ));
+        prepared.resumed_under = Some(Box::new(ResumedSelection {
+            owner: Arc::clone(&self.selection_owner),
+            installation: Arc::clone(&parameters.installation),
+            original: Arc::clone(&head.pair),
+            predecessor,
+        }));
         Ok(prepared)
     }
     fn finalize_selected(
         &self,
-        prepared: PreparedOperation,
+        mut prepared: PreparedOperation,
         receipt: &HardwareAdvanceReceipt,
         parameters: &AuthenticatedParameters,
     ) -> Result<(PreparedOperation, CompletedOperation)> {
@@ -2413,7 +2455,7 @@ impl Engine for NativeEngine {
         let k = kind(&witness, parameters.inner.programs.len())?;
         let mut pairs = Vec::new();
         if k != full::BOOTSTRAP {
-            let (_, _, _, _, u) = decode_head(&prepared.predecessor.pair, parameters)?;
+            let u = self.predecessor_for_proof(&mut prepared, parameters)?;
             pairs.push(full::trace_uniform(u, &p.generators));
         }
         stage.mark("predecessor trace");

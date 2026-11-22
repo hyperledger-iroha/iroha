@@ -492,7 +492,7 @@ struct PreparedReceive {
 pub struct PreparedOperation {
     // Present only after a cold reconstruction checked the captured predecessor and
     // reproduced the exact capsule. Neither identity is part of the wallet wire.
-    resumed_under: Option<(Arc<()>, Arc<()>)>,
+    resumed_under: Option<Box<engine::ResumedSelection>>,
     manifest_digest: [u8; 32],
     parameters_id: [u8; 32],
     capsule: RecoveryCapsule,

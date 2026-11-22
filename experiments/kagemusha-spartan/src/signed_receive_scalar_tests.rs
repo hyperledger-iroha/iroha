@@ -244,9 +244,7 @@ fn check_owned_writes<S: Scalar + zeroize::Zeroize>(
     );
 }
 
-#[test]
-#[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
-fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
+fn signed_receive_fixture() -> (AuthenticatedParameters, RecoveryCapsule, PathBuf) {
     let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
     let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
     let read = |dir: &PathBuf, file: &str| std::fs::read(dir.join(file)).unwrap();
@@ -261,8 +259,97 @@ fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
         &crate::native::device_fixture::scheme().scheme_id(),
     )
     .unwrap();
+    (parameters, capsule, wallet)
+}
+
+#[test]
+#[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
+fn resumed_predecessor_matches_full_verification_only_for_bound_original_and_owner() {
+    let (mut parameters, capsule, _) = signed_receive_fixture();
+    let engine = NativeEngine::default();
+    let mut prepared = engine.resume(&capsule, &parameters).unwrap();
+    let original = Arc::clone(&prepared.predecessor.pair);
+    let mut altered = original.to_vec();
+    altered[0] ^= 1;
+    prepared.predecessor.pair = altered.into();
+    assert!(
+        engine
+            .predecessor_for_proof(&mut prepared, &parameters)
+            .is_err()
+    );
+    prepared.predecessor.pair = original;
+    let other_engine = NativeEngine::default();
+    let installation = std::mem::replace(&mut parameters.installation, Arc::new(()));
+    assert!(!engine.resumed_here(&prepared, &parameters));
+    drop(
+        engine
+            .predecessor_for_proof(&mut prepared, &parameters)
+            .unwrap(),
+    );
+    assert!(
+        prepared
+            .resumed_under
+            .as_ref()
+            .unwrap()
+            .predecessor
+            .is_some()
+    );
+    parameters.installation = installation;
+    assert!(!other_engine.resumed_here(&prepared, &parameters));
+    assert!(engine.resumed_here(&prepared, &parameters));
+    let start = std::time::Instant::now();
+    let independently_verified = other_engine
+        .predecessor_for_proof(&mut prepared, &parameters)
+        .unwrap();
+    let full_check = start.elapsed();
+    assert!(
+        prepared
+            .resumed_under
+            .as_ref()
+            .unwrap()
+            .predecessor
+            .is_some()
+    );
+    let start = std::time::Instant::now();
+    let pred = engine
+        .predecessor_for_proof(&mut prepared, &parameters)
+        .unwrap();
+    eprintln!(
+        "signed Receive predecessor full check {full_check:?}, retained {:?}",
+        start.elapsed()
+    );
+    assert!(
+        prepared
+            .resumed_under
+            .as_ref()
+            .unwrap()
+            .predecessor
+            .is_none()
+    );
+    assert_eq!(independently_verified.kind, pred.kind);
+    assert_eq!(independently_verified.ip.io, pred.ip.io);
+    assert_eq!(independently_verified.is.io, pred.is.io);
+    assert_eq!(independently_verified.pp.to_bytes(), pred.pp.to_bytes());
+    assert_eq!(independently_verified.ps.to_bytes(), pred.ps.to_bytes());
+    assert_eq!(
+        (
+            independently_verified.d,
+            independently_verified.rho,
+            independently_verified.r
+        ),
+        (pred.d, pred.rho, pred.r)
+    );
+    assert!(Arc::ptr_eq(&independently_verified.cp, &pred.cp));
+    assert!(Arc::ptr_eq(&independently_verified.cs, &pred.cs));
+    drop(independently_verified);
+}
+
+#[test]
+#[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
+fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
+    let (parameters, capsule, wallet) = signed_receive_fixture();
     let record = CompletionRecord::decode(
-        &read(&wallet, "counterparty-receive-completion.norito"),
+        &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
         capsule.wallet(),
     )
     .unwrap();
@@ -285,7 +372,7 @@ fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
     };
     assert_eq!(
         incoming_payment.as_ref(),
-        read(&wallet, "complete-payment.bin")
+        std::fs::read(wallet.join("complete-payment.bin")).unwrap()
     );
     let incoming = prepared.receive.as_ref().unwrap();
     assert!(incoming.can_credit);
