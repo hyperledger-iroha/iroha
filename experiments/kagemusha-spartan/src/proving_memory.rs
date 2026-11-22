@@ -351,7 +351,11 @@ impl<F: Scalar> UniformCircuit<F> {
         let m_plan_bytes = retained - start;
         let start = retained;
         if let Some(t) = self.plan.get() {
-            retained += bytes(&t.pool) + bytes(&t.regs.inputs) + bytes(&t.regs.ops);
+            retained += bytes(&t.pool) + bytes(&t.regs.inputs);
+            retained += match &t.regs.ops {
+                RegisterInstructions::Packed(words) => bytes(words),
+                RegisterInstructions::Wide(instructions) => bytes(instructions),
+            };
         }
         let matrix_program_bytes = retained - start;
 

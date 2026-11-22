@@ -82,7 +82,7 @@ fn check_register_degrees(
     }
     let row = |r: Slot| r as usize * vars..(r as usize + 1) * vars;
     let mut next = vec![0u8; vars];
-    for &(op, d) in &regs.ops {
+    for (op, d) in regs.ops.iter() {
         match op {
             Op::Add(a, b) | Op::Sub(a, b) => {
                 for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
@@ -406,11 +406,14 @@ impl<F: Scalar> UniformCircuit<F> {
             return Err("duplicate late program IO".into());
         }
         let pool = unpack_fields(&p.constants)?;
+        drop(p.constants);
         let fixed_count = (fixed_rows - wallet_rows)
             .checked_mul(shape.cols())
             .ok_or("fixed program field count overflow")?;
         let fixed_values = unpack_fixed_fields(&p.fixed, fixed_count)?;
+        drop(p.fixed);
         let ops = compact::unpack(p.inputs, pool.len(), &p.operations)?;
+        drop(p.operations);
         let muls = ops.iter().filter(|op| matches!(op, Op::Mul(..))).count();
         let scales = ops.iter().filter(|op| matches!(op, Op::Scale(..))).count();
         if p.outputs
@@ -545,7 +548,7 @@ impl<F: Scalar> UniformCircuit<F> {
 }
 
 /// An instruction's public-program record: tag, then its two words.
-fn op_words(op: Op) -> [u32; 3] {
+pub(super) fn op_words(op: Op) -> [u32; 3] {
     match op {
         Op::Add(a, b) => [0, a, b],
         Op::Sub(a, b) => [1, a, b],

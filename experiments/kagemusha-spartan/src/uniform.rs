@@ -5629,6 +5629,61 @@ pub struct Tape<F> {
     regs: Regs,
 }
 
+/// In-memory register instructions. The public artifact always uses its own
+/// canonical slot encoding. A larger register or constant index keeps the
+/// full-width representation.
+enum RegisterInstructions {
+    Packed(Vec<u64>),
+    Wide(Vec<(Op, Slot)>),
+}
+
+impl RegisterInstructions {
+    const BITS: u32 = 20;
+    const MASK: u32 = (1 << Self::BITS) - 1;
+
+    fn new(instructions: impl ExactSizeIterator<Item = (Op, Slot)>, count: u32, max_constant: u32) -> Self {
+        if count > Self::MASK + 1 || max_constant > Self::MASK {
+            return Self::Wide(instructions.collect());
+        }
+        Self::Packed(instructions.map(|(op, dest)| {
+            let [tag, a, b] = program_artifact::op_words(op);
+            assert!(tag < 16 && a <= Self::MASK && b <= Self::MASK && dest <= Self::MASK);
+            u64::from(tag) << (3 * Self::BITS)
+                | u64::from(dest) << (2 * Self::BITS)
+                | u64::from(a) << Self::BITS
+                | u64::from(b)
+        }).collect())
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Packed(words) => words.len(),
+            Self::Wide(instructions) => instructions.len(),
+        }
+    }
+
+    fn iter(&self) -> impl ExactSizeIterator<Item = (Op, Slot)> + '_ {
+        (0..self.len()).map(|i| match self {
+            Self::Packed(words) => {
+                let word = words[i];
+                let dest = (word >> (2 * Self::BITS)) as u32 & Self::MASK;
+                let a = (word >> Self::BITS) as u32 & Self::MASK;
+                let b = word as u32 & Self::MASK;
+                let op = match word >> (3 * Self::BITS) {
+                    0 => Op::Add(a, b),
+                    1 => Op::Sub(a, b),
+                    2 => Op::Mul(a, b),
+                    3 => Op::Scale(a, b),
+                    4 => Op::Const(a),
+                    _ => unreachable!("internal register opcode"),
+                };
+                (op, dest)
+            }
+            Self::Wide(instructions) => instructions[i],
+        })
+    }
+}
+
 /// A tape in register form: a slot's register is free again once its last
 /// reader has run, so a batch of points keeps `count` values per point
 /// rather than one per slot.
@@ -5637,7 +5692,7 @@ struct Regs {
     /// The register of each input slot.
     inputs: Vec<Slot>,
     /// Each instruction over registers, with the register it writes.
-    ops: Vec<(Op, Slot)>,
+    ops: RegisterInstructions,
     out: [Slot; 3],
 }
 
@@ -5658,7 +5713,11 @@ impl Regs {
         let end = Slot::try_from(n).expect("tape fits its slot representation");
         assert!(end < Slot::MAX, "reserve one unused-slot marker");
         let mut last = vec![Slot::MAX; n];
+        let mut max_constant = 0;
         for (i, op) in ops.iter().enumerate() {
+            if let Op::Scale(_, k) | Op::Const(k) = *op {
+                max_constant = max_constant.max(k);
+            }
             let (src, k) = operands(*op);
             for a in &src[..k] {
                 last[*a as usize] = (inputs + i) as Slot;
@@ -5682,10 +5741,8 @@ impl Regs {
                 free.push(reg[j]);
             }
         }
-        let mut rops = Vec::with_capacity(ops.len());
         for (i, op) in ops.iter().enumerate() {
             let s = inputs + i;
-            let rop = op.map_slots(|x| reg[x as usize]);
             // Operands read for the last time give their registers back
             // first, so the result may take one (each lane reads its
             // operands before it writes).
@@ -5700,8 +5757,16 @@ impl Regs {
             if last[s] == Slot::MAX {
                 free.push(d);
             }
-            rops.push((rop, d));
         }
+        drop(last);
+        drop(free);
+        let rops = RegisterInstructions::new(
+            ops.iter().enumerate().map(|(i, op)| {
+                (op.map_slots(|s| reg[s as usize]), reg[inputs + i])
+            }),
+            count,
+            max_constant,
+        );
         Regs {
             count: count as usize,
             inputs: reg[..inputs].to_vec(),
@@ -5747,7 +5812,7 @@ impl<F: Scalar> Tape<F> {
             .ops
             .iter()
             .enumerate()
-            .map(move |(i, &(op, dest))| {
+            .map(move |(i, (op, dest))| {
                 let original = op.map_slots(|r| slots[r as usize]);
                 slots[dest as usize] = (self.inputs + i) as Slot;
                 original
@@ -5778,7 +5843,7 @@ impl<F: Scalar> Tape<F> {
                 r[g as usize][l] = p.as_ref()[j];
             }
         }
-        for &(op, d) in &rg.ops {
+        for (op, d) in rg.ops.iter() {
             let v: [F; L] = match op {
                 Op::Add(a, b) => {
                     let (x, y) = (&r[a as usize], &r[b as usize]);
@@ -8522,6 +8587,39 @@ pub(crate) mod tests {
             crate::spartan::verify_circuit(&gshape, &ggens, &ginst, &proof.to_bytes(), &g).is_ok(),
             "sparse form"
         );
+    }
+
+    #[test]
+    fn register_representation_preserves_full_width_operands_and_output_aliases() {
+        let mask = RegisterInstructions::MASK;
+        for (inputs, constant, packed) in [
+            (mask + 1, mask, true),
+            (mask + 2, mask, false),
+            (2, mask + 1, false),
+        ] {
+            let high = inputs - 1;
+            let ops = [
+                Op::Scale(high, constant),
+                Op::Const(constant),
+                Op::Sub(inputs, inputs + 1),
+                Op::Mul(inputs + 2, inputs + 2),
+                Op::Add(inputs + 3, inputs + 1),
+            ];
+            let out = [high, inputs + 4, inputs + 4];
+            let regs = Regs::of(inputs as usize, &ops, out);
+            assert_eq!(matches!(regs.ops, RegisterInstructions::Packed(_)), packed);
+            let tape = Tape::<iroha_pasta::Fp> {
+                inputs: inputs as usize,
+                pool: Vec::new(),
+                out,
+                muls: 1,
+                scales: 1,
+                regs,
+            };
+            assert!(tape.slot_instructions().eq(ops));
+            assert_eq!(tape.regs.out[1], tape.regs.out[2]);
+            assert_ne!(tape.regs.out[0], tape.regs.out[1]);
+        }
     }
 
     /// Register reuse must retain inputs and outputs, including aliases,
