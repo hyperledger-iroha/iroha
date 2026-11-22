@@ -15,8 +15,8 @@ pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
 pub use cursor::{
-    NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
-    NativeFinalityCursorV1,
+    NativeCurrentFinalityV1, NativeCurrentStepV1, NativeFinalityAtHeightV1,
+    NativeFinalityCursorErrorV1, NativeFinalityCursorV1, NativeSupersededCutV1,
 };
 pub use interval::{
     NativeFinalityProofInterval, NativeFinalityProofIntervalError,

@@ -1289,6 +1289,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
+        reason: "Identifies the native replication order for one Musubi archive ID and paid manifest digest",
+        literals: &[r"iroha:musubi:native-replication-order:v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
         reason: "Musubi registry instruction identifiers, release and attestation digests and signing preimages",
         literals: &[
             r"iroha.musubi.archive-id.v1",
