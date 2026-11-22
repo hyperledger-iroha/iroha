@@ -15237,6 +15237,13 @@
         "kind": "const",
         "matching": "^NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES$",
         "why": "Pin the sole native closed path/control descriptor input ceiling under its source owner; arbitrary local path lengths are not a committed payment-validity bound."
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/certified_chain.rs",
+        "kind": "const",
+        "matching": "(?:^|_)(?:MAX|MAXIMUM)(?:_|$)|LIMIT|BUDGET|CEILING|OVERHEAD|RESERVE|(?:^|_)CAP(?:ACITY)?(?:_|$)|^SHARED_PREFIXES_(?:PER_CHAIN|TOTAL)$",
+        "comparisons": true,
+        "why": "Scan the usual limit names and both local cursor capacities. The process-wide capacity is tested with equality before eviction, so a relational-comparison scan alone cannot pin its value."
       }
     ],
     "excluded": [
@@ -15250,6 +15257,36 @@
         "exprs": {
           "SHARED_PREFIXES_PER_CHAIN": "4",
           "SHARED_PREFIXES_TOTAL": "16"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/sorafs/token/paid.rs",
+        "reason": "The Torii paid-token journal limits one locally written and reopened unsigned operation record to 8,192 bytes. A larger record refuses that provider token request. It does not constrain a transaction, a certified block or its proof.",
+        "symbols": [
+          "MAX_RECORD"
+        ],
+        "exprs": {
+          "MAX_RECORD": "8192"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/sorafs/token/signer_lifecycle.rs",
+        "reason": "The paid stream-token signer permits eight fresh challenges when a certified head advances before its first signer dispatch. Exhaustion returns SignerFinalityUnavailable for that local request. Each retry must still fit the original grant.",
+        "symbols": [
+          "MAX_PAID_CURRENT_REFRESHES"
+        ],
+        "exprs": {
+          "MAX_PAID_CURRENT_REFRESHES": "8"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+        "reason": "The native signer history reader can retain and extend evidence of a verified source prefix through height 256. Above that height it uses the ordinary certified walk. The cap selects a local reuse path and leaves the verifiable height and certificate checks unchanged.",
+        "symbols": [
+          "MAX_HEIGHT"
+        ],
+        "exprs": {
+          "MAX_HEIGHT": "256"
         }
       },
       {
@@ -27616,6 +27653,24 @@
               "sites": {
                 "view.height() < 2": 1
               }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot/retained_provider.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/certified_chain.rs",
+              "sites": {
+                "first .max(2)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+              "sites": {
+                "through >= 2": 1
+              }
             }
           ]
         },
@@ -30271,7 +30326,8 @@
             {
               "path": "crates/iroha_torii/src/sorafs/token/signer_lifecycle.rs",
               "sites": {
-                "issued > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)": 1
+                "issued > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)": 1,
+                "self.now_unix_ms()? / 1000 < body.ttl_epoch": 1
               }
             },
             {
@@ -30332,6 +30388,12 @@
               "path": "crates/iroha_torii/src/sorafs/api.rs",
               "sites": {
                 "u64::try_from(retry_after.as_millis().saturating_add(999) / 1_000) .unwrap_or(u64::MAX) .max(1)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot/retained_provider.rs",
+              "sites": {
+                "view .authenticated_query_ledger_time_ms() .ok_or(\"missing authenticated provider expiry clock\")? / 1000 >= expires": 1
               }
             }
           ]
@@ -30861,7 +30923,7 @@
             {
               "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
               "sites": {
-                "view.native_world_snapshot_height_v1()? < 2": 1,
+                "observed_height < 2": 1,
                 "self.height() >= 2": 2
               }
             },
@@ -31152,6 +31214,28 @@
               "path": "crates/iroha_data_model/src/sumeragi_finality/keyed_schema/carrier.rs",
               "sites": {
                 "(0x20..=0x7e).contains(&byte)": 2
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The native signer history optimization captures a certificate-inclusive source prefix from the first successor through MAX_HEIGHT. The lower endpoint identifies a post-genesis certificate and the upper endpoint selects the bounded local cache. Outside that range the ordinary native verifier still walks the history.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+              "sites": {
+                "(2..=Self::MAX_HEIGHT).contains(&through)": 2
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The local Musubi purpose-order builder measures one proposed canonical replication order before allocating and emitting it. A frame above 256 KiB refuses this construction request. The ledger applies the separate MAX_REPLICATION_ORDER_PAYLOAD_BYTES check to a submitted IssueReplicationOrder.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/query/native_musubi_storage.rs",
+              "sites": {
+                "length > 256 * 1024": 1
               }
             }
           ]
