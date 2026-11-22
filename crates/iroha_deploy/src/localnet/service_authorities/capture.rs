@@ -3,7 +3,7 @@
 use super::*;
 use iroha_config::parameters::{actual::NodeSecretFile, defaults::data_dir as layout};
 use iroha_config_base::file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource};
-use iroha_fs::{PrivateDirectory, PrivateFileComparison, PrivateReadScope, PrivateReadTreeScope};
+use iroha_fs::{PrivateDirectory, PrivateFileComparison, PrivateReadTreeScope};
 use std::{
     ffi::{OsStr, OsString},
     io,
@@ -109,21 +109,43 @@ impl CapturedDirectory {
         )
     }
 
-    fn check_inventory(&self, reader: &PrivateReadScope<'_>) -> crate::managed::Result<()> {
-        if let Some(expected) = &self.inventory {
-            let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
-            if reader
-                .entries(expected.len())?
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-                != expected
-            {
-                return Err(Error::Invalid(
-                    "original service directory inventory differs".into(),
-                ));
+    // The root and standalone fixtures retain the same closed canonical file policy.
+    fn compare_inputs(&self) -> crate::managed::Result<()> {
+        self.compare_inputs_with(|inputs| self.directory.compare_files(inputs))
+    }
+
+    fn revalidate_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        // Keep the native census and complete-name comparison in one fresh suffix bracket.
+        // Its exit closes even empty inventories and overrides ordinary comparison errors.
+        tree.read_scope(&self.directory, |reader| match &self.inventory {
+            Some(expected) => {
+                let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
+                if reader
+                    .entries(expected.len())?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    != expected
+                {
+                    return Err(Error::Invalid(
+                        "original service directory inventory differs".into(),
+                    ));
+                }
+                Ok(())
             }
-        }
-        Ok(())
+            None => Ok(()),
+        })
+    }
+
+    fn compare_inputs_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        self.compare_inputs_with(|inputs| {
+            tree.read_scope(&self.directory, |reader| reader.compare_files(inputs))
+        })
     }
 
     // Borrow the same fixed bounded metadata for both callers. The canonical private leaf
@@ -382,42 +404,45 @@ impl CapturedProfile {
                 value.set(Some(count.checked_add(1).expect("profile image count")));
             }
         });
-        let (generation, descendants) = self.directories.split_first().ok_or_else(invalid)?;
-        if self.directories.len() > DIRECTORY_COUNT {
-            return Err(invalid());
-        }
+        let generation = self.directories.first().ok_or_else(invalid)?;
+        // One fresh complete profile pass, never a shared verdict across callers. The
+        // retained generation closes full ancestry on every ordinary result; descendants
+        // share only the complete identical native prefix and otherwise use full checks.
+        // Intermediate prefix observations consolidate: fully restored changes inside this
+        // readonly pass may go unobserved. This is not an atomic snapshot or unwind guard.
         generation
             .directory
-            .read_tree_scope_with_root(|tree, reader| {
-                Self::revalidate_directory(generation, descendants, tree, reader, &mut || Ok(()))
-            })
+            .read_tree_scope(|tree| self.revalidate_in_tree(tree))
     }
 
-    // Open in captured order and keep the original native custody of each directory
-    // until its final inventory. At the last entry, run the bounded chain of file
-    // comparisons in that same order, then close inventories in reverse. Every native
-    // scope rechecks its directory on ordinary error as well as success. A change wholly
-    // restored inside a scope may be unobserved. No reader survives this profile pass.
-    fn revalidate_directory(
-        directory: &CapturedDirectory,
-        remaining: &[CapturedDirectory],
+    fn revalidate_in_tree(
+        &self,
         tree: &mut PrivateReadTreeScope<'_>,
-        reader: &mut PrivateReadScope<'_>,
-        preceding_inputs: &mut dyn FnMut() -> crate::managed::Result<()>,
     ) -> crate::managed::Result<()> {
-        directory.check_inventory(reader)?;
-        let mut compare_inputs = || {
-            preceding_inputs()?;
-            directory.compare_inputs_with(|inputs| reader.compare_files(inputs))
-        };
-        if let Some((next, rest)) = remaining.split_first() {
-            tree.read_scope_with_tree(&next.directory, |tree, reader| {
-                Self::revalidate_directory(next, rest, tree, reader, &mut compare_inputs)
-            })?;
-        } else {
-            compare_inputs()?;
+        // Keep the generation's original full checks without wrapping it in another
+        // full-fallback directory view. Only genuine descendants can share its prefix.
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
         }
-        directory.check_inventory(reader)
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.compare_inputs()?;
+            } else {
+                directory.compare_inputs_in_tree(tree)?;
+            }
+        }
+        for (index, directory) in self.directories.iter().enumerate().rev() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
+        }
+        Ok(())
     }
 
     /// Reject external inheritance/profile resolution before the general SDK byte loader.
