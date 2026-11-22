@@ -930,10 +930,19 @@ mod tests {
                 &bits.map(Fq::from)
             );
         }
-        for kind in [RECEIVE, SEND, BOOTSTRAP] {
+        for kind in [RECEIVE, SEND, BOOTSTRAP, crate::full::ARCHIVE_SENT] {
             assert!(project(kind, [Fp::ZERO; 2]).is_ok());
             assert!(project(kind, [Fp::ZERO, Fp::ONE]).is_err());
             assert!(project(kind, [Fp::ONE, Fp::ZERO]).is_err());
+        }
+        let archive = project(crate::full::ARCHIVE_SENT, [Fp::ZERO; 2]).unwrap();
+        for (index, expected) in [
+            (crate::full::KIND_IO, 0u64),
+            (crate::full::KIND_IO + 1, 0),
+            (crate::full::KIND_C2_IO, 1),
+        ] {
+            assert_eq!(archive.primary.io[index], Fp::from(expected));
+            assert_eq!(archive.secondary.io[index], Fq::from(expected));
         }
         for bits in [[Fp::ONE; 2], [Fp::from(2), Fp::ZERO], [Fp::ZERO, -Fp::ONE]] {
             assert!(project(CONTROL, bits).is_err());
@@ -963,7 +972,7 @@ mod tests {
                 [Fp::ZERO; crate::bootstrap_context::FIELDS],
                 [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
                 crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
-                4,
+                crate::deferral::MAX_KINDS,
                 [Fp::ZERO; 2],
             )
             .is_err()
