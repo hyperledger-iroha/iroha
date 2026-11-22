@@ -790,7 +790,10 @@ mod tests {
                 };
                 let (wire_id, payload) =
                     iroha::data_model::isi::framed_instruction_payload(&instruction).unwrap();
-                let draft = norito::json::json!({"tx_instructions": [{"wire_id": wire_id, "payload_hex": hex::encode(payload)}]});
+                let payload_hex = hex::encode(payload);
+                let draft = norito::json!({
+                    "tx_instructions": [{"wire_id": wire_id, "payload_hex": payload_hex}]
+                });
                 let expected = child_wire == matches!(root, RootScopeV1::DataSpace(_));
                 assert_eq!(drafted_attestation(&draft).is_ok(), expected);
             }
