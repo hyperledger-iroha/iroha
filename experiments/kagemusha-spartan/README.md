@@ -189,6 +189,31 @@ The isolated physical fixture lives under `device/runtime`; the iOS runtime UI i
 `device/ios/RuntimeFixture.swift`. Build from this canonical checkout. Keep generated
 proof artifacts, device packages, signing scratch and logs in ignored outputs.
 
+### Bootstrap the five-kind monetary compiler
+
+The five-kind compiler starts with an actual signed four-kind software-wallet history. The [compiler runner](fixtures/compile_five_kind.py) builds those inputs locally, compiles ArchiveSent on both curves, then runs the five-kind fixed-point test on the two canonical warm Cargo targets. Its demo genesis, test Artifact certificate and software payment key are public. It needs no phone or operational issuer credentials.
+
+From the repository root, choose a new output directory under an existing parent.
+
+```sh
+exp="$PWD/experiments/kagemusha-spartan"
+mkdir -p "$exp/output"
+python3 "$exp/fixtures/compile_five_kind.py" --output "$exp/output/five-kind-build"
+```
+
+If a public four-kind `program-bundle.norito` is already available, pass `--four-kind-bundle /absolute/path/to/program-bundle.norito` or set `KAGEMUSHA_SPARTAN_FOUR_KIND_BUNDLE`. The software issuer checks its schema and all eight independently compiled pins. Without that input, the runner first creates the public bundle with `full::backend_chain_tests::compile_wallet_program_bundle` at the p18-s17 layout.
+
+To reuse a completed demo bootstrap, supply all four directories below. Keep the wallet and raw originals from the same host run. Its public software holder generates fresh operation IDs and signatures.
+
+| Environment variable | Producer and contents |
+|---|---|
+| `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` | `issue_software_device_fixture_from_public_bundle` emits the isolated issuer's program bundle, manifest and signature under the explicit fixture genesis. |
+| `KAGEMUSHA_SPARTAN_DEVICE_ROOT` | `host_tests::two_wallet_device_flow_on_host` starts with an empty owner-only directory. Launch three recovers all four operations. |
+| `KAGEMUSHA_SPARTAN_ARCHIVE_RAW_ORIGINALS` | [The exporter](fixtures/export_compiler_originals.py) pairs the host’s checksummed capsule and completion frames by selected generation and preserves its digest-checked peer originals. Run it with the completed software wallet and a new destination as positional arguments. |
+| `KAGEMUSHA_SPARTAN_ARCHIVE_PREVIOUS` | `compile_completed_archive_programs_group_four` verifies the retained signed history, proves both receiver forms and requires identical canonical programs. Its successful output contains `archive-primary.program` and `archive-secondary.program`. |
+
+The final `compile_five_kind_wallet_program_bundle_group_four` run checks two identical ten-tape generations against a fresh monetary history. Only its successful output becomes `--output`, containing `program-bundle.norito` and `public-program-profile.json`. On failure the runner identifies its private working directory so completed fixture stages and diagnostic tapes are available for investigation. A tape with an `.unqualified` filename is a compiler diagnostic.
+
 ## Design and research records
 
 [CERTIFICATE.md](CERTIFICATE.md), [CREDENTIAL.md](CREDENTIAL.md),

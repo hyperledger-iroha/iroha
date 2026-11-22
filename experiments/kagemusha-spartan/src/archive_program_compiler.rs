@@ -484,3 +484,57 @@ fn first_five_archive(group: CompilerGroup) {
 
 #[path = "archive_fixed_point_compiler.rs"]
 mod fixed_point;
+
+/// Issue the software-device fixture from a public, compiled four-kind bundle.
+/// Both the Artifact signing fixture and the explicit demo genesis are public.
+#[test]
+#[ignore = "imports the four-kind public originals and issues an isolated software-device fixture"]
+fn issue_software_device_fixture_from_public_bundle() {
+    use iroha_data_model::sumeragi_finality::{
+        SumeragiCommitVerifierV1, test_fixtures::NativeFinalityFixture,
+    };
+    use std::io::{Read as _, Write as _};
+
+    let source = std::env::var_os("KAGEMUSHA_SPARTAN_FOUR_KIND_BUNDLE")
+        .expect("path to the public four-kind program-bundle.norito");
+    let output = PathBuf::from(
+        std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT").expect("new fixture directory"),
+    );
+    assert!(!output.exists(), "fixture directory already exists");
+    let mut bundle = Vec::new();
+    std::fs::File::open(source)
+        .unwrap()
+        .take(native::MAX_PROGRAM_BUNDLE_BYTES as u64 + 1)
+        .read_to_end(&mut bundle)
+        .unwrap();
+    assert!(bundle.len() <= native::MAX_PROGRAM_BUNDLE_BYTES);
+    // The public signer accepts either generation for its normal customers.
+    // This particular host compiler starts at the independently pinned four.
+    assert_eq!(
+        norito::core::Header::read(&bundle[..]).unwrap().schema,
+        norito::schema::identity::frame_hash::<native::ProgramBundle>()
+    );
+    let scheme = native::device_fixture::scheme();
+    let fixture = NativeFinalityFixture::new_with_explicit_parameters();
+    let finality = SumeragiCommitVerifierV1::new(&fixture.verifier()).unwrap();
+    let cert = native::engine::test_artifact_certificate(&scheme.scheme_id());
+    let (manifest, _) = native::AuthenticatedParameters::prepare_manifest_for_signing(
+        &bundle,
+        &scheme,
+        &[&cert.body[..], &cert.signature].concat(),
+        finality,
+    )
+    .unwrap();
+    let signature = native::engine::test_sign_manifest(&manifest);
+    native::device_fixture::install(&bundle, &manifest, signature).unwrap();
+
+    std::fs::create_dir(&output).unwrap();
+    for (name, bytes) in [
+        ("program-bundle.norito", bundle.as_slice()),
+        ("parameter-signature.bin", signature.as_slice()),
+        ("parameter-manifest.norito", manifest.as_slice()),
+    ] {
+        let mut file = std::fs::File::create_new(output.join(name)).unwrap();
+        file.write_all(bytes).unwrap();
+    }
+}
