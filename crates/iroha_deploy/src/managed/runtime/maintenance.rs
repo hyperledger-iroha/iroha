@@ -399,31 +399,19 @@ pub(super) fn refresh(
         .providers
         .each_ref()
         .map(|provider| provider.selection.catalog);
-    let (promoted, currents, observed_at, observed_utc) = {
-        // All writer effects have returned. Keep only exact immutable checkpoint imports
-        // across the ordered catalog, enrollment and final launch material reads.
-        let renderer = live[0].maintenance_renderer();
-        let mut reads = renderer
-            .as_deref()
-            .map(|owner| owner.catalog_launch_reads());
-        let promoted = catalog::observe(prepared, &mut live, catalogs, budget, reads.as_mut())?;
-        budget.call(|_| promoted[slot].require_writer_receipt(written))?;
-        let floors = original
-            .providers
-            .each_ref()
-            .map(|provider| provider.selection.terminal);
-        let (currents, observed_at, observed_utc) =
-            observe_native_set(prepared, &live, floors, budget, reads.as_mut())?;
-        budget.progress.enter(Phase::GatewayValidation);
-        if !norito::core::decode_limits_active()
-            && let Some(reads) = reads.as_mut()
-        {
-            OwnedGateway::validate_shared_round(prepared, &live, budget, Some(reads))?;
-        } else {
-            validate_gateways(prepared, &mut live, budget)?;
-        }
-        (promoted, currents, observed_at, observed_utc)
-    };
+    let promoted = catalog::observe(prepared, &mut live, catalogs, budget)?;
+    // The old lease supplies every anchor, including the writer's. A durably committed
+    // catalog from a failed earlier turn is recoverable. Any effect just returned by this
+    // turn must also agree exactly with the independently authenticated serving head.
+    budget.call(|_| promoted[slot].require_writer_receipt(written))?;
+    let floors = original
+        .providers
+        .each_ref()
+        .map(|provider| provider.selection.terminal);
+    let (currents, observed_at, observed_utc) =
+        observe_native_set(prepared, &live, floors, budget)?;
+    budget.progress.enter(Phase::GatewayValidation);
+    validate_gateways(prepared, &mut live, budget)?;
     let read_plans = OwnedGateway::release_for_plan_read(live);
     budget.progress.enter(Phase::Selection);
     // The old aggregate remains current without interruption even after all fresh rows return.

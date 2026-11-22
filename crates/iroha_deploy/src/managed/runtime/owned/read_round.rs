@@ -22,13 +22,6 @@ impl OwnedGateway {
             .then_some(self.launch.owner.as_ref())
     }
 
-    /// This scoped owner is dropped before the refresh releases its original child handles.
-    pub(in crate::managed::runtime) fn maintenance_renderer(
-        &self,
-    ) -> Option<Arc<GeneratedServiceRuntime>> {
-        self.read_renderer().map(|_| Arc::clone(&self.launch.owner))
-    }
-
     fn shared_read_launch<'a>(
         live: &'a [Self; 3],
         imports: Option<&mut crate::managed::generated_service_runtime::CatalogLaunchReads<'_>>,
@@ -71,11 +64,10 @@ impl OwnedGateway {
 
     /// Project the three original enrollments for exactly the floor proved on all peers.
     /// No network call or caller code runs while the opaque revision is being projected.
-    pub(in crate::managed::runtime) fn read_enrollments<'a>(
-        live: &'a [Self; 3],
+    pub(in crate::managed::runtime) fn read_enrollments(
+        live: &[Self; 3],
         floors: [ManagedTransactionFinality; 3],
-        reads: Option<&mut CatalogLaunchReads<'_>>,
-    ) -> Result<[&'a RetainedCustodyEnrollment; 3]> {
+    ) -> Result<[&RetainedCustodyEnrollment; 3]> {
         if live[0].read_renderer().is_none() {
             return Ok([
                 live[0].selected_enrollment(floors[0])?,
@@ -83,7 +75,7 @@ impl OwnedGateway {
                 live[2].selected_enrollment(floors[2])?,
             ]);
         }
-        let launch = Self::shared_read_launch(live, reads)?;
+        let launch = Self::shared_read_launch(live, None)?;
         let current = launch.revision.observation_floor()?;
         if floors.iter().any(|floor| *floor != current) {
             return Err(invalid(
