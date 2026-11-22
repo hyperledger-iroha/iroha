@@ -2,7 +2,7 @@
 
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
-    queue::Queue,
+    queue::{Error as QueueError, Queue},
     state::{State, World},
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     tx::AcceptedTransaction,
@@ -84,18 +84,28 @@ fn expired_transactions_drain_without_panic() {
     // draining Arc-backed transactions with outstanding clones.
     let iterations = 32;
     for i in 0..iterations {
-        let tx = make_transaction(
-            &chain_id,
-            &authority,
-            &key_pair,
-            i,
-            Duration::from_millis(20),
-        );
-        let retained = tx.clone();
-        queue
-            .push(tx, state.view())
-            .expect("queue accepts new transaction");
-        thread::sleep(Duration::from_millis(30));
+        // Signed lifetime is measured from signed creation, so a slow or loaded host can begin
+        // admission after it has elapsed. The queue must then refuse the input as expired and
+        // retain nothing; the same nonce is re-signed with a doubled lifetime, below the queue's
+        // own one-second TTL, so every iteration still reaches the drain path.
+        let mut ttl = Duration::from_millis(20);
+        let retained = loop {
+            let tx = make_transaction(&chain_id, &authority, &key_pair, i, ttl);
+            let retained = tx.clone();
+            match queue.push(tx, state.view()) {
+                Ok(()) => break retained,
+                Err(failure)
+                    if matches!(failure.err, QueueError::Expired)
+                        && ttl < Duration::from_millis(640) =>
+                {
+                    assert!(queue.is_expired(&retained), "refused input is expired");
+                    assert_eq!(queue.queued_len(), 0, "expired admission retains nothing");
+                    ttl *= 2;
+                }
+                Err(failure) => panic!("queue accepts new transaction: {failure:?}"),
+            }
+        };
+        thread::sleep(ttl + Duration::from_millis(10));
         assert!(queue.is_expired(&retained), "original signed input expired");
         let view = state.view();
         let pending = queue
