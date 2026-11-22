@@ -402,13 +402,21 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
         let unmetered = !norito::core::decode_limits_active();
         if unmetered {
             let previous = history.lock().ok().and_then(|entry| entry.clone());
-            if previous.is_some_and(|source| source.covers(view, through)) {
+            let extended = previous
+                .as_ref()
+                .and_then(|source| source.extend(view, through));
+            if extended.is_some() || previous.is_some_and(|source| source.covers(view, through)) {
                 let hashes = view.block_hashes();
                 for target in &targets {
                     let at = usize::try_from(target.height - 1).map_err(|_| unavailable())?;
                     if hashes.get(at).map(|hash| *hash.as_ref()) != Some(target.block_hash) {
                         return Err(unavailable());
                     }
+                }
+                if let Some(source) = extended
+                    && let Ok(mut entry) = history.lock()
+                {
+                    *entry = Some(Arc::new(source));
                 }
                 return Ok(Self { view, targets });
             }
