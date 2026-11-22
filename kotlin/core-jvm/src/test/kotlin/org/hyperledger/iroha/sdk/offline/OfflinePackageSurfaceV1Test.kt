@@ -140,7 +140,11 @@ class OfflinePackageSurfaceV1Test {
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletRetainedPreparingHostNativeV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletSuffixUnloadHostNativeV1Test.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaWalletSuffixUnloadV1Test.kt",
-            // The Spartan wallet and its device probes (2026-11-14).
+            // Spartan account instructions, wallet confirmation and device probes.
+            "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KagemushaSpartanActivateInstructionV1.kt",
+            "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KagemushaSpartanUnloadInstructionV1.kt",
+            "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/KagemushaSpartanUnloadInstructionV1Test.kt",
+            "$WALLET/main/java/$WALLET_PACKAGE/KagemushaSpartanAndroidConfirmationV1.kt",
             "$WALLET/main/java/$WALLET_PACKAGE/KagemushaSpartanWalletV1.kt",
             "$WALLET/test/kotlin/$WALLET_PACKAGE/KagemushaSpartanWalletV1Test.kt",
             "$WALLET/androidTest/java/$WALLET_PACKAGE/KagemushaSpartanHardwareProbeTest.kt",
