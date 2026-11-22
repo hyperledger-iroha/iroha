@@ -732,6 +732,14 @@ impl From<CheckedAnonymousGovernanceCertificateErrorV1> for AnonymousParliamentE
                 Self::Certificate(error)
             }
             CheckedAnonymousGovernanceCertificateErrorV1::Codec(error) => error.into(),
+            CheckedAnonymousGovernanceCertificateErrorV1::ClosureUnavailable(original) => {
+                Self::Certificate(
+                    AnonymousBallotBindingErrorV1::Codec(
+                        AnonymousBallotCodecErrorV1::DecodeUnavailable(original),
+                    )
+                    .into(),
+                )
+            }
         }
     }
 }
