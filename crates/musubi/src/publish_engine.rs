@@ -556,10 +556,12 @@ impl<'a> PublicationEngine<'a> {
                     }
                 }
                 if readbacks.len() != 2 {
-                    if readbacks.len() + pending >= 2 {
-                        return Err(PublicationError::Backend(
-                            first_pending.expect("missing verified evidence is pending"),
-                        ));
+                    // An acknowledged job may still reach quorum alongside a temporarily
+                    // unavailable provider. A permanent refusal cannot fill the second seat.
+                    if let Some(error) = first_pending
+                        && (readbacks.len() + pending >= 2 || first_retryable_failure.is_some())
+                    {
+                        return Err(PublicationError::Backend(error));
                     }
                     if let Some(error) = first_permanent_failure.or(first_retryable_failure) {
                         return Err(PublicationError::Backend(error));

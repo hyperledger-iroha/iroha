@@ -17,7 +17,7 @@ struct CompleteBackend {
     finality_pending_once: bool,
     substitute_readback: bool,
     substitute_all_readbacks: bool,
-    readback_backend_failure: Option<(ProviderId, PublicationBackendError)>,
+    readback_backend_failures: Vec<(ProviderId, PublicationBackendError)>,
     readback_providers: Vec<ProviderId>,
     submissions: usize,
 }
@@ -300,8 +300,10 @@ impl PublicationBackend for CompleteBackend {
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
         self.readback_providers.push(provider);
-        if let Some((failed_provider, error)) = &self.readback_backend_failure
-            && *failed_provider == provider
+        if let Some((_, error)) = self
+            .readback_backend_failures
+            .iter()
+            .find(|(p, _)| *p == provider)
         {
             return Err(error.clone());
         }
