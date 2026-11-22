@@ -294,12 +294,6 @@ impl SumeragiFinalityVerifier {
         &self,
         tip: &SumeragiFinalityProof,
     ) -> Result<SumeragiFinalityCheckpoint, FinalityReadError> {
-        if !norito::core::decode_limits_active()
-            && let Some(witness) = self.export_witness.upgrade()
-            && std::ptr::eq(&witness.tip, tip)
-        {
-            return self.capture_verified_checkpoint(tip, &witness.verified);
-        }
         // Ordinary exporters discard the verified graph before checkpoint construction,
         // preserving their original ownership and peak-memory behavior.
         self.export_checkpoint_projected(tip, drop)
@@ -357,30 +351,21 @@ impl SumeragiFinalityVerifier {
                 .export_checkpoint_with_tip(tip)
                 .map_err(SumeragiCheckpointAdvanceError::Export);
         }
-        let checkpoint = self
-            .capture_verified_checkpoint(tip, &verified)
-            .map_err(SumeragiCheckpointAdvanceError::Export)?;
+        let checkpoint = (|| -> Result<_, FinalityReadError> {
+            need(
+                self.decisions.last_key_value().map(|(height, _)| *height) == Some(tip.height()),
+                "checkpoint must export the authenticated tip",
+            )?;
+            let expected = self
+                .decisions
+                .get(&tip.height())
+                .ok_or_else(|| FinalityError("decision is outside authenticated prefix".into()))?;
+            Self::require_retained_decision(&verified.0, expected)?;
+            let mut validation = EpochValidationScope::new();
+            self.capture_checkpoint(tip, Some(&mut validation))
+        })()
+        .map_err(SumeragiCheckpointAdvanceError::Export)?;
         Ok((checkpoint, verified))
-    }
-
-    // Only the original native producer can enter here. A witness from another
-    // verifier, another allocation or an active decoder takes the independent path.
-    fn capture_verified_checkpoint(
-        &self,
-        tip: &SumeragiFinalityProof,
-        verified: &VerifiedSumeragiBlock,
-    ) -> Result<SumeragiFinalityCheckpoint, FinalityReadError> {
-        need(
-            self.decisions.last_key_value().map(|(height, _)| *height) == Some(tip.height()),
-            "checkpoint must export the authenticated tip",
-        )?;
-        let expected = self
-            .decisions
-            .get(&tip.height())
-            .ok_or_else(|| FinalityError("decision is outside authenticated prefix".into()))?;
-        Self::require_retained_decision(&verified.0, expected)?;
-        let mut validation = EpochValidationScope::new();
-        self.capture_checkpoint(tip, Some(&mut validation))
     }
 
     // The only projections are the private wrappers above: discard or retain the exact

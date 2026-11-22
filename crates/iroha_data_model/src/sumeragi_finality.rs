@@ -1081,28 +1081,6 @@ fn authenticated_genesis_instance(
         .map_err(malformed)
 }
 
-/// One native proof and its own authenticated graph from the same verification.
-#[derive(Debug, Clone)]
-pub struct SumeragiCheckpointWitness {
-    tip: SumeragiFinalityProof,
-    verified: VerifiedSumeragiBlock,
-}
-
-impl SumeragiCheckpointWitness {
-    /// Exact immutable proof that produced this result.
-    pub fn proof(&self) -> &SumeragiFinalityProof {
-        &self.tip
-    }
-    /// Native decision authenticated from that original proof.
-    pub fn verified(&self) -> &VerifiedSumeragiBlock {
-        &self.verified
-    }
-    /// Move the native result out after the observer closes.
-    pub fn into_verified(self) -> VerifiedSumeragiBlock {
-        self.verified
-    }
-}
-
 /// Independent current-certificate verifier retaining only authenticated prefix decisions.
 #[derive(Debug, Clone)]
 pub struct SumeragiFinalityVerifier {
@@ -1114,7 +1092,6 @@ pub struct SumeragiFinalityVerifier {
     genesis_epoch: crate::sumeragi::epoch::ValidatorEpochContextV1,
     genesis_metadata: crate::parameter::system::ConsensusHandshakeMetadata,
     decisions: BTreeMap<u64, Decision>,
-    export_witness: std::sync::Weak<SumeragiCheckpointWitness>,
 }
 impl SumeragiFinalityVerifier {
     /// Begin with a caller-authenticated signed genesis and its independently selected roster.
@@ -1161,7 +1138,6 @@ impl SumeragiFinalityVerifier {
             instance,
             genesis_committee_digest: chain_hash(&committee_digest_preimage(&committee)).0,
             decisions: BTreeMap::new(),
-            export_witness: std::sync::Weak::new(),
         })
     }
     /// Exact chain label selected with this owner's authenticated signed genesis.
@@ -1278,30 +1254,6 @@ impl SumeragiFinalityVerifier {
         self.decisions.insert(next, Self::decision(&decoded));
         Ok(VerifiedSumeragiBlock(decoded, self.root_scope()))
     }
-    /// Verify the next original proof and retain its exact witness for checkpoint export.
-    /// The mutable prefix owns admission; an observer can only borrow the authenticated
-    /// proof and decision. Every independently supplied proof keeps full verification.
-    ///
-    /// # Errors
-    /// Returns the ordinary contiguous native verification refusal.
-    pub fn verify_checkpoint_witness(
-        &mut self,
-        proof: &SumeragiFinalityProof,
-    ) -> Result<std::sync::Arc<SumeragiCheckpointWitness>, FinalityReadError> {
-        let active = norito::core::decode_limits_active();
-        let verified = self.verify(proof)?;
-        let witness = std::sync::Arc::new(SumeragiCheckpointWitness {
-            tip: proof.clone(),
-            verified,
-        });
-        self.export_witness = if active {
-            std::sync::Weak::new()
-        } else {
-            std::sync::Arc::downgrade(&witness)
-        };
-        Ok(witness)
-    }
-
     /// Re-verify an alternate certificate witness for a decision already in this prefix.
     /// Equal inputs still undergo cryptographic verification and prefix-membership checks.
     ///

@@ -13,7 +13,8 @@ fn original_prefix(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Prefix, Fi
     let verified = native.verify_retained_decision(checkpoint.tip())?;
     Ok(Prefix {
         native,
-        selection: PrefixSelection::Independent(checkpoint.tip().clone(), verified),
+        tip: checkpoint.tip().clone(),
+        verified,
         start: checkpoint.height(),
     })
 }
@@ -21,19 +22,13 @@ fn original_prefix(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Prefix, Fi
 fn same_prefix(actual: &Prefix, expected: &Prefix) {
     assert_eq!(actual.start, expected.start);
     assert_eq!(actual.height(), expected.height());
-    assert_eq!(*actual.selection.tip(), *expected.selection.tip());
+    assert_eq!(actual.tip, expected.tip);
     assert_eq!(actual.members().unwrap(), expected.members().unwrap());
+    assert_eq!(actual.verified.commitment(), expected.verified.commitment());
+    assert_eq!(actual.verified.context_id(), expected.verified.context_id());
     assert_eq!(
-        actual.selection.verified().commitment(),
-        expected.selection.verified().commitment()
-    );
-    assert_eq!(
-        actual.selection.verified().context_id(),
-        expected.selection.verified().context_id()
-    );
-    assert_eq!(
-        actual.selection.verified().block().encode_wire().unwrap(),
-        expected.selection.verified().block().encode_wire().unwrap()
+        actual.verified.block().encode_wire().unwrap(),
+        expected.verified.block().encode_wire().unwrap()
     );
     assert_eq!(actual.checkpoint().unwrap(), expected.checkpoint().unwrap());
 }
@@ -52,8 +47,7 @@ fn prefix_import_preserves_native_tip_successor_and_member_witness_checks() {
         expected.push(chain.proof(height + 1)).unwrap();
         same_prefix(&actual, &expected);
         let epoch = actual
-            .selection
-            .verified()
+            .verified
             .commitment()
             .schedule
             .current
