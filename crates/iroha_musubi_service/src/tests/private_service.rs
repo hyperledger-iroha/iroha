@@ -2569,3 +2569,28 @@ fn only_typed_retryable_http_425_marks_an_original_operation_busy() {
             .is_operation_busy()
     );
 }
+
+#[test]
+fn only_an_exact_native_readback_wait_is_reported_as_readback_progress() {
+    use MusubiPublicationServiceBackendErrorV1 as Backend;
+    use MusubiPublicationServiceErrorCodeV1 as Code;
+    let remote = |code, backend| {
+        let r = service_backend_error(code, backend).into_response();
+        remote_transport_error(StatusCode::from_u16(r.status).unwrap(), &r.body)
+    };
+    assert!(
+        remote(Code::ProviderReadbackUnavailable, Backend::ReadbackPending).is_operation_busy()
+    );
+    for (code, failure) in [
+        (Code::ProviderReadbackUnavailable, Backend::Retryable),
+        (Code::ProviderReadbackUnavailable, Backend::Permanent),
+        (Code::ProviderReadbackUnavailable, Backend::StoragePending),
+        (
+            Code::StorageCoordinationUnavailable,
+            Backend::ReadbackPending,
+        ),
+        (Code::SeedIngressUnavailable, Backend::ReadbackPending),
+    ] {
+        assert!(!remote(code, failure).is_operation_busy());
+    }
+}

@@ -52,6 +52,7 @@ trait AuthenticatedReadbackSourceV1: Send {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
+        paid_operation_id: [u8; 32],
     ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1>;
     fn take_stream_failure(&mut self) -> Option<MusubiArchiveRuntimeErrorV1>;
 }
@@ -78,13 +79,15 @@ impl AuthenticatedReadbackSourceV1 for AuthenticatedMusubiArchiveFetchClientV1 {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
+        paid_operation_id: [u8; 32],
     ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
-        AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car(
+        AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car_for_readback(
             self,
             pin_manifest,
             provider,
             commitment,
             plan,
+            paid_operation_id,
         )
     }
     fn take_stream_failure(&mut self) -> Option<MusubiArchiveRuntimeErrorV1> {
@@ -327,6 +330,7 @@ fn read_complete_car<S: AuthenticatedReadbackSourceV1>(
             request.provider,
             &request.commitment,
             plan,
+            request.operation_id,
         )
         .map_err(backend_error)?;
     if reader.read_exact(&mut car).is_err() {
@@ -379,6 +383,9 @@ fn verify_complete_readback(
 }
 
 fn backend_error(error: MusubiArchiveRuntimeErrorV1) -> MusubiPublicationServiceBackendErrorV1 {
+    if error.is_account_token_pending() {
+        return MusubiPublicationServiceBackendErrorV1::ReadbackPending;
+    }
     match error.class() {
         MusubiArchiveRuntimeFailureClassV1::Retryable
         | MusubiArchiveRuntimeFailureClassV1::Unavailable => {
@@ -440,11 +447,13 @@ mod tests {
             provider: ProviderId,
             commitment: &MusubiArchiveCommitmentV1,
             plan: &CarBuildPlan,
+            paid_operation_id: [u8; 32],
         ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
             assert_eq!(*pin_manifest, self.expected_manifest);
             assert_eq!(provider, self.expected_provider);
             assert_eq!(*commitment, self.expected_commitment);
             assert_eq!(*plan, self.plan);
+            assert_eq!(paid_operation_id, [0x41; 32]);
             self.car_calls += 1;
             Ok(Box::new(Cursor::new(self.car.clone())))
         }

@@ -778,7 +778,7 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             .coordinate_storage(&self.storage_coordinator_url, &coordination_request)
             .map_err(|error| {
                 if error.is_operation_busy() {
-                    PublicationBackendError::pending_storage()
+                    PublicationBackendError::pending_native_operation()
                 } else {
                     map_transport_error(error)
                 }
@@ -1702,7 +1702,13 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         let response = self
             .http
             .readback_provider(&gateway.readback, &readback_request)
-            .map_err(map_transport_error)?;
+            .map_err(|error| {
+                if error.is_operation_busy() {
+                    PublicationBackendError::pending_native_operation()
+                } else {
+                    map_transport_error(error)
+                }
+            })?;
         Ok(PublicationReadbackEvidenceV1 {
             provider: response.provider,
             location_id: response.location_id,

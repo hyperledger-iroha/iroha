@@ -175,8 +175,16 @@ impl SignerDriverV1 {
         }
         // Reobserve local finality after evidence authentication and while serializing publication
         // against concurrent successful observations. No runtime client I/O occurs under this lock.
-        self.finality.validate_floors(
-            [floor.minimum, history.anchor],
+        self.finality.validate(
+            floor.minimum,
+            candidate,
+            floor.finality,
+            historical,
+            observation,
+            completed,
+        )?;
+        self.finality.validate(
+            history.anchor,
             candidate,
             floor.finality,
             historical,

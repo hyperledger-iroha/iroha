@@ -1620,6 +1620,8 @@ fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
 pub enum MusubiPublicationServiceBackendErrorV1 {
     /// An admitted storage operation awaits an independently observed native receipt.
     StoragePending,
+    /// An authenticated provider acknowledged the exact paid readback and is issuing its token.
+    ReadbackPending,
     /// A newly authorized identical request may succeed later.
     Retryable,
     /// Deployment configuration or immutable backend state must change.
@@ -1628,6 +1630,7 @@ pub enum MusubiPublicationServiceBackendErrorV1 {
 impl fmt::Display for MusubiPublicationServiceBackendErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ReadbackPending => "Musubi provider readback awaits its original account token",
             Self::StoragePending => "Musubi storage operation is awaiting a native receipt",
             Self::Retryable => "Musubi publication backend is temporarily unavailable",
             Self::Permanent => "Musubi publication backend requires configuration or state changes",
@@ -3554,7 +3557,15 @@ fn service_backend_error(
                 MusubiPublicationServiceErrorCodeV1::OperationBusy,
             )
         }
-        MusubiPublicationServiceBackendErrorV1::StoragePending
+        MusubiPublicationServiceBackendErrorV1::ReadbackPending
+            if code == MusubiPublicationServiceErrorCodeV1::ProviderReadbackUnavailable =>
+        {
+            MusubiPublicationServiceErrorV1::retryable(
+                MusubiPublicationServiceErrorCodeV1::OperationBusy,
+            )
+        }
+        MusubiPublicationServiceBackendErrorV1::ReadbackPending
+        | MusubiPublicationServiceBackendErrorV1::StoragePending
         | MusubiPublicationServiceBackendErrorV1::Retryable => {
             MusubiPublicationServiceErrorV1::retryable(code)
         }

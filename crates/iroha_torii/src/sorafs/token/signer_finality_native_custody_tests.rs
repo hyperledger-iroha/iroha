@@ -698,24 +698,3 @@ fn startup_custody_descendant_still_requires_current_provider_registration() {
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)
     ));
 }
-
-#[test]
-fn native_acceptance_proves_requested_and_serialized_floors_on_one_cut() {
-    let fixture = NativeCustodyFixture::new();
-    let guard = fixture.guard();
-    let tip = fixture.current.anchor;
-    let signed = fixture.verified_observation_at(tip);
-    let floor = guard.capture(fixture.approval).unwrap();
-    let historical = [HistoricalFinalityV1::Custody(fixture.approval)];
-    let check = |minima| guard.validate_floors(minima, tip, floor, &historical, &signed, None);
-    check([fixture.approval, tip]).unwrap();
-    check([tip, tip]).unwrap();
-    let mut forged = tip;
-    forged.state_digest[0] ^= 1;
-    assert!(check([fixture.approval, forged]).is_err());
-    assert!(check([forged, tip]).is_err());
-    fixture
-        .chain
-        .corrupt_local_quorum_for_test(tip.height, Signers::BelowQuorum);
-    assert!(check([fixture.approval, tip]).is_err());
-}

@@ -2352,31 +2352,31 @@ fn poll_publication(
     loop {
         let result = advance();
         let left = remaining();
-        let pending_storage = match &result {
+        let pending_native_operation = match &result {
             Ok(PublicationAdvanceV1::Progressed(_)) if !left.is_zero() => continue,
             Ok(PublicationAdvanceV1::Pending(_)) => false,
             Err(PublicationError::Backend(error))
                 if error.class() == PublicationBackendFailureClass::Retryable =>
             {
-                error.is_pending_storage()
+                error.is_pending_native_operation()
             }
             _ => return result,
         };
-        if pending_storage {
+        if pending_native_operation {
             delay = policy.initial_delay;
         }
         if attempt < policy.max_attempts && delay < left {
             sleep(delay);
             if !remaining().is_zero() {
                 attempt += 1;
-                if !pending_storage {
+                if !pending_native_operation {
                     delay = delay.saturating_mul(2).min(policy.max_delay);
                 }
                 continue;
             }
         }
-        // Only the authenticated storage wait may use the validated journal to report progress.
-        return if pending_storage {
+        // Only an authenticated native operation wait may use the validated journal to report progress.
+        return if pending_native_operation {
             journal_phase().map(PublicationAdvanceV1::Pending)
         } else {
             result
@@ -4982,7 +4982,7 @@ private_key = "{}"
                     ))
                 } else {
                     Err(PublicationError::Backend(
-                        PublicationBackendError::pending_storage(),
+                        PublicationBackendError::pending_native_operation(),
                     ))
                 }
             },
@@ -5046,7 +5046,7 @@ private_key = "{}"
     fn elapsed_poll_backoff_preserves_the_original_response() {
         let policy = PublicationPollPolicyV1::default();
         for (error, authenticated) in [
-            (PublicationBackendError::pending_storage(), true),
+            (PublicationBackendError::pending_native_operation(), true),
             (
                 PublicationBackendError::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY"),
                 false,

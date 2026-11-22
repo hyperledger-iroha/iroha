@@ -2387,3 +2387,52 @@ fn detached_operation_ids_are_canonical_nonzero_lowercase_hex() {
             .is_err()
     );
 }
+
+#[test]
+fn acknowledged_readback_and_independent_success_resume_without_opening_a_third_paid_provider() {
+    let temp = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+    let engine = PublicationEngine::new(&store);
+    let (request, broker) = request();
+    let operation_id = request.operation_id();
+    let source = BytesSource(b"canonical-car".to_vec());
+    let mut backend = CompleteBackend {
+        broker,
+        replication_pending_once: false,
+        finality_pending_once: false,
+        substitute_readback: false,
+        substitute_all_readbacks: false,
+        readback_backend_failure: Some((
+            ProviderId::new([1; 32]),
+            PublicationBackendError::pending_native_operation(),
+        )),
+        readback_providers: Vec::new(),
+        submissions: 0,
+    };
+    let result = engine.publish(request, &source, &mut backend);
+    assert!(
+        matches!(result, Err(PublicationError::Backend(error)) if error.is_pending_native_operation())
+    );
+    let first = ProviderId::new([1; 32]);
+    let second = ProviderId::new([2; 32]);
+    assert_eq!(backend.readback_providers, [first, second]);
+    let pending = store.load(operation_id).unwrap();
+    assert_eq!(pending.phase, PublicationPhaseV1::Readback);
+    assert!(pending.readbacks.is_empty());
+    backend.readback_backend_failure = None;
+    assert!(matches!(
+        engine.resume(operation_id, &source, &mut backend).unwrap(),
+        PublicationAdvanceV1::Complete(_)
+    ));
+    assert_eq!(backend.readback_providers, [first, second, first, second]);
+    let completed = store.load(operation_id).unwrap();
+    assert_eq!(
+        completed
+            .readbacks
+            .iter()
+            .map(|row| row.provider)
+            .collect::<Vec<_>>(),
+        [first, second]
+    );
+    completed.validate().unwrap();
+}
