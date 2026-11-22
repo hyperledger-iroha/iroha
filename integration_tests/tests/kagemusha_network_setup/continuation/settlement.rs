@@ -2,6 +2,7 @@
 use super::*;
 use iroha_data_model::{
     ValidationFail,
+    block::execution_output::TransactionResultRef,
     isi::error::{AssetTransferAdmissionError, InstructionExecutionError},
     transaction::{TransactionResult, error::TransactionRejectionReason},
 };
@@ -35,14 +36,16 @@ pub(super) fn state_rejection(
 }
 
 fn claim_failure<'a>(
-    result: &'a TransactionResult,
+    result: impl Into<TransactionResultRef<'a>>,
     expected: &TransactionRejectionReason,
 ) -> Result<&'a TransactionRejectionReason> {
     let reason = result
-        .0
+        .into()
         .as_ref()
         .err()
-        .ok_or_else(|| eyre!("invalid claim applied"))?;
+        .ok_or_else(|| eyre!("invalid claim applied"))?
+        .baseline()
+        .ok_or_else(|| eyre!("expected the certified baseline settlement rejection"))?;
     ensure!(
         matches!(
             reason,
@@ -698,6 +701,21 @@ fn claim_failure_requires_typed_instruction_invariant_and_retains_exact_reason()
         reason
     );
     assert!(claim_failure(&TransactionResult::new(Ok(Vec::new())), &reason).is_err());
+    let c10 = iroha_data_model::ivm_c10::TransactionResultC10V1(
+        Err(
+            iroha_data_model::ivm_c10::TransactionRejectionReasonC10V1::Validation(
+                iroha_data_model::ivm_c10::ValidationFailC10V1::InstructionFailed(
+                    InstructionExecutionError::InvariantViolation(
+                        "exact invalid-claim detail".into(),
+                    ),
+                ),
+            ),
+        ),
+        Vec::new(),
+        None,
+        Default::default(),
+    );
+    assert!(claim_failure(TransactionResultRef::C10(&c10), &reason).is_err());
     for unrelated in [
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "fee rejection".into(),
