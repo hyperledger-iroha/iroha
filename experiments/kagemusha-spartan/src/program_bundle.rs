@@ -206,4 +206,4 @@ fn inspect_side<F: Scalar>(
 
 #[cfg(test)]
 #[path = "program_bundle_tests.rs"]
-mod tests;
+pub(super) mod tests;

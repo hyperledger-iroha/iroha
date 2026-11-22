@@ -1,6 +1,8 @@
 //! Offline comparison with the generation compiler's independently retained public pins.
 use super::*;
-use zk_spartan::native::{MAX_PROGRAM_BUNDLE_BYTES, ProgramBundleGeometry, ProgramBundleV2};
+use zk_spartan::native::{
+    MAX_PROGRAM_BUNDLE_BYTES, ProgramBundleGeometry, ProgramBundleV2, ProgramProfileV2,
+};
 
 const PROFILE_MAX: usize = 4096;
 
@@ -32,7 +34,7 @@ fn pins(words: &[String]) -> io::Result<[[u8; 32]; 5]> {
     Ok(pins)
 }
 
-pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
+pub(super) fn read_profile(profile: &str) -> io::Result<(Original, ProgramProfileV2)> {
     let profile = Original::open(profile, PROFILE_MAX, None)?;
     let input: PublicProfile = checked(
         json::from_slice(&profile.bytes),
@@ -44,10 +46,26 @@ pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
     let primary = pins(&input.primary)?;
     let secondary = pins(&input.secondary)?;
     let dimensions = [input.primary_dimensions, input.secondary_dimensions].map(|d| [d.x, d.y]);
+    Ok((
+        profile,
+        ProgramProfileV2 {
+            primary,
+            secondary,
+            dimensions,
+        },
+    ))
+}
+
+pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
+    let (profile, compiler) = read_profile(profile)?;
     let bundle = Original::open(bundle, MAX_PROGRAM_BUNDLE_BYTES, None)?;
-    let geometry =
-        ProgramBundleV2::inspect_originals(&bundle.bytes, &primary, &secondary, dimensions)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let geometry = ProgramBundleV2::inspect_originals(
+        &bundle.bytes,
+        &compiler.primary,
+        &compiler.secondary,
+        compiler.dimensions,
+    )
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     profile.recheck()?;
     bundle.recheck()?;
     println!(

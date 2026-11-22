@@ -733,7 +733,7 @@ impl ParameterSet {
     }
 }
 
-fn manifest_signing_message(bytes: &[u8]) -> Fp {
+pub(super) fn manifest_signing_message(bytes: &[u8]) -> Fp {
     crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), bytes)
 }
 
@@ -775,7 +775,7 @@ pub(super) fn authenticate_manifest(
     Ok((manifest, m.to_repr()))
 }
 
-fn verify_signature(q: &p256::Point, m: Fp, sig: &[u8; 64]) -> Result<()> {
+pub(super) fn verify_signature(q: &p256::Point, m: Fp, sig: &[u8; 64]) -> Result<()> {
     let r = BigUint::from_bytes_be(&sig[..32]);
     let s = BigUint::from_bytes_be(&sig[32..]);
     if q.x >= p256::p() || q.y >= p256::p() || !p256::on_curve(q) || s > p256::n() >> 1 {

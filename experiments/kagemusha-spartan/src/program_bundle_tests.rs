@@ -65,7 +65,7 @@ fn successor_bundle_enforces_complete_frame_ceiling_and_stricter_caller_budget()
 
 /// Small real compiled public tapes, with the exact two late slot sequences.
 /// Each kind pins a different fixture value. These describe no monetary action.
-fn original<F: Scalar>(
+pub(in crate::native) fn original<F: Scalar>(
     primary: bool,
     kind: usize,
     coordinates: usize,

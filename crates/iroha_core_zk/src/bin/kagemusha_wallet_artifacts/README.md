@@ -143,3 +143,30 @@ The command imports all ten tapes, compares their program digests and recursive
 layouts and prints the complete bundle size and geometry on each curve. Its
 output describes the unsigned compiler inputs. The issuer separately selects
 and authenticates the wallet generation.
+
+### Prepare and verify a five-kind parameter manifest
+
+Use the same program bundle and independent compiler profile as the inspection
+command. The release scope JSON has six fields.
+
+| Field | Value |
+| --- | --- |
+| `schema` | `iroha.kagemusha.spartan.manifest-scope.v5` |
+| `scheme_original`, `signed_genesis` | Absolute paths to the selected canonical public scheme and signed genesis originals. |
+| `scheme_id_hex` | The independently selected 32-byte scheme identity in lowercase hexadecimal. |
+| `genesis_public_key`, `chain_id` | The selected Ed25519 genesis authority and ledger chain identifier. |
+
+```sh
+kagemusha_wallet_artifacts --prepare-spartan-v2-manifest "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE" "$SCOPE" "$ARTIFACT_CERTIFICATE"
+kagemusha_wallet_artifacts --verify-spartan-v2-manifest "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE" "$SCOPE" "$PARAMETER_MANIFEST" "$ARTIFACT_SIGNATURE" "$MANIFEST_DIGEST_HEX"
+```
+
+Preparation authenticates the genesis and the Artifact certificate, checks the
+ten compiler outputs and prints the unsigned manifest and exact 32-byte signing
+message in hexadecimal. The certificate file contains the 172-byte Spartan
+certificate transcript. The independent Artifact signer uses ECDSA P-256 with
+SHA-256 and returns the canonical low-S 64-byte signature. Verification takes
+the raw manifest and signature files and the independently selected manifest
+digest. It authenticates the signature, reconstructs the generator and wallet
+table profile from the public tapes and compares the canonical manifest bytes.
+Both commands operate offline.

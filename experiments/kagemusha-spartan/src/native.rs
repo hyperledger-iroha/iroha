@@ -128,6 +128,9 @@ pub struct ProgramBundle {
 #[path = "program_bundle.rs"]
 mod program_bundle;
 pub use program_bundle::{ProgramBundleGeometry, ProgramBundleV2};
+#[path = "successor_manifest.rs"]
+mod successor_manifest;
+pub use successor_manifest::ProgramProfileV2;
 
 #[derive(Debug)]
 pub enum Error {
