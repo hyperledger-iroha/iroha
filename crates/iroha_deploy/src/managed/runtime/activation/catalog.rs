@@ -58,6 +58,7 @@ pub(in crate::managed::runtime) fn observe(
     live: &mut [OwnedGateway; 3],
     expected: [PromotedGeneratedCatalog; 3],
     budget: &Budget,
+    mut reads: Option<&mut CatalogLaunchReads<'_>>,
 ) -> std::result::Result<[PromotedGeneratedCatalog; 3], Failure> {
     budget.check()?;
     let Some(renderer) = live[0].read_renderer() else {
@@ -69,14 +70,13 @@ pub(in crate::managed::runtime) fn observe(
         |gateway| budget.call(|_| renderer.open_catalog_reader(prepared, gateway.provider())),
         || budget.progress.unconfirmed(),
     )?;
-    let mut reads = renderer.catalog_launch_reads();
     budget.call(|deadline| {
         ManagedGatewayCompliance::recover_promoted_set(&owners, expected, deadline, |plans| {
             budget
                 .check()
                 .map_err(|f| crate::managed::Error::Invalid(f.message()))?;
             let result =
-                OwnedGateway::validate_catalog_read(prepared, live, plans, Some(&mut reads));
+                OwnedGateway::validate_catalog_read(prepared, live, plans, reads.as_deref_mut());
             budget
                 .check()
                 .map_err(|f| crate::managed::Error::Invalid(f.message()))?;

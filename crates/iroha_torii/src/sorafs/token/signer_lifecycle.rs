@@ -298,22 +298,6 @@ impl SignerDriverV1 {
         &self,
         body: StreamTokenBodyV1,
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
-        self.complete(body, false)
-    }
-
-    /// Reopen only the existing exact signer receipt after a cancelled account delivery.
-    pub(super) fn recover_undelivered(
-        &self,
-        body: StreamTokenBodyV1,
-    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
-        self.complete(body, true)
-    }
-
-    fn complete(
-        &self,
-        body: StreamTokenBodyV1,
-        recover_only: bool,
-    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
         let prepared = SignerStreamTokenExpectedV1::new(&body, self.pins.binding())
             .map_err(|_| evidence_error())?;
         // Production cannot make a signer reservation while the completed-operation proof
@@ -323,21 +307,15 @@ impl SignerDriverV1 {
         self.check_handles()?;
         // The exact body and prepared operation survive an ambiguous result. Recovery is one
         // read-only lookup, never a second reservation, signature or HTTP issuance.
-        let raw_receipt = if recover_only {
-            self.client
-                .recover(&prepared, &body)
-                .map_err(map_call_error)?
-        } else {
-            match self.client.sign(&prepared, &body) {
-                Ok(receipt) => receipt,
-                Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion) => {
-                    self.check_handles()?;
-                    self.client
-                        .recover(&prepared, &body)
-                        .map_err(map_call_error)?
-                }
-                Err(error) => return Err(map_call_error(error)),
+        let raw_receipt = match self.client.sign(&prepared, &body) {
+            Ok(receipt) => receipt,
+            Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion) => {
+                self.check_handles()?;
+                self.client
+                    .recover(&prepared, &body)
+                    .map_err(map_call_error)?
             }
+            Err(error) => return Err(map_call_error(error)),
         };
         self.check_handles()?;
         let claims = ReceiptClaims(

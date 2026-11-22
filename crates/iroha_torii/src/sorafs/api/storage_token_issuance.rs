@@ -235,34 +235,14 @@ async fn issue_storage_token(
                     )
                 })
                 .transpose()?;
-            let delivery = policy
-                .as_ref()
-                .filter(|_| !norito::core::decode_limits_active())
-                .map(|policy| {
-                    super::token::delivery::AccountDelivery::new(
-                        quota_subject,
-                        req.manifest_id_hex,
-                        manifest_cid.clone(),
-                        provider_id,
-                        profile_handle.clone(),
-                        overrides,
-                        policy.clone(),
-                    )
-                });
-            let recovered = delivery
-                .as_ref()
-                .and_then(|request| worker_issuer.take_undelivered(request));
-            let issuance_result = match recovered {
-                Some(previous) => worker_issuer.recover_undelivered(previous),
-                None => worker_issuer.issue_token(
-                    quota_subject,
-                    manifest_cid,
-                    provider_id,
-                    profile_handle,
-                    overrides,
-                    policy.as_ref(),
-                ),
-            };
+            let issuance_result = worker_issuer.issue_token(
+                quota_subject,
+                manifest_cid,
+                provider_id,
+                profile_handle,
+                overrides,
+                policy.as_ref(),
+            );
             // Issuance can await external custody. Do not release a token after an intervening
             // finalized policy withdrawal, account deletion, expiry, or replacement.
             if let Some(account) = &account
@@ -277,9 +257,7 @@ async fn issue_storage_token(
                     "account-read policy changed during token issuance",
                 ));
             }
-            Ok(issuance_result.map(|issue| {
-                super::token::delivery::WorkerDelivery::new(worker_issuer, delivery, issue)
-            }))
+            Ok(issuance_result)
         })
         .await
         {
@@ -287,7 +265,7 @@ async fn issue_storage_token(
             Err(response) => return response,
         };
     let token_issue = match issuance_result {
-        Ok(token) => token.receive(),
+        Ok(token) => token,
         Err(err) => {
             return match &err {
                 StreamTokenIssuerError::IssuanceQuotaExceeded {
