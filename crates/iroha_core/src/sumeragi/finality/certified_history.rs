@@ -23,7 +23,7 @@ impl CertifiedHistorySource {
     /// Enable source capture before the original certified walk starts.
     pub fn track<V: StateReadOnly>(reader: &mut CertifiedChain<'_, V>, through: u64) {
         if (2..=Self::MAX_HEIGHT).contains(&through) && !norito::core::decode_limits_active() {
-            reader.enable_proof_source_cut();
+            reader.enable_signer_source_cut();
         }
     }
 
@@ -66,17 +66,19 @@ impl CertifiedHistorySource {
     /// Authenticate newly appended blocks with the ordinary native reader. Join their exact
     /// certificate bytes to the previously certified prefix, then compare the complete result
     /// against one fresh journal image before returning evidence for the new height.
-    pub fn extend(&self, view: &impl StateReadOnly, through: u64) -> Option<Self> {
+    pub fn extend(&self, view: &impl StateReadOnly, first: u64, through: u64) -> Option<Self> {
         if norito::core::decode_limits_active()
             || through <= self.height
             || through > Self::MAX_HEIGHT
-            || view.network_id() != &self.network
-            || view.chain_id() != &self.chain
-            || header_digest(view, self.height) != Some(self.headers)
+            || first > self.height + 1
+            || !self.covers(view, self.height)
         {
             return None;
         }
         let reader = CertifiedChain::new(view).ok()?;
+        if !reader.shared_history_is_current(first, self.height) {
+            return None;
+        }
         let mut wire = self.wire;
         // Start at the immediate successor. Any native shared predecessor of this first
         // certificate lies within the prefix authenticated by the final source comparison.
@@ -150,15 +152,15 @@ mod tests {
         chain.commit_at(4_000, Vec::new());
         chain.commit_at(5_000, Vec::new());
         let view = chain.state().view();
-        let extended = source.extend(&view, 5).unwrap();
+        let extended = source.extend(&view, 1, 5).unwrap();
         assert!(extended.covers(&view, 5));
-        assert!(source.extend(&view, 6).is_none());
+        assert!(source.extend(&view, 1, 6).is_none());
         norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(1024, 1024, 1024, 0, 8))
-            .with(|| assert!(source.extend(&view, 5).is_none()));
+            .with(|| assert!(source.extend(&view, 1, 5).is_none()));
         drop(view);
         chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
         assert!(!source.covers(&chain.state().view(), 3));
         assert!(!extended.covers(&chain.state().view(), 5));
-        assert!(source.extend(&chain.state().view(), 5).is_none());
+        assert!(source.extend(&chain.state().view(), 1, 5).is_none());
     }
 }

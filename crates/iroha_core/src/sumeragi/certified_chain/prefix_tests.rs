@@ -109,6 +109,46 @@ fn a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds() {
 }
 
 #[test]
+fn signer_source_capture_preserves_the_next_readers_decoder_budget() {
+    use crate::sumeragi::finality::CertifiedHistorySource;
+
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 24_000)).unwrap();
+    for height in 2..=5 {
+        chain.commit_at(24_000 + height * 1_000, Vec::new());
+    }
+    let view = chain.state().view();
+    SHARE_PREFIXES_IN_TEST.set(true);
+    let warm_and_measure = |track_source| {
+        let mut reader = CertifiedChain::new(&view).unwrap();
+        SHARED_PREFIXES.lock().unwrap().retain(|cursor| {
+            cursor.instance != reader.instance || cursor.root_scope != reader.root_scope
+        });
+        if track_source {
+            CertifiedHistorySource::track(&mut reader, 5);
+        }
+        for block in reader.walk(2, 5) {
+            block.unwrap();
+        }
+        if track_source {
+            assert!(CertifiedHistorySource::from_verified(&reader, 5).is_some());
+        }
+        let reader = CertifiedChain::new(&view).unwrap();
+        assert!(reader.shared_history_is_current(2, 5));
+        let limits = norito::DecodeLimits::new(1 << 20, 1 << 20, 1 << 20, 1 << 20, 128);
+        let result =
+            norito::core::with_decode_limits_measured(limits, || reader.certified(5).is_ok());
+        reader.certified(2).unwrap();
+        assert!(!reader.shared_history_is_current(2, 5));
+        result
+    };
+    let ordinary = warm_and_measure(false);
+    let captured = warm_and_measure(true);
+    SHARE_PREFIXES_IN_TEST.set(false);
+    assert!(ordinary.0);
+    assert_eq!(ordinary, captured);
+}
+
+#[test]
 fn staged_certificate_prefix_preserves_reset_target_first_order_and_original_receipts() {
     let (chain, _) = chain();
     let view = chain.state().view();

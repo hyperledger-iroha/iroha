@@ -399,20 +399,25 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
         if through > u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())? {
             return Err(unavailable());
         }
-        let unmetered = !norito::core::decode_limits_active();
-        if unmetered {
+        let mut reader = CertifiedChain::new(view).map_err(|_| unavailable())?;
+        // A mismatching target must stop the ordinary walk at its own height. In particular,
+        // an attempted extension must not publish shared cursors beyond that refusal.
+        let track_history = !norito::core::decode_limits_active()
+            && targets.iter().all(|target| {
+                usize::try_from(target.height - 1)
+                    .ok()
+                    .and_then(|at| view.block_hashes().get(at).copied())
+                    .is_some_and(|hash| *hash.as_ref() == target.block_hash)
+            });
+        if track_history {
             let previous = history.lock().ok().and_then(|entry| entry.clone());
             let extended = previous
                 .as_ref()
-                .and_then(|source| source.extend(view, through));
-            if extended.is_some() || previous.is_some_and(|source| source.covers(view, through)) {
-                let hashes = view.block_hashes();
-                for target in &targets {
-                    let at = usize::try_from(target.height - 1).map_err(|_| unavailable())?;
-                    if hashes.get(at).map(|hash| *hash.as_ref()) != Some(target.block_hash) {
-                        return Err(unavailable());
-                    }
-                }
+                .and_then(|source| source.extend(view, first, through));
+            if extended.is_some()
+                || (reader.shared_history_is_current(first, through)
+                    && previous.is_some_and(|source| source.covers(view, through)))
+            {
                 if let Some(source) = extended
                     && let Ok(mut entry) = history.lock()
                 {
@@ -420,9 +425,8 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
                 }
                 return Ok(Self { view, targets });
             }
+            CertifiedHistorySource::track(&mut reader, through);
         }
-        let mut reader = CertifiedChain::new(view).map_err(|_| unavailable())?;
-        CertifiedHistorySource::track(&mut reader, through);
         let mut matched = 0;
         for block in reader.walk(first, through) {
             let block = block.map_err(|_| unavailable())?;
@@ -442,7 +446,7 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
         if matched != targets.len() {
             return Err(unavailable());
         }
-        if unmetered
+        if track_history
             && let Some(source) = CertifiedHistorySource::from_verified(&reader, through)
             && let Ok(mut entry) = history.lock()
         {
