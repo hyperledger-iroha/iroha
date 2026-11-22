@@ -623,6 +623,10 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         temporary: &tempfile::TempDir,
         peers: &mut UnavailablePeers,
     ) {
+        // Every offline recovery here repeats one local graph and dependency census over the
+        // 29 retained originals. It contacts no peer and signs nothing, so its local deadline
+        // only guards against a hang; the original signing deadline is separate and unchanged.
+        const OFFLINE_RECOVERY_GUARD: Duration = Duration::from_secs(120);
         let policies = &original.policies;
         for _ in 0..2 {
             let mut owner = ManagedServiceBootstrap::open(prepared).unwrap();
@@ -630,7 +634,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             // signing deadline; a loaded host spends seconds in each.
             let fresh = original
                 .fees
-                .options(Instant::now() + Duration::from_secs(120));
+                .options(Instant::now() + OFFLINE_RECOVERY_GUARD);
             let recovery_started = Instant::now();
             assert_eq!(finalities(owner.recover(fresh.deadline).unwrap()), expected);
             eprintln!(
@@ -754,19 +758,31 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             .write_atomic("carrier.nrt", &foreign_carrier, PublishMode::Replace)
             .unwrap();
         let mut owner = ManagedServiceBootstrap::open(prepared).unwrap();
+        // Recovery refuses each substituted carrier with its own original cause. Any other
+        // error, including an expired hang guard, cannot stand in for that refusal.
+        let foreign = owner.recover(Instant::now() + OFFLINE_RECOVERY_GUARD);
         assert!(
-            owner
-                .recover(Instant::now() + Duration::from_secs(30))
-                .is_err()
+            matches!(
+                &foreign,
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "original native operation transaction absent from certified carrier"
+            ),
+            "certified foreign carrier refusal: {:?}",
+            foreign.as_ref().err()
         );
         assert!(peers.requests.lock().unwrap().is_empty());
         reputation
             .write_atomic("carrier.nrt", &[0xA5], PublishMode::Replace)
             .unwrap();
+        let malformed = owner.recover(Instant::now() + OFFLINE_RECOVERY_GUARD);
         assert!(
-            owner
-                .recover(Instant::now() + Duration::from_secs(30))
-                .is_err()
+            matches!(
+                &malformed,
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "invalid retained native operation checkpoint"
+            ),
+            "malformed carrier refusal: {:?}",
+            malformed.as_ref().err()
         );
         assert!(peers.requests.lock().unwrap().is_empty());
         reputation
@@ -775,7 +791,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         assert_eq!(
             finalities(
                 owner
-                    .recover(Instant::now() + Duration::from_secs(30))
+                    .recover(Instant::now() + OFFLINE_RECOVERY_GUARD)
                     .unwrap()
             ),
             expected
@@ -836,7 +852,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         assert_eq!(
             finalities(
                 owner
-                    .recover(Instant::now() + Duration::from_secs(30))
+                    .recover(Instant::now() + OFFLINE_RECOVERY_GUARD)
                     .unwrap()
             ),
             expected
