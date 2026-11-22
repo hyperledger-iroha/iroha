@@ -25,6 +25,14 @@ fn request<'a>(operation: &'a str, policy: &'a RegisteredAccountReadV1) -> Reque
         policy,
     }
 }
+fn status() -> StatusKey {
+    StatusKey::new(
+        StreamTokenQuotaSubject([8; 32]),
+        b"signed paid request",
+        &[0xaa],
+        "sorafs.sf1@1.0.0",
+    )
+}
 fn op(n: u64) -> String {
     format!("{n:064x}:0")
 }
@@ -42,8 +50,28 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
     let stalled = fixture.requests.lock().unwrap();
     let issue = std::thread::scope(|scope| {
         let (send, received) = oneshot::channel();
-        let worker = scope.spawn(|| issuer.issue_paid(&path, req(), send));
+        let worker = scope.spawn(|| issuer.issue_paid(&path, req(), status(), send));
         received.blocking_recv().unwrap();
+        assert!(issuer.paid_work_active(status(), NOW_MS / 1000));
+        assert!(!issuer.paid_work_active(
+            StatusKey::new(
+                StreamTokenQuotaSubject([9; 32]),
+                b"signed paid request",
+                &[0xaa],
+                "sorafs.sf1@1.0.0"
+            ),
+            NOW_MS / 1000
+        ));
+        assert!(!issuer.paid_work_active(
+            StatusKey::new(
+                StreamTokenQuotaSubject([8; 32]),
+                b"another signed request",
+                &[0xaa],
+                "sorafs.sf1@1.0.0"
+            ),
+            NOW_MS / 1000
+        ));
+
         let record = std::fs::read_dir(&path)
             .unwrap()
             .flatten()
@@ -52,7 +80,7 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
         assert!(record.metadata().unwrap().len() < MAX_RECORD as u64);
         assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
         let (send, mut received) = oneshot::channel();
-        assert!(issuer.issue_paid(&path, req(), send).is_err());
+        assert!(issuer.issue_paid(&path, req(), status(), send).is_err());
         received.try_recv().unwrap();
         let (send, mut received) = oneshot::channel();
         let changed = Request {
@@ -60,7 +88,7 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
             ..req()
         };
         assert!(matches!(
-            issuer.issue_paid(&path, changed, send),
+            issuer.issue_paid(&path, changed, status(), send),
             Err(Error::SignerEvidenceInvalid)
         ));
         assert!(received.try_recv().is_err());
@@ -68,9 +96,10 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
         worker.join().unwrap().unwrap()
     });
     assert_eq!(issue.remaining_quota, 0);
+    assert!(!issuer.paid_work_active(status(), NOW_MS / 1000));
     let (send, mut rx) = oneshot::channel();
     let before = fixture.observer_calls.load(Ordering::SeqCst);
-    let warm = issuer.issue_paid(&path, req(), send).unwrap();
+    let warm = issuer.issue_paid(&path, req(), status(), send).unwrap();
     assert!(rx.try_recv().is_err());
     assert_eq!(warm.token, issue.token);
     assert_eq!(fixture.observer_calls.load(Ordering::SeqCst), before + 1);
@@ -80,12 +109,12 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
         .unwrap()
         .insert(before + 2, ObserverFault::SignerRevoked);
     let (send, mut rx) = oneshot::channel();
-    assert!(issuer.issue_paid(&path, req(), send).is_err());
+    assert!(issuer.issue_paid(&path, req(), status(), send).is_err());
     assert!(rx.try_recv().is_err());
     let different = op(9);
     let (send, mut rx) = oneshot::channel();
     assert!(matches!(
-        issuer.issue_paid(&path, request(&different, &policy), send),
+        issuer.issue_paid(&path, request(&different, &policy), status(), send),
         Err(Error::IssuanceQuotaExceeded { .. })
     ));
     assert!(rx.try_recv().is_err());
@@ -96,14 +125,14 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
     };
     assert!(
         issuer
-            .issue_paid(&path, request(&operation, &changed_policy), send)
+            .issue_paid(&path, request(&operation, &changed_policy), status(), send)
             .is_err()
     );
     assert!(rx.try_recv().is_err());
     drop(issuer);
     let cold = fixture.issuer().unwrap();
     let (send, mut rx) = oneshot::channel();
-    let reopened = cold.issue_paid(&path, req(), send).unwrap();
+    let reopened = cold.issue_paid(&path, req(), status(), send).unwrap();
     rx.try_recv().unwrap();
     assert_eq!(issue.token, reopened.token);
     assert_eq!(reopened.remaining_quota, 0);
@@ -133,7 +162,7 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
     let cold = fixture.issuer().unwrap();
     let (send, mut rx) = oneshot::channel();
     assert!(matches!(
-        cold.issue_paid(&path, req(), send),
+        cold.issue_paid(&path, req(), status(), send),
         Err(Error::SignerEvidenceInvalid)
     ));
     assert!(rx.try_recv().is_err());
@@ -141,7 +170,7 @@ fn paid_ack_requires_one_admitted_original_and_each_release_checks_custody() {
     fixture.clock.now.store(NOW_MS + 60_000, Ordering::SeqCst);
     let (send, mut rx) = oneshot::channel();
     assert!(matches!(
-        cold.issue_paid(&path, req(), send),
+        cold.issue_paid(&path, req(), status(), send),
         Err(Error::SignerStateChanged)
     ));
     assert!(rx.try_recv().is_err());
@@ -180,10 +209,10 @@ fn paid_operation_and_workspace_admission_are_bounded() {
         })
         .unwrap();
     let (send, _) = oneshot::channel();
-    issuer.issue_paid(&path, req(), send).unwrap();
+    issuer.issue_paid(&path, req(), status(), send).unwrap();
     let (send, mut rx) = oneshot::channel();
     assert!(matches!(
-        issuer.issue_paid(&path, request(&collision, &policy), send),
+        issuer.issue_paid(&path, request(&collision, &policy), status(), send),
         Err(Error::IssuanceQuotaCapacityExceeded { .. })
     ));
     assert!(rx.try_recv().is_err());
@@ -193,7 +222,7 @@ fn paid_operation_and_workspace_admission_are_bounded() {
     lease.try_lock().unwrap();
     let (send, mut rx) = oneshot::channel();
     assert!(matches!(
-        issuer.issue_paid(&path, req(), send),
+        issuer.issue_paid(&path, req(), status(), send),
         Err(Error::IssuanceQuotaCapacityExceeded { .. })
     ));
     assert!(rx.try_recv().is_err());

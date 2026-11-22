@@ -238,9 +238,34 @@ async fn issue_storage_token(
     // The physical worker owns query and heavy-query admission until issuance finishes, even
     // if the HTTP request is cancelled. Custody checks and broker I/O must not run on an executor.
     let (acknowledge, mut accepted) = tokio::sync::oneshot::channel();
-    let pending = req.paid_readback.as_ref().map(|op| {
-        format!(r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{op}","provider":"{}","manifest":"{}"}}"#,req.provider_id_hex,req.manifest_id_hex)
-    });
+    let pending = if let Some(op) = &req.paid_readback {
+        let Ok(encoded) = norito::json::to_vec(&req) else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid paid account-token request",
+            );
+        };
+        let status = super::token::paid::StatusKey::new(
+            quota_subject,
+            &encoded,
+            &manifest_cid,
+            &profile_handle,
+        );
+        let body = format!(
+            r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{op}","provider":"{}","manifest":"{}"}}"#,
+            req.provider_id_hex, req.manifest_id_hex
+        );
+        if std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok_and(|now| issuer.paid_work_active(status, now.as_secs()))
+        {
+            return paid_token_pending_response(body, &client_id, &nonce);
+        }
+        Some((body, status))
+    } else {
+        None
+    };
+    let status = pending.as_ref().map(|(_, status)| *status);
     let workspace = req.paid_readback.as_ref().map(|_| {
         state
             .sorafs_node
@@ -272,10 +297,11 @@ async fn issue_storage_token(
         let recovered = delivery
             .as_ref()
             .and_then(|request| worker_issuer.take_undelivered(request));
-        let issuance_result = if let (Some(operation), Some(path), Some(policy)) = (
+        let issuance_result = if let (Some(operation), Some(path), Some(policy), Some(status)) = (
             req.paid_readback.as_deref(),
             workspace.as_deref(),
             policy.as_ref(),
+            status,
         ) {
             worker_issuer.issue_paid(
                 path,
@@ -289,6 +315,7 @@ async fn issue_storage_token(
                     overrides,
                     policy,
                 },
+                status,
                 acknowledge,
             )
         } else {
@@ -334,16 +361,12 @@ async fn issue_storage_token(
         }))
     });
     tokio::pin!(worker);
-    let completed = if let Some(body) = pending {
+    let completed = if let Some((body, _)) = pending {
         tokio::select! {
             biased;
             Ok(()) = &mut accepted => {
-                let mut headers = HeaderMap::new();
-                headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-                headers.insert(header::HeaderName::from_static(HEADER_SORA_CLIENT),header_value(&client_id,"X-SoraFS-Client"));
-                headers.insert(header::HeaderName::from_static(HEADER_SORA_NONCE),header_value(&nonce,"X-SoraFS-Nonce"));
-                return (StatusCode::ACCEPTED,headers,body).into_response()
+                return paid_token_pending_response(body,&client_id,&nonce)
+
             },
             result = &mut worker => result,
         }
@@ -487,6 +510,24 @@ async fn issue_storage_token(
         json_entry("token_base64", &(Value::String(token_base64))),
     ]);
     (StatusCode::OK, response_headers, JsonBody(response)).into_response()
+}
+#[cfg(feature = "app_api")]
+fn paid_token_pending_response(body: String, client_id: &str, nonce: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::HeaderName::from_static(HEADER_SORA_CLIENT),
+        header_value(client_id, "X-SoraFS-Client"),
+    );
+    headers.insert(
+        header::HeaderName::from_static(HEADER_SORA_NONCE),
+        header_value(nonce, "X-SoraFS-Nonce"),
+    );
+    (StatusCode::ACCEPTED, headers, body).into_response()
 }
 #[cfg(feature = "app_api")]
 fn stream_token_body_json(body: &StreamTokenBodyV1) -> Value {

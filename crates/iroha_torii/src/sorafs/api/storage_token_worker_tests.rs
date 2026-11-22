@@ -440,3 +440,92 @@ async fn paid_account_job_requires_signed_subject_nonce_and_current_native_polic
     );
     assert_storage_token_worker_permits(&context.app, 1);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn signed_paid_status_can_observe_its_worker_while_both_admission_permits_are_held() {
+    let (context, fixture) = storage_token_worker_context(TestSignerMode::Sign);
+    let key = iroha_crypto::KeyPair::from_seed(vec![93; 32], iroha_crypto::Algorithm::Ed25519);
+    let verified = crate::app_auth::VerifiedCanonicalRequest {
+        account: AccountId::new(key.public_key().clone()),
+        signer: key.public_key().clone(),
+        verified_signers: vec![key.public_key().clone()],
+        offchain_signing_key: false,
+    };
+    let subject = StreamTokenQuotaSubject::from_authenticated_account(
+        context.app.signed_query_admission.network_id(),
+        &verified.account,
+    );
+    let mut request = context.token_request(TokenOverrides::default());
+    let operation = format!("{}:0", "ab".repeat(32));
+    request.paid_readback = Some(operation.clone());
+    let manifest = context.manifest();
+    let cid = manifest.manifest_cid().to_vec();
+    let profile = manifest.chunk_profile_handle().to_string();
+    let status = crate::sorafs::token::paid::StatusKey::new(
+        subject,
+        &norito::json::to_vec(&request).unwrap(),
+        &cid,
+        &profile,
+    );
+    let gate = StorageTokenIssuanceGate::hold(fixture.clone());
+    let permit = crate::acquire_query_admission(context.app.as_ref(), true)
+        .await
+        .unwrap();
+    let issuer = context.app.stream_token_issuer().unwrap();
+    let original_manifest = request.manifest_id_hex.clone();
+    let path = context
+        ._storage_dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("signed-paid-test");
+    let (send, received) = tokio::sync::oneshot::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        let policy = sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1 {
+            https_host: "storage.example.test".into(),
+            https_port: 443,
+            ttl_secs: 60,
+            max_streams: 1,
+            rate_limit_bytes: 1024,
+            requests_per_minute: 1,
+        };
+        issuer.issue_paid(
+            &path,
+            crate::sorafs::token::paid::Request {
+                subject,
+                operation: &operation,
+                manifest_id: &original_manifest,
+                manifest_cid: &cid,
+                provider: [0xAB; 32],
+                profile: &profile,
+                overrides: TokenOverrides::default(),
+                policy: &policy,
+            },
+            status,
+            send,
+        )
+    });
+    received.await.unwrap();
+    gate.assert_held(&fixture);
+    assert_storage_token_worker_permits(&context.app, 0);
+    let mut headers = storage_token_worker_headers(&context);
+    insert_static_api_test_header(&mut headers, "x-iroha-nonce", "physical-issuance-worker");
+    let response = handle_post_sorafs_storage_account_token(
+        Some(Extension(verified)),
+        State(context.app.clone()),
+        headers,
+        JsonOnly(request),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        api_test_header_str(response.headers(), HEADER_SORA_NONCE),
+        Some("physical-issuance-worker")
+    );
+    assert!(response.headers().get(HEADER_SORA_TOKEN_ID).is_none());
+    gate.release();
+    worker.await.unwrap().unwrap();
+    assert_eq!(fixture.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_storage_token_worker_permits(&context.app, 1);
+}

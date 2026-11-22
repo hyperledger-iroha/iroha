@@ -33,6 +33,28 @@ pub(in crate::sorafs) struct Request<'a> {
     pub policy: &'a RegisteredAccountReadV1,
 }
 
+/// Exact account-authenticated request and locally selected manifest. It identifies only
+/// a running worker and carries no authority to sign, recover or release a token.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::sorafs) struct StatusKey([u8; 32]);
+impl StatusKey {
+    pub(in crate::sorafs) fn new(
+        subject: StreamTokenQuotaSubject,
+        canonical_request: &[u8],
+        manifest_cid: &[u8],
+        profile: &str,
+    ) -> Self {
+        Self(digest(
+            "iroha.sorafs.paid-token.active-request.v1",
+            &[
+                &subject.0,
+                canonical_request,
+                manifest_cid,
+                profile.as_bytes(),
+            ],
+        ))
+    }
+}
 fn digest(domain: &'static str, parts: &[&[u8]]) -> [u8; 32] {
     let mut h = blake3::Hasher::new_derive_key(domain);
     for p in parts {
@@ -124,6 +146,7 @@ enum State {
     Failed(Error),
 }
 pub(super) struct Entry {
+    status: StatusKey,
     address: [u8; 32],
     binding: [u8; 32],
     state: State,
@@ -161,6 +184,24 @@ impl Drop for Claim<'_> {
 }
 
 impl StreamTokenIssuer {
+    /// The original worker already holds its normal and heavy permits. Polling its status
+    /// must not require a second permit. All Ready delivery takes the ordinary admission path.
+    pub(in crate::sorafs) fn paid_work_active(
+        &self,
+        status: StatusKey,
+        current_epoch: u64,
+    ) -> bool {
+        // This status-only read never contends on the signer's history lock, which may
+        // enclose durable finality work. Actual delivery samples the trusted clock again.
+        current_epoch >= self.max_seen_epoch.load(Ordering::Acquire)
+            && self.paid_jobs.lock().is_ok_and(|jobs| {
+                jobs.values().any(|e| {
+                    e.status == status
+                        && matches!(e.state, State::Active)
+                        && current_epoch < e.expires
+                })
+            })
+    }
     pub(in crate::sorafs) fn paid_release_time(
         &self,
         body: &StreamTokenBodyV1,
@@ -176,6 +217,7 @@ impl StreamTokenIssuer {
         &self,
         path: &Path,
         req: Request<'_>,
+        status: StatusKey,
         acknowledge: oneshot::Sender<()>,
     ) -> Result<TokenIssue, Error> {
         if !valid_operation(req.operation) || norito::core::decode_limits_active() {
@@ -239,6 +281,7 @@ impl StreamTokenIssuer {
         jobs.insert(
             slot,
             Entry {
+                status,
                 address,
                 binding,
                 state: State::Preparing,
