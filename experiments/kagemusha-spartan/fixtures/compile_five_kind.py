@@ -80,6 +80,25 @@ def check_final(directory):
             raise ValueError(f"incomplete {side} program pins in the compared compiler profile")
 
 
+def recheck_fixed_point(final, env):
+    # Each native compiler invocation owns this new temporary directory.
+    # Read the *last* complete round, including rounds 10–12 in numeric order.
+    rounds = [round_no for round_no in range(1, 13)
+              if final.with_suffix(f".round-{round_no}.unqualified.norito").is_file()]
+    if not rounds or rounds != list(range(1, rounds[-1] + 1)):
+        raise ValueError("missing consecutive fixed-point compiler outputs")
+    prior = final.with_suffix(f".round-{rounds[-1]}.unqualified.norito")
+    bundle = final / "program-bundle.norito"
+    if prior.samefile(bundle):
+        raise ValueError("the prior compiler round aliases the final output")
+    profile = final.parent / "independent-profile.json"
+    test_case(EXP, COMPILER + "fixed_point::rederive_four_variable_fixed_point_public_profile",
+              {**env, INPUTS[3]: str(prior), "KAGEMUSHA_SPARTAN_ARCHIVE_FINAL": str(bundle),
+               TEST_OUTPUT: str(profile)})
+    if read_bounded(profile, 16 * 1024) != read_bounded(final / "public-program-profile.json", 16 * 1024):
+        raise ValueError("independently derived program profile differs")
+
+
 def compile_five_kind(output, public_bundle):
     output = output.parent.resolve() / output.name
     if os.path.lexists(output) or not output.parent.is_dir():
@@ -108,6 +127,7 @@ def compile_five_kind(output, public_bundle):
         test_case(EXP, COMPILER + "fixed_point::compile_five_kind_wallet_program_bundle_group_four",
                   {**env, **chosen, TEST_OUTPUT: str(final)})
         check_final(final)
+        recheck_fixed_point(final, env)
         if os.path.lexists(output):
             raise ValueError(f"another process created {output}")
         final.rename(output)

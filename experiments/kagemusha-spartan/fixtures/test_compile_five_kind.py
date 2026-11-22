@@ -36,11 +36,18 @@ class CompilerRunnerTests(unittest.TestCase):
             output.mkdir()
             for file in ("archive-primary.program", "archive-secondary.program"):
                 (output / file).touch()
+        elif name.endswith("::rederive_four_variable_fixed_point_public_profile"):
+            previous = Path(env[runner.INPUTS[3]])
+            self.assertEqual(previous.name, "final.round-1.unqualified.norito")
+            self.assertTrue(previous.is_file())
+            self.assertFalse(previous.samefile(Path(env["KAGEMUSHA_SPARTAN_ARCHIVE_FINAL"])))
+            output.write_bytes(b"test inspection")
         else:
             self.assertEqual(name, runner.COMPILER + "fixed_point::compile_five_kind_wallet_program_bundle_group_four")
             output.mkdir()
-            for file in ("program-bundle.norito", "public-program-profile.json"):
-                (output / file).touch()
+            output.with_suffix(".round-1.unqualified.norito").write_bytes(b"test programs")
+            (output / "program-bundle.norito").write_bytes(b"test programs")
+            (output / "public-program-profile.json").write_bytes(b"test inspection")
 
     def run_mocked_compiler(self, supplied=(), bundle=None):
         with (patch.dict(os.environ, dict(supplied), clear=True),
@@ -56,17 +63,17 @@ class CompilerRunnerTests(unittest.TestCase):
 
     def test_fresh_scope_builds_every_stage(self):
         self.run_mocked_compiler()
-        self.assertEqual(len(self.stages), 5)
+        self.assertEqual(len(self.stages), 6)
         self.assertEqual(self.stages[0][1], "full::backend_chain_tests::compile_wallet_program_bundle")
 
     def test_public_four_kind_bundle_skips_only_first_compiler(self):
         bundle = self.root / "public-four.norito"
         bundle.touch()
         self.run_mocked_compiler(bundle=bundle)
-        self.assertEqual(len(self.stages), 4)
+        self.assertEqual(len(self.stages), 5)
         self.assertTrue(self.stages[0][1].endswith("::issue_software_device_fixture_from_public_bundle"))
 
-    def test_prepared_fixture_runs_only_final_compiler(self):
+    def test_prepared_fixture_rechecks_final_compiler(self):
         supplied = {}
         for key in runner.INPUTS:
             path = self.root / key
@@ -75,7 +82,29 @@ class CompilerRunnerTests(unittest.TestCase):
         for name in ("archive-primary.program", "archive-secondary.program"):
             (Path(supplied[runner.INPUTS[3]]) / name).touch()
         self.run_mocked_compiler(supplied.items())
-        self.assertEqual(len(self.stages), 1)
+        self.assertEqual(len(self.stages), 2)
+
+    def test_recheck_refuses_missing_rounds_aliased_exports_and_substituted_profile(self):
+        self.output.mkdir()
+        bundle = self.output / "program-bundle.norito"
+        bundle.write_bytes(b"final programs")
+        (self.output / "public-program-profile.json").write_bytes(b"compiler profile")
+        first = self.output.with_suffix(".round-1.unqualified.norito")
+        second = self.output.with_suffix(".round-2.unqualified.norito")
+        second.hardlink_to(bundle)
+        with self.assertRaisesRegex(ValueError, "missing consecutive"):
+            runner.recheck_fixed_point(self.output, {})
+        first.write_bytes(b"prior programs")
+        with self.assertRaisesRegex(ValueError, "aliases"):
+            runner.recheck_fixed_point(self.output, {})
+        second.unlink()
+        second.write_bytes(bundle.read_bytes())
+        def changed_profile(crate, name, env):
+            self.assertEqual(Path(env[runner.INPUTS[3]]), second)
+            Path(env[runner.TEST_OUTPUT]).write_bytes(b"substituted profile")
+        with (patch.object(runner, "test_case", changed_profile),
+              self.assertRaisesRegex(ValueError, "independently derived")):
+            runner.recheck_fixed_point(self.output, {})
 
     def test_existing_output_and_partial_fixture_fail_before_cargo(self):
         with patch.dict(os.environ, {runner.INPUTS[0]: str(self.root)}, clear=True):
