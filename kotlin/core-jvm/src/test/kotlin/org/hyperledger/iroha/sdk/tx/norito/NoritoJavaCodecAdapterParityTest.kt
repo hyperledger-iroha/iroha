@@ -284,28 +284,34 @@ class NoritoJavaCodecAdapterParityTest {
         val policyField = readField(controllerDecoder, "authority.controller.policy")
         assertEquals(0, controllerDecoder.remaining())
 
+        // The Rust-pinned AccountId owner (fixtures/account/multisig_wire_v1.json) gives the exact bytes.
+        assertContentEquals(TransferWirePayloadEncoder.encodeAccountIdPayload(authority), authorityField)
+
+        // Rust `MultisigPolicy { version, threshold, members }` frames each named field.
         val policyDecoder = canonicalDecoder(policyField)
-        val version = NoritoAdapters.uint(8).decode(policyDecoder).toInt()
-        val threshold = NoritoAdapters.uint(16).decode(policyDecoder).toInt()
-        val memberCount = policyDecoder.readLength(false)
+        val version = decodeFieldPayload(readField(policyDecoder, "policy.version"), NoritoAdapters.uint(8), "policy.version").toInt()
+        val threshold = decodeFieldPayload(readField(policyDecoder, "policy.threshold"), NoritoAdapters.uint(16), "policy.threshold").toInt()
+        val membersDecoder = canonicalDecoder(readField(policyDecoder, "policy.members"))
+        assertEquals(0, policyDecoder.remaining())
+        val memberCount = membersDecoder.readLength(false)
         assertEquals(1, version)
         assertEquals(2, threshold)
         assertEquals(2L, memberCount)
 
         // Unsigned public-key order places seed 0x22 (a09a...) before seed 0x11 (d04a...).
         assertMultisigMember(
-            policyDecoder,
+            membersDecoder,
             compactPublicKeyPayload(0x01, memberKeyB),
             2,
             "member[0]",
         )
         assertMultisigMember(
-            policyDecoder,
+            membersDecoder,
             compactPublicKeyPayload(0x01, memberKeyA),
             1,
             "member[1]",
         )
-        assertEquals(0, policyDecoder.remaining())
+        assertEquals(0, membersDecoder.remaining())
 
         val encodedSigned = SignedTransactionEncoder.encode(signed)
         val signedDecoder = canonicalDecoder(encodedSigned)
@@ -315,7 +321,10 @@ class NoritoJavaCodecAdapterParityTest {
         val multisigPayload = assertNotNull(decodeOptionPayload(multisigField, "signed.multisig_signatures"))
         assertEquals(0, signedDecoder.remaining())
 
-        val multisigDecoder = canonicalDecoder(multisigPayload)
+        // Rust `MultisigSignatures { signatures }` frames its one named field.
+        val bundleDecoder = canonicalDecoder(multisigPayload)
+        val multisigDecoder = canonicalDecoder(readField(bundleDecoder, "multisig.signatures"))
+        assertEquals(0, bundleDecoder.remaining())
         val count = multisigDecoder.readLength(false)
         assertEquals(2L, count)
         val compact = multisigDecoder.compactLenActive()
@@ -621,8 +630,9 @@ class NoritoJavaCodecAdapterParityTest {
     ) {
         val memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label)
         val memberDecoder = canonicalDecoder(memberPayload)
-        val publicKey = BYTE_VECTOR_ADAPTER.decode(memberDecoder)
-        val weight = NoritoAdapters.uint(16).decode(memberDecoder).toInt()
+        // Rust `MultisigMember { public_key, weight }` frames each named field.
+        val publicKey = decodeFieldPayload(readField(memberDecoder, "$label.public_key"), BYTE_VECTOR_ADAPTER, "$label.public_key")
+        val weight = decodeFieldPayload(readField(memberDecoder, "$label.weight"), NoritoAdapters.uint(16), "$label.weight").toInt()
         assertEquals(0, memberDecoder.remaining(), "$label payload should not have trailing bytes")
         assertContentEquals(expectedPublicKey, publicKey)
         assertEquals(expectedWeight, weight)
@@ -670,8 +680,9 @@ class NoritoJavaCodecAdapterParityTest {
         signature: MultisigSignature,
         field: String,
     ) {
-        val publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder)
-        val signaturePayload = BYTE_VECTOR_ADAPTER.decode(decoder)
+        // Rust `MultisigSignature { signer, signature }` frames each named field.
+        val publicKeyPayload = decodeFieldPayload(readField(decoder, "$field.signer"), BYTE_VECTOR_ADAPTER, "$field.signer")
+        val signaturePayload = decodeFieldPayload(readField(decoder, "$field.signature"), BYTE_VECTOR_ADAPTER, "$field.signature")
         assertEquals(signature.publicKey().size + 1, publicKeyPayload.size, "$field public key payload length mismatch")
         assertEquals(signature.algorithmTag, publicKeyPayload[0].toInt() and 0xFF, "$field algorithm tag mismatch")
         assertContentEquals(signature.publicKey(), publicKeyPayload.copyOfRange(1, publicKeyPayload.size))
