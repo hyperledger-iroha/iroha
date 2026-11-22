@@ -5,7 +5,8 @@ use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_core::{
     state::{BlockHashRead, State, StateReadOnly, WorldStateSnapshotError},
     sumeragi::finality::{
-        NativeCurrentFinalityV1, NativeFinalityCursorErrorV1, NativeFinalityCursorV1,
+        NativeCurrentFinalityV1, NativeCurrentStepV1, NativeFinalityCursorErrorV1,
+        NativeFinalityCursorV1,
     },
 };
 use iroha_crypto::HashOf;
@@ -96,6 +97,7 @@ impl Discovery {
         let mut clock_floor = now()?;
         let mut cursor = None;
         let mut previous_cut = None;
+        let mut durable_floor = None;
         advance_current_in_slices(norito::core::decode_limits_active(), |steps, may_retry| {
             check(deadline)?;
             let view = self.state.view();
@@ -107,19 +109,35 @@ impl Discovery {
                 return Err(Error::Unavailable);
             }
             require_previous_cut(previous_cut, view.block_hashes())?;
+            require_durable_floor(durable_floor.take(), height)?;
             let held = match &mut cursor {
                 Some(held) => held,
                 None => cursor.insert(self.cursor.try_lock().map_err(|_| Error::Unavailable)?),
             };
-            let current = held
-                .advance_current(&view, &self.budget, deadline, steps)
+            let current = match held
+                .advance_current_or_superseded(&view, &self.budget, deadline, steps)
                 .map_err(|error| match error {
                     NativeFinalityCursorErrorV1::Deadline => Error::Deadline,
                     _ => Error::Unavailable,
-                })?;
-            let Some(current) = current else {
-                previous_cut = Some((height, view.latest_block_hash().ok_or(Error::Unavailable)?));
-                return Ok(None);
+                })? {
+                NativeCurrentStepV1::Current(current) => current,
+                NativeCurrentStepV1::Incomplete => {
+                    previous_cut =
+                        Some((height, view.latest_block_hash().ok_or(Error::Unavailable)?));
+                    return Ok(None);
+                }
+                NativeCurrentStepV1::Superseded(cut) => {
+                    // This cut has no result. A later slice continues only at a strictly
+                    // newer cut that extends it.
+                    let previous = superseded_cut(
+                        (cut.height(), cut.hash(), cut.durable_height()),
+                        view.block_hashes(),
+                        may_retry,
+                    )?;
+                    previous_cut = Some(previous);
+                    durable_floor = Some(cut.durable_height());
+                    return Ok(None);
+                }
             };
             drop(view);
             drop(cursor.take());
@@ -340,6 +358,31 @@ fn require_previous_cut(
     Ok(())
 }
 
+// A cut the cursor reported superseded by a strictly newer durable count is never current.
+// It may continue only from the exact view it classified, while another slice remains.
+fn superseded_cut(
+    (height, hash, durable): (u64, HashOf<BlockHeader>, u64),
+    hashes: &dyn BlockHashRead,
+    may_retry: bool,
+) -> Result<DiscoveryCut, Error> {
+    let origin = usize::try_from(height).map_err(|_| Error::Unavailable)?;
+    if !may_retry || durable <= height || hashes.len() != origin || hashes.last() != Some(&hash) {
+        return Err(Error::Unavailable);
+    }
+    Ok((origin, hash))
+}
+
+// A new applied view must reach the durable height that superseded its predecessor.
+// The predecessor hash is checked independently by `require_previous_cut`.
+fn require_durable_floor(floor: Option<u64>, applied: usize) -> Result<(), Error> {
+    if let Some(floor) = floor
+        && u64::try_from(applied).map_err(|_| Error::Unavailable)? < floor
+    {
+        return Err(Error::Unavailable);
+    }
+    Ok(())
+}
+
 // Each incomplete native call retains its authenticated progress. Reopen the current
 // view before the next group so a long catch-up does not pin its original tip throughout.
 // All calls share the same cursor, deadline and maximum aggregate successor count.
@@ -457,6 +500,35 @@ mod cut_tests {
         assert!(checked_extension(2, second, 4, &hashes, Some(3)).is_err());
         assert!(checked_extension(2, second, 3, &hashes, Some(2)).is_err());
         assert!(checked_extension(2, second, 3, &hashes, None).is_err());
+    }
+
+    #[test]
+    fn superseded_cut_continues_only_at_a_strictly_newer_linked_view() {
+        let hash = |byte| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([byte; 32]))
+        };
+        let (first, second, third) = (hash(1), hash(2), hash(3));
+        // The cursor's own classified view, while another slice remains.
+        assert_eq!(
+            superseded_cut((2, second, 3), &[first, second], true),
+            Ok((2, second))
+        );
+        // No slice remains, no newer durable count, another view or another tip.
+        assert!(superseded_cut((2, second, 3), &[first, second], false).is_err());
+        assert!(superseded_cut((2, second, 2), &[first, second], true).is_err());
+        assert!(superseded_cut((2, second, 3), &[first, second, third], true).is_err());
+        assert!(superseded_cut((2, third, 3), &[first, second], true).is_err());
+        // H3 extends H2, but is insufficient after the journal reported durable H4.
+        let cut = Some((2, second));
+        assert_eq!(require_durable_floor(Some(4), 3), Err(Error::Unavailable));
+        assert!(require_durable_floor(Some(4), 4).is_ok());
+        assert!(require_durable_floor(Some(4), 5).is_ok());
+        assert!(require_durable_floor(None, 2).is_ok());
+        assert!(require_previous_cut(cut, &[first, second, third]).is_ok());
+        assert_eq!(
+            require_previous_cut(cut, &[first, third, second]),
+            Err(Error::Unavailable)
+        );
     }
 
     #[test]
