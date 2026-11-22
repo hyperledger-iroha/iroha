@@ -42,13 +42,6 @@ pub struct Addition {
 
 /// One canonical World field an addition adds.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a release declares its World-cell additions here; this release adds only a table"
-    )
-)]
 pub enum StorageAddition {
     /// A table, installed empty: its registry identity.
     Table(&'static str),

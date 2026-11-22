@@ -15,7 +15,7 @@ use crate::{
         },
         map_vm_error_with_context_to_validation,
     },
-    state::{StateReadOnly, StateTransaction, StorageReadOnly},
+    state::{StateReadOnly, StateTransaction},
 };
 
 /// Work remains chargeable after deterministic VM or effect rejection.

@@ -31,8 +31,8 @@ fn score(
     })
 }
 
-/// Derive the same bounded plan while retaining original account-encoding refusals.
-/// The frozen baseline entrypoint and the common allocation/ranking policy are unchanged.
+/// Derive the bounded body plan of [`bounded_plan_from_rankings`] while retaining original
+/// account-encoding refusals of the per-body ranking scores.
 pub(crate) fn derive_bounded_body_plan_checked_v1(
     sizing: &dyn ParliamentDrawSizingV1,
     network_id: &NetworkId,

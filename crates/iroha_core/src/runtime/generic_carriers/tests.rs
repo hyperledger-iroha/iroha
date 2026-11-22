@@ -142,7 +142,12 @@ fn decoding_borrows_exact_descriptors_and_envelope_without_granting_execution_su
     let decoded = decode(&fixture).unwrap().unwrap();
     assert_eq!(decoded.interface_id, fixture.interface);
     assert_eq!(decoded.implementation_id, fixture.implementation);
-    assert_eq!(decoded.interface.wire_id, WIRE);
+    let Some(DefinitionDescriptorV1::Interface(interface)) =
+        fixture.published.get(&decoded.interface_id)
+    else {
+        panic!("interface")
+    };
+    assert_eq!(interface.wire_id, WIRE);
     assert_eq!(
         decoded.implementation.host_profile,
         super::super::release_catalog()
@@ -150,9 +155,10 @@ fn decoding_borrows_exact_descriptors_and_envelope_without_granting_execution_su
             .generic_carriers
             .map(|profile| profile.host)
     );
-    assert_eq!(decoded.payload, [0, 1]);
-    assert!(decoded.payload.as_ptr() >= decoded.frame.as_ptr());
-    assert!(decoded.payload.as_ptr_range().end <= decoded.frame.as_ptr_range().end);
+    let payload = validated_carrier_payload_v1(&payload_schema(), decoded.frame).unwrap();
+    assert_eq!(payload, [0, 1]);
+    assert!(payload.as_ptr() >= decoded.frame.as_ptr());
+    assert!(payload.as_ptr_range().end <= decoded.frame.as_ptr_range().end);
     assert!(std::ptr::eq(
         decoded.frame,
         fixture.instruction.as_opaque().unwrap().frame()

@@ -41,21 +41,18 @@ pub(crate) enum Error {
     Codec(#[source] DecodeAttemptError),
 }
 
-/// Borrowed selected definitions and validated original payload; no invocation capability.
+/// Borrowed selected definitions and the validated original frame; no invocation capability.
 #[derive(Debug)]
 pub(crate) struct DecodedInstruction<'a> {
     /// Exact selected interface identity.
     pub(crate) interface_id: DefinitionId,
     /// Exact selected implementation identity.
     pub(crate) implementation_id: DefinitionId,
-    /// Published interface, retained by the original authenticated State read.
-    pub(crate) interface: &'a InterfaceDescriptorV1,
     /// Published implementation; the execution owner must separately acquire its artifact.
     pub(crate) implementation: &'a ImplementationDescriptorV1,
-    /// Original canonical frame, retained without re-encoding the opaque envelope.
+    /// Original canonical frame, retained without re-encoding the opaque envelope; its bare
+    /// payload satisfies the selected interface's carrier schema.
     pub(crate) frame: &'a [u8],
-    /// Validated bare payload borrowed directly from the original frame.
-    pub(crate) payload: &'a [u8],
 }
 
 fn require(condition: bool, reason: &'static str) -> Result<(), Error> {
@@ -314,7 +311,7 @@ pub(crate) fn decode_selected<'a>(
     if opaque.is_dense() {
         return Err(malformed(wire_id));
     }
-    let payload = validated_carrier_payload_v1(schema, opaque.frame()).map_err(|error| {
+    validated_carrier_payload_v1(schema, opaque.frame()).map_err(|error| {
         if error.kind() == DecodeAttemptErrorKind::Invalid {
             malformed(wire_id)
         } else {
@@ -324,10 +321,8 @@ pub(crate) fn decode_selected<'a>(
     Ok(Some(DecodedInstruction {
         interface_id: binding.interface,
         implementation_id,
-        interface,
         implementation,
         frame: opaque.frame(),
-        payload,
     }))
 }
 
