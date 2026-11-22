@@ -323,7 +323,7 @@ impl GeneratedServiceRuntimeRevision {
     }
 }
 
-/// One renderer may share immutable checkpoint imports during one catalog observation or peer start.
+/// One renderer may share immutable checkpoint imports during one read-only maintenance phase or peer start.
 pub(super) struct CatalogLaunchReads<'a> {
     owner: &'a GeneratedServiceRuntime,
     imports: Option<CheckpointImportScope>,

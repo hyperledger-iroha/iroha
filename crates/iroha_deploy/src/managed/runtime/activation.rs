@@ -14,7 +14,8 @@ use crate::{
             LiveGatewayProcess, ManagedGatewayCompliance, PromotedGeneratedCatalog,
         },
         generated_service_runtime::{
-            GeneratedRuntimeStage, GeneratedServiceRuntime, GeneratedServiceRuntimeRevision,
+            CatalogLaunchReads, GeneratedRuntimeStage, GeneratedServiceRuntime,
+            GeneratedServiceRuntimeRevision,
         },
         native_operation::{ManagedTransactionFinality, invalid, now_ms},
         service_bootstrap::{
@@ -446,7 +447,7 @@ impl Recheck {
             }
             validate_live(prepared, gateway, budget)?;
         }
-        let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+        let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors, None))?;
         // Each enrollment has its own signed expiry. Sample before preparing the continuations;
         // these clocks never replace the later clock that bounds the native discovery itself.
         let enrollment_mono = Instant::now();
@@ -502,6 +503,7 @@ pub(super) fn observe_native_set(
     live: &[OwnedGateway; 3],
     floors: [ManagedTransactionFinality; 3],
     budget: &Budget,
+    reads: Option<&mut CatalogLaunchReads<'_>>,
 ) -> std::result::Result<
     (
         [build_registry::GeneratedServiceObservation; 3],
@@ -510,7 +512,7 @@ pub(super) fn observe_native_set(
     ),
     Failure,
 > {
-    let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+    let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors, reads))?;
     observe_enrolled_set(prepared, live, floors, enrollments, budget)
 }
 
@@ -619,7 +621,7 @@ pub(super) fn validate_gateways(
     budget: &Budget,
 ) -> std::result::Result<(), Failure> {
     if !norito::core::decode_limits_active() {
-        return OwnedGateway::validate_shared_round(prepared, live, budget);
+        return OwnedGateway::validate_shared_round(prepared, live, budget, None);
     }
     let plans = budget.call(|_| {
         live[0]

@@ -535,6 +535,7 @@ impl OwnedGateway {
         prepared: &PreparedLocalnet,
         live: &[Self; 3],
         budget: &activation::Budget,
+        mut reads: Option<&mut CatalogLaunchReads<'_>>,
     ) -> std::result::Result<(), super::progress::Failure> {
         let plans = budget.call(|_| {
             live[0]
@@ -551,7 +552,7 @@ impl OwnedGateway {
                     "gateway round belongs to different original launches",
                 ));
             }
-            launch.validate()?;
+            launch.validate_with(reads.as_deref_mut())?;
             #[cfg(all(test, unix))]
             tests::batch_validation_tests::after_entry();
             let result = (|| {
@@ -583,7 +584,7 @@ impl OwnedGateway {
             // Close on every ordinary result, even cancellation or expiry inside the round.
             // Evaluate all child observations before propagating material or child failures.
             // The enclosing Budget::call then preserves clock/cancellation precedence.
-            let material = launch.validate();
+            let material = launch.validate_with(reads);
             #[cfg(all(test, unix))]
             tests::batch_validation_tests::exit_material(&material);
             let children = live.each_ref().map(OwnedGateway::require_running);
