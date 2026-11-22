@@ -807,6 +807,7 @@ mod tests {
                 witness: Arc::new(witness),
                 receipt_body: body,
                 receive: None,
+            archive: None,
                 predecessor: head.clone(),
             },
             head,

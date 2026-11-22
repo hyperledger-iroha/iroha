@@ -2,78 +2,19 @@
 use super::*;
 use crate::{
     bootstrap_context::{LINEAGE_IO, PENDING_ROOT},
-    indexed_map::{self, InsertWitness, Leaf, Path},
+    indexed_map,
     operation_auth::tests::{expose, finish, holds, proof},
     send_arithmetic::Source,
     uniform::Array,
 };
 use iroha_data_model::kagemusha::{
-    KagemushaWalletIndexedOpeningV1, KagemushaWalletIndexedRemoveV1, KagemushaWalletIndexedTreeV1,
+    KagemushaWalletIndexedTreeV1,
     kagemusha_wallet_indexed_verify_membership_v1,
     kagemusha_wallet_indexed_verify_non_membership_v1,
 };
 use iroha_pasta::poseidon;
 
-// A change at another slot changes one sibling on this path, at the highest
-// differing index bit. The subtree below that fork keeps all of its old siblings.
-fn subtree(mut hash: Fp, path: &Path<32>, levels: usize) -> Fp {
-    for (h, sibling) in path.siblings.iter().take(levels).enumerate() {
-        let pair = if (path.index >> h) & 1 == 0 {
-            [hash, *sibling]
-        } else {
-            [*sibling, hash]
-        };
-        hash = poseidon::hash_with_domain(indexed_map::NODE_DOMAIN, &pair);
-    }
-    hash
-}
-
-fn path(original: &KagemushaWalletIndexedOpeningV1) -> Result<Path<32>> {
-    let mut siblings = [Fp::ZERO; 32];
-    for (dst, raw) in siblings.iter_mut().zip(&original.siblings) {
-        *dst = field(raw)?;
-    }
-    Ok(Path {
-        index: original.slot,
-        siblings,
-    })
-}
-
-fn reverse_insertion(
-    before: &[u8; 32],
-    key: &[u8; 32],
-    value: &[u8; 32],
-    removal: &KagemushaWalletIndexedRemoveV1,
-) -> Result<InsertWitness<32>> {
-    let after = removal
-        .verify(before, key)
-        .map_err(|_| Error::Malformed("indexed removal openings"))?;
-    if removal.leaf.value != *value {
-        return Err(Error::AuthorityMismatch("pending descriptor"));
-    }
-    let mut low_path = path(&removal.predecessor_opening)?;
-    let mut slot = path(&removal.leaf_opening)?;
-    let fork = (low_path.index ^ slot.index).ilog2() as usize; // verify checked distinct slots
-    let low = Leaf {
-        key: field(&removal.predecessor.key)?,
-        value: field(&removal.predecessor.value)?,
-        next: field(&removal.leaf.next_key)?,
-    };
-    let key = field(key)?;
-    // Insertion opens the predecessor *after* deletion, and the vacant slot
-    // after relinking the predecessor back to the removed key.
-    let original_low = indexed_map::leaf_hash(Leaf { next: key, ..low });
-    low_path.siblings[fork] = subtree(Fp::ZERO, &slot, fork);
-    slot.siblings[fork] = subtree(original_low, &low_path, fork);
-    Ok(InsertWitness {
-        old_root: field(&after)?,
-        key,
-        value: field(value)?,
-        low,
-        low_path,
-        slot,
-    })
-}
+use crate::native::engine::transfers::archive_sent::relation::reverse_insertion;
 
 fn exercise(
     tree: &mut KagemushaWalletIndexedTreeV1,

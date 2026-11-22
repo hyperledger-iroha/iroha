@@ -632,7 +632,7 @@ impl Selection {
             if BlobV1::of(&artifact_manifest) != profile.release.pack {
                 return Err(invalid());
             }
-            let (programs, digest) = program_carrier::authenticated_pack_selection(
+            let (programs, digest) = program_carrier::authenticated_pack_selection_any(
                 &artifact_manifest,
                 &scheme,
                 profile.asset,
@@ -640,7 +640,7 @@ impl Selection {
             .map_err(|_| invalid())?;
             let mut certificate = signer.body.transcript();
             certificate.extend_from_slice(signer.signature.as_ref());
-            if programs.signer_certificate != certificate || digest != profile.manifest_digest {
+            if programs.signer_certificate() != certificate || digest != profile.manifest_digest {
                 return Err(invalid());
             }
             digest

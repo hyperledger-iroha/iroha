@@ -327,9 +327,9 @@ impl<F: Copy> Cells<F> for [F] {
     }
 }
 
-/// The prover's witness as its Hyrax rows: every row is the caller's until
-/// the prover writes into it (masks, the link phase, the second phase), and
-/// only a written row is copied. The witness itself is never cloned. Rows the
+/// The prover's witness as its Hyrax rows. Writes to an immutable caller's
+/// authored rows use copy on write. An owning guard lends its authored rows
+/// exclusively for masks, the link and the second phase. Rows the
 /// circuit says the caller never wrote ([`crate::r1cs::RowFill`]) are never
 /// read from the caller's witness, so their pages are never allocated.
 pub struct Rows<'a, F> {
@@ -343,6 +343,7 @@ pub struct Rows<'a, F> {
 
 enum Row<'a, F> {
     Shared(&'a [F]),
+    Exclusive(&'a mut [F]),
     Own(Vec<F>),
     /// All zero.
     Zero,
@@ -359,16 +360,33 @@ impl<'a, F: Field> Rows<'a, F> {
     /// `w` in rows of `cols` entries, of which those `fill` names zero or
     /// unit rows are known without reading `w`.
     pub fn with_fill(w: &'a [F], cols: usize, fill: &[crate::r1cs::RowFill]) -> Self {
+        Self::from_rows(w.len(), cols, fill, w.chunks_exact(cols).map(Row::Shared))
+    }
+
+    /// An owning guard wipes the original authored rows on drop. Write those
+    /// rows in place. Implicit rows still materialize from their public layout.
+    pub(crate) fn with_mutable_values(
+        w: &'a mut [F],
+        cols: usize,
+        fill: &[crate::r1cs::RowFill],
+    ) -> Self {
+        Self::from_rows(w.len(), cols, fill, w.chunks_exact_mut(cols).map(Row::Exclusive))
+    }
+
+    fn from_rows(
+        len: usize,
+        cols: usize,
+        fill: &[crate::r1cs::RowFill],
+        rows: impl Iterator<Item = Row<'a, F>>,
+    ) -> Self {
         use crate::r1cs::RowFill;
-        assert!(cols.is_power_of_two() && w.len() % cols == 0, "whole rows");
-        assert_eq!(fill.len(), w.len() / cols, "a fill per row");
+        assert!(cols.is_power_of_two() && len % cols == 0, "whole rows");
+        assert_eq!(fill.len(), len / cols, "a fill per row");
         Rows {
             shift: cols.trailing_zeros() as usize,
-            rows: w
-                .chunks_exact(cols)
-                .zip(fill)
+            rows: rows.zip(fill)
                 .map(|(row, f)| match f {
-                    RowFill::Values => Row::Shared(row),
+                    RowFill::Values => row,
                     RowFill::Zero => Row::Zero,
                     RowFill::Unit => Row::Unit,
                 })
@@ -396,6 +414,7 @@ impl<'a, F: Field> Rows<'a, F> {
     pub fn row(&self, r: usize) -> &[F] {
         match &self.rows[r] {
             Row::Shared(row) => row,
+            Row::Exclusive(row) => row,
             Row::Own(row) => row,
             Row::Zero => self.zero.get_or_init(|| vec![F::ZERO; self.cols()]),
             Row::Unit => self.unit.get_or_init(|| {
@@ -417,9 +436,10 @@ impl<'a, F: Field> Rows<'a, F> {
                 row[0] = F::ONE;
                 self.rows[r] = Row::Own(row);
             }
-            Row::Own(_) => {}
+            Row::Exclusive(_) | Row::Own(_) => {}
         }
         match &mut self.rows[r] {
+            Row::Exclusive(row) => row,
             Row::Own(row) => row,
             _ => unreachable!("an owned row"),
         }
@@ -431,6 +451,7 @@ impl<'a, F: Field> Rows<'a, F> {
             .iter()
             .map(|row| match row {
                 Row::Shared(row) => *row,
+                Row::Exclusive(row) => &**row,
                 Row::Own(row) => row.as_slice(),
                 Row::Zero | Row::Unit => &[],
             })
@@ -478,6 +499,7 @@ impl<F: Field> Cells<F> for Rows<'_, F> {
         let (r, c) = (i >> self.shift, i & ((1 << self.shift) - 1));
         match &self.rows[r] {
             Row::Shared(row) => row[c],
+            Row::Exclusive(row) => row[c],
             Row::Own(row) => row[c],
             Row::Zero => F::ZERO,
             Row::Unit if c == 0 => F::ONE,
@@ -533,7 +555,7 @@ impl<F: Field> Table<F> for ZView<'_, '_, F> {
             // The row's public account only: a row of values may hold
             // anything, whatever it holds, and is not read here.
             let zero = match &self.rows.rows[r] {
-                Row::Shared(_) | Row::Own(_) => false,
+                Row::Shared(_) | Row::Exclusive(_) | Row::Own(_) => false,
                 Row::Zero => true,
                 Row::Unit => c != 0,
             };
@@ -847,6 +869,63 @@ impl Support {
             seg: self.seg,
             runs: self.z_masks.iter().map(|mask| *mask != 0).collect(),
         }
+    }
+}
+
+/// Keep small private folds materialized. Above 32 MiB the next round can
+/// recompute its inputs as it reads them, leaving the first array unallocated.
+pub(crate) fn large_private_fold<F>(low: usize) -> bool {
+    low > (32 << 20) / std::mem::size_of::<F>().max(1)
+}
+
+/// The first fold of a private table, evaluated while the second round reads
+/// it. The public row layout determines every corner read. The weights are the
+/// multilinear evaluation of the first round's transcript challenges.
+pub(crate) struct FoldedWitness<'a, F, T: ?Sized> {
+    witness: &'a T,
+    weights: Vec<F>,
+    masks: Vec<u32>,
+    seg: usize,
+    low: usize,
+}
+
+impl<'a, F: Field, T: Table<F> + ?Sized> FoldedWitness<'a, F, T> {
+    pub(crate) fn new(witness: &'a T, r: &[F], support: &Support) -> Self {
+        assert_eq!(r.len(), support.k);
+        let low = witness.len() >> support.k;
+        assert_eq!(support.z_masks.len(), low.div_ceil(support.seg));
+        Self {
+            witness,
+            weights: crate::grid::eq_table(r),
+            masks: support.z_masks.clone(),
+            seg: support.seg,
+            low,
+        }
+    }
+}
+
+impl<F: Field, T: Table<F> + ?Sized> Table<F> for FoldedWitness<'_, F, T> {
+    fn len(&self) -> usize {
+        self.low
+    }
+
+    #[inline]
+    fn at(&self, j: usize) -> F {
+        let mut mask = self.masks[j / self.seg];
+        let mut sum = F::ZERO;
+        while mask != 0 {
+            let hi = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            sum += self.weights[hi] * self.witness.at(hi * self.low + j);
+        }
+        sum
+    }
+
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        range.is_empty()
+            || self.masks[range.start / self.seg..=(range.end - 1) / self.seg]
+                .iter()
+                .all(|mask| *mask == 0)
     }
 }
 
@@ -1564,6 +1643,71 @@ mod tests {
     use crate::fs::SpikeRng;
     use crate::grid::{Extender, eq_table};
     use iroha_pasta::Fp;
+
+    #[test]
+    fn mutable_rows_reuse_authored_values_and_preserve_implicit_layout() {
+        use super::{Cells, Rows};
+        use crate::r1cs::RowFill;
+        let mut storage = (1_u64..=12).map(Fp::from).collect::<Vec<_>>();
+        let initial = storage.clone();
+        let fill = [RowFill::Values, RowFill::Zero, RowFill::Unit];
+        let mut shared = Rows::with_fill(&initial, 4, &fill);
+        let mut exclusive = Rows::with_mutable_values(&mut storage, 4, &fill);
+        for i in 0..12 {
+            assert_eq!(shared.cell(i), exclusive.cell(i));
+        }
+        for i in [2, 7, 8] {
+            shared.set_cell(i, Fp::from(29));
+            exclusive.set_cell(i, Fp::from(29));
+        }
+        assert_eq!(shared.slices(), exclusive.slices());
+        assert_eq!(shared.owned(), 3);
+        assert_eq!(exclusive.owned(), 2);
+        exclusive.zeroize_owned();
+        drop(exclusive);
+        assert_eq!(storage[2], Fp::from(29));
+        assert_eq!(storage[4..], initial[4..]);
+    }
+
+    #[test]
+    fn folded_witness_matches_the_materialized_table_on_both_curves() {
+        fn check<F: ff::PrimeField>() {
+            let n = 1 << 16;
+            let seg = super::SEGMENT;
+            let values: Vec<_> = (0..n).map(|i| {
+                if i / seg % 7 < 3 { F::from((i % 251) as u64) } else { F::ZERO }
+            }).collect();
+            let live = super::Live {
+                seg,
+                runs: (0..n / seg).map(|i| i % 7 < 3).collect(),
+            };
+            let z = super::Masked::new(&values, &live);
+            let r = [F::from(3), F::from(5), F::from(7)];
+            let matrix: Vec<_> = (0..n).map(|i| F::from((i % 149) as u64)).collect();
+            let support = super::support(3, &super::Public(&matrix), &z);
+            let dense = super::fold_top(&z, &r, Some(&support));
+            let folded = super::FoldedWitness::new(&z, &r, &support);
+            assert_eq!(super::Table::len(&folded), dense.len());
+            let live = support.folded_live();
+            for (i, expected) in dense.iter().enumerate() {
+                assert_eq!(super::Table::at(&folded, i), *expected);
+            }
+            for i in (0..dense.len()).step_by(seg) {
+                let end = (i + seg).min(dense.len());
+                assert_eq!(super::Table::zero_run(&folded, i..end), live.zero_run(i..end));
+            }
+            let matrix = super::Public(&matrix[..dense.len()]);
+            let second = super::support(3, &matrix, &folded);
+            let eager = super::Masked::new(&dense, &live);
+            let basis = super::Basis::new(3);
+            assert_eq!(super::inner_round(&basis, &matrix, &eager, Some(&second)),
+                       super::inner_round(&basis, &matrix, &folded, Some(&second)));
+            assert_eq!(super::fold_top(&eager, &r, Some(&second)),
+                       super::fold_top(&folded, &r, Some(&second)));
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
 
     #[test]
     fn consumed_matrix_matches_logical_dense_fold_on_both_fields() {

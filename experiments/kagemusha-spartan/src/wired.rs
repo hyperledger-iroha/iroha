@@ -423,8 +423,8 @@ pub fn scalar_wired(
         )
     };
     let mut limb_src: Vec<(usize, usize, Fp)> = Vec::new();
-    let mut slot_feed: Vec<[Option<Feed>; 3]> = vec![[None; 3]; n_s];
-    let mut tau_feed: Vec<[Option<Feed>; 3]> = vec![[None; 3]; n_s];
+    let mut slot_feed = vec![[None; scalar::T.len()]; n_s];
+    let mut tau_feed = vec![[None; scalar::TAU.len()]; n_s];
     let mut glue_feed: Vec<(usize, Feed)> = Vec::new();
     let mut u_feed: Vec<Feed> = Vec::new();
     if lean {
@@ -432,18 +432,20 @@ pub fn scalar_wired(
         let i = take(Kind::Full);
         limb_src.push(full(shared_at[i]));
         assert!(limb_src[0].2 == tr.tau[0], "tau from its limbs");
-        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(0));
+        tau_feed[x_of(0)][shape.k - slots[0].k] = Some(Feed::Full(0));
     } else {
         for s in 0..mo {
             for v in 0..slots[s].k {
-                tau_feed[x_of(s)][3 - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+                tau_feed[x_of(s)][shape.k - slots[s].k + v] =
+                    Some(Feed::Raw(shared_at[take(Kind::Raw)]));
             }
         }
     }
     for s in 0..mo {
         let n_round = if lean { 1 } else { slots[s].k };
         for v in 0..n_round {
-            slot_feed[x_of(s)][3 - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+            slot_feed[x_of(s)][shape.k - slots[s].k + v] =
+                Some(Feed::Raw(shared_at[take(Kind::Raw)]));
         }
     }
     for k in 0..if lean { 1 } else { 3 } {
@@ -452,7 +454,7 @@ pub fn scalar_wired(
     let mut g = 0;
     for (s, sl) in slots.iter().enumerate().skip(mo) {
         assert_eq!(sl.first, g, "inner slot order");
-        let d0 = 3 - sl.k;
+        let d0 = shape.k - sl.k;
         if lean && g > shape.row_bits {
             let i = take(Kind::Raw);
             slot_feed[x_of(s)][d0] = Some(Feed::Raw(shared_at[i]));
@@ -681,18 +683,13 @@ pub fn scalar_wired(
     let mut inputs = 0;
     {
         let sd = &mut arrays[S_SIDE + scalar::S_SLOT];
-        for d in 0..3 {
-            let feeds: Vec<Option<Feed>> = (0..n_s).map(|x| slot_feed[x][d]).collect();
-            if feeds.iter().any(|f| f.is_some()) {
-                inputs += feeds.iter().filter(|f| f.is_some()).count();
-                sd.rows.push(wire(n_s, scalar::T[d], &feeds));
-            }
-        }
-        for d in 0..3 {
-            let feeds: Vec<Option<Feed>> = (0..n_s).map(|x| tau_feed[x][d]).collect();
-            if feeds.iter().any(|f| f.is_some()) {
-                inputs += feeds.iter().filter(|f| f.is_some()).count();
-                sd.rows.push(wire(n_s, scalar::TAU[d], &feeds));
+        for (feed, cells) in [(&slot_feed, scalar::T), (&tau_feed, scalar::TAU)] {
+            for (d, &cell) in cells[..shape.k].iter().enumerate() {
+                let feeds: Vec<Option<Feed>> = (0..n_s).map(|x| feed[x][d]).collect();
+                if feeds.iter().any(|f| f.is_some()) {
+                    inputs += feeds.iter().filter(|f| f.is_some()).count();
+                    sd.rows.push(wire(n_s, cell, &feeds));
+                }
             }
         }
     }
@@ -868,12 +865,21 @@ mod tests {
 
     #[test]
     fn scalar_side_wired_to_the_binding_chain() {
+        binding_control(3, 11, 13);
+    }
+
+    #[test]
+    fn four_variable_recursive_wiring_matches_the_native_trace_including_short_rounds() {
+        binding_control(4, 12, 17);
+    }
+
+    fn binding_control(group: usize, col_bits: usize, sx: usize) {
         let shape = Shape {
             label: "scalar-wired-test",
-            sx: 13,
+            sx,
             row_bits: 2,
-            col_bits: 11,
-            k: 3,
+            col_bits,
+            k: group,
         };
         let gens = crate::ipa::Gens::<Vesta>::new(shape.cols());
         let io_len = crate::census::STATEMENT_IO + 2 * (2 + shape.col_bits) - 6;
@@ -896,6 +902,59 @@ mod tests {
             &crate::spartan::Link::None,
         );
         let sw = scalar_wired(&shape, &inst, &proof, &claims, &tr, true);
+        if group == 4 {
+            assert_eq!(shape.outer_blocks().last(), Some(&1));
+            assert_eq!(shape.inner_blocks().last(), Some(&3));
+            let mut wiring = crate::full::Wiring::default();
+            let family = wiring.family(0, 1);
+            let values = crate::verifier::shared_values(&tr, &proof, &claims);
+            let rho = values.len().next_power_of_two().ilog2() as usize;
+            let mut words: Vec<_> = values.iter().copied().map(Fp::from_u128).collect();
+            words.resize(1 << rho, Fp::ZERO);
+            let shared = wiring.push(Array {
+                name: "verified transcript",
+                family,
+                rho,
+                r_count: values.len(),
+                fixed: false,
+                lookups: Vec::new(),
+                widths: vec![128],
+                rows: Vec::new(),
+                values: vec![words],
+            });
+            crate::full::endo_table(&mut wiring, family);
+            let side = crate::full::scalar_into::<Vesta>(
+                &mut wiring,
+                family,
+                shared,
+                0,
+                &shape,
+                &inst,
+                &proof,
+                &claims,
+                &tr,
+                &|rx, ry| crate::r1cs::matrix_evals(&shape, rx, ry),
+            );
+            assert_eq!(side.inputs, sw.inputs);
+            let (arrays, pi, counts, tables, copies) = wiring.finish();
+            let (c, uinst, uwit) = build(
+                Wired {
+                    arrays,
+                    pi,
+                    counts,
+                    tables,
+                    copies,
+                },
+                "four-variable-full-wiring",
+                12,
+            );
+            let ch = [Fp::from(5), Fp::from(7)];
+            let mut witness = uwit;
+            let relation = c.instantiate(&c.shape, &ch, Some(&mut witness.w));
+            let z = crate::r1cs::z_vector(&c.shape, &uinst, &witness);
+            let (a, b, c) = relation.abc(&c.shape, &z);
+            assert!(a.into_iter().zip(b).zip(c).all(|((a, b), c)| a * b == c));
+        }
         let lean = crate::fs::lean_schedule();
         assert_eq!(
             (sw.endo, sw.limbs),

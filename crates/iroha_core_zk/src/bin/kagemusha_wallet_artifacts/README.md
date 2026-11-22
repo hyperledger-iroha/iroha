@@ -140,9 +140,11 @@ commands. The profile accepts up to 4,096 bytes of JSON with exactly these field
 | `primary_dimensions`, `secondary_dimensions` | Objects with integer `x` and `y` accumulator dimensions. Use the compiler's selected dimensions for each curve. |
 
 The command imports all ten tapes, compares their program digests and recursive
-layouts and prints the complete bundle size and geometry on each curve. Its
-output describes the unsigned compiler inputs. The issuer separately selects
-and authenticates the wallet generation.
+layouts, and reports the complete bundle size and geometry on each curve.
+It measures the compact Payment pair, envelope and complete peer message with
+the wallet serializer. It also checks both maximum-depth CreditStatus messages,
+from a Receive head and from a later Send head, with all 32 siblings present. The signing and verification commands apply the
+same transport ceilings to the selected tapes.
 
 ### Prepare and verify a five-kind parameter manifest
 

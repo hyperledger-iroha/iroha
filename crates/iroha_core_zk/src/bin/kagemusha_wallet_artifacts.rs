@@ -623,19 +623,24 @@ fn verify_spartan_sources(
     compiled: &str,
 ) -> io::Result<()> {
     use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan;
-    let (primary, secondary) = zk_spartan::native::built_in_producer_programs()
-        .ok_or_else(|| invalid("this native build has no qualified Spartan producer"))?;
     let original = Original::open(scheme, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, None)?;
     let scheme = KagemushaWalletSchemeV1::decode_canonical(&original.bytes, &digest(scheme_id)?)
         .map_err(io::Error::other)?;
     let compiled = Original::open(compiled, zk_spartan::native::MAX_PROGRAM_BUNDLE_BYTES, None)?;
     let root = PrivateDirectory::open_exact(carrier)?;
+    let asset = digest(asset)?;
+    let manifest = digest(manifest)?;
+    let pack = root.read("verifier-pack.norito", spartan::MAX_PACK_BYTES)?;
+    let (claims, selected) = spartan::authenticated_pack_selection_any(&pack, &scheme, asset)?;
+    if selected != manifest { return Err(invalid("selected Spartan manifest differs")); }
+    let compiler = claims.built_in_producer()
+        .ok_or_else(|| invalid("native compiler registry unavailable"))?;
     spartan::verify_compiled_bundle(
         &root,
         &scheme,
-        digest(asset)?,
-        digest(manifest)?,
-        &spartan::ProducerPrograms { primary, secondary },
+        asset,
+        manifest,
+        &compiler,
         &compiled.bytes,
     )?;
     compiled.recheck()?;
@@ -646,11 +651,9 @@ fn verify_spartan_sources(
 
 fn encode_spartan_carrier(world: &str, scheme: &str, destination: &str) -> io::Result<()> {
     use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan::{
-        self, ProducerPrograms,
+        self, CompiledPrograms,
     };
     use iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1 as Install;
-    let (primary, secondary) = zk_spartan::native::built_in_producer_programs()
-        .ok_or_else(|| invalid("this native build has no qualified Spartan producer"))?;
     let world = Original::open(world, Install::MAX_BYTES, None)?;
     let row: Install =
         norito::decode_canonical_with_layout(&world.bytes, norito::core::WireLayout::Fixed)
@@ -659,7 +662,8 @@ fn encode_spartan_carrier(world: &str, scheme: &str, destination: &str) -> io::R
     let scheme = KagemushaWalletSchemeV1::decode_canonical(&original.bytes, &row.scheme)
         .map_err(io::Error::other)?;
     let root = PrivateDirectory::open_exact(destination)?;
-    let profile = ProducerPrograms { primary, secondary };
+    let profile = CompiledPrograms::for_manifest(&row.manifest)
+        .ok_or_else(|| invalid("native compiler registry unavailable"))?;
     let pins = spartan::publish(&row, &scheme, &profile, &root)?;
     let restored = spartan::read(
         &root,

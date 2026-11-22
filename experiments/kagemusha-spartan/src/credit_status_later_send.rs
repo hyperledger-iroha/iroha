@@ -214,8 +214,6 @@ pub(super) fn verify(
     let decoded =
         carrier::decode_projected_pair(&profile, &pair, &projection).map_err(Error::Rejected)?;
     let decided = verify_pair(&parameters.inner, full::SEND, decoded)?;
-    #[cfg(not(test))]
-    drop(decided);
     // Every evidence word was an input of the decided pair or of the checked receipt.
     let words: [Fp; 64] = projection
         .primary()
@@ -233,7 +231,6 @@ pub(super) fn verify(
             statement: s,
             profile: words,
             exact_pair: pair,
-            #[cfg(test)]
             pair: decided,
             next: opening.next,
             slot: opening.path.index,
@@ -242,7 +239,14 @@ pub(super) fn verify(
     })
 }
 
-fn qualified_maximum(encoded_pair: usize) -> Result<usize> {
+pub(super) fn maximum_for_codec(
+    profile: &carrier::TrustedProfile,
+    codec: &proof_codec::Codec,
+) -> Result<usize> {
+    maximum_peer_bytes(generator_projection::Layout::new(profile, codec)?.bytes())
+}
+
+fn maximum_peer_bytes(encoded_pair: usize) -> Result<usize> {
     // Profile/flags, all bounded statement fields, receipt fragment, epoch and pending
     // root, next credit and slot, then all 32 siblings. Dense form has no redundant mask.
     let fixed =
@@ -250,10 +254,15 @@ fn qualified_maximum(encoded_pair: usize) -> Result<usize> {
     let n = fixed
         .checked_add(encoded_pair)
         .ok_or(Error::ResourceLimit)?;
-    if n > MAX_PAYLOAD {
+    n.checked_add(payment_wire::HEADER_BYTES).ok_or(Error::ResourceLimit)
+}
+
+fn qualified_maximum(encoded_pair: usize) -> Result<usize> {
+    let n = maximum_peer_bytes(encoded_pair)?;
+    if n > MAX_PAYLOAD + payment_wire::HEADER_BYTES {
         return Err(Error::ResourceLimit);
     }
-    Ok(n + payment_wire::HEADER_BYTES)
+    Ok(n)
 }
 
 fn pack_frame(

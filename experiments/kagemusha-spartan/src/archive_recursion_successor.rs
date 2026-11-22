@@ -31,10 +31,8 @@
 //! byte from the same input as the recursive verifier. Extra diagnostic words expose
 //! retained Request, Payment and profile inputs during engineering qualification.
 use super::*;
-#[path = "archive_recursive_wire_successor.rs"]
-mod wire;
 use crate::{
-    full::{self, ArchiveIncoming, TracedPair, VerifiedPredecessor},
+    full::{self, TracedPair},
     r1cs::Witness,
     verifier::Fq,
 };
@@ -45,254 +43,7 @@ use std::cell::RefCell;
 
 type ReceiverReceipt = super::super::receiver_signature::ReceiverReceipt;
 
-/// Payer-held and receiver exact originals the native verifier supplies. The primary's
-/// io already holds the profile (0..64), the folded matrix claim (from `full::LATE_IO`,
-/// below the link), the link (124..128) and the inherited generator claim (from
-/// `generator_claim::IO_START`, through 192).
-const ORIGINALS_IO: usize = 192;
-// `IO_START` is aligned to the generator claim's power-of-two width, so it ends by 192.
-const _: () = assert!(ORIGINALS_IO >= crate::generator_claim::IO_START + 32);
-/// Offsets inside the originals block: tag, credit, descriptor (7), transcript binding (2),
-/// quoted credential digest, Payment digest, exact receipt digest, form bit, subject.
-const FORM: usize = 14;
-const SUBJECT: usize = 15;
-/// The packed open and completed Request words.
-const OPEN: usize = 16;
-const COMPLETED: usize = 32;
-/// The receiver statement, raw pair and primary profile digests.
-const EXACT: usize = 48;
-const STATEMENT_DIGEST: usize = EXACT;
-const PAIR_DIGEST: usize = EXACT + 1;
-const PROFILE_DIGEST: usize = EXACT + 2;
-/// The remaining exact Request and Payment diagnostics still exceed the wallet profile.
-const P_IO: usize = 256;
-const _: () = assert!(ORIGINALS_IO + PROFILE_DIGEST < P_IO);
-const S_IO: usize = 64;
-
-#[derive(Clone, Copy)]
-enum Projection<'a> {
-    Diagnostics,
-    Wallet,
-    Completed {
-        credential: &'a crate::credential::Credential,
-        receipt: &'a crate::receipt::Receipt,
-    },
-}
-
-impl Case {
-    /// The successor relation over verifier-owned sources. Returns the derived values of
-    /// the four branch inputs `[receiver verdict, evidence, signature, no correction]`.
-    #[allow(clippy::too_many_arguments)]
-    fn append_verified(
-        &self,
-        w: &mut Wiring<Fp>,
-        family: usize,
-        binding: [Fp; 2],
-        receiver: &ReceiverReceipt,
-        predecessor: &VerifiedPredecessor,
-        incoming: &ArchiveIncoming<'_>,
-        projection: Projection<'_>,
-    ) -> std::result::Result<[Fp; 4], &'static str> {
-        use crate::credential_policy::{all, zero_predicate};
-        let facts = incoming.facts;
-        let prior = monetary_state::append_state(w, family, &self.before.core, &self.before.rest);
-        let next = monetary_state::append_state(w, family, &self.after.core, &self.after.rest);
-        let [k0, k1] = facts.kind();
-        let mut c = Cells::new(family);
-        c.a.name = "Lambda_archive successor inputs and verified predecessor joins";
-        let tag = c.cell(self.tag, 255);
-        let credit = c.cell(self.credit, 255);
-        let descriptor = self.descriptor.map(|v| c.cell(v, 255));
-        let before = self.before.lineage.map(|v| c.cell(v, 255));
-        let after = self.after.lineage.map(|v| c.cell(v, 255));
-        let binding = binding.map(|v| c.cell(v, 255));
-        // The before state and every before-lineage field are the verified payer head's.
-        c.eq(
-            source(prior.local, prior.commitment).linear(),
-            predecessor.head().linear(),
-        );
-        for (&cell, verified) in before.iter().zip(predecessor.lineage()) {
-            c.eq(own(cell, 1), verified.linear());
-        }
-        // The verified receiver head is a signed Receive or Send head: c1 = 0. The slot's
-        // two admitted keys and both deferred folds already hold this; this total
-        // predicate reads the same verified io leaf, never a free prover bit.
-        let signed_kind = zero_predicate(&mut c, k1.linear(), k1.value(w));
-        let local = w.push(c.a);
-        let s = |k| source(local, k);
-        let descriptor = descriptor.map(s);
-        let ports = receiver.append(w, family, descriptor, s(signed_kind));
-        // The words the receipt and opening relations compare are the verified head's.
-        let context = facts.context();
-        let mut joins = Cells::new(family);
-        joins.a.name = "Lambda_archive receiver words from the total verifier slot";
-        for (i, verified) in [
-            (1, facts.receipt_digest()),
-            (2, facts.head()),
-            (3, facts.statement_digest()),
-            (6, context[bc::WALLET]),
-            (7, context[bc::WALLET + 1]),
-            (8, context[bc::PAYMENT_KEY]),
-            (9, context[bc::PAYMENT_KEY + 1]),
-            (10, context[bc::PAYMENT_KEY + 2]),
-            (11, context[bc::PAYMENT_KEY + 3]),
-        ] {
-            joins.eq(ports.public[i].linear(), verified.linear());
-        }
-        let opening = &ports.opening;
-        if opening.len() != 4 + 32 {
-            return Err("ArchiveSent credit opening");
-        }
-        joins.eq(
-            opening[0].linear(),
-            facts.lineage()[bc::CREDIT_ROOT].linear(),
-        );
-        w.push(joins.a);
-        // The authenticated receiver kind against the public form: its verified kind bit
-        // c0 (Send 1, Receive 0) must be the form bit, which the statement's own kind
-        // word and the receipt's signed operation id already match. A total predicate in
-        // the evidence: a disagreement derives a false result and only the no-op.
-        let form = ports.public[12];
-        let mut k = Cells::new(family);
-        k.a.name = "Lambda_archive authenticated receiver kind against the form";
-        let agrees = zero_predicate(
-            &mut k,
-            plus(&k0.linear(), &scaled(&form.linear(), -Fp::ONE)),
-            k0.value(w) - form.value(w),
-        );
-        let receipt_evidence = k.bit(ports.evidence.value(w) == Fp::ONE);
-        k.eq(own(receipt_evidence, 1), ports.evidence.linear());
-        let evidence = all(&mut k, &[receipt_evidence, agrees]);
-        let kind_local = w.push(k.a);
-        let results = [
-            facts.validity(),
-            source(kind_local, evidence),
-            ports.signature,
-            incoming.corrections,
-        ];
-        let derived = results.map(|r| r.value(w));
-        append(
-            w,
-            family,
-            &ArchiveState {
-                state: &prior,
-                lineage: before.map(s),
-            },
-            &ArchiveState {
-                state: &next,
-                lineage: after.map(s),
-            },
-            ArchiveInputs {
-                tag: s(tag),
-                credit: s(credit),
-                descriptor,
-                results,
-            },
-            &self.core_path,
-            &self.adjusted_path,
-        );
-        let statement = wire::append(
-            w,
-            family,
-            predecessor,
-            incoming,
-            &prior,
-            &next,
-            s(credit),
-            &ports,
-        );
-        if let Projection::Completed { credential, receipt } = projection {
-            let current = crate::operation_auth::append_current(
-                w, family, credential, &prior, predecessor,
-            )?;
-            let authenticated = crate::receipt::append_own(
-                w, family, receipt, &current, &statement,
-                crate::statement::Kind::Archive, crate::receipt::PaymentDigest::Absent,
-            )?;
-            expose(w, family, full::RECEIPT_IO, &[authenticated.digest()]);
-        }
-
-        expose(
-            w,
-            family,
-            full::HEAD_IO,
-            &[source(next.local, next.commitment)],
-        );
-        expose(w, family, bc::CONTEXT_IO, &predecessor.context());
-        expose(w, family, bc::LINEAGE_IO, &after.map(s));
-        if !matches!(projection, Projection::Diagnostics) {
-            crate::full::archive_receiver_projection::bind(
-                w,
-                family,
-                incoming.facts,
-                crate::full::archive_receiver_projection::Originals {
-                    statement: &ports.statement_fields,
-                    statement_digest: ports.public[14],
-                    receipt_digest: ports.public[5],
-                    wallet: ports.quoted_wallet,
-                    key: ports.quoted_key,
-                    table: ports.quoted_table,
-                    send_form: ports.public[12],
-                    subject: ports.public[13],
-                },
-            );
-            return Ok(derived);
-        }
-        let mut originals = vec![s(tag), s(credit)];
-        originals.extend(descriptor);
-        originals.extend(binding.map(s));
-        originals.extend([
-            ports.public[0],
-            ports.public[4],
-            ports.public[5],
-            ports.public[12],
-            ports.public[13],
-        ]);
-        debug_assert_eq!(originals.len(), OPEN);
-        expose(w, family, ORIGINALS_IO, &originals);
-        let request = ports.request.as_ref().ok_or("ArchiveSent signed Request")?;
-        expose(w, family, ORIGINALS_IO + OPEN, &request.open);
-        expose(w, family, ORIGINALS_IO + COMPLETED, &request.completed);
-        expose(
-            w,
-            family,
-            ORIGINALS_IO + EXACT,
-            &[ports.public[14], facts.proof_digest(), incoming.io_digest],
-        );
-        Ok(derived)
-    }
-}
-
-/// [`full::ArchiveRelation`] for one successor case and its receiver originals.
-struct Composed<'a> {
-    case: &'a Case,
-    binding: [Fp; 2],
-    receiver: &'a ReceiverReceipt,
-    derived: RefCell<Option<[Fp; 4]>>,
-    projection: Projection<'a>,
-}
-
-impl full::ArchiveRelation for Composed<'_> {
-    fn append(
-        &self,
-        w: &mut Wiring<Fp>,
-        family: usize,
-        predecessor: &VerifiedPredecessor,
-        incoming: &ArchiveIncoming<'_>,
-    ) -> std::result::Result<(), &'static str> {
-        let derived = self.case.append_verified(
-            w,
-            family,
-            self.binding,
-            self.receiver,
-            predecessor,
-            incoming,
-            self.projection,
-        )?;
-        *self.derived.borrow_mut() = Some(derived);
-        Ok(())
-    }
-}
+use crate::native::engine::transfers::archive_sent::relation::{Projection,Composed,ORIGINALS_IO,FORM,SUBJECT,OPEN,COMPLETED,EXACT,STATEMENT_DIGEST,PAIR_DIGEST,PROFILE_DIGEST,P_IO,S_IO};
 
 type BuiltS = (UniformCircuit<Fq>, Instance<Fq>, Witness<Fq>);
 
@@ -486,6 +237,31 @@ fn primary_at(
     projection: Projection<'_>,
     layout: Option<crate::uniform::Layout>,
 ) -> Lambda {
+    primary_at_group(
+        payer,
+        gens,
+        slots,
+        folds,
+        case,
+        receiver,
+        projection,
+        layout,
+        full::backend_chain_tests::CompilerGroup::Three,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn primary_at_group(
+    payer: &Inputs<'_>,
+    gens: &full::PairGens,
+    slots: &[TracedPair; 2],
+    folds: &full::GeneratorFolds,
+    case: &Case,
+    receiver: &ReceiverReceipt,
+    projection: Projection<'_>,
+    layout: Option<crate::uniform::Layout>,
+    group: full::backend_chain_tests::CompilerGroup,
+) -> Lambda {
     let relation = Composed {
         case,
         binding: payer.binding(),
@@ -500,13 +276,25 @@ fn primary_at(
     };
     let columns = gens.p.g.len().ilog2() as usize;
     let p = if matches!(projection, Projection::Completed { .. }) {
-        full::backend_chain_tests::build_monetary_program(w, columns, true, layout)
+        full::backend_chain_tests::build_monetary_program_grouped(w, columns, true, layout, group)
     } else {
+        assert_eq!(group, full::backend_chain_tests::CompilerGroup::Three);
         let (a, p, n, t, c) = w.finish();
         UniformCircuit::build_with_copies_at(
-            "Lambda_archive P", a, p, n, t, c, columns,
-            if matches!(projection, Projection::Diagnostics) { P_IO } else { 64 },
-            b"Lambda_archive P", layout,
+            "Lambda_archive P",
+            a,
+            p,
+            n,
+            t,
+            c,
+            columns,
+            if matches!(projection, Projection::Diagnostics) {
+                P_IO
+            } else {
+                64
+            },
+            b"Lambda_archive P",
+            layout,
         )
     };
     Lambda {
@@ -549,8 +337,30 @@ fn compiler_secondary(
     folds: &full::GeneratorFolds,
     layout: Option<crate::uniform::Layout>,
 ) -> BuiltS {
+    compiler_secondary_group(
+        gens,
+        slots,
+        folds,
+        layout,
+        full::backend_chain_tests::CompilerGroup::Three,
+    )
+}
+
+fn compiler_secondary_group(
+    gens: &full::PairGens,
+    slots: &[TracedPair; 2],
+    folds: &full::GeneratorFolds,
+    layout: Option<crate::uniform::Layout>,
+    group: full::backend_chain_tests::CompilerGroup,
+) -> BuiltS {
     let (w, _) = full::s_archive_operation(gens, slots, folds);
-    full::backend_chain_tests::build_monetary_program(w, gens.s.g.len().ilog2() as usize, false, layout)
+    full::backend_chain_tests::build_monetary_program_grouped(
+        w,
+        gens.s.g.len().ilog2() as usize,
+        false,
+        layout,
+        group,
+    )
 }
 
 /// One Λ_archive witness against one secondary: both circuits' constraints with one
@@ -622,10 +432,17 @@ fn public_statement(payer: &Inputs<'_>, case: &Case, status: [u8; 32]) -> Fp {
 }
 
 fn public_fields(payer: &Inputs<'_>, case: &Case, status: [u8; 32]) -> [Fp; 26] {
+    public_payment_fields(payer, case, payer.delivery.payment().digest(), status)
+}
+
+/// Each fresh compiler Receive signs the exact Payment of its originating
+/// Send. Its digest is also an operand of the resulting payer statement.
+fn public_payment_fields(
+    payer: &Inputs<'_>, case: &Case, payment: Fp, status: [u8; 32],
+) -> [Fp; 26] {
     use crate::native::engine::transfers::archive_sent::{archive_statement, credited_digest};
-    let payment = payer.delivery.payment();
-    let credit = payment.statement()[17];
-    let credited = credited_digest(credit, payment.digest(), status).unwrap();
+    let credit = payer.delivery.payment().statement()[17];
+    let credited = credited_digest(credit, payment, status).unwrap();
     let profile = payer.released.head().profile();
     let at = bc::CONTEXT_IO + bc::RELATION;
     let relation = [profile[at], profile[at + 1]];
@@ -1619,5 +1436,104 @@ fn wallet_projection_proves_both_heads_and_their_exact_noops() {
     });
 }
 
+#[test]
+#[ignore = "requires the retained device-fixture Send, Request, both receiver forms and software payer credential"]
+fn native_archive_builder_matches_compiler_for_both_receiver_forms() {
+    use crate::r1cs::Circuit;
+
+    with_both_forms(|forms, send, sent, params| {
+        let engine = NativeEngine::default();
+        let send_capsule = send.capsule().encode().unwrap();
+        let send_completion = sent.completion().encode().unwrap();
+        let gens = &params.inner.generators;
+        for payer in forms {
+            let payment = payer.delivery.payment();
+            let descriptor = payment.statement()[17..24].try_into().unwrap();
+            let mut store =
+                super::payer_custody::Store::new(&super::payer_custody::pending_tree(&descriptor));
+            let mut witness = engine
+                .wallet_archive_sent_witness(
+                    payer.current,
+                    payer.released.head(),
+                    &send_capsule,
+                    &send_completion,
+                    payer.delivery.open_request(),
+                    payer.delivery.credit_status(),
+                    &mut store,
+                    params,
+                )
+                .unwrap();
+            let prepared = engine
+                .archive_proving_inputs(&witness, payer.released.head(), params)
+                .unwrap();
+            let native::ExactOperationWitness::ArchiveSent { step, .. } = &mut witness else {
+                panic!("expected ArchiveSent")
+            };
+            let case = payer.case(step.after_core[NONCE]).unwrap();
+            let receipt = compiler::compiler_receipt(
+                payer,
+                &case,
+                payment.digest(),
+                payer.delivery.status_digest().unwrap(),
+            );
+            step.receipt = receipt.clone();
+            let slots = slots_with(
+                payer,
+                params,
+                prepared.pair.clone(),
+                prepared.pair_bytes.clone(),
+            );
+            let folds =
+                full::GeneratorFolds::prepare(gens, &slots, &ProofEntropy::fresh().unwrap())
+                    .unwrap();
+            let wire = prepared
+                .primary(step, payer.released.head(), gens, &slots, &folds)
+                .unwrap();
+            let (program, public, private) = full::backend_chain_tests::build_monetary_program(
+                wire,
+                gens.p.g.len().ilog2() as usize,
+                true,
+                None,
+            );
+            let expected = primary_at(
+                payer,
+                gens,
+                &slots,
+                &folds,
+                &case,
+                &delivered_receipt(payer.delivery).unwrap(),
+                Projection::Completed {
+                    credential: payer.current.credential(),
+                    receipt: &receipt,
+                },
+                None,
+            );
+            assert_eq!(program.program_digest(), expected.p.0.program_digest());
+            assert_eq!(public.io, expected.p.1.io);
+            assert_eq!(program.wallet_io(), Some(full::TABLE_IO));
+            assert_eq!(
+                public.io[full::STATEMENT_IO],
+                crate::statement::digest(&step.statement)
+            );
+            assert_eq!(
+                public.io[full::RECEIPT_IO],
+                crate::receipt::digest(&receipt)
+            );
+            drop(expected);
+            let ss = compiler_secondary(gens, &slots, &folds, None);
+            let (ok, r, _) = linked_holds(&ss.0, &ss.1, &ss.2, &rho(), None, None);
+            assert!(ok);
+            assert!(linked_holds(&program, &public, &private, &rho(), Some(r), None).0);
+        }
+    });
+}
+
 #[path = "archive_program_compiler.rs"]
 mod compiler;
+#[path = "archive_compiler_receiver.rs"]
+mod compiler_receiver;
+#[path = "archive_compiler_predecessors.rs"]
+mod compiler_predecessors;
+
+#[path = "archive_compiler_history.rs"]
+mod compiler_history;

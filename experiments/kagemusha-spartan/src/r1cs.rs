@@ -145,6 +145,11 @@ impl<S: zeroize::Zeroize> WrittenWitness<S> {
         &self.rows
     }
 
+    /// Mutable authored values remain under this guard until the proof consumes it.
+    pub(crate) fn parts_mut(&mut self) -> (&mut Witness<S>, &[RowFill]) {
+        (&mut self.witness, &self.rows)
+    }
+
     pub(crate) fn allocation_bytes(&self) -> usize {
         self.witness.w.capacity() * std::mem::size_of::<S>()
             + self.rows.capacity() * std::mem::size_of::<RowFill>()

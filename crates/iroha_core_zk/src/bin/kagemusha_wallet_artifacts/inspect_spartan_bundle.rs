@@ -59,7 +59,7 @@ pub(super) fn read_profile(profile: &str) -> io::Result<(Original, ProgramProfil
 pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
     let (profile, compiler) = read_profile(profile)?;
     let bundle = Original::open(bundle, MAX_PROGRAM_BUNDLE_BYTES, None)?;
-    let geometry = ProgramBundleV2::inspect_originals(
+    let (geometry, sizes) = ProgramBundleV2::inspect_retail_originals(
         &bundle.bytes,
         &compiler.primary,
         &compiler.secondary,
@@ -72,10 +72,15 @@ pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
         "program_bundle_version=2 kinds=5 bytes={}",
         bundle.bytes.len()
     );
+    println!(
+        "payment_pair_bytes={} payment_envelope_bytes={} payment_peer_bytes={} maximum_receive_status_peer_bytes={} maximum_later_send_status_peer_bytes={}",
+        sizes.payment_pair, sizes.payment_envelope, sizes.payment_peer, sizes.receive_status_peer, sizes.later_send_status_peer
+    );
     for (
         curve,
         ProgramBundleGeometry {
             constraint_bits,
+            sumcheck_variables,
             row_bits,
             column_bits,
             first_phase_rows,
@@ -86,7 +91,7 @@ pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
     ) in ["primary", "secondary"].into_iter().zip(geometry)
     {
         println!(
-            "curve={curve} constraint_bits={constraint_bits} row_bits={row_bits} column_bits={column_bits} first_phase_rows={first_phase_rows} link_phase_rows={link_phase_rows} fixed_rows={fixed_rows} folded_claim_words={folded_claim_words}"
+            "curve={curve} constraint_bits={constraint_bits} sumcheck_variables={sumcheck_variables} row_bits={row_bits} column_bits={column_bits} first_phase_rows={first_phase_rows} link_phase_rows={link_phase_rows} fixed_rows={fixed_rows} folded_claim_words={folded_claim_words}"
         );
     }
     Ok(())

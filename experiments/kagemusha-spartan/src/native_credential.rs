@@ -54,6 +54,58 @@ impl CredentialIssuerParameters {
         })
     }
 
+    /// Derive the issuer's payment-key table from the authenticated five-kind
+    /// generation and the capacities independently selected by this build.
+    pub fn from_five_manifest(
+        header: &crate::native::AuthenticatedManifestHeaderV5,
+        scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
+    ) -> Result<Self> {
+        let source = crate::native::FIVE_KIND_PRODUCER
+            .as_ref()
+            .ok_or(Error::Unavailable("qualified five-kind compiler profile"))?;
+        Self::from_selected_five_manifest(
+            header,
+            scheme,
+            &source.programs,
+            source.generator_capacity_bits,
+        )
+    }
+
+    pub(in crate::native) fn from_selected_five_manifest(
+        header: &crate::native::AuthenticatedManifestHeaderV5,
+        scheme: &iroha_data_model::kagemusha::KagemushaWalletSchemeV1,
+        programs: &crate::native::ProgramProfileV2,
+        capacities: [usize; 2],
+    ) -> Result<Self> {
+        scheme
+            .validate()
+            .map_err(|e| Error::Rejected(e.to_string()))?;
+        let network: iroha_data_model::NetworkId = header
+            .finality_network
+            .parse()
+            .map_err(|_| Error::Malformed("issuer genesis"))?;
+        if header.programs != *programs
+            || header.scheme != scheme.scheme_id()
+            || header.relation != scheme.relation_id
+            || network.as_bytes() != &scheme.network_id
+            || network.to_string() != header.finality_network
+            || header.generator_capacity_bits.map(|n| n as usize) != capacities
+        {
+            return Err(Error::AuthorityMismatch(
+                "installed five-kind issuer profile",
+            ));
+        }
+        let [p, s] = capacities.map(|n| 1usize << n);
+        let generators = (Gens::new(p), Gens::new(s));
+        header.verify_generators(&generators)?;
+        let (gp, _) = generators;
+        Ok(Self {
+            scheme: header.scheme,
+            root: super::super::point(scheme.scheme_root_key.as_ref())?,
+            table: Arc::new(gp.prefix(full_table_bases())),
+        })
+    }
+
     /// Build the exact extended credential body for the enrolled payment key.
     pub fn credential_body_for_issuance(
         &self,

@@ -30,12 +30,124 @@ fn artifact_signed_five_kind_manifest_requires_exact_genesis_programs_and_profil
         .prepare_manifest_for_signing(&bundle, &scheme, &finality, &artifact)
         .unwrap();
     let signature = engine::test_sign_manifest(&manifest);
+    let header =
+        ProgramProfileV2::authenticate_manifest_header(&manifest, &signature, &selected, &scheme)
+            .unwrap();
+    assert!(header.programs == profile);
+    assert_eq!(header.manifest_digest, selected);
+    assert_eq!(header.finality_network, finality.network().to_string());
+    assert_eq!(header.finality_chain, finality.chain_id());
+    assert!(
+        ProgramProfileV2::authenticate_manifest_header(&manifest, &[0; 64], &selected, &scheme)
+            .is_err()
+    );
+    assert!(
+        ProgramProfileV2::authenticate_manifest_header(&manifest, &signature, &[0; 32], &scheme)
+            .is_err()
+    );
+    let limit = InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES;
+    assert!(matches!(
+        ProgramProfileV2::authenticate_manifest_header(
+            &vec![0; limit + 1],
+            &signature,
+            &selected,
+            &scheme
+        ),
+        Err(Error::ResourceLimit)
+    ));
     let geometry = profile
         .verify_signed_originals(
             &bundle, &manifest, &signature, &selected, &scheme, &finality,
         )
         .unwrap();
     assert_eq!(geometry.map(|g| g.column_bits), [13, 10]);
+    let mounted = crate::native::AuthenticatedParameters::install_five(
+        &bundle,
+        &manifest,
+        signature,
+        &selected,
+        &profile,
+        &scheme,
+        finality.clone(),
+    )
+    .unwrap();
+    assert_eq!(mounted.export_program_bundle().unwrap(), bundle);
+    assert_eq!(mounted.manifest_digest(), &selected);
+    assert_eq!(mounted.id(), &scheme.relation_id);
+    // This test producer has its own explicit pins. The installed application
+    // and enrollment service must independently recognize a shipping producer.
+    assert!(
+        crate::native::AuthenticatedParameters::governed_manifest(
+            &manifest, &signature, &selected, &scheme,
+        )
+        .is_err()
+    );
+    assert!(
+        crate::native::CredentialIssuerParameters::from_five_manifest(&header, &scheme).is_err()
+    );
+    mounted.require_archive_sent_program().unwrap();
+    let issuer = crate::native::CredentialIssuerParameters::from_selected_five_manifest(
+        &header,
+        &scheme,
+        &profile,
+        [13, 10],
+    )
+    .unwrap();
+    let account = fixture
+        .genesis()
+        .external_transactions()
+        .next()
+        .unwrap()
+        .authority();
+    let (_, origin, _) =
+        device_fixture::registered_bootstrap(&mounted, &device_fixture::vector_asset(), account);
+    let crate::native::ExactOperationWitness::Bootstrap(input) = &origin else {
+        panic!("bootstrap credential")
+    };
+    let credential = &input.input.credential;
+    let fields = credential.enrollment_fields().unwrap();
+    assert_eq!(
+        issuer.credential_body_for_issuance(&fields).unwrap(),
+        credential.body
+    );
+    assert_eq!(
+        mounted.credential_body_for_issuance(&fields).unwrap(),
+        credential.body
+    );
+    assert!(
+        crate::native::CredentialIssuerParameters::from_selected_five_manifest(
+            &header,
+            &scheme,
+            &profile,
+            [13, 11],
+        )
+        .is_err()
+    );
+    let mut wrong = profile.clone();
+    wrong.secondary.swap(1, 3);
+    assert!(
+        crate::native::CredentialIssuerParameters::from_selected_five_manifest(
+            &header,
+            &scheme,
+            &wrong,
+            [13, 10],
+        )
+        .is_err()
+    );
+    let mut empty_pin = profile.clone();
+    empty_pin.primary[4] = [0; 32];
+    assert!(matches!(
+        crate::native::AuthenticatedParameters::install_five(
+            &bundle,
+            &manifest,
+            signature,
+            &selected,
+            &empty_pin,
+            &scheme,
+            finality.clone(),
+        ),
+        Err(Error::AuthorityMismatch("missing five-kind producer pin"))
+    ));
     // Both wire dimensions are distinct from the installed eight-tape generation.
     assert!(crate::native::decode::<crate::native::ParameterManifest>(&manifest).is_err());
     assert!(crate::native::ProgramBundle::decode(&bundle).is_err());

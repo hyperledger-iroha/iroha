@@ -33,6 +33,30 @@ fn worst_payload(pair: usize) -> usize {
 /// Qualify all thirty-two populated siblings and maximum legal terms under the installed geometry.
 pub(super) fn admit_profile(profile: &carrier::TrustedProfile, gens: &full::PairGens) -> std::result::Result<usize, String> {
     let pair = proof_codec::Codec::new(profile, gens)?.encoded_len()?;
+    admit_pair_size(pair)
+}
+
+pub(in crate::native) fn admit_common_program_geometry(
+    profile: &carrier::TrustedProfile,
+    matrices: [proof_codec::MatrixQueryLayout; 2],
+) -> Result<[usize; 2]> {
+    let [primary, secondary] = matrices;
+    let codec = proof_codec::Codec::from_matrix_layouts(profile, primary, secondary)
+        .map_err(Error::Rejected)?;
+    let receive = worst_payload(codec.encoded_len().map_err(Error::Rejected)?) + payment_wire::HEADER_BYTES;
+    let later_send = later_send::maximum_for_codec(profile, &codec)?;
+    let limit = super::super::MAX_CREDIT_STATUS_ORIGINAL_BYTES;
+    if receive > limit || later_send > limit {
+        return Err(Error::Rejected(format!(
+            "maximum CreditStatus peer bytes: Receive {receive}, later Send {later_send}, limit {limit}"
+        )));
+    }
+    Ok([receive, later_send])
+}
+
+pub(in crate::native) use proof_codec::MatrixQueryLayout;
+
+fn admit_pair_size(pair: usize) -> std::result::Result<usize, String> {
     let maximum = worst_payload(pair);
     if maximum > MAX_PAYLOAD { return Err(format!("installed Receive needs {maximum} canonical credit-status bytes")); }
     Ok(maximum)
@@ -219,7 +243,30 @@ fn restore_receipt(
     })
 }
 
-fn projected(
+pub(in crate::native) fn receive_opening(
+    maps: &crate::receive_lineage::ReceiveMapWitness, credit: Fp, payment: Fp, root: Fp,
+) -> Result<(VerifiedCreditStatus, Fp, Path<32>)> {
+    let opening = if maps.credit_search.leaf.key == credit {
+        Opening {
+            next: maps.credit_search.leaf.next,
+            path: maps.credit_search.path.clone(),
+        }
+    } else {
+        Opening {
+            next: maps.credit_insert.low.next,
+            path: maps.credit_insert.slot.clone(),
+        }
+    };
+    let status = [VerifiedCreditStatus::Credited, VerifiedCreditStatus::Burned]
+        .into_iter()
+        .find(|status| {
+            opening.root(credit, payment, *status).is_ok_and(|calculated| calculated == root)
+        })
+        .ok_or(Error::AuthorityMismatch("exact retained credit membership"))?;
+    Ok((status, opening.next, opening.path))
+}
+
+pub(in crate::native) fn projected(
     receiver: &Credential,
     s: &[Fp; 26],
     receipt: &bootstrap::Receipt,
@@ -318,8 +365,6 @@ impl NativeEngine {
         let decoded = carrier::decode_projected_pair(&trusted, &exact, &projection)
             .map_err(Error::Rejected)?;
         let pair = verify_pair(&parameters.inner, full::RECEIVE, decoded)?;
-        #[cfg(not(test))]
-        drop(pair);
         // Every word below was an input of the decided pair or of the checked receipt.
         let profile: [Fp; 64] = projection
             .primary()
@@ -335,7 +380,6 @@ impl NativeEngine {
                 statement: s,
                 profile,
                 exact_pair: exact,
-                #[cfg(test)]
                 pair,
                 next: opening.next,
                 slot: opening.path.index,
@@ -426,27 +470,13 @@ impl NativeEngine {
         if receipt.body.as_slice() != &r[..338] || receipt.signature.as_slice() != &r[338..] {
             return Err(Error::AuthorityMismatch("credit status retained receipt"));
         }
-        let maps = &step.maps;
-        let opening = if maps.credit_search.leaf.key == s[17] {
-            Opening {
-                next: maps.credit_search.leaf.next,
-                path: maps.credit_search.path.clone(),
-            }
-        } else {
-            Opening {
-                next: maps.credit_insert.low.next,
-                path: maps.credit_insert.slot.clone(),
-            }
-        };
         let lineage: [Fp; 6] = head.profile[bc::LINEAGE_IO..bc::LINEAGE_IO + bc::LINEAGE_FIELDS]
             .try_into()
             .unwrap();
-        let status = [VerifiedCreditStatus::Credited, VerifiedCreditStatus::Burned]
-            .into_iter()
-            .find(|status| {
-                opening.root(s[17], payment.digest(), *status).is_ok_and(|root| root == lineage[bc::CREDIT_ROOT])
-            })
-            .ok_or(Error::AuthorityMismatch("exact retained credit membership"))?;
+        let (status, next, path) = receive_opening(
+            &step.maps, s[17], payment.digest(), lineage[bc::CREDIT_ROOT],
+        )?;
+        let opening = Opening { next, path };
         let projection = projected(&receiver, &s, &receipt, lineage)?;
         if projection.primary().io != head.profile {
             return Err(Error::AuthorityMismatch(

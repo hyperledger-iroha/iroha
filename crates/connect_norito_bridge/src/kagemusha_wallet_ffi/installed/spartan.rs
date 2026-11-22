@@ -57,6 +57,12 @@ fn carrier_error(error: std::io::Error) -> Failure {
     use std::io::ErrorKind as Kind;
     if error
         .get_ref()
+        .is_some_and(|inner| inner.is::<carrier::CompilerUnavailable>())
+    {
+        return Failure::code(ARTIFACTS_UNAVAILABLE);
+    }
+    if error
+        .get_ref()
         .is_some_and(|inner| inner.is::<std::collections::TryReserveError>())
     {
         return Failure::code(RESOURCE);
@@ -78,8 +84,7 @@ fn carrier_root(root: &[u8]) -> Result<PrivateDirectory> {
     if root.is_empty() || root.len() > ROOT_MAX || root.contains(&0) {
         return Err(Failure::code(INVALID));
     }
-    let root =
-        std::path::Path::new(std::str::from_utf8(root).map_err(|_| Failure::code(INVALID))?);
+    let root = std::path::Path::new(std::str::from_utf8(root).map_err(|_| Failure::code(INVALID))?);
     if !root.is_absolute() {
         return Err(Failure::code(INVALID));
     }
@@ -99,15 +104,6 @@ fn require_offer(input: &RuntimeOriginals<'_>, release: &carrier::ReleasePins) -
         return Err(Failure::code(INVALID));
     }
     Ok(())
-}
-
-/// This build's own compiler outputs, independent of every signed or installed original.
-/// A build whose owner has not verified them cannot install Spartan programs at all.
-// The v4 registry pins the exact eight canonical programs compared by the fixed-point test.
-fn producer_programs() -> Result<carrier::ProducerPrograms> {
-    let (primary, secondary) =
-        native::built_in_producer_programs().ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
-    Ok(carrier::ProducerPrograms { primary, secondary })
 }
 
 /// Exact equality with the installed originals. This compares; it never installs.
@@ -132,15 +128,13 @@ impl Installation {
             return Err(Failure::code(INVALID));
         }
         require_offer(input, &profile.release)?;
-        let producer = producer_programs()?;
         let root = carrier_root(input.originals_root)?;
-        let install = carrier::read(
+        let (install, producer) = carrier::read_from_build(
             &root,
             profile.release,
             &selected.scheme,
             profile.asset,
             profile.manifest_digest,
-            &producer,
         )
         .map_err(carrier_error)?;
         if install.scheme != selected.scheme.scheme_id()
@@ -152,13 +146,26 @@ impl Installation {
         opening.lap("spartan_carrier");
         let finality =
             SumeragiCommitVerifierV1::new(&selected.genesis).map_err(|_| Failure::code(INVALID))?;
-        let parameters = native::AuthenticatedParameters::install(
-            &install.programs,
-            &install.manifest,
-            install.signature,
-            &selected.scheme,
-            finality,
-        )?;
+        let parameters = match producer {
+            carrier::CompiledPrograms::Four(_) => native::AuthenticatedParameters::install(
+                &install.programs,
+                &install.manifest,
+                install.signature,
+                &selected.scheme,
+                finality,
+            ),
+            carrier::CompiledPrograms::Five(programs) => {
+                native::AuthenticatedParameters::install_five(
+                    &install.programs,
+                    &install.manifest,
+                    install.signature,
+                    &profile.manifest_digest,
+                    &programs,
+                    &selected.scheme,
+                    finality,
+                )
+            }
+        }?;
         if parameters.manifest_digest() != &profile.manifest_digest
             || parameters.id() != &selected.scheme.relation_id
         {
@@ -538,6 +545,17 @@ mod tests {
             assert_eq!(carrier_error(error), Failure::code(INVALID));
         }
         let exhausted = Vec::<u8>::new().try_reserve_exact(usize::MAX).unwrap_err();
+        assert_eq!(
+            carrier_error(Error::new(
+                ErrorKind::Unsupported,
+                carrier::CompilerUnavailable
+            )),
+            Failure::code(ARTIFACTS_UNAVAILABLE)
+        );
+        assert_eq!(
+            carrier_error(Error::from(ErrorKind::Unsupported)).status,
+            UNAVAILABLE
+        );
         assert_eq!(
             carrier_error(Error::other(exhausted)),
             Failure::code(RESOURCE)

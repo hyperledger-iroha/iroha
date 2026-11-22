@@ -238,6 +238,11 @@ fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<FixedVal
     })
 }
 impl<F: Scalar> UniformCircuit<F> {
+    /// Maximum ordinary fixed rows this canonical tape can expand at its column count.
+    pub(crate) fn max_exported_fixed_rows(&self) -> usize {
+        (MAX_PROGRAM_BYTES / 32) / self.shape.cols()
+    }
+
     /// Serialize only exact public verification instructions and constants.
     pub fn export_program(&self) -> Result<Vec<u8>, String> {
         let side = match self.shape.label {
@@ -303,6 +308,22 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Decode a bounded verifier-only program. Its digest must subsequently be
     /// authenticated by the independent scheme-root manifest before use.
     pub fn import_program(bytes: &[u8], primary: bool) -> Result<Self, String> {
+        Self::import_with_sumcheck_group::<3>(bytes, primary)
+    }
+
+    /// Read a four-variable tape when the producer profile independently selects
+    /// that grouping. The caller must authenticate the resulting program digest.
+    pub(crate) fn import_four_variable_program(
+        bytes: &[u8],
+        primary: bool,
+    ) -> Result<Self, String> {
+        Self::import_with_sumcheck_group::<4>(bytes, primary)
+    }
+
+    fn import_with_sumcheck_group<const GROUP: usize>(
+        bytes: &[u8],
+        primary: bool,
+    ) -> Result<Self, String> {
         let p = compact::decode::<PublicProgram>(bytes)?;
         if p.version != 3
             || p.side != if primary { 1 } else { 2 }
@@ -329,7 +350,7 @@ impl<F: Scalar> UniformCircuit<F> {
             || !(2..=18).contains(&row_bits)
             || !(9..=18).contains(&col_bits)
             || row_bits + col_bits > 30
-            || k != 3
+            || k != GROUP
             || io_len != 64
             || !matches!(p.challenges, 0 | 2)
             || p.degrees[0] > 1

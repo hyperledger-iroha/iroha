@@ -31,7 +31,6 @@ use crate::nonnative::{
 };
 use crate::p256;
 use crate::sha::{self, Sha};
-#[cfg(test)]
 #[path = "archive_receiver_projection.rs"]
 pub(crate) mod archive_receiver_projection;
 #[cfg(test)]
@@ -2844,8 +2843,8 @@ where
         )
     };
     let mut limb_src: Vec<(usize, usize, S<C>)> = Vec::new();
-    let mut slot_feed: Vec<[Option<Feed>; 3]> = vec![[None; 3]; n_s];
-    let mut tau_feed: Vec<[Option<Feed>; 3]> = vec![[None; 3]; n_s];
+    let mut slot_feed = vec![[None; scalar::T.len()]; n_s];
+    let mut tau_feed = vec![[None; scalar::TAU.len()]; n_s];
     let mut glue_feed: Vec<(usize, Feed)> = Vec::new();
     let mut u_feed: Vec<Feed> = Vec::new();
     // The pair link's word comes first (right after the first phase's rows),
@@ -2865,18 +2864,18 @@ where
         let i = take(Kind::Full);
         let source = full(shared_at[i]);
         assert_eq!(source.2, tr.tau[0], "tau from its limbs");
-        tau_feed[x_of(0)][3 - slots[0].k] = Some(Feed::Full(limb_src.len()));
+        tau_feed[x_of(0)][shape.k - slots[0].k] = Some(Feed::Full(limb_src.len()));
         limb_src.push(source);
     } else {
         for s in 0..mo {
             for v in 0..slots[s].k {
-                tau_feed[x_of(s)][3 - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+                tau_feed[x_of(s)][shape.k - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
             }
         }
     }
     for s in 0..mo {
         for v in 0..if lean { 1 } else { slots[s].k } {
-            slot_feed[x_of(s)][3 - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+            slot_feed[x_of(s)][shape.k - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
         }
     }
     for k in 0..if lean { 1 } else { 3 } {
@@ -2885,7 +2884,7 @@ where
     let mut g = 0;
     for (s, sl) in slots.iter().enumerate().skip(mo) {
         assert_eq!(sl.first, g, "inner slot order");
-        let d0 = 3 - sl.k;
+        let d0 = shape.k - sl.k;
         if lean && g > shape.row_bits {
             slot_feed[x_of(s)][d0] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
             g += sl.k;
@@ -3092,11 +3091,11 @@ where
     {
         let sd = &mut w.arrays[first + scalar::S_SLOT];
         for (feed, cells) in [(&slot_feed, scalar::T), (&tau_feed, scalar::TAU)] {
-            for d in 0..3 {
+            for (d, &cell) in cells[..shape.k].iter().enumerate() {
                 let feeds: Vec<Option<Feed>> = (0..n_s).map(|x| feed[x][d]).collect();
                 if feeds.iter().any(|f| f.is_some()) {
                     inputs += feeds.iter().filter(|f| f.is_some()).count();
-                    sd.rows.push(wire(n_s, cells[d], &feeds));
+                    sd.rows.push(wire(n_s, cell, &feeds));
                 }
             }
         }
@@ -3874,15 +3873,32 @@ pub fn next_gens_with_archive_at(
     dimensions: ((usize, usize), (usize, usize)),
 ) -> PairGens {
     assert_eq!(archive.kind, ARCHIVE_SENT, "pair of kind ArchiveSent");
-    for t in [send, boot, control, archive] {
+    next_gens_with_archive_programs_at(
+        recv, send, boot, control, &archive.cp, &archive.cs, dimensions,
+    )
+}
+
+/// Construct the compiler's next matrix polynomials and verification keys from
+/// exact public programs. Seed tapes only size the next recursive pass.
+pub(crate) fn next_gens_with_archive_programs_at(
+    recv: &UniformPair,
+    send: &UniformPair,
+    boot: &UniformPair,
+    control: &UniformPair,
+    archive_p: &std::sync::Arc<crate::uniform::UniformCircuit<Fp>>,
+    archive_s: &std::sync::Arc<crate::uniform::UniformCircuit<Fq>>,
+    dimensions: ((usize, usize), (usize, usize)),
+) -> PairGens {
+    for (kind, p, s) in [
+        (SEND, &send.cp, &send.cs), (BOOTSTRAP, &boot.cp, &boot.cs),
+        (CONTROL, &control.cp, &control.cs), (ARCHIVE_SENT, archive_p, archive_s),
+    ] {
         assert!(
-            t.cp.layout() == recv.cp.layout()
-                && t.cs.layout() == recv.cs.layout()
-                && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len)
-                && (t.cp.shape.cols(), t.cs.shape.cols())
-                    == (recv.cp.shape.cols(), recv.cs.shape.cols()),
-            "kind {} shares the common layout, io length and generators",
-            t.kind
+            p.layout() == recv.cp.layout()
+                && s.layout() == recv.cs.layout()
+                && (p.io_len, s.io_len) == (recv.cp.io_len, recv.cs.io_len)
+                && (p.shape.cols(), s.shape.cols()) == (recv.cp.shape.cols(), recv.cs.shape.cols()),
+            "kind {kind} shares the common layout, io length and generators"
         );
     }
     let mut gens =
@@ -3890,8 +3906,8 @@ pub fn next_gens_with_archive_at(
     let (dp, ds) = dimensions;
     let mut p_kinds = std::mem::take(&mut gens.defer_p.kinds);
     let mut s_kinds = std::mem::take(&mut gens.defer_s.kinds);
-    p_kinds.push(uniform_kind(archive.cp.clone()));
-    s_kinds.push(uniform_kind(archive.cs.clone()));
+    p_kinds.push(uniform_kind(archive_p.clone()));
+    s_kinds.push(uniform_kind(archive_s.clone()));
     gens.defer_p = crate::deferral::MatPoly::with_min_vec(p_kinds, dp.0, dp.1);
     gens.defer_s = crate::deferral::MatPoly::with_min_vec(s_kinds, ds.0, ds.1);
     assert_eq!(
@@ -3899,8 +3915,8 @@ pub fn next_gens_with_archive_at(
         (dp.0, dp.1, ds.0, ds.1),
         "ArchiveSent has the accumulators' dimensions"
     );
-    let key_p = crate::spartan::fixed_commitments(&archive.cp.shape, &gens.p, archive.cp.as_ref());
-    let key_s = crate::spartan::fixed_commitments(&archive.cs.shape, &gens.s, archive.cs.as_ref());
+    let key_p = crate::spartan::fixed_commitments(&archive_p.shape, &gens.p, archive_p.as_ref());
+    let key_s = crate::spartan::fixed_commitments(&archive_s.shape, &gens.s, archive_s.as_ref());
     gens.keys_p.as_mut().expect("the four kinds' keys").push(key_p);
     gens.keys_s.as_mut().expect("the four kinds' keys").push(key_s);
     gens
@@ -4002,7 +4018,6 @@ pub enum OperationWitness<'a> {
     Receive(&'a crate::receive::Witness),
     /// Λ_archive's primary relation, built through [`p_archive_operation`].
     /// A five-kind matrix polynomial pins the ArchiveSent selector.
-    #[cfg(test)]
     ArchiveSent(&'a dyn ArchiveRelation),
 }
 
@@ -4011,7 +4026,6 @@ pub enum OperationWitness<'a> {
 /// total verifier's [`ArchiveIncoming`], and the absence of a required correction only
 /// through the verifier-owned conjunction of the four deferred accumulator decisions
 /// (`correction_conjunction`). It owns its own public outputs.
-#[cfg(test)]
 pub(crate) trait ArchiveRelation {
     fn append(
         &self,
@@ -4028,7 +4042,6 @@ pub(crate) trait ArchiveRelation {
 /// and the digest of its exact raw pair), the digest of its P io (the exact profile its
 /// transcript absorbed, `fs::io_digest`) and the conjunction of its four deferred
 /// accumulator decisions.
-#[cfg(test)]
 pub(crate) struct ArchiveIncoming<'a> {
     pub(crate) facts: &'a IncomingProofFacts,
     /// Original verifier input, before the total decoder selects its fallback.
@@ -4049,18 +4062,13 @@ impl OperationWitness<'_> {
             Self::Send(_) => SEND,
             Self::Control { .. } => CONTROL,
             Self::Receive(_) => RECEIVE,
-            #[cfg(test)]
             Self::ArchiveSent(_) => ARCHIVE_SENT,
         }
     }
 
     /// Λ_archive: a hard wallet predecessor and a total incoming receiver head.
     fn is_archive(&self) -> bool {
-        #[cfg(test)]
-        if let Self::ArchiveSent(_) = self {
-            return true;
-        }
-        false
+        matches!(self, Self::ArchiveSent(_))
     }
 }
 
@@ -4173,7 +4181,6 @@ pub fn p_operation(
 /// folds as Receive. The receiver slot's kind bits are its verified io values; they
 /// select its program's keys and matrices on both curves. The relation's receiver
 /// verdict and correction inputs are derived here, never supplied by the host.
-#[cfg(test)]
 pub(crate) fn p_archive_operation(
     relation: &dyn ArchiveRelation,
     gens: &PairGens,
@@ -4196,7 +4203,6 @@ pub(crate) fn p_archive_operation(
 /// same two slots. A five-kind program pins the ArchiveSent selector. The
 /// receiver slot's P proof key is selected by the same shared kind bits, and its S
 /// io is held to the exact projection of that kind.
-#[cfg(test)]
 pub(crate) fn s_archive_operation(
     gens: &PairGens,
     pairs: &[TracedPair],
@@ -4219,7 +4225,6 @@ pub(crate) fn s_archive_operation(
 /// (corrected-claim iff bits) and the P and S inherited generator accumulators.
 /// Each bit is a shared value bound by `bind_verdict` to its verifier cell in the
 /// P (2, 5) or S (3, 7) circuit; the pair link makes both circuits read one vector.
-#[cfg(test)]
 fn correction_conjunction(
     w: &mut Wiring<Fp>,
     family: usize,
@@ -4586,7 +4591,6 @@ fn p_circuit_impl(
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
     // Λ_archive's receiver slot: the digest cell of its P io, the exact profile its
     // transcript absorbed (the shared io-digest limbs it replays equal this cell).
-    #[cfg(test)]
     let incoming_io_digest = archive.then(|| {
         let at = items
             .iter()
@@ -4773,7 +4777,6 @@ fn p_circuit_impl(
             }
             // The receiver verdict, kind, profile digest and corrections come only from
             // this circuit's total verifier; the relation exposes its own successor profile.
-            #[cfg(test)]
             OperationWitness::ArchiveSent(relation) => {
                 let (facts, exact_pair_bytes) = incoming.as_ref().expect("total incoming owner");
                 let corrections = correction_conjunction(&mut w, gfam, shared, verdict_at);
@@ -5552,14 +5555,14 @@ where
         let (slot_a, glue) = (sc.side + scalar::S_SLOT, sc.side + scalar::S_GLUE);
         let slots = crate::spartan::slots(shape);
         let x_of = |s: usize| sc.slot_instances - slots.len() + s;
-        let mut digit_maps: Vec<Vec<Option<usize>>> = vec![vec![None; nc]; 3];
+        let mut digit_maps: Vec<Vec<Option<usize>>> = vec![vec![None; nc]; shape.k];
         let mut place = |outer: bool, g: usize, j: usize| {
             let (s, sl) = slots
                 .iter()
                 .enumerate()
                 .find(|(_, sl)| sl.outer == outer && sl.first <= g && g < sl.first + sl.k)
                 .expect("a slot per variable");
-            digit_maps[g - sl.first + 3 - sl.k][j] = Some(x_of(s));
+            digit_maps[shape.k - sl.k + (g - sl.first)][j] = Some(x_of(s));
         };
         for g in 0..shape.sx {
             place(true, g, 4 + g);

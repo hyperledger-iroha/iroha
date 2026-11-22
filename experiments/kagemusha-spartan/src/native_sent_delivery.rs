@@ -21,7 +21,6 @@ pub(crate) struct ReceiverEvidence {
     pub(crate) profile: [Fp; 64],
     pub(crate) exact_pair: Vec<u8>,
     /// The receiver pair decided under the signed program for this exact projected head.
-    #[cfg(test)]
     pub(crate) pair: crate::full::UniformPair,
     pub(crate) next: Fp,
     pub(crate) slot: u32,
@@ -50,6 +49,10 @@ impl VerifiedSentDelivery<'_> {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn receiver_evidence(&self) -> &ReceiverEvidence {
         &self.receiver
+    }
+
+    pub(crate) fn into_archive_parts(self) -> (VerifiedIncomingPayment, ReceiverEvidence) {
+        (self.payment, self.receiver)
     }
 
     /// The historical local Send operation id.

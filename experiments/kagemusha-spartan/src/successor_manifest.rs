@@ -7,6 +7,7 @@ use iroha_data_model::{
     isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
     kagemusha::KagemushaWalletSchemeV1, sumeragi_finality::SumeragiCommitVerifierV1,
 };
+use iroha_pasta::{Ep, Eq};
 
 /// Ordered public pins from the generation compiler. Each side uses Receive,
 /// Send, Bootstrap, Control and ArchiveSent, in that order.
@@ -38,7 +39,83 @@ struct ParameterManifestV5 {
     signer_certificate: Vec<u8>,
 }
 
+/// Public claims authenticated by the selected Artifact signature. Installation
+/// also checks the independent producer pins, finality owner and all originals.
+#[non_exhaustive]
+pub struct AuthenticatedManifestHeaderV5 {
+    pub scheme: [u8; 32],
+    pub relation: [u8; 32],
+    pub programs: ProgramProfileV2,
+    pub manifest_digest: [u8; 32],
+    pub finality_network: String,
+    pub finality_chain: String,
+    pub signer_certificate: Vec<u8>,
+    pub generator_capacity_bits: [u32; 2],
+    pub generator_digests: [[u8; 32]; 2],
+    pub table_vector: [[u8; 32]; 2],
+}
+
+type GeneratorSets = (Gens<Eq>, Gens<Ep>);
+
+fn derive_generators(geometry: &[ProgramBundleGeometry; 2]) -> GeneratorSets {
+    // The checked per-side tape geometry bounds each shift and allocation.
+    let [p, s] = geometry.map(|side| 1usize << side.column_bits);
+    (Gens::new(p), Gens::new(s))
+}
+
+impl AuthenticatedManifestHeaderV5 {
+    pub(super) fn verify_generators(&self, generators: &GeneratorSets) -> Result<()> {
+        let profile = engine::generator_profile(&generators.0, &generators.1)?;
+        if profile.capacity_bits != self.generator_capacity_bits
+            || profile.digests != self.generator_digests
+            || profile.table_vector != self.table_vector
+        {
+            return Err(Error::AuthorityMismatch(
+                "canonical five-kind generator and table profile",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ProgramProfileV2 {
+    /// Authenticate the bounded canonical header before importing any tapes.
+    pub fn authenticate_manifest_header(
+        bytes: &[u8],
+        signature: &[u8; 64],
+        selected_digest: &[u8; 32],
+        scheme: &KagemushaWalletSchemeV1,
+    ) -> Result<AuthenticatedManifestHeaderV5> {
+        let manifest = authenticate_header(bytes, signature, selected_digest, scheme)?;
+        Ok(AuthenticatedManifestHeaderV5 {
+            scheme: manifest.scheme,
+            relation: manifest.relation,
+            programs: manifest.programs,
+            manifest_digest: *selected_digest,
+            finality_network: manifest.finality_network,
+            finality_chain: manifest.finality_chain,
+            signer_certificate: manifest.signer_certificate,
+            generator_capacity_bits: manifest.generator_capacity_bits,
+            generator_digests: manifest.generator_digests,
+            table_vector: manifest.table_vector,
+        })
+    }
+
+    fn measure_programs(
+        &self,
+        bundle: &[u8],
+    ) -> Result<([ProgramBundleGeometry; 2], engine::GeneratorProfile)> {
+        let (geometry, _) = ProgramBundleV2::inspect_retail_originals(
+            bundle,
+            &self.primary,
+            &self.secondary,
+            self.dimensions,
+        )?;
+        let (p, s) = derive_generators(&geometry);
+        let gens = engine::generator_profile(&p, &s)?;
+        Ok((geometry, gens))
+    }
+
     fn measure(
         &self,
         bundle: &[u8],
@@ -46,16 +123,7 @@ impl ProgramProfileV2 {
         finality: &SumeragiCommitVerifierV1,
         certificate: &[u8],
     ) -> Result<(ParameterManifestV5, [ProgramBundleGeometry; 2])> {
-        let geometry = ProgramBundleV2::inspect_originals(
-            bundle,
-            &self.primary,
-            &self.secondary,
-            self.dimensions,
-        )?;
-        // Capacities come from the independently pinned, imported tapes. Import
-        // bounds each column width before we allocate or derive generators.
-        let [p, s] = geometry.map(|g| 1usize << g.column_bits);
-        let gens = engine::generator_profile(&Gens::new(p), &Gens::new(s))?;
+        let (geometry, gens) = self.measure_programs(bundle)?;
         let manifest = ParameterManifestV5 {
             version: 5,
             scheme: scheme.scheme_id(),
@@ -83,7 +151,10 @@ impl ProgramProfileV2 {
         finality: &SumeragiCommitVerifierV1,
         certificate: &[u8],
     ) -> Result<(Vec<u8>, [u8; 32])> {
-        artifact_key(scheme, finality, certificate)?;
+        if finality.network().as_bytes() != &scheme.network_id {
+            return Err(Error::AuthorityMismatch("parameter ledger root"));
+        }
+        artifact_key(scheme, certificate)?;
         let (manifest, _) = self.measure(bundle, scheme, finality, certificate)?;
         let bytes = super::encode(&manifest)?;
         require_install_extent(bundle, &bytes)?;
@@ -103,40 +174,124 @@ impl ProgramProfileV2 {
         scheme: &KagemushaWalletSchemeV1,
         finality: &SumeragiCommitVerifierV1,
     ) -> Result<[ProgramBundleGeometry; 2]> {
-        const LIMIT: usize = InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES;
-        if bytes.len() > LIMIT || bundle.len() > super::MAX_PROGRAM_BUNDLE_BYTES {
+        let header =
+            self.install_header(bundle, bytes, signature, selected_digest, scheme, finality)?;
+        self.verify_compiled_originals(bundle, &header)
+    }
+
+    fn install_header(
+        &self,
+        bundle: &[u8],
+        bytes: &[u8],
+        signature: &[u8; 64],
+        selected_digest: &[u8; 32],
+        scheme: &KagemushaWalletSchemeV1,
+        finality: &SumeragiCommitVerifierV1,
+    ) -> Result<AuthenticatedManifestHeaderV5> {
+        if bundle.len() > super::MAX_PROGRAM_BUNDLE_BYTES {
             return Err(Error::ResourceLimit);
         }
-        let limits = norito::DecodeLimits::new(LIMIT, LIMIT, 2 * LIMIT, 4 * LIMIT, 16);
-        let manifest: ParameterManifestV5 =
-            norito::core::with_decode_limits_scope(limits, || super::decode(bytes))?;
-        if manifest.version != 5
-            || manifest.programs != *self
-            || manifest.scheme != scheme.scheme_id()
-            || manifest.relation != scheme.relation_id
-            || manifest.finality_network != finality.network().to_string()
-            || manifest.finality_chain != finality.chain_id()
+        let header = Self::authenticate_manifest_header(bytes, signature, selected_digest, scheme)?;
+        if header.programs != *self
+            || header.finality_network != finality.network().to_string()
+            || header.finality_chain != finality.chain_id()
         {
             return Err(Error::AuthorityMismatch("selected five-kind manifest"));
         }
-        let message = engine::manifest_signing_message(bytes);
-        if message.to_repr() != *selected_digest {
-            return Err(Error::AuthorityMismatch(
-                "selected five-kind manifest digest",
-            ));
-        }
-        let key = artifact_key(scheme, finality, &manifest.signer_certificate)?;
-        engine::verify_signature(&key, message, signature)?;
         require_install_extent(bundle, bytes)?;
-        let (expected, geometry) =
-            self.measure(bundle, scheme, finality, &manifest.signer_certificate)?;
-        if super::encode(&expected)? != bytes {
-            return Err(Error::AuthorityMismatch(
-                "canonical five-kind generator and table profile",
-            ));
+        Ok(header)
+    }
+
+    pub(super) fn import_signed_programs(
+        &self,
+        bundle: &[u8],
+        bytes: &[u8],
+        signature: &[u8; 64],
+        selected_digest: &[u8; 32],
+        scheme: &KagemushaWalletSchemeV1,
+        finality: &SumeragiCommitVerifierV1,
+    ) -> Result<(Box<[engine::Program]>, GeneratorSets)> {
+        let header =
+            self.install_header(bundle, bytes, signature, selected_digest, scheme, finality)?;
+        let (geometry, programs) = ProgramBundleV2::import_retail_programs(bundle, self)?;
+        let generators = derive_generators(&geometry);
+        header.verify_generators(&generators)?;
+        Ok((programs, generators))
+    }
+
+    /// Compare independently selected producer pins and imported tapes with the
+    /// generator and table claims of a previously authenticated carrier header.
+    /// Offline native installation separately binds its own finality reader.
+    pub fn verify_compiled_originals(
+        &self,
+        bundle: &[u8],
+        header: &AuthenticatedManifestHeaderV5,
+    ) -> Result<[ProgramBundleGeometry; 2]> {
+        if header.programs != *self {
+            return Err(Error::AuthorityMismatch("selected five-kind manifest"));
         }
+        let (geometry, _) = ProgramBundleV2::inspect_retail_originals(
+            bundle,
+            &self.primary,
+            &self.secondary,
+            self.dimensions,
+        )?;
+        header.verify_generators(&derive_generators(&geometry))?;
         Ok(geometry)
     }
+}
+
+fn authenticate_header(
+    bytes: &[u8],
+    signature: &[u8; 64],
+    selected_digest: &[u8; 32],
+    scheme: &KagemushaWalletSchemeV1,
+) -> Result<ParameterManifestV5> {
+    const LIMIT: usize = InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES;
+    if bytes.len() > LIMIT {
+        return Err(Error::ResourceLimit);
+    }
+    let limits = norito::DecodeLimits::new(LIMIT, LIMIT, 2 * LIMIT, 4 * LIMIT, 16);
+    let manifest: ParameterManifestV5 =
+        norito::core::with_decode_limits_scope(limits, || super::decode(bytes))?;
+    if manifest.version != 5
+        || manifest.scheme != scheme.scheme_id()
+        || manifest.relation != scheme.relation_id
+        || manifest.finality_chain.is_empty()
+    {
+        return Err(Error::AuthorityMismatch("selected five-kind manifest"));
+    }
+    if manifest.generator_domain != crate::ipa::GENERATOR_DOMAIN
+        || manifest.hash_to_curve != engine::HASH_TO_CURVE_SUITE
+        || manifest.table_construction != engine::TABLE_CONSTRUCTION
+    {
+        return Err(Error::AuthorityMismatch(
+            "canonical five-kind generator and table profile",
+        ));
+    }
+    let network: iroha_data_model::prelude::NetworkId = manifest
+        .finality_network
+        .parse()
+        .map_err(|_| Error::Malformed("parameter finality network"))?;
+    if network.as_bytes() != &scheme.network_id || network.to_string() != manifest.finality_network
+    {
+        return Err(Error::AuthorityMismatch("parameter ledger root"));
+    }
+    norito::verify_exact_canonical_frame_with_layout(
+        &manifest,
+        bytes,
+        norito::core::WireLayout::Fixed,
+    )
+    .map_err(|_| Error::Malformed("canonical five-kind manifest"))?;
+    let message = engine::manifest_signing_message(bytes);
+    if message.to_repr() != *selected_digest {
+        return Err(Error::AuthorityMismatch(
+            "selected five-kind manifest digest",
+        ));
+    }
+    let key = artifact_key(scheme, &manifest.signer_certificate)?;
+    engine::verify_signature(&key, message, signature)?;
+    Ok(manifest)
 }
 
 fn require_install_extent(bundle: &[u8], manifest: &[u8]) -> Result<()> {
@@ -167,15 +322,11 @@ fn require_install_extent(bundle: &[u8], manifest: &[u8]) -> Result<()> {
 
 fn artifact_key(
     scheme: &KagemushaWalletSchemeV1,
-    finality: &SumeragiCommitVerifierV1,
     certificate: &[u8],
 ) -> Result<crate::p256::Point> {
     scheme
         .validate()
         .map_err(|e| Error::Rejected(e.to_string()))?;
-    if finality.network().as_bytes() != &scheme.network_id {
-        return Err(Error::AuthorityMismatch("parameter ledger root"));
-    }
     let signer = engine::read_certificate(certificate)?;
     certificate::authenticate_signer(
         &signer,

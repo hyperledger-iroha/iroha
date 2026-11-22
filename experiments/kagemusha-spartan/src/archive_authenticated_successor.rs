@@ -88,97 +88,10 @@ fn receiver_receipt(
     payment: &native::VerifiedIncomingPayment,
     outcome: native::VerifiedCreditStatus,
 ) -> Result<super::receiver_signature::ReceiverReceipt> {
-    use crate::{credential, deferral, full, payment_wire::limbs, receipt, statement};
-    let p = &evidence.profile;
-    let s = &evidence.statement;
-    let tag = |kind: KagemushaWalletOperationKindV1| Fp::from(u64::from(kind.tag()));
-    let (send, program) = if s[16] == tag(KagemushaWalletOperationKindV1::Receive) {
-        (false, full::RECEIVE)
-    } else if s[16] == tag(KagemushaWalletOperationKindV1::Send) {
-        (true, full::SEND)
-    } else {
-        return Err(Error::AuthorityMismatch("ArchiveSent receiver head kind"));
-    };
-    // Native and in-circuit acceptance must agree. The decided profile names the same
-    // program, and its head and statement digest are this statement's. The head receipt
-    // signs the operation id of this kind and credit. A Receive names this Payment's credit.
-    let (a, b) = deferral::kind_bits(program);
-    let operation = poseidon::hash_with_domain(
-        u64::from_le_bytes(*b"kgwopid1"),
-        &[
-            p[bc::CONTEXT_IO + bc::WALLET],
-            p[bc::CONTEXT_IO + bc::WALLET + 1],
-            s[16],
-            s[17],
-        ],
-    );
-    if [p[full::KIND_IO], p[full::KIND_IO + 1]] != [Fp::from(a), Fp::from(b)]
-        || p[full::HEAD_IO] != s[15]
-        || p[full::STATEMENT_IO] != statement::digest(s)
-        || evidence.receipt.body[114..146] != operation.to_repr()
-        || (!send && s[17] != payment.statement()[17])
-    {
-        return Err(Error::AuthorityMismatch(
-            "ArchiveSent receiver head evidence",
-        ));
-    }
-    // The opened statement's semantic predicates. The signed receipt names this statement and
-    // carries its sequence, predecessor and successor. The statement names the quoted scheme
-    // and asset. A Receive effect names the Request's payer wallet and the Payment amount and
-    // is zero-filled.
-    let body = &evidence.receipt.body;
-    let sequence = s[9].to_repr();
-    let quoted = &evidence.credential.body;
-    let request = &payment.request().body;
-    if body[98..114] != sequence[..16]
-        || sequence[16..] != [0; 16]
-        || body[146..178] != s[14].to_repr()
-        || body[178..210] != s[15].to_repr()
-        || body[210..242] != statement::digest(s).to_repr()
-        || s[3..5] != limbs(&quoted[2..34])
-        || s[5..7] != limbs(&quoted[34..66])
-        || (!send
-            && (s[18..20] != limbs(&request[66..98])
-                || s[20] != payment.statement()[21]
-                || s[21..].iter().any(|word| !word.is_zero_vartime())))
-    {
-        return Err(Error::AuthorityMismatch(
-            "ArchiveSent receiver head statement",
-        ));
-    }
-    let expected = [
-        credential::digest(&evidence.credential),
-        p[full::RECEIPT_IO],
-        p[full::HEAD_IO],
-        p[full::STATEMENT_IO],
-        payment.digest(),
-        receipt::digest(&evidence.receipt),
-        p[bc::CONTEXT_IO + bc::WALLET],
-        p[bc::CONTEXT_IO + bc::WALLET + 1],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 1],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 2],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 3],
-    ];
-    Ok(super::receiver_signature::ReceiverReceipt {
-        request: Some(payment.request().clone()),
-        opening: Some(super::credit_opening::StatusOpening {
-            root: p[bc::LINEAGE_IO + bc::CREDIT_ROOT],
-            burned: matches!(outcome, native::VerifiedCreditStatus::Burned),
-            next: evidence.next,
-            index: evidence.slot,
-            siblings: evidence.siblings,
-        }),
-        credential: evidence.credential.clone(),
-        receipt: evidence.receipt.clone(),
-        expected,
-        send,
-        subject: s[17],
-        // The verifier's own reconstruction of the exact original that the circuit opens.
-        statement: *s,
-        statement_digest: statement::digest(s),
-    })
+    receiver_receipt_fields(evidence, payment.statement(), payment.request(), payment.digest(), outcome)
 }
+
+use crate::native::engine::transfers::archive_sent::relation::receiver_receipt_fields;
 
 fn verify_io(verifier: &Verifier, io: Vec<Fp>, proof: &[u8]) -> Result<()> {
     let circuit = &verifier.0;

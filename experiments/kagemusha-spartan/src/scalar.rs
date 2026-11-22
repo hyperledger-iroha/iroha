@@ -1,6 +1,6 @@
 //! Stage A2, step 5: the IPA verifier's scalar side as uniform arrays.
 //!
-//! With k = 3 and base-4 round slots (grid.rs), every closed-form opening
+//! With three or four variables per base-4 round slot (grid.rs), every closed-form opening
 //! `<s(u), b>` is one pass over the column bits plus a short product per round
 //! slot and digit (spartan::b_final_slots); no vector is left. The arrays:
 //! - `slot data` (one instance per round slot): the round's challenge powers
@@ -20,7 +20,7 @@
 //!   leaves) and one glue instance (gamma^-1, kappa, kappa' as kappa plus the
 //!   openings' weighted sum, the Schnorr scalars).
 //!
-//! Slots are indexed by their 64-column block's low bits x (the bits that
+//! Slots are indexed by their round block's low bits x (the bits that
 //! differ between slots), so s(u)'s varying high bits are selectors by single
 //! index bits; instances below the first slot are idle (zero weights).
 //! Openings sit in the low bits (`r = x * Q + q`), so per-slot coefficients
@@ -57,17 +57,18 @@ const OXP: usize = 3;
 const OXV: usize = 4;
 
 // Slot data cells.
-pub const T: [usize; 3] = [0, 1, 2];
-const SQ: [usize; 3] = [3, 4, 5];
-pub const TAU: [usize; 3] = [6, 7, 8];
-const W0: [usize; 3] = [9, 10, 11];
-const W1: [usize; 3] = [12, 13, 14];
+pub const T: [usize; 4] = [0, 1, 2, 20];
+const SQ: [usize; 4] = [3, 4, 5, 21];
+pub const TAU: [usize; 4] = [6, 7, 8, 22];
+const W0: [usize; 4] = [9, 10, 11, 23];
+const W1: [usize; 4] = [12, 13, 14, 24];
 pub const FB: usize = 15;
 const FG: usize = 16;
 const PP1: usize = 17;
 const PP: usize = 18;
 const PRE: usize = 19;
-const SLOT_CELLS: usize = 20;
+// The original three-digit indices are part of the signed v4 circuit.
+const PREFIX_012: usize = 25;
 
 // Bit cells.
 pub const U: usize = 0;
@@ -82,16 +83,17 @@ const BIT_CELLS: usize = 8;
 
 // Slot term cells (s(u) over the varying high bits, the term and the sum
 // follow).
-const P: [usize; 3] = [0, 1, 2];
+const P: [usize; 4] = [0, 1, 2, 15];
 const B01: usize = 3;
 const BB: usize = 4;
-const LU: [usize; 3] = [5, 6, 7];
-const HU: [usize; 3] = [8, 9, 10];
+const LU: [usize; 4] = [5, 6, 7, 16];
+const HU: [usize; 4] = [8, 9, 10, 17];
 const G01: usize = 11;
 const GG: usize = 12;
 const FBB: usize = 13;
 pub const FGG: usize = 14;
-const SV0: usize = 15;
+const BOOLEAN_012: usize = 18;
+const LAGRANGE_012: usize = 19;
 
 // Glue cells.
 pub const ALPHA: usize = 0;
@@ -148,8 +150,8 @@ enum Digit {
     Missing,
 }
 
-fn digit(slot: &Slot, d: usize) -> Digit {
-    let lead = 3 - slot.k;
+fn digit(group: usize, slot: &Slot, d: usize) -> Digit {
+    let lead = group - slot.k;
     if d >= lead {
         Digit::Var(d - lead)
     } else {
@@ -241,21 +243,24 @@ pub fn scalar_side_with<C: PastaCurve>(
     let one = F::<C>::ONE;
     let zero = F::<C>::ZERO;
     let slots = spartan::slots(shape);
-    assert_eq!(shape.k, 3, "three-variable rounds, 64-column slots");
+    let group = shape.k;
+    assert!(matches!(group, 3 | 4), "supported recursive grouping");
+    let slot_bits = 2 * group;
+    let digit = |slot: &Slot, index| digit(group, slot, index);
     let l = shape.col_bits;
-    assert!(l >= 6, "a slot's six digit bits");
+    assert!(l >= slot_bits, "a round slot must fit the IPA columns");
     let (ns, mo) = (slots.len(), shape.outer_blocks().len());
     let openings = 1 + claims.len();
     let q_pad = openings.next_power_of_two();
     let qb = q_pad.trailing_zeros() as usize;
-    // Slot s sits in 64-column block b0 + s; x = the block's low w bits.
-    let high = l - 6;
-    let b0 = slots[0].offset >> 6;
+    // Slot s sits in the aligned block b0 + s; x = the block's low w bits.
+    let high = l - slot_bits;
+    let b0 = slots[0].offset >> slot_bits;
     assert!(
         slots
             .iter()
             .enumerate()
-            .all(|(s, sl)| sl.offset == (b0 + s) << 6),
+            .all(|(s, sl)| sl.offset == (b0 + s) << slot_bits),
         "consecutive slots"
     );
     let w = (usize::BITS - (b0 ^ (b0 + ns - 1)).leading_zeros()) as usize;
@@ -281,7 +286,7 @@ pub fn scalar_side_with<C: PastaCurve>(
             .iter()
             .position(|sl| !sl.outer && sl.first <= g && g < sl.first + sl.k)
             .expect("inner variable");
-        (x_of(s), g - slots[s].first + 3 - slots[s].k)
+        (x_of(s), g - slots[s].first + group - slots[s].k)
     };
     let round_lean = |sl: &Slot| lean && (sl.outer || sl.first > shape.row_bits);
     let value_t = |sl: &Slot, d: usize| -> F<C> {
@@ -300,8 +305,10 @@ pub fn scalar_side_with<C: PastaCurve>(
     // the last w are x's bits.
     let block_bit = |j: usize| (b0 >> (high - 1 - j)) & 1;
     let common: Vec<usize> = (0..nc).map(block_bit).collect();
-    let (tm, acc) = (SV0 + w, SV0 + w + 1);
-    let term_cells = SV0 + w + 2;
+    let sv0 = if group == 4 { 20 } else { 15 };
+    let slot_cells = if group == 4 { 26 } else { 20 };
+    let (tm, acc) = (sv0 + w, sv0 + w + 1);
+    let term_cells = sv0 + w + 2;
 
     let bit = |b: bool| if b { one } else { zero };
 
@@ -314,7 +321,7 @@ pub fn scalar_side_with<C: PastaCurve>(
     let all_s = vec![one; n_s];
     let mut rows_s: Vec<[Lin<F<C>>; 3]> = Vec::new();
     let own_s = |k: usize, c: Vec<F<C>>| lin(Src::Own(k), c);
-    for d in 0..3 {
+    for d in 0..group {
         rows_s.push([
             own_s(T[d], all_s.clone()),
             own_s(T[d], all_s.clone()),
@@ -328,7 +335,7 @@ pub fn scalar_side_with<C: PastaCurve>(
             && matches!(digit(sl, d), Digit::Var(_))
             && matches!(digit(sl, d + 1), Digit::Var(_))
     };
-    for d in 0..2 {
+    for d in 0..group-1 {
         let c = ps(&|s| chain(d, s));
         rows_s.push([
             own_s(SQ[d], c.clone()),
@@ -337,7 +344,7 @@ pub fn scalar_side_with<C: PastaCurve>(
         ]);
     }
     // A missing digit's challenge is 0 (its Lagrange factor is then 1).
-    for d in 0..3 {
+    for d in 0..group {
         let miss = ps(&|s| digit(&slots[s], d) == Digit::Missing);
         if miss.iter().any(|c| !bool::from(c.is_zero())) {
             rows_s.push([own_s(T[d], miss), constant(all_s.clone()), Vec::new()]);
@@ -356,14 +363,14 @@ pub fn scalar_side_with<C: PastaCurve>(
         let sl = &slots[s];
         lean && sl.outer && s >= 1 && digit(sl, d) == Digit::Var(0)
     };
-    for d in 0..3 {
+    for d in 0..group {
         let (cs, cc) = (ps(&|s| same(d, s)), ps(&|s| cross(d, s)));
         let src = if d == 0 {
-            lk(a(S_SLOT), TAU[2], slot_down.clone(), cc.clone())
+            lk(a(S_SLOT), TAU[group-1], slot_down.clone(), cc.clone())
         } else {
             sum(&[
                 own_s(TAU[d - 1], cs.clone()),
-                lk(a(S_SLOT), TAU[2], slot_down.clone(), cc.clone()),
+                lk(a(S_SLOT), TAU[group-1], slot_down.clone(), cc.clone()),
             ])
         };
         let on: Vec<F<C>> = cs.iter().zip(&cc).map(|(x, y)| *x + y).collect();
@@ -372,7 +379,7 @@ pub fn scalar_side_with<C: PastaCurve>(
     // Boolean weights per digit: w0 + u_lo w1 sums the digit's values 0, 1.
     let ov = |d: usize| ps(&|s| slots[s].outer && matches!(digit(&slots[s], d), Digit::Var(_)));
     let iv = |d: usize| ps(&|s| !slots[s].outer && matches!(digit(&slots[s], d), Digit::Var(_)));
-    for d in 0..3 {
+    for d in 0..group {
         rows_s.push([
             sum(&[
                 own_s(W1[d], all_s.clone()),
@@ -439,11 +446,15 @@ pub fn scalar_side_with<C: PastaCurve>(
         ])
     };
     rows_s.push([pre_f(0), pre_f(1), own_s(PP1, all_s.clone())]);
+    let prefix_012 = if group == 4 { PREFIX_012 } else { PP };
     rows_s.push([
         own_s(PP1, all_s.clone()),
         pre_f(2),
-        own_s(PP, all_s.clone()),
+        own_s(prefix_012, all_s.clone()),
     ]);
+    if group == 4 {
+        rows_s.push([own_s(prefix_012, all_s.clone()), pre_f(3), own_s(PP, all_s.clone())]);
+    }
     rows_s.push([
         sum(&[
             lk(a(S_SLOT), PRE, slot_down.clone(), rest_s.clone()),
@@ -455,18 +466,19 @@ pub fn scalar_side_with<C: PastaCurve>(
     // Values (idle instances: zero challenges and weights).
     let ginv = tr.gamma.invert().unwrap();
     let (rho1, rho2) = (tr.alpha * ginv, tr.alpha * tr.alpha * ginv);
-    let mut vs = vec![vec![zero; n_s]; SLOT_CELLS];
+    let mut vs = vec![vec![zero; n_s]; slot_cells];
     for x in 0..n_s {
-        for d in 0..3 {
+        for d in 0..group {
             vs[W0[d]][x] = one;
             vs[PP1][x] = one;
+            vs[prefix_012][x] = one;
             vs[PP][x] = one;
         }
     }
     let (mut fb, mut pre) = (one, one);
     for (s, sl) in slots.iter().enumerate() {
         let x = x_of(s);
-        for d in 0..3 {
+        for d in 0..group {
             let t = value_t(sl, d);
             vs[T[d]][x] = t;
             vs[SQ[d]][x] = t * t;
@@ -488,11 +500,14 @@ pub fn scalar_side_with<C: PastaCurve>(
         };
         vs[FB][x] = fb;
         vs[FG][x] = fb * tr.alpha * if last_of_sumcheck(s) { one } else { -one };
-        let fs: Vec<F<C>> = (0..3)
+        let fs: Vec<F<C>> = (0..group)
             .map(|d| if in_pre(s, d) { one - vs[T[d]][x] } else { one })
             .collect();
         vs[PP1][x] = fs[0] * fs[1];
-        vs[PP][x] = vs[PP1][x] * fs[2];
+        vs[prefix_012][x] = vs[PP1][x] * fs[2];
+        if group == 4 {
+            vs[PP][x] = vs[prefix_012][x] * fs[3];
+        }
         pre *= vs[PP][x];
         vs[PRE][x] = pre;
     }
@@ -527,7 +542,7 @@ pub fn scalar_side_with<C: PastaCurve>(
     let rcd: Vec<(usize, usize)> = (0..l).map(|j| ry_digit(1 + shape.row_bits + j)).collect();
     let mut rows_b: Vec<[Lin<F<C>>; 3]> = Vec::new();
     let mut rc = own_b(RC, ones_b.clone());
-    for d in 0..3 {
+    for d in 0..group {
         let map: Vec<Option<usize>> = (0..n_b)
             .map(|r| (r < l * q_pad).then(|| rcd[r >> qb].0))
             .collect();
@@ -641,7 +656,7 @@ pub fn scalar_side_with<C: PastaCurve>(
             .collect()
     };
     let ub = |j: usize, c: Vec<F<C>>| lk(a(S_BITS), U, to_bit(j), c);
-    let (j_hi, j_lo) = (|d: usize| l - 6 + 2 * d, |d: usize| l - 5 + 2 * d);
+    let (j_hi, j_lo) = (|d: usize| high + 2 * d, |d: usize| high + 2 * d + 1);
     let h = half::<F<C>>();
     let cst = |c: F<C>| vec![c; n_t];
     let bf =
@@ -656,7 +671,7 @@ pub fn scalar_side_with<C: PastaCurve>(
         ])
     };
     let mut rows_t: Vec<[Lin<F<C>>; 3]> = Vec::new();
-    for d in 0..3 {
+    for d in 0..group {
         rows_t.push([
             ub(j_lo(d), all_t.clone()),
             sd(W1[d], all_t.clone()),
@@ -664,15 +679,23 @@ pub fn scalar_side_with<C: PastaCurve>(
         ]);
     }
     rows_t.push([bf(0), bf(1), own_t(B01, all_t.clone())]);
-    rows_t.push([own_t(B01, all_t.clone()), bf(2), own_t(BB, all_t.clone())]);
-    for d in 0..3 {
+    let bf_012 = if group == 4 { BOOLEAN_012 } else { BB };
+    rows_t.push([own_t(B01, all_t.clone()), bf(2), own_t(bf_012, all_t.clone())]);
+    if group == 4 {
+        rows_t.push([own_t(bf_012, all_t.clone()), bf(3), own_t(BB, all_t.clone())]);
+    }
+    for d in 0..group {
         let l1 = sum(&[sd(T[d], cst(F::<C>::from(2))), sd(SQ[d], cst(-one))]);
         let l2 = sum(&[sd(SQ[d], cst(h)), sd(T[d], cst(-h))]);
         rows_t.push([ub(j_lo(d), all_t.clone()), l1, own_t(LU[d], all_t.clone())]);
         rows_t.push([ub(j_hi(d), all_t.clone()), l2, own_t(HU[d], all_t.clone())]);
     }
     rows_t.push([gf(0), gf(1), own_t(G01, all_t.clone())]);
-    rows_t.push([own_t(G01, all_t.clone()), gf(2), own_t(GG, all_t.clone())]);
+    let gf_012 = if group == 4 { LAGRANGE_012 } else { GG };
+    rows_t.push([own_t(G01, all_t.clone()), gf(2), own_t(gf_012, all_t.clone())]);
+    if group == 4 {
+        rows_t.push([own_t(gf_012, all_t.clone()), gf(3), own_t(GG, all_t.clone())]);
+    }
     rows_t.push([
         sd(FB, all_t.clone()),
         own_t(BB, all_t.clone()),
@@ -693,19 +716,19 @@ pub fn scalar_side_with<C: PastaCurve>(
         let prev = if t == 0 {
             lin(Src::One, all_t.clone())
         } else {
-            own_t(SV0 + t - 1, all_t.clone())
+            own_t(sv0 + t - 1, all_t.clone())
         };
         let set = xbit(t);
         let sel = sum(&[
             ub(nc + t, set.clone()),
             lin(Src::One, set.iter().map(|c| one - c).collect()),
         ]);
-        rows_t.push([prev, sel, own_t(SV0 + t, all_t.clone())]);
+        rows_t.push([prev, sel, own_t(sv0 + t, all_t.clone())]);
     }
     let svar = if w == 0 {
         lin(Src::One, all_t.clone())
     } else {
-        own_t(SV0 + w - 1, all_t.clone())
+        own_t(sv0 + w - 1, all_t.clone())
     };
     rows_t.push([
         svar,
@@ -733,9 +756,9 @@ pub fn scalar_side_with<C: PastaCurve>(
         for q in 0..q_pad {
             let r = x * q_pad + q;
             let u = |j: usize| vb[U][j * q_pad + q];
-            let mut bfs = [zero; 3];
-            let mut gfs = [zero; 3];
-            for d in 0..3 {
+            let mut bfs = [zero; 4];
+            let mut gfs = [zero; 4];
+            for d in 0..group {
                 let (uh, ul) = (u(j_hi(d)), u(j_lo(d)));
                 let t = vs[T[d]][x];
                 vt[P[d]][r] = ul * vs[W1[d]][x];
@@ -746,9 +769,15 @@ pub fn scalar_side_with<C: PastaCurve>(
                 gfs[d] = l0 + vt[LU[d]][r] + vt[HU[d]][r];
             }
             vt[B01][r] = bfs[0] * bfs[1];
-            vt[BB][r] = vt[B01][r] * bfs[2];
+            vt[bf_012][r] = vt[B01][r] * bfs[2];
+            if group == 4 {
+                vt[BB][r] = vt[bf_012][r] * bfs[3];
+            }
             vt[G01][r] = gfs[0] * gfs[1];
-            vt[GG][r] = vt[G01][r] * gfs[2];
+            vt[gf_012][r] = vt[G01][r] * gfs[2];
+            if group == 4 {
+                vt[GG][r] = vt[gf_012][r] * gfs[3];
+            }
             vt[FBB][r] = vs[FB][x] * vt[BB][r];
             vt[FGG][r] = vs[FG][x] * vt[GG][r];
             let mut sv = one;
@@ -756,7 +785,7 @@ pub fn scalar_side_with<C: PastaCurve>(
                 if (x >> (w - 1 - t)) & 1 == 1 {
                     sv *= u(nc + t);
                 }
-                vt[SV0 + t][r] = sv;
+                vt[sv0 + t][r] = sv;
             }
             vt[tm][r] = sv * (vt[FBB][r] + vt[FGG][r]);
             totals[q] += vt[tm][r];
@@ -1150,12 +1179,21 @@ mod tests {
 
     #[test]
     fn scalar_side_matches_native_proves_and_refuses() {
+        scalar_proof_control(3, 11);
+    }
+
+    #[test]
+    fn four_variable_scalar_side_matches_native_and_refuses_changed_fourth_digit() {
+        scalar_proof_control(4, 12);
+    }
+
+    fn scalar_proof_control(group: usize, col_bits: usize) {
         let shape = Shape {
             label: "scalar-test",
-            sx: 13,
+            sx: if group == 4 { 15 } else { 13 },
             row_bits: 2,
-            col_bits: 11,
-            k: 3,
+            col_bits,
+            k: group,
         };
         let gens = crate::ipa::Gens::<Vesta>::new(shape.cols());
         let io_len = crate::census::STATEMENT_IO + 2 * (2 + shape.col_bits) - 6;
@@ -1179,6 +1217,11 @@ mod tests {
         );
         let lean = crate::fs::lean_schedule();
         let side = scalar_side::<Vesta>(0, 0, &shape, lean, &inst, &proof, &claims, &tr);
+        if group == 4 {
+            for (name, array, cell, instance, native) in &side.expected {
+                assert_eq!(side.arrays[*array].values[*cell][*instance], *native, "{name}");
+            }
+        }
         let n = side.arrays.len();
         let (c, uinst, uwit) = UniformCircuit::build(
             "scalar-test",
@@ -1277,6 +1320,13 @@ mod tests {
             refused(&c, &uinst, &uwit, &ugens, S_OPEN, OVAL, 0),
             "changed b_final"
         );
+        if group == 4 {
+            let last = xs - 1;
+            assert!(refused(&c, &uinst, &uwit, &ugens, S_SLOT, T[3], last));
+            assert!(refused(&c, &uinst, &uwit, &ugens, S_SLOT, PREFIX_012, last));
+            assert!(refused(&c, &uinst, &uwit, &ugens, S_TERMS, P[3], last * side.q_pad));
+            assert!(refused(&c, &uinst, &uwit, &ugens, S_TERMS, LU[3], last * side.q_pad));
+        }
         assert_eq!(n, S_IO + 1, "seven arrays");
     }
 }

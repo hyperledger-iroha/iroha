@@ -33,39 +33,39 @@ use std::collections::HashSet;
 
 const RECEIVER_TABLE: u32 = 11;
 #[derive(Clone)]
-pub(super) struct ReceiverReceipt {
-    pub(super) request: Option<crate::request::CompletedRequest>,
-    pub(super) opening: Option<super::credit_opening::StatusOpening>,
-    pub(super) credential: Credential,
-    pub(super) receipt: Receipt,
+pub(in crate::native::engine) struct ReceiverReceipt {
+    pub(in crate::native::engine) request: Option<crate::request::CompletedRequest>,
+    pub(in crate::native::engine) opening: Option<super::credit_opening::StatusOpening>,
+    pub(in crate::native::engine) credential: Credential,
+    pub(in crate::native::engine) receipt: Receipt,
     // Authenticated quoted credential, receiver folded receipt/head/statement, original Payment and exact source receipt digest.
     // The final six fields are the wallet ID and payment key of the folded receiver.
-    pub(super) expected: [Fp; 12],
+    pub(in crate::native::engine) expected: [Fp; 12],
     // Public form bit: false for the Receive receipt of this Payment, true for a later
     // receiver Send head whose credit root covers its credit.
-    pub(super) send: bool,
+    pub(in crate::native::engine) send: bool,
     // Public credit named by the head's signed operation id. The Receive form fixes it to
     // this Payment's credit. The Send form takes it from the later Send statement.
-    pub(super) subject: Fp,
+    pub(in crate::native::engine) subject: Fp,
     // Private exact original of the head statement. It has a fixed length in both forms.
-    pub(super) statement: [Fp; 26],
+    pub(in crate::native::engine) statement: [Fp; 26],
     // Public digest of that statement, reconstructed by the verifier from the natively
     // authenticated statement. Only `statement` opens it. The folded `expected[3]` and the
     // signed receipt's field are separate semantic matches.
-    pub(super) statement_digest: Fp,
+    pub(in crate::native::engine) statement_digest: Fp,
 }
 
-pub(super) struct ReceiptResults {
-    pub(super) evidence: Source,
-    pub(super) signature: Source,
-    pub(super) public: [Source; 15],
-    pub(super) proof_digest: Source,
-    pub(super) statement_fields: [Source; 26],
-    pub(super) quoted_table: [Source; 4],
-    pub(super) quoted_wallet: [Source; 2],
-    pub(super) quoted_key: [Source; 4],
-    pub(super) request: Option<super::request_original::RequestResults>,
-    pub(super) opening: Vec<Source>,
+pub(in crate::native::engine) struct ReceiptResults {
+    pub(in crate::native::engine) evidence: Source,
+    pub(in crate::native::engine) signature: Source,
+    pub(in crate::native::engine) public: [Source; 15],
+    pub(in crate::native::engine) proof_digest: Source,
+    pub(in crate::native::engine) statement_fields: [Source; 26],
+    pub(in crate::native::engine) quoted_table: [Source; 4],
+    pub(in crate::native::engine) quoted_wallet: [Source; 2],
+    pub(in crate::native::engine) quoted_key: [Source; 4],
+    pub(in crate::native::engine) request: Option<super::request_original::RequestResults>,
+    pub(in crate::native::engine) opening: Vec<Source>,
 }
 
 fn receiver_table(
@@ -126,7 +126,7 @@ fn receiver_table(
 impl ReceiverReceipt {
     /// Public words 64..79: the twelve expected words, the form bit, the subject and the
     /// exact statement digest.
-    pub(super) fn public_words(&self) -> [Fp; 15] {
+    pub(in crate::native::engine) fn public_words(&self) -> [Fp; 15] {
         std::array::from_fn(|i| match i {
             12 => Fp::from(u64::from(self.send)),
             13 => self.subject,
@@ -188,7 +188,7 @@ impl ReceiverReceipt {
         source(local, out)
     }
 
-    pub(super) fn append(
+    pub(in crate::native::engine) fn append(
         &self,
         w: &mut Wiring<Fp>,
         family: usize,

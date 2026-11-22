@@ -222,7 +222,9 @@ pub fn prove<C: PastaCurve>(
     // U as a base of the L/R sums: the value and blind terms are folded into
     // each sum instead of separate scalar multiplications.
     let u_affine = group::Curve::to_affine(&u_point);
-    let mut g = gens.g.clone();
+    // The first round reads the installed generators without a copy. Only
+    // folding them after the transcript challenge needs a writable vector.
+    let mut g = std::borrow::Cow::Borrowed(gens.g.as_slice());
     let mut lr = Vec::with_capacity(n.trailing_zeros() as usize);
     let mut len = n;
     while len > 1 {
@@ -230,22 +232,17 @@ pub fn prove<C: PastaCurve>(
         let (lam, mu): (F<C>, F<C>) = (rng.scalar(), rng.scalar());
         let lr_clock = std::time::Instant::now();
         let (l, r) = {
-            // L = <x_lo, G_hi> + <x_lo, b_hi> U + lam H and R likewise, at the
-            // same time, each one constant-time sum over its generators, U and
-            // H. Every scalar (vector, inner product, blind) is private.
+            // Each side adds the same two private terms to its vector
+            // commitment. The constant-time kernel accepts both slices
+            // directly, so neither secret scalars nor bases are copied.
             let (x_lo, x_hi) = x.split_at(half);
             let (b_lo, b_hi) = b.split_at(half);
             let (g_lo, g_hi) = g[..len].split_at(half);
             let side = |xs: &[F<C>], bs: &[F<C>], gs: &[Aff<C>], blind: F<C>| -> Aff<C> {
-                let mut scalars = Zeroizing::new(Vec::with_capacity(half + 2));
-                scalars.extend_from_slice(xs);
-                scalars.push(inner(xs, bs));
-                scalars.push(blind);
-                let mut bases = Vec::with_capacity(half + 2);
-                bases.extend_from_slice(gs);
-                bases.push(u_affine);
-                bases.push(gens.h);
-                group::Curve::to_affine(&secret_msm::<C>(&scalars, &bases))
+                let tail = Zeroizing::new([inner(xs, bs), blind]);
+                let vector = secret_msm::<C>(xs, gs);
+                let masks = secret_msm::<C>(&tail[..], &[u_affine, gens.h]);
+                group::Curve::to_affine(&(vector + masks))
             };
             rayon::join(
                 || side(x_lo, b_hi, g_hi, lam),
@@ -285,7 +282,7 @@ pub fn prove<C: PastaCurve>(
         }
         crate::prof::add("ipa.xb", xb_clock.elapsed().as_secs_f64());
         let fold_clock = std::time::Instant::now();
-        fold_generators_vartime::<C>(&mut g[..len], &u);
+        fold_generators_vartime::<C>(&mut g.to_mut()[..len], &u);
         crate::prof::add(
             if len == n {
                 "ipa.fold1"

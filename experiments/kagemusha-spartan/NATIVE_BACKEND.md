@@ -252,10 +252,10 @@ prefix, matrix query padding, both matrix values and both inherited generator po
 from the signed programs and the public query coordinates and challenges. The payer
 then verifies the reconstructed pair. Admission checks the maximum legal statement,
 lineage and next key with all 32 non-default siblings. The ordinary Receive step and
-the folded lineage share one recursive pair in this profile. It has no independent
-unfolded Receive proof or ArchiveSent selector. Wallets retain the exact Payment for
-redelivery. Transport qualification includes a full NFC or Nearby exchange using this
-evidence on two physical phones.
+the folded lineage share one recursive pair in this profile. The signed four-kind
+generation returns a typed refusal when the payer selects ArchiveSent. Wallets retain
+the exact Payment for redelivery. Transport qualification includes a full NFC or
+Nearby exchange using this evidence on two physical phones.
 
 Spartan IPM1 profile `0x8001`, schema `3`, kind `4` carries two folded-head
 projections of `Credited::Status`. `KGSCST3` followed by a zero byte selects the
@@ -279,6 +279,18 @@ the capsule and the supplied canonical account companion. The signed destination
 binds that companion and the entire reconstructed wire must match. Without the
 action or a supplied companion, Native reports unavailable custody data. Both
 forms are read-only. [Wallet wire §3.4 and §6](../../specs/kagemusha_wallet_wire_v1.md)
+
+For ArchiveSent, a five-kind installation authenticates a separate Artifact-signed
+manifest against the selected genesis digest. The producer registry supplies the
+ten expected program digests, matrix dimensions and sumcheck grouping on each
+curve. The payer reopens its released Send, exact Payment, signed Request and
+folded CreditStatus. It verifies the pending-outgoing removal at both the committed
+and lineage-adjusted roots. The successor advances the sequence and state nonce,
+removes that pending entry, and preserves the balances and fee claim. Cold recovery
+checks the same originals and selected manifest. A wallet using Spartan profile
+`0x8001` accepts either folded receiver projection as tag 2 evidence. Tag 1 belongs
+to the separate ordinary Receive package with its own proof and credential layout.
+[Native ArchiveSent](src/native_archive_sent.rs) · [Five-kind program admission](src/program_bundle.rs)
 
 The canonical PIPA-R ordinary Receive proof has one public statement digest and a
 3,360-byte descriptor at its one-lane k12 shape. Its state commitment absorbs 29 core

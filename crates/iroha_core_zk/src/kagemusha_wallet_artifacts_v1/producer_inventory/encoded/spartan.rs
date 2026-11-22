@@ -4,11 +4,14 @@ use iroha_data_model::{
     isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1 as Install,
     kagemusha::KagemushaWalletSchemeV1,
 };
-use zk_spartan::native::{AuthenticatedParameters, ParameterManifest};
+use zk_spartan::native::{
+    self, AuthenticatedManifestHeaderV5, AuthenticatedParameters, ParameterManifest,
+    ProgramProfileV2,
+};
 
 /// Maximum fixed-layout carrier header, including the bounded signed program manifest.
 pub const MAX_PACK_BYTES: usize = Install::MAX_MANIFEST_BYTES + 2048;
-/// Bounded fixed-layout inventory of the eight program digests and signed selection.
+/// Bounded fixed-layout inventory of the selected producer programs and signed manifest.
 pub const MAX_INVENTORY_BYTES: usize = 4096;
 /// Maximum length of either single-original JSON metadata document.
 pub const MAX_JSON_BYTES: usize = 2048;
@@ -71,23 +74,142 @@ fn framed<T: norito::NoritoSerialize>(value: &T) -> io::Result<Vec<u8>> {
     norito::to_bytes(value).map_err(io::Error::other)
 }
 
+#[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.kagemusha.spartan.wallet.ProducerInventory.v2")]
+struct FiveInventory {
+    programs: ProgramProfileV2,
+    manifest_digest: [u8; 32],
+    original: BlobV1,
+}
+
+/// Compiler pins selected independently of the signed verifier originals.
+#[derive(Clone)]
+pub enum CompiledPrograms {
+    /// The compiled Receive, Send, Bootstrap and Control programs.
+    Four(ProducerPrograms),
+    /// The ten compiled tapes and deferred matrix dimensions for the ArchiveSent generation.
+    Five(ProgramProfileV2),
+}
+
+impl From<&ProducerPrograms> for CompiledPrograms {
+    fn from(programs: &ProducerPrograms) -> Self {
+        Self::Four(*programs)
+    }
+}
+
+impl From<&CompiledPrograms> for CompiledPrograms {
+    fn from(programs: &CompiledPrograms) -> Self {
+        programs.clone()
+    }
+}
+
+impl CompiledPrograms {
+    /// Select the native compiler registry for this manifest schema.
+    pub fn for_manifest(bytes: &[u8]) -> Option<Self> {
+        if AuthenticatedParameters::is_five_manifest(bytes) {
+            native::built_in_five_programs().map(Self::Five)
+        } else {
+            Self::four()
+        }
+    }
+
+    fn four() -> Option<Self> {
+        native::built_in_producer_programs()
+            .map(|(primary, secondary)| Self::Four(ProducerPrograms { primary, secondary }))
+    }
+}
+
+/// Public Artifact-signed claims from the selected version of the wallet pack.
+pub enum AuthenticatedPackManifest {
+    /// Authenticated four-kind parameter and issuer claims.
+    Four(ParameterManifest),
+    /// Authenticated five-kind parameter and issuer claims.
+    Five(AuthenticatedManifestHeaderV5),
+}
+
+impl AuthenticatedPackManifest {
+    /// Root-certified signer original selected by the monetary manifest.
+    pub fn signer_certificate(&self) -> &[u8] {
+        match self {
+            Self::Four(manifest) => &manifest.signer_certificate,
+            Self::Five(manifest) => &manifest.signer_certificate,
+        }
+    }
+
+    /// Look up the build's own producer registry independently of these claims.
+    pub fn built_in_producer(&self) -> Option<CompiledPrograms> {
+        match self {
+            Self::Four(_) => CompiledPrograms::four(),
+            Self::Five(_) => native::built_in_five_programs().map(CompiledPrograms::Five),
+        }
+    }
+
+    fn authenticate(
+        bytes: &[u8],
+        signature: &[u8; 64],
+        digest: &[u8; 32],
+        scheme: &KagemushaWalletSchemeV1,
+    ) -> io::Result<Self> {
+        if AuthenticatedParameters::is_five_manifest(bytes) {
+            ProgramProfileV2::authenticate_manifest_header(bytes, signature, digest, scheme)
+                .map(Self::Five)
+                .map_err(io::Error::other)
+        } else {
+            let (manifest, actual) =
+                AuthenticatedParameters::authenticated_manifest(bytes, signature, scheme)
+                    .map_err(io::Error::other)?;
+            if actual != *digest {
+                return Err(invalid("Spartan signed manifest digest"));
+            }
+            Ok(Self::Four(manifest))
+        }
+    }
+
+    fn require_compiler(&self, producer: &CompiledPrograms) -> io::Result<()> {
+        let matches = match (self, producer) {
+            (Self::Four(m), CompiledPrograms::Four(p)) => {
+                m.primary == p.primary && m.secondary == p.secondary
+            }
+            (Self::Five(m), CompiledPrograms::Five(p)) => m.programs == *p,
+            _ => false,
+        };
+        if !matches {
+            return Err(invalid("installed programs differ from native producer"));
+        }
+        Ok(())
+    }
+
+    /// Import the selected public program originals under the independent native compiler pins.
+    ///
+    /// # Errors
+    /// Refuses mismatched compiler pins, malformed programs or invalid manifest claims.
+    pub fn verify_originals(&self, bytes: &[u8], producer: &CompiledPrograms) -> io::Result<()> {
+        self.require_compiler(producer)?;
+        match self {
+            Self::Four(m) => AuthenticatedParameters::verify_program_originals(bytes, m),
+            Self::Five(m) => m.programs.verify_compiled_originals(bytes, m).map(|_| ()),
+        }
+        .map_err(io::Error::other)
+    }
+}
+
 fn inventory(
     original: BlobV1,
     manifest_digest: [u8; 32],
-    programs: &ProducerPrograms,
+    programs: &CompiledPrograms,
 ) -> io::Result<Vec<u8>> {
-    framed(&Inventory {
-        original,
-        manifest_digest,
-        programs: programs.clone(),
-    })
-}
-
-fn require_compiler(manifest: &ParameterManifest, producer: &ProducerPrograms) -> io::Result<()> {
-    if manifest.primary != producer.primary || manifest.secondary != producer.secondary {
-        return Err(invalid("installed programs differ from native producer"));
+    match programs {
+        CompiledPrograms::Four(programs) => framed(&Inventory {
+            original,
+            manifest_digest,
+            programs: *programs,
+        }),
+        CompiledPrograms::Five(programs) => framed(&FiveInventory {
+            original,
+            manifest_digest,
+            programs: programs.clone(),
+        }),
     }
-    Ok(())
 }
 
 fn require_world_extent(install: &Install) -> io::Result<()> {
@@ -149,33 +271,32 @@ fn measure(lengths: [usize; 4], row: EncodedOriginalV1) -> io::Result<()> {
 pub fn publish(
     install: &Install,
     scheme: &KagemushaWalletSchemeV1,
-    producer: &ProducerPrograms,
+    producer: impl Into<CompiledPrograms>,
     destination: &PrivateDirectory,
 ) -> io::Result<ReleasePins> {
+    let producer = producer.into();
     require_world_extent(install)?;
-    let (manifest, digest) = AuthenticatedParameters::authenticated_manifest(
-        &install.manifest,
-        &install.signature,
-        scheme,
-    )
-    .map_err(io::Error::other)?;
-    if digest != install.manifest_digest || manifest.scheme != install.scheme {
+    if install.scheme != scheme.scheme_id() {
         return Err(invalid("Spartan publisher scope"));
     }
-    require_compiler(&manifest, producer)?;
-    AuthenticatedParameters::verify_program_originals(&install.programs, &manifest)
-        .map_err(io::Error::other)?;
-    publish_files(install, digest, producer, destination)
+    let manifest = AuthenticatedPackManifest::authenticate(
+        &install.manifest,
+        &install.signature,
+        &install.manifest_digest,
+        scheme,
+    )?;
+    manifest.verify_originals(&install.programs, &producer)?;
+    publish_files(install, install.manifest_digest, &producer, destination)
 }
 
 fn publish_files(
     install: &Install,
     digest: [u8; 32],
-    producer: &ProducerPrograms,
+    producer: impl Into<CompiledPrograms>,
     destination: &PrivateDirectory,
 ) -> io::Result<ReleasePins> {
     let original = BlobV1::of(&install.programs);
-    let catalog = inventory(original, digest, producer)?;
+    let catalog = inventory(original, digest, &producer.into())?;
     let catalog_digest = artifact_digest(b"producer-catalog", &catalog);
     let pack = framed(&Pack {
         scheme: install.scheme,
@@ -221,7 +342,7 @@ fn authenticated_header(
     bytes: &[u8],
     scheme: &KagemushaWalletSchemeV1,
     asset: [u8; 32],
-) -> io::Result<(Pack, ParameterManifest)> {
+) -> io::Result<(Pack, AuthenticatedPackManifest)> {
     if bytes.is_empty() || bytes.len() > MAX_PACK_BYTES {
         return Err(invalid("Spartan carrier header extent"));
     }
@@ -239,15 +360,12 @@ fn authenticated_header(
     {
         return Err(invalid("Spartan pack selection or original extent"));
     }
-    let (manifest, digest) = AuthenticatedParameters::authenticated_manifest(
+    let manifest = AuthenticatedPackManifest::authenticate(
         &header.manifest,
         &header.signature,
+        &header.manifest_digest,
         scheme,
-    )
-    .map_err(io::Error::other)?;
-    if digest != header.manifest_digest {
-        return Err(invalid("Spartan signed manifest digest"));
-    }
+    )?;
     Ok((header, manifest))
 }
 
@@ -263,6 +381,21 @@ pub fn authenticated_pack_selection(
     scheme: &KagemushaWalletSchemeV1,
     asset: [u8; 32],
 ) -> io::Result<(ParameterManifest, [u8; 32])> {
+    match authenticated_pack_selection_any(bytes, scheme, asset)? {
+        (AuthenticatedPackManifest::Four(manifest), digest) => Ok((manifest, digest)),
+        _ => Err(invalid("carrier requires five-kind manifest selection")),
+    }
+}
+
+/// Authenticate the bounded pack and its signed manifest across both supported schemas.
+///
+/// # Errors
+/// Refuses a changed signer, scope, digest, asset, signature or noncanonical pack.
+pub fn authenticated_pack_selection_any(
+    bytes: &[u8],
+    scheme: &KagemushaWalletSchemeV1,
+    asset: [u8; 32],
+) -> io::Result<(AuthenticatedPackManifest, [u8; 32])> {
     let (header, manifest) = authenticated_header(bytes, scheme, asset)?;
     Ok((manifest, header.manifest_digest))
 }
@@ -280,8 +413,54 @@ pub fn read(
     scheme: &KagemushaWalletSchemeV1,
     asset: [u8; 32],
     manifest_digest: [u8; 32],
-    producer: &ProducerPrograms,
+    producer: impl Into<CompiledPrograms>,
 ) -> io::Result<Install> {
+    read_using(root, release, scheme, asset, manifest_digest, |_| {
+        Ok(producer.into())
+    })
+    .map(|(install, _)| install)
+}
+
+/// An authenticated generation has no independently verified compiler registry in this native build.
+#[derive(Clone, Copy, Debug)]
+pub struct CompilerUnavailable;
+
+impl std::fmt::Display for CompilerUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("native compiler registry unavailable")
+    }
+}
+
+impl std::error::Error for CompilerUnavailable {}
+
+/// Reconstruct the release and select the installed native compiler registry.
+/// Returns both so the caller can mount the identical selected program set.
+///
+/// # Errors
+/// In addition to ordinary carrier refusals, returns Unsupported when this
+/// native build has no verified compiler registry for the authenticated schema.
+pub fn read_from_build(
+    root: &PrivateDirectory,
+    release: ReleasePins,
+    scheme: &KagemushaWalletSchemeV1,
+    asset: [u8; 32],
+    manifest_digest: [u8; 32],
+) -> io::Result<(Install, CompiledPrograms)> {
+    read_using(root, release, scheme, asset, manifest_digest, |claims| {
+        claims
+            .built_in_producer()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, CompilerUnavailable))
+    })
+}
+
+fn read_using(
+    root: &PrivateDirectory,
+    release: ReleasePins,
+    scheme: &KagemushaWalletSchemeV1,
+    asset: [u8; 32],
+    manifest_digest: [u8; 32],
+    select: impl FnOnce(&AuthenticatedPackManifest) -> io::Result<CompiledPrograms>,
+) -> io::Result<(Install, CompiledPrograms)> {
     require_carrier_entries(root, true)?;
     let pack = root.read("verifier-pack.norito", MAX_PACK_BYTES)?;
     let catalog = root.read("producer-inventory.norito", MAX_INVENTORY_BYTES)?;
@@ -297,14 +476,18 @@ pub fn read(
         return Err(invalid("Spartan carrier differs from signed release"));
     }
     let (header, manifest) = authenticated_header(&pack, scheme, asset)?;
-    let digest = header.manifest_digest;
-    if header.catalog_digest != release.catalog_digest
-        || digest != manifest_digest
-        || inventory(header.original, digest, producer)? != *catalog
-    {
+    if header.manifest_digest != manifest_digest {
+        return Err(invalid("Spartan selected manifest digest"));
+    }
+    if header.catalog_digest != release.catalog_digest {
         return Err(invalid("Spartan carrier authority mismatch"));
     }
-    require_compiler(&manifest, producer)?;
+    let producer = select(&manifest)?;
+    let digest = header.manifest_digest;
+    if inventory(header.original, digest, &producer)? != *catalog {
+        return Err(invalid("Spartan carrier authority mismatch"));
+    }
+    manifest.require_compiler(&producer)?;
     let transport_rows = EncodedTransportV1::from_json(&transport)?;
     let [row] = transport_rows.originals() else {
         return Err(invalid("Spartan carrier has extra transport rows"));
@@ -345,7 +528,7 @@ pub fn read(
         programs,
     };
     require_world_extent(&result)?;
-    Ok(result)
+    Ok((result, producer))
 }
 
 /// Check the app build's freshly compiled bundle against the complete signed carrier.
@@ -358,9 +541,10 @@ pub fn verify_compiled_bundle(
     scheme: &KagemushaWalletSchemeV1,
     asset: [u8; 32],
     manifest_digest: [u8; 32],
-    producer: &ProducerPrograms,
+    producer: impl Into<CompiledPrograms>,
     compiled: &[u8],
 ) -> io::Result<()> {
+    let producer = producer.into();
     let catalog = root.read("producer-inventory.norito", MAX_INVENTORY_BYTES)?;
     let pins = ReleasePins {
         catalog_digest: artifact_digest(b"producer-catalog", &catalog),
@@ -368,19 +552,19 @@ pub fn verify_compiled_bundle(
         pack: BlobV1::of(&root.read("verifier-pack.norito", MAX_PACK_BYTES)?),
         transport: BlobV1::of(&root.read("transport.json", MAX_JSON_BYTES)?),
     };
-    let install = read(root, pins, scheme, asset, manifest_digest, producer)?;
+    let install = read(root, pins, scheme, asset, manifest_digest, &producer)?;
     if install.programs != compiled {
         return Err(invalid(
             "signed programs differ from the fresh compiler output",
         ));
     }
-    let (manifest, _) = AuthenticatedParameters::authenticated_manifest(
+    let manifest = AuthenticatedPackManifest::authenticate(
         &install.manifest,
         &install.signature,
+        &install.manifest_digest,
         scheme,
-    )
-    .map_err(io::Error::other)?;
-    AuthenticatedParameters::verify_program_originals(compiled, &manifest).map_err(io::Error::other)
+    )?;
+    manifest.verify_originals(compiled, &producer)
 }
 
 #[cfg(test)]
@@ -500,6 +684,50 @@ mod tests {
         }
         assert!(load(pins, [6; 32], install.manifest_digest, &producer).is_err());
         assert!(load(pins, install.asset, [1; 32], &producer).is_err());
+        // A repinned pack can still name the wrong catalog. Reject it before
+        // selecting a producer, even on a device without that compiler.
+        let crossed =
+            PrivateDirectory::open_or_create(root.path().with_file_name("crossed")).unwrap();
+        crossed.ensure_child("wallet-originals").unwrap();
+        let pack = root.read("verifier-pack.norito", MAX_PACK_BYTES).unwrap();
+        let (mut header, _) = authenticated_header(&pack, &scheme, install.asset).unwrap();
+        header.catalog_digest[0] ^= 1;
+        let pack = framed(&header).unwrap();
+        let catalog = root
+            .read("producer-inventory.norito", MAX_INVENTORY_BYTES)
+            .unwrap();
+        let transport = root.read("transport.json", MAX_JSON_BYTES).unwrap();
+        let financial = financial_json_for_scope(
+            &pack,
+            &catalog,
+            &transport,
+            Some((install.asset, install.manifest_digest)),
+        )
+        .unwrap();
+        for (name, data) in [
+            ("verifier-pack.norito", pack.as_slice()),
+            ("producer-inventory.norito", &catalog),
+            ("transport.json", &transport),
+            ("financial-originals.json", &financial),
+        ] {
+            super::super::super::transport_metadata::publish_metadata(&crossed, name, data)
+                .unwrap();
+        }
+        let crossed_pins = ReleasePins {
+            pack: BlobV1::of(&pack),
+            ..pins
+        };
+        let error = read_using(
+            &crossed,
+            crossed_pins,
+            &scheme,
+            install.asset,
+            install.manifest_digest,
+            |_| panic!("producer lookup preceded the catalog identity check"),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let mut wrong_pins = pins;
         wrong_pins.catalog_digest[0] ^= 1;
         assert!(
@@ -523,6 +751,136 @@ mod tests {
         )
         .unwrap();
         assert!(load(pins, install.asset, install.manifest_digest, &producer).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires the independently pinned public five-kind manifest/producer test fixture"]
+    fn five_kind_carrier_authenticates_all_ten_pins_and_cross_version_refusals() {
+        let fixtures = std::path::PathBuf::from(
+            std::env::var_os("KAGEMUSHA_SPARTAN_FIVE_CARRIER_FIXTURE").unwrap(),
+        );
+        let read_fixture = |name: &str| std::fs::read(fixtures.join(name)).unwrap();
+        let identity = read_fixture("identity.bin");
+        let scheme_id: [u8; 32] = identity[..32].try_into().unwrap();
+        let scheme =
+            KagemushaWalletSchemeV1::decode_canonical(&read_fixture("scheme.norito"), &scheme_id)
+                .unwrap();
+        let install = Install {
+            scheme: scheme_id,
+            asset: [7; 32],
+            manifest_digest: identity[32..64].try_into().unwrap(),
+            manifest: read_fixture("manifest.norito"),
+            signature: read_fixture("signature.bin").try_into().unwrap(),
+            programs: read_fixture("program-bundle.norito"),
+        };
+        let pins = read_fixture("producer-pins.bin");
+        assert_eq!(pins.len(), 10 * 32);
+        let side = |offset: usize| {
+            std::array::from_fn(|i| {
+                pins[32 * (offset + i)..32 * (offset + i + 1)]
+                    .try_into()
+                    .unwrap()
+            })
+        };
+        let producer = ProgramProfileV2 {
+            primary: side(0),
+            secondary: side(5),
+            dimensions: [[24, 25], [24, 24]],
+        };
+        let selected = CompiledPrograms::Five(producer.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let destination = std::env::var_os("KAGEMUSHA_SPARTAN_FIVE_CARRIER_OUTPUT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| tmp.path().canonicalize().unwrap().join("carrier"));
+        let root = PrivateDirectory::open_or_create(destination).unwrap();
+        let release = publish(&install, &scheme, &selected, &root).unwrap();
+        let restored = read(
+            &root,
+            release,
+            &scheme,
+            install.asset,
+            install.manifest_digest,
+            &selected,
+        )
+        .unwrap();
+        assert_eq!(restored, install);
+        // The synthetic tapes can be compared with explicit independent test pins.
+        // They can never supply the device build's own monetary producer selection.
+        let unavailable = read_from_build(
+            &root,
+            release,
+            &scheme,
+            install.asset,
+            install.manifest_digest,
+        )
+        .err()
+        .expect("the synthetic compiler fixture is not an installed monetary generation");
+        if native::built_in_five_programs().is_none() {
+            assert!(
+                unavailable
+                    .get_ref()
+                    .is_some_and(|error| error.is::<CompilerUnavailable>())
+            );
+        } else {
+            assert_eq!(unavailable.kind(), io::ErrorKind::InvalidData);
+        }
+        let pack = root.read("verifier-pack.norito", MAX_PACK_BYTES).unwrap();
+        let (manifest, digest) =
+            authenticated_pack_selection_any(&pack, &scheme, install.asset).unwrap();
+        assert!(matches!(manifest, AuthenticatedPackManifest::Five(_)));
+        assert_eq!(digest, install.manifest_digest);
+        assert_eq!(
+            manifest.signer_certificate(),
+            read_fixture("certificate.bin")
+        );
+        assert!(authenticated_pack_selection(&pack, &scheme, install.asset).is_err());
+        verify_compiled_bundle(
+            &root,
+            &scheme,
+            install.asset,
+            digest,
+            &selected,
+            &install.programs,
+        )
+        .unwrap();
+        let four = signed_install().2;
+        assert!(read(&root, release, &scheme, install.asset, digest, &four).is_err());
+        let mut alternate = producer.clone();
+        alternate.secondary.swap(3, 4);
+        assert!(
+            read(
+                &root,
+                release,
+                &scheme,
+                install.asset,
+                digest,
+                &CompiledPrograms::Five(alternate)
+            )
+            .is_err()
+        );
+        let mut wrong_dimensions = producer;
+        wrong_dimensions.dimensions[0][1] -= 1;
+        assert!(
+            read(
+                &root,
+                release,
+                &scheme,
+                install.asset,
+                digest,
+                &CompiledPrograms::Five(wrong_dimensions)
+            )
+            .is_err()
+        );
+        let catalog = root
+            .read("producer-inventory.norito", MAX_INVENTORY_BYTES)
+            .unwrap();
+        assert!(!catalog.is_empty());
+        eprintln!(
+            "five-kind inventory {} bytes, pack {} bytes, exact program original {} bytes",
+            catalog.len(),
+            pack.len(),
+            install.programs.len()
+        );
     }
 
     #[test]

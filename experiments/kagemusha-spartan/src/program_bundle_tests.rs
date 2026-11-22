@@ -72,6 +72,16 @@ pub(in crate::native) fn original<F: Scalar>(
     col_bits: usize,
     wallet_row: bool,
 ) -> (Vec<u8>, [u8; 32]) {
+    original_at::<F, 3>(primary, kind, coordinates, col_bits, wallet_row, None)
+}
+
+pub(in crate::native) fn fixture_wiring<F: Scalar>(
+    primary: bool,
+    kind: usize,
+    coordinates: usize,
+    col_bits: usize,
+    wallet_row: bool,
+) -> full::Wiring<F> {
     let mut wiring = full::Wiring::<F>::default();
     let family = wiring.family(0, 1);
     for (count, offset) in [
@@ -126,8 +136,20 @@ pub(in crate::native) fn original<F: Scalar>(
         wiring.link.io.push((a, slot));
     }
     wiring.link.io_values = Some(Box::new(move |_, _| vec![F::ZERO; slots.len()]));
+    wiring
+}
+
+pub(in crate::native) fn original_at<F: Scalar, const GROUP: usize>(
+    primary: bool,
+    kind: usize,
+    coordinates: usize,
+    col_bits: usize,
+    wallet_row: bool,
+    target: Option<crate::uniform::Layout>,
+) -> (Vec<u8>, [u8; 32]) {
+    let wiring = fixture_wiring::<F>(primary, kind, coordinates, col_bits, wallet_row);
     let (arrays, families, counts, tables, copies) = wiring.finish();
-    let (circuit, _, _) = UniformCircuit::build_with_copies(
+    let (circuit, _, _, _) = UniformCircuit::build_rows_grouped_with_release::<GROUP>(
         if primary { "P-uniform" } else { "S-uniform" },
         arrays,
         families,
@@ -137,8 +159,60 @@ pub(in crate::native) fn original<F: Scalar>(
         col_bits,
         64,
         b"five-kind original geometry fixture",
+        target,
+        |_| {},
     );
     (circuit.export_program().unwrap(), circuit.program_digest())
+}
+
+#[test]
+fn selected_primary_and_secondary_groupings_bind_the_exact_ten_originals() {
+    let primary =
+        std::array::from_fn::<_, 5, _>(|i| original_at::<Fp, 4>(true, i, 55, 13, true, None));
+    let secondary = std::array::from_fn::<_, 5, _>(|i| original::<Fq>(false, i, 54, 10, false));
+    let p = primary.each_ref().map(|entry| entry.1);
+    let s = secondary.each_ref().map(|entry| entry.1);
+    let bundle = ProgramBundleV2 {
+        version: 2,
+        primary: primary.map(|entry| entry.0),
+        secondary: secondary.map(|entry| entry.0),
+    }
+    .encode()
+    .unwrap();
+    let dimensions = [[24, 25], [24, 24]];
+    let source = crate::native::FiveKindProducer {
+        programs: crate::native::ProgramProfileV2 {
+            primary: p,
+            secondary: s,
+            dimensions,
+        },
+        generator_capacity_bits: [13, 10],
+        grouping: [SumcheckGroup::Four, SumcheckGroup::Three],
+    };
+    let selected = |p, s, dims| SumcheckGroup::for_source(Some(&source), p, s, dims);
+    let groups = selected(&p, &s, dimensions);
+    assert_eq!(groups, source.grouping);
+    let mut other = s;
+    other.swap(1, 4);
+    assert_eq!(selected(&p, &other, dimensions), [SumcheckGroup::Three; 2]);
+    assert_eq!(
+        selected(&p, &s, [[24, 24], [24, 24]]),
+        [SumcheckGroup::Three; 2]
+    );
+    let check = |groups| ProgramBundleV2::inspect_retail_with(&bundle, &p, &s, dimensions, groups);
+    let (geometry, _) = check(groups).unwrap();
+    assert_eq!(geometry.map(|side| side.sumcheck_variables), [4, 3]);
+    let (installed_geometry, pairs) =
+        ProgramBundleV2::retain_programs(&bundle, &source.programs, groups).unwrap();
+    assert_eq!(installed_geometry, geometry);
+    assert_eq!(pairs.len(), 5);
+    for (index, pair) in pairs.iter().enumerate() {
+        assert_eq!(pair.primary.program_digest(), p[index]);
+        assert_eq!(pair.secondary.program_digest(), s[index]);
+    }
+    assert!(check([SumcheckGroup::Three, SumcheckGroup::Four]).is_err());
+    assert!(check([SumcheckGroup::Four; 2]).is_err());
+    assert!(ProgramBundleV2::inspect_retail_originals(&bundle, &p, &s, dimensions).is_err());
 }
 
 #[test]
@@ -156,6 +230,8 @@ fn successor_preflight_checks_each_pinned_tape_common_layout_and_claim_slots() {
     let frame = bundle.encode().unwrap();
     let [primary, secondary] =
         ProgramBundleV2::inspect_originals(&frame, &pins_p, &pins_s, dimensions).unwrap();
+    assert_eq!([primary.sumcheck_variables, secondary.sumcheck_variables], [3, 3]);
+    assert!(ProgramBundleV2::inspect_four_variable_retail_originals(&frame, &pins_p, &pins_s, dimensions).is_err());
     assert_eq!((primary.column_bits, primary.folded_claim_words), (13, 56));
     assert_eq!(
         (secondary.column_bits, secondary.folded_claim_words),
@@ -266,6 +342,10 @@ fn signed_installed_v1_bundle_roundtrips_through_shared_codec_and_keeps_all_eigh
     assert_eq!(*installed.id(), device_fixture::scheme().relation_id);
     let (primary, secondary) = built_in_producer_programs().unwrap();
     assert_eq!(installed.inner.programs.len(), 4);
+    assert!(matches!(
+        installed.require_archive_sent_program(),
+        Err(Error::AuthorityMismatch("signed generation has no ArchiveSent program"))
+    ));
     for (kind, pair) in installed.inner.programs.iter().enumerate() {
         assert_eq!(pair.primary.program_digest(), primary[kind]);
         assert_eq!(pair.secondary.program_digest(), secondary[kind]);
@@ -274,4 +354,39 @@ fn signed_installed_v1_bundle_roundtrips_through_shared_codec_and_keeps_all_eigh
         "authenticated signed fixture: {} byte-identical original bytes; four installed kinds; eight compiler pins matched",
         restored.len()
     );
+}
+
+#[test]
+fn five_program_transport_qualification_refuses_large_payment_before_signing() {
+    let dimensions = [[24, 25], [24, 24]];
+    let s = std::array::from_fn::<_, 5, _>(|i| original::<Fq>(false, i, 54, 10, false));
+    let pins_s = s.each_ref().map(|o| o.1);
+    let secondary = s.map(|o| o.0);
+    for oversized in [false, true] {
+        let target = oversized.then_some(crate::uniform::Layout {
+            sx: 10, row_bits: 7, p1: 1, pl: 0, fixed: 1,
+        });
+        let p = std::array::from_fn::<_, 5, _>(|i| original_at::<Fp,3>(true, i, 55, 13, true, target));
+        let pins_p = p.each_ref().map(|o| o.1);
+        let bundle = ProgramBundleV2 { version: 2, primary: p.map(|o| o.0), secondary: secondary.clone() };
+        let frame = bundle.encode().unwrap();
+        let geometry = ProgramBundleV2::inspect_originals(&frame, &pins_p, &pins_s, dimensions).unwrap();
+        let checked = ProgramBundleV2::inspect_retail_originals(&frame, &pins_p, &pins_s, dimensions);
+        if oversized {
+            assert!(matches!(checked, Err(Error::Rejected(_))), "{checked:?}");
+            if let Some(dir) = std::env::var_os("KAGEMUSHA_SPARTAN_TRANSPORT_FIXTURE_DIR") {
+                let dir = std::path::Path::new(&dir);
+                std::fs::create_dir_all(dir).unwrap();
+                std::fs::write(dir.join("wide-program-bundle.norito"), frame).unwrap();
+                let pins: Vec<u8> = pins_p.iter().chain(&pins_s).flatten().copied().collect();
+                std::fs::write(dir.join("wide-pins.bin"), pins).unwrap();
+            }
+        } else {
+            let (qualified, sizes) = checked.unwrap();
+            assert_eq!(geometry, qualified);
+            assert!(sizes.payment_peer > sizes.payment_envelope && sizes.payment_envelope > sizes.payment_pair);
+            assert!(sizes.receive_status_peer > 32 * 32 && sizes.later_send_status_peer > 32 * 32);
+            eprintln!("admitted five-kind retail fixture: {sizes:?}");
+        }
+    }
 }

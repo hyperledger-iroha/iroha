@@ -1713,6 +1713,57 @@ impl<F: Scalar> UniformCircuit<F> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_rows_with_release(
         label: &'static str,
+        arrays: Vec<Array<F>>,
+        pi: Vec<usize>,
+        counts: Vec<usize>,
+        table_specs: Vec<(usize, u32)>,
+        copies: Copies<F>,
+        col_bits: usize,
+        io_len: usize,
+        seed: &[u8],
+        target: Option<Layout>,
+        release: impl Fn(&mut Vec<Vec<F>>),
+    ) -> (Self, Instance<F>, Witness<F>, Vec<RowFill>) {
+        Self::build_rows_grouped_with_release::<3>(
+            label, arrays, pi, counts, table_specs, copies, col_bits, io_len, seed, target, release,
+        )
+    }
+
+    /// Independently selected offline grouping for the five-kind engineering compiler.
+    /// Production callers continue to use the group-three constructor above.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_group_four_with_copies_at(
+        label: &'static str,
+        arrays: Vec<Array<F>>,
+        pi: Vec<usize>,
+        counts: Vec<usize>,
+        table_specs: Vec<(usize, u32)>,
+        copies: Copies<F>,
+        col_bits: usize,
+        io_len: usize,
+        seed: &[u8],
+        target: Option<Layout>,
+    ) -> (Self, Instance<F>, Witness<F>) {
+        let (c, i, w, _) = Self::build_rows_grouped_with_release::<4>(
+            label,
+            arrays,
+            pi,
+            counts,
+            table_specs,
+            copies,
+            col_bits,
+            io_len,
+            seed,
+            target,
+            |_| {},
+        );
+        (c, i, w)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_rows_grouped_with_release<const GROUP: usize>(
+        label: &'static str,
         mut arrays: Vec<Array<F>>,
         mut pi: Vec<usize>,
         mut counts: Vec<usize>,
@@ -2342,7 +2393,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 sx,
                 row_bits,
                 col_bits,
-                k: 3,
+                k: GROUP,
             };
             // The last MASK_COLS active columns of some rows hold the masking
             // values: no stripe reaches them.

@@ -1,6 +1,6 @@
 //! Wallet-wire evidence for the recursive ArchiveSent verifier. The exact Ω proof
 //! bytes come from the same recursive verifier that decides the receiver's two curves.
-use super::super::later_receiver_head::wire_binding::{Transcript, status_chain};
+use super::transcript::{Transcript, status_chain};
 use super::*;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_WALLET_LINEAGE_DOMAIN_V1, KAGEMUSHA_WALLET_LINEAGE_PUBLIC_TRANSCRIPT_BYTES_V1,
@@ -55,7 +55,7 @@ pub(super) fn append(
     prior: &monetary_state::StateCells,
     next: &monetary_state::StateCells,
     credit: Source,
-    ports: &super::super::super::receiver_signature::ReceiptResults,
+    ports: &super::receiver_signature::ReceiptResults,
 ) -> crate::statement::StatementCells {
     let lineage = lineage(w, family, incoming);
     let [_, _, credited] = status_chain(

@@ -16,13 +16,13 @@ use zeroize::Zeroizing;
 
 /// Wallet-owned store fixture: the payer's pending-outgoing tree holding this Send's
 /// descriptor, and optionally the receiver's credit route for the later Send evidence.
-struct Store {
+pub(super) struct Store {
     pending: KagemushaWalletIndexedTreeV1,
     staged: usize,
     credit: Option<([u8; 32], PublicLeaf, PublicPath)>,
 }
 impl Store {
-    fn new(pending: &KagemushaWalletIndexedTreeV1) -> Self {
+    pub(super) fn new(pending: &KagemushaWalletIndexedTreeV1) -> Self {
         Self {
             pending: pending.clone(),
             staged: 0,
@@ -111,7 +111,7 @@ fn with_originals(
     }
 }
 /// The single pending descriptor of the retained payer, as the wallet-owned tree.
-fn pending_tree(descriptor: &[Fp; 7]) -> KagemushaWalletIndexedTreeV1 {
+pub(super) fn pending_tree(descriptor: &[Fp; 7]) -> KagemushaWalletIndexedTreeV1 {
     let mut pending = KagemushaWalletIndexedTreeV1::new();
     pending
         .insert(
@@ -357,11 +357,12 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
             engine.prepare(&with_originals(&reopened, None, Some(&other), None), head, params);
         assert!(refused.is_err() && !gate(refused), "another signed open Request");
 
-        // No kind-5 capsule can be encoded, selected, resumed or completed, so Advance can
-        // never request or verify a hardware receipt for an ArchiveSent.
+        // Both generations share the structural frame. Authorization at selection,
+        // resume and release uses the installed producer and its signed kind count.
         let mut forged = send.capsule().clone();
         forged.frame.kind = 5;
-        assert!(forged.encode().is_err());
+        let frame = forged.encode().unwrap();
+        let forged = native::RecoveryCapsule::decode(&frame, forged.scheme()).unwrap();
         assert!(matches!(
             engine.prepare_selection(&forged, params),
             Err(Error::AuthorityMismatch(m)) if m == ARCHIVE_SENT_UNSIGNED

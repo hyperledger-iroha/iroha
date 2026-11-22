@@ -191,6 +191,38 @@ fn bounded_columns_equal_naive_and_bucket_sums_on_both_curves() {
     bounded_columns::<Eq>(5);
 }
 
+/// Signed radix-16 has one carry digit when the public bound is a
+/// multiple of four. Every residue class and every limb boundary must
+/// reconstruct the original scalar, including a full carry chain.
+fn signed_window_bounds<C: PastaCurve>(seed: u64) {
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    let g = C::generator();
+    let bases = [g.to_affine(), (-g).to_affine(), g.double().to_affine()];
+    let rows: Vec<_> = (0..=FULL_BITS)
+        .map(|bits| [
+            largest::<C::ScalarExt>(bits),
+            below::<C::ScalarExt>(&mut rng, bits),
+            largest::<C::ScalarExt>(bits.saturating_sub(1)),
+        ])
+        .collect();
+    let columns: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .map(|(bits, row)| (row.as_slice(), bits))
+        .collect();
+    let mut sums = vec![C::identity(); columns.len()];
+    run_stack::<C>(&columns, &bases, 4, None, &mut sums).unwrap();
+    for (bits, (row, sum)) in rows.iter().zip(sums).enumerate() {
+        assert_eq!(sum, msm_naive::<C>(row, &bases), "public bound {bits}");
+    }
+}
+
+#[test]
+fn signed_radix_carries_cover_every_public_width_on_both_curves() {
+    signed_window_bounds::<Ep>(71);
+    signed_window_bounds::<Eq>(73);
+}
+
 /// Different budgets and pool sizes change the chunking and loop count only;
 /// every plan returns the same exact group elements.
 fn plans_agree<C: PastaCurve>(seed: u64) {

@@ -1358,6 +1358,16 @@ impl<S: Scalar + zeroize::Zeroize> ProverWitness<'_, S> {
         }
     }
 
+    fn prover_rows(&mut self, cols: usize) -> crate::kern::Rows<'_, S> {
+        match self {
+            Self::Borrowed(witness, fill) => crate::kern::Rows::with_fill(&witness.w, cols, fill),
+            Self::Owned(witness) => {
+                let (witness, fill) = witness.parts_mut();
+                crate::kern::Rows::with_mutable_values(&mut witness.w, cols, fill)
+            }
+        }
+    }
+
     fn owned_bytes(&self) -> usize {
         match self {
             Self::Borrowed(..) => 0,
@@ -1518,7 +1528,7 @@ fn prove_rows<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     inst: &Instance<F<C>>,
-    witness: ProverWitness<'_, F<C>>,
+    mut witness: ProverWitness<'_, F<C>>,
     rng: &mut SpikeRng,
     cheat: Cheat,
     separated: bool,
@@ -1571,7 +1581,7 @@ fn prove_rows<C: PastaCurve>(
             .all(|(r, f)| *f != r1cs::RowFill::Unit || r >= rows_c),
         "only fixed rows are padding rows"
     );
-    let mut zw = crate::kern::Rows::with_fill(&wit.w, cols, fill);
+    let mut zw = witness.prover_rows(cols);
     crate::prof::time("c.masks", || circuit.randomize_masks_rows(&mut zw, rng));
     mark("z");
 
@@ -1806,6 +1816,7 @@ fn prove_rows<C: PastaCurve>(
     // public layout (rows the build never wrote, the public half beyond the
     // io). The folded M is public; a private value is never tested for zero.
     let mut z_live: Option<crate::kern::Live> = None;
+    let mut first_z = None;
     let mut inner = Vec::new();
     let mut ry = Vec::new();
     let mut start = 0;
@@ -1844,22 +1855,26 @@ fn prove_rows<C: PastaCurve>(
             mark("mtable");
             m = first.m;
             let fold_clock = Instant::now();
-            z = crate::kern::fold_top(&zv, &first.r, first.support.as_ref());
+            // Large first folds need not coexist as two dense field arrays.
+            // The next round reads the private fold twice over its public
+            // support, then materializes only its smaller second fold.
+            if let Some(support) = first.support.as_ref()
+                && crate::kern::large_private_fold::<F<C>>(m.len())
+            {
+                first_z = Some(crate::kern::FoldedWitness::new(&zv, &first.r, support));
+            } else {
+                z = crate::kern::fold_top(&zv, &first.r, first.support.as_ref());
+            }
             crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
             first.support
         } else {
-            let live = z_live.as_ref().expect("the folded witness's live runs");
-            let (values, support) = inner_values(
-                &basis,
-                k,
-                &crate::kern::Public(&m),
-                &crate::kern::Masked::new(&z, live),
-            );
-            let r = round(&values);
-            let fold_clock = Instant::now();
-            m = crate::kern::fold_top(&m, &r, support.as_ref());
-            z = crate::kern::fold_top(&z, &r, support.as_ref());
-            crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
+            let (next_z, support) = if let Some(folded) = first_z.take() {
+                advance_inner_round(&basis, k, &mut m, &folded, &mut round)
+            } else {
+                let live = z_live.as_ref().expect("the folded witness's live runs");
+                advance_inner_round(&basis, k, &mut m, &crate::kern::Masked::new(&z, live), &mut round)
+            };
+            z = next_z;
             support
         };
         if !old_kernels {
@@ -1870,6 +1885,7 @@ fn prove_rows<C: PastaCurve>(
         }
         start += k;
     }
+    drop(first_z);
     let alpha: F<C> = t.challenge(b"alpha");
     let gamma: F<C> = gamma_challenge(&mut t, separated);
     timings.inner = clock.elapsed().as_secs_f64();
@@ -2012,6 +2028,24 @@ fn inner_values<S: Field, M: crate::kern::Table<S> + ?Sized, Z: crate::kern::Tab
         crate::kern::inner_round(basis, m, z, support.as_ref())
     });
     (values, support)
+}
+
+/// Commit an inner round and replace both folded tables. The first private
+/// table can be recomputed on read, and subsequent ones are materialized.
+fn advance_inner_round<S: Field, Z: crate::kern::Table<S>>(
+    basis: &crate::kern::Basis,
+    k: usize,
+    matrix: &mut Vec<S>,
+    witness: &Z,
+    round: &mut impl FnMut(&[S]) -> Vec<S>,
+) -> (Vec<S>, Option<crate::kern::Support>) {
+    let (values, support) = inner_values(basis, k, &crate::kern::Public(matrix), witness);
+    let r = round(&values);
+    let clock = Instant::now();
+    *matrix = crate::kern::fold_top(matrix, &r, support.as_ref());
+    let z = crate::kern::fold_top(witness, &r, support.as_ref());
+    crate::prof::add("i.fold", clock.elapsed().as_secs_f64());
+    (z, support)
 }
 
 /// Honest-prover sanity check of the batched relation (used by tests).

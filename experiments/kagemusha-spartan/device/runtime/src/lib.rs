@@ -246,6 +246,21 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
         && matches!(
             stage.as_str(),
+            "ordinary-receive" | "ordinary-recover" | "ordinary-verify-prepare" | "ordinary-prepare"
+        )
+    {
+        let wallet = bootstrap.input.credential.body[66..98]
+            .try_into()
+            .expect("credential wallet");
+        drop(verification);
+        return host_tests::ordinary_receive::exercise(
+            root, &mut runtime, &slot.0, &wallet, &stage, measurements,
+        );
+    }
+    #[cfg(test)]
+    if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
+        && matches!(
+            stage.as_str(),
             "refresh-prepare" | "refresh-execute" | "refresh-recover"
         )
     {

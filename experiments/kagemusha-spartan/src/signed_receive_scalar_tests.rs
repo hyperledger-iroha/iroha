@@ -202,6 +202,48 @@ fn check_built_program<S: Scalar>(built: &UniformCircuit<S>, signed: &UniformCir
     );
 }
 
+// A fresh proof writes masks, its link phase and its late witness helpers.
+// Compare the old immutable input and the guarded mutable input at the exact
+// issued dimensions. Only row counts and their storage requirements are printed.
+fn check_owned_writes<S: Scalar + zeroize::Zeroize>(
+    result: (UniformCircuit<S>, Instance<S>, Witness<S>, Vec<crate::r1cs::RowFill>),
+    signed: &UniformCircuit<S>,
+) {
+    use crate::{fs::SpikeRng, kern::Rows, r1cs::Circuit as _};
+    let (built, _, witness, fill) = result;
+    check_built_program(&built, signed);
+    let cols = built.shape.cols();
+    let mutate = |rows: &mut Rows<'_, S>| {
+        let mut rng = SpikeRng::new(b"signed Receive witness row differential");
+        built.randomize_masks_rows(rows, &mut rng);
+        if built.link_rows(&built.shape) > 0 {
+            built.fill_link_rows(&[0x17; 32], rows);
+        }
+        let challenges: Vec<S> = (0..built.phase2_challenges()).map(|_| rng.scalar()).collect();
+        drop(built.instantiate_rows(&built.shape, &challenges, rows));
+        let mut digest = blake3::Hasher::new();
+        for row in rows.slices() {
+            digest.update(&(row.len() as u64).to_le_bytes());
+            for x in row {
+                digest.update(x.to_repr().as_ref());
+            }
+        }
+        let evidence = (rows.owned(), digest.finalize());
+        rows.zeroize_owned();
+        evidence
+    };
+    let (copied, prior) = mutate(&mut Rows::with_fill(&witness.w, cols, &fill));
+    let mut witness = crate::r1cs::WrittenWitness::new(witness, fill);
+    let (witness, fill) = witness.parts_mut();
+    let (allocated, current) = mutate(&mut Rows::with_mutable_values(&mut witness.w, cols, fill));
+    assert_eq!(prior, current);
+    assert!(allocated < copied, "at least one authored row must be reused");
+    eprintln!(
+        "signed Receive {} copied {} rows, mutable {} rows, avoided {} bytes",
+        built.label, copied, allocated, (copied - allocated) * cols * std::mem::size_of::<S>()
+    );
+}
+
 #[test]
 #[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
 fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
@@ -275,14 +317,14 @@ fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
     )
     .unwrap();
     check_side(&w, idx.shared, &slots, 1);
-    check_built_program(
-        &build(w, &signed.primary, &entropy, b"primary witness").0,
+    check_owned_writes(
+        build(w, &signed.primary, &entropy, b"primary witness").unwrap(),
         &signed.primary,
     );
     let (w, idx) = full::s_operation(full::RECEIVE, None, &p.generators, &pairs, &folds);
     check_side(&w, idx.shared, &slots, 0);
-    check_built_program(
-        &build(w, &signed.secondary, &entropy, b"secondary witness").0,
+    check_owned_writes(
+        build(w, &signed.secondary, &entropy, b"secondary witness").unwrap(),
         &signed.secondary,
     );
 }

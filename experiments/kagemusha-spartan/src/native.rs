@@ -18,7 +18,7 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 #[path = "engine.rs"]
 pub(crate) mod engine;
 pub use engine::{
-    BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim,
+    BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim, GovernedManifest,
     credential_signing_message_for_body, CredentialIssuerParameters, MAX_UNLOAD_CLAIM_BYTES, NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest,
     UnloadDestinations, VerifiedUnloadClaim, VerifiedCreditStatus, SpartanWalletMap, SpartanWalletMaps, wallet_send_replay_key, wallet_receive_replay_key, OpenRequestPeer, decode_open_request_peer, encode_open_request_peer,
 };
@@ -46,9 +46,24 @@ mod owned_unload;
 pub(crate) const PRODUCER_MATRIX_DIMENSIONS: ((usize, usize), (usize, usize)) =
     ((24, 25), (24, 24));
 
-/// Native compiler's qualified primary and secondary program digests, in
-/// Receive, Send, Bootstrap, Control order. An unpublished compiler profile
-/// cannot acquire a device provider or select a wallet generation.
+/// Published independently of any incoming signature, profile or program bytes.
+/// Populated by the compiler after all ten monetary tapes reach a fixed point.
+const FIVE_KIND_PRODUCER: Option<FiveKindProducer> = None;
+
+struct FiveKindProducer {
+    programs: ProgramProfileV2,
+    generator_capacity_bits: [usize; 2],
+    grouping: [program_bundle::SumcheckGroup; 2],
+}
+
+/// Five-kind program pins supported by this native producer build.
+pub fn built_in_five_programs() -> Option<ProgramProfileV2> {
+    FIVE_KIND_PRODUCER
+        .as_ref()
+        .map(|source| source.programs.clone())
+}
+
+/// Native compiler digests in Receive, Send, Bootstrap and Control order.
 pub fn built_in_producer_programs() -> Option<([[u8; 32]; 4], [[u8; 32]; 4])> {
     // v4 p18-s17. Each canonical program was byte-identical across compiler passes 4 and 5.
     Some((
@@ -127,10 +142,10 @@ pub struct ProgramBundle {
 }
 #[path = "program_bundle.rs"]
 mod program_bundle;
-pub use program_bundle::{ProgramBundleGeometry, ProgramBundleV2};
+pub use program_bundle::{ProgramBundleGeometry, ProgramBundleV2, ProgramTransportSizes};
 #[path = "successor_manifest.rs"]
 mod successor_manifest;
-pub use successor_manifest::ProgramProfileV2;
+pub use successor_manifest::{AuthenticatedManifestHeaderV5, ProgramProfileV2};
 
 #[derive(Debug)]
 pub enum Error {
@@ -303,8 +318,8 @@ pub enum ExactOperationWitness {
     /// Payer ArchiveSent of one delivered Send. The four exact originals are its fold
     /// witnesses: the released Send capsule and completion (historical payer credential,
     /// certificate and the exact Payment), the hosted open Request and the Credited
-    /// CreditStatus. No program of the signed generation proves this kind, so Native
-    /// rechecks it completely and then refuses to freeze, select or finalize it.
+    /// CreditStatus. A five-kind installation reopens all four during preparation
+    /// and recovery. A four-kind installation refuses before custody selection.
     ArchiveSent {
         step: Box<ArchiveSentWitness>,
         /// Contains the original private Send witness. Erase it when the last owner drops.
@@ -484,6 +499,7 @@ pub struct PreparedOperation {
     witness: Arc<ExactOperationWitness>,
     receipt_body: [u8; 338],
     receive: Option<Box<PreparedReceive>>,
+    archive: Option<Box<engine::PreparedArchive>>,
     predecessor: VerifiedWalletHead,
 }
 impl PreparedOperation {
@@ -930,7 +946,7 @@ impl RecoveryCapsule {
     fn validate(&self) -> Result<()> {
         let f = &self.frame;
         if f.version != RECOVERY_CAPSULE_VERSION
-            || ![1, 2, 3, 4, 6, 7].contains(&f.kind)
+            || !(1..=7).contains(&f.kind)
             || f.receipt_body.len() != 338
             || f.recovery.is_empty()
             || f.recovery.len() > MAX_RECOVERY_BYTES

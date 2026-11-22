@@ -10,15 +10,15 @@ use crate::{
 
 // 482 original bytes packed in <= 31-byte words are injective in the Pasta field.
 const PACKED: usize = (request::BODY_BYTES + request::SIGNATURE_BYTES).div_ceil(31);
-pub(super) struct RequestResults {
-    pub(super) signatures: Source,
-    pub(super) open: [Source; PACKED],
-    pub(super) completed: [Source; PACKED],
+pub(in crate::native::engine) struct RequestResults {
+    pub(in crate::native::engine) signatures: Source,
+    pub(in crate::native::engine) open: [Source; PACKED],
+    pub(in crate::native::engine) completed: [Source; PACKED],
     // The completed Request's payer wallet limbs, which the Receive effect must name.
-    pub(super) payer: [Source; 2],
+    pub(in crate::native::engine) payer: [Source; 2],
 }
 
-pub(super) fn append(
+pub(in crate::native::engine) fn append(
     w: &mut Wiring<Fp>,
     family: usize,
     input: &CompletedRequest,
@@ -106,7 +106,7 @@ pub(super) fn append(
     }
 }
 
-pub(super) fn expected_words(bytes: &[u8]) -> Vec<Fp> {
+pub(in crate::native::engine) fn expected_words(bytes: &[u8]) -> Vec<Fp> {
     assert_eq!(bytes.len(), request::BODY_BYTES + request::SIGNATURE_BYTES);
     bytes
         .chunks(31)

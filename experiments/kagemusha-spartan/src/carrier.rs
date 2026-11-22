@@ -85,6 +85,23 @@ impl Layout {
     }
 }
 
+/// Compact proof layout retained after checking one circuit tape.
+pub(crate) struct ProjectedSide {
+    pub(crate) shape: Shape,
+    layout: Layout,
+    late_slots: Vec<usize>,
+}
+
+impl ProjectedSide {
+    pub(crate) fn measure<S: Scalar>(shape: Shape, circuit: &dyn Circuit<S>) -> Self {
+        Self {
+            shape,
+            layout: Layout::new(&shape, circuit, 64),
+            late_slots: circuit.late_slots(),
+        }
+    }
+}
+
 /// Trusted fixture context, supplied independently of untrusted carrier bytes.
 /// `id` must identify the caller's exact authorized scheme/VK, not just geometry.
 /// The measurement hook uses an in-memory run-specific fixture context, which
@@ -168,18 +185,33 @@ impl TrustedProfile {
         secondary: &dyn Circuit<Fq>,
         lean: bool,
     ) -> Result<Self, String> {
-        let profile = Self {
+        Self::from_sides(
             id,
-            p_shape,
-            s_shape,
-            p: Layout::new(&p_shape, primary, 64),
-            s: Layout::new(&s_shape, secondary, 64),
-            late_slots: [primary.late_slots(), secondary.late_slots()],
+            [
+                ProjectedSide::measure(p_shape, primary),
+                ProjectedSide::measure(s_shape, secondary),
+            ],
             lean,
-        };
-        profile.p.check(&p_shape)?;
-        profile.s.check(&s_shape)?;
-        Ok(profile)
+        )
+    }
+
+    pub(crate) fn from_sides(
+        id: [u8; 32],
+        sides: [ProjectedSide; 2],
+        lean: bool,
+    ) -> Result<Self, String> {
+        let [p, s] = sides;
+        p.layout.check(&p.shape)?;
+        s.layout.check(&s.shape)?;
+        Ok(Self {
+            id,
+            p_shape: p.shape,
+            s_shape: s.shape,
+            p: p.layout,
+            s: s.layout,
+            late_slots: [p.late_slots, s.late_slots],
+            lean,
+        })
     }
 }
 

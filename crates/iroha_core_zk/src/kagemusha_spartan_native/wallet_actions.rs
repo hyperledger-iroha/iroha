@@ -204,6 +204,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         use crate::kagemusha_wallet_advance_v1::KagemushaWalletLookupV1 as Lookup;
 
         self.require_account(slot, None)?;
+        self.parameters.require_archive_sent_program().map_err(provider_error)?;
         let wallet = self.authorized_wallet_id(slot)?;
         let selected_send = match self.provider.lookup(slot, sent_operation)? {
             Lookup::Retained(row) => row.capsule_digest,

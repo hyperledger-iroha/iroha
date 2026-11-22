@@ -1005,7 +1005,7 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
         violated.is_empty(),
         "violated rows (array, name, row, instance): {violated:?}"
     );
-    check_constraints(w, 18, None).unwrap();
+    check_constraints(w, 18, 3, None).unwrap();
     // The Burn credited 10 into the Core balance and the lineage alone records
     // it as burned: the Core's own burn field is still the stale zero.
     assert_eq!(step.before_core[9], Fp::from(110));
@@ -1031,4 +1031,32 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
                 .any(|v| v.1 == "Send checked arithmetic and state preservation"),
         "a successor that drops the adjusted burn must violate the Send relation"
     );
+}
+
+#[test]
+fn native_private_witness_rebuilds_the_authenticated_sumcheck_group_on_both_curves() {
+    use crate::native::program_bundle::tests::{fixture_wiring, original_at};
+    fn check<F: Scalar + zeroize::Zeroize, const GROUP: usize>(
+        primary: bool,
+        width: usize,
+        coordinates: usize,
+    ) {
+        let (encoded, pin) = original_at::<F, GROUP>(primary, 1, coordinates, width, primary, None);
+        let circuit = match GROUP {
+            3 => UniformCircuit::<F>::import_program(&encoded, primary),
+            4 => UniformCircuit::<F>::import_four_variable_program(&encoded, primary),
+            _ => unreachable!(),
+        }
+        .unwrap();
+        let wiring = fixture_wiring::<F>(primary, 1, coordinates, width, primary);
+        let entropy = ProofEntropy::fresh().unwrap();
+        let (derived, _, _, _) = build(wiring, &circuit, &entropy, b"selected group test").unwrap();
+        assert_eq!(derived.shape.k, GROUP);
+        assert_eq!(derived.program_digest(), pin);
+        same_program(&derived, &circuit).unwrap();
+    }
+    check::<Fp, 3>(true, 13, 55);
+    check::<Fq, 3>(false, 10, 54);
+    check::<Fp, 4>(true, 13, 55);
+    check::<Fq, 4>(false, 13, 54);
 }

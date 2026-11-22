@@ -19,15 +19,17 @@
 //! same Credited original is the same operation on any later head, and new evidence is a new
 //! operation.
 //!
-//! The witness is private recovery data and carries no authority. The signed generation
-//! has no ArchiveSent program: `Engine::prepare` rechecks the witness here and then refuses
-//! it, so it is never frozen into a capsule, selected, signed or released, and no Payment
-//! byte becomes deletable.
+//! Native rechecks the retained evidence at preparation and recovery. The authenticated
+//! five-kind installation supplies the ArchiveSent program for selection and release.
+//! A four-kind installation returns its typed refusal before selection.
 use super::*;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1,
     KagemushaWalletIndexedRemoveV1, kagemusha_wallet_poseidon_bytes_v1,
 };
+
+#[path = "archive_relation.rs"]
+pub(in crate::native::engine) mod relation;
 
 /// Canonical ArchiveSent statement for an already selected predecessor and successor.
 pub(in crate::native::engine) fn archive_statement(
@@ -89,6 +91,8 @@ pub(crate) fn credited_digest(credit: Fp, payment: Fp, evidence: [u8; 32]) -> Re
 /// Credited evidence for one released Send, verified natively from its exact originals.
 struct Evidence {
     payment: VerifiedIncomingPayment,
+    receiver: crate::native::sent_delivery::ReceiverEvidence,
+    outcome: VerifiedCreditStatus,
     send_sequence: u128,
     credit: Fp,
     descriptor: Fp,
@@ -120,14 +124,18 @@ impl NativeEngine {
         let (send, sent) = self.verify_released_operation(&capsule, &record, parameters)?;
         let delivery =
             self.verify_sent_delivery(&send, &sent, open_request, credit_status, parameters)?;
-        let payment = delivery.payment().clone();
+        let payment = delivery.payment();
         let credit = payment.statement[17];
         let descriptor = poseidon::hash_with_domain(
             crate::send_maps::PENDING_DOMAIN,
             &payment.statement[17..24],
         );
         let credited = credited_digest(credit, payment.digest(), delivery.status_digest()?)?;
+        let outcome = delivery.outcome();
+        let (payment, receiver) = delivery.into_archive_parts();
         Ok(Evidence {
+            receiver,
+            outcome,
             send_sequence: capsule.sequence(),
             credit,
             descriptor,
@@ -234,7 +242,7 @@ impl NativeEngine {
         maps: &mut dyn SpartanWalletMaps,
         parameters: &AuthenticatedParameters,
     ) -> Result<ExactOperationWitness> {
-        self.require_minimum_memory(parameters, full::SEND)?;
+        self.require_minimum_memory(parameters, if parameters.inner.programs.len() == 5 {full::ARCHIVE_SENT} else {full::SEND})?;
         let (before, rest) = checked_source(prepared, head, parameters)?;
         let c = head.credential();
         let evidence = self.archive_evidence(
@@ -291,6 +299,16 @@ impl NativeEngine {
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<()> {
+        self.checked_archive(witness, head, parameters, false).map(drop)
+    }
+
+    fn checked_archive(
+        &self,
+        witness: &ExactOperationWitness,
+        head: &VerifiedWalletHead,
+        parameters: &AuthenticatedParameters,
+        frozen: bool,
+    ) -> Result<Evidence> {
         let ExactOperationWitness::ArchiveSent {
             step,
             send_capsule,
@@ -301,7 +319,14 @@ impl NativeEngine {
         else {
             return Err(Error::AuthorityMismatch("ArchiveSent witness"));
         };
-        self.require_minimum_memory(parameters, full::SEND)?;
+        self.require_minimum_memory(
+            parameters,
+            if parameters.inner.programs.len() == 5 {
+                full::ARCHIVE_SENT
+            } else {
+                full::SEND
+            },
+        )?;
         head.require_parameters(parameters)?;
         let c = &step.credential;
         let (before, rest) = (&step.before_core, &step.before_rest);
@@ -342,12 +367,115 @@ impl NativeEngine {
         if next.after != step.after_core
             || step.after_rest != *rest
             || next.statement != step.statement
-            || next.receipt.body != step.receipt.body
+            || next.receipt.body[..242] != step.receipt.body[..242]
+            || next.receipt.body[306..] != step.receipt.body[306..]
+            || (!frozen && next.receipt.body[242..306] != step.receipt.body[242..306])
             || step.receipt.signature != [0; 64]
         {
             return Err(Error::AuthorityMismatch("ArchiveSent exact successor"));
         }
-        Ok(())
+        Ok(evidence)
+    }
+
+    pub(in crate::native::engine) fn archive_proving_inputs(
+        &self,
+        witness: &ExactOperationWitness,
+        head: &VerifiedWalletHead,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<Box<PreparedArchive>> {
+        let evidence = self.checked_archive(witness, head, parameters, true)?;
+        let receiver = evidence.receiver;
+        let payment = evidence.payment;
+        let receipt = relation::receiver_receipt_fields(
+            &receiver,
+            payment.statement(),
+            payment.request(),
+            payment.digest(),
+            evidence.outcome,
+        )?;
+        Ok(Box::new(PreparedArchive {
+            pair: receiver.pair,
+            pair_bytes: receiver.exact_pair,
+            receipt,
+            descriptor: payment.statement()[17..24]
+                .try_into()
+                .expect("seven descriptor words"),
+        }))
+    }
+}
+
+pub(in crate::native) struct PreparedArchive {
+    pub(in crate::native::engine) pair: full::UniformPair,
+    pub(in crate::native::engine) pair_bytes: Vec<u8>,
+    receipt: relation::receiver_signature::ReceiverReceipt,
+    descriptor: [Fp; 7],
+}
+
+impl PreparedArchive {
+    pub(in crate::native::engine) fn primary(
+        &self,
+        step: &ArchiveSentWitness,
+        head: &VerifiedWalletHead,
+        gens: &full::PairGens,
+        slots: &[full::TracedPair],
+        folds: &full::GeneratorFolds,
+    ) -> Result<full::Wiring<Fp>> {
+        let before = relation::State {
+            core: step.before_core,
+            rest: step.before_rest,
+            lineage: head.profile[bc::LINEAGE_IO..bc::LINEAGE_IO + bc::LINEAGE_FIELDS]
+                .try_into()
+                .unwrap(),
+        };
+        let key = self.descriptor[0].to_repr();
+        let value = poseidon::hash_with_domain(crate::send_maps::PENDING_DOMAIN, &self.descriptor)
+            .to_repr();
+        let core_path = relation::reverse_insertion(
+            &before.core[PENDING].to_repr(),
+            &key,
+            &value,
+            &step.core_removal,
+        )?;
+        let adjusted_path = relation::reverse_insertion(
+            &before.lineage[bc::PENDING_ROOT].to_repr(),
+            &key,
+            &value,
+            &step.adjusted_removal,
+        )?;
+        let mut after = relation::State {
+            core: step.after_core,
+            rest: step.after_rest,
+            lineage: before.lineage,
+        };
+        after.lineage[bc::PENDING_ROOT] = adjusted_path.old_root;
+        let case = relation::Case {
+            before,
+            after,
+            tag: Fp::from(TAG),
+            credit: self.descriptor[0],
+            descriptor: self.descriptor,
+            results: [Fp::ONE; 4],
+            core_path,
+            adjusted_path,
+        };
+        let relation = relation::Composed {
+            case: &case,
+            binding: [Fp::ZERO; 2],
+            receiver: &self.receipt,
+            derived: Default::default(),
+            projection: relation::Projection::Completed {
+                credential: &step.credential,
+                receipt: &step.receipt,
+            },
+        };
+        let (w, _) =
+            full::p_archive_operation(&relation, gens, slots, folds).map_err(Error::Malformed)?;
+        if relation.derived.into_inner() != Some([Fp::ONE; 4]) {
+            return Err(Error::AuthorityMismatch(
+                "ArchiveSent receiver evidence decision",
+            ));
+        }
+        Ok(w)
     }
 }
 
@@ -437,12 +565,13 @@ mod tests {
     fn archive_sent_has_no_program_in_the_signed_generation() {
         let witness = synthetic();
         assert!(matches!(
-            super::super::super::kind(&witness),
+            super::super::super::kind(&witness, 4),
             Err(Error::AuthorityMismatch(m)) if m == ARCHIVE_SENT_UNSIGNED
         ));
+        assert_eq!(super::super::super::kind(&witness, 5).unwrap(), full::ARCHIVE_SENT);
         // No other kind changes its program.
         let send = ExactOperationWitness::Send(Box::new(crate::send::tests::fixture(0, false).input));
-        assert_eq!(super::super::super::kind(&send).unwrap(), full::SEND);
+        assert_eq!(super::super::super::kind(&send, 4).unwrap(), full::SEND);
     }
 
     #[test]
