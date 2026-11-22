@@ -26,7 +26,9 @@ impl CertifiedHistorySource {
 
     /// Retain the source of the reader's actual completed prefix. The native digest includes
     /// signed genesis and each authenticated successor, including the local commit certificate.
-    /// A checkpoint without those original bytes cannot create this evidence.
+    /// A checkpoint without those original bytes cannot create this evidence. The digest is
+    /// the canonical encoding of the frames the walk verified; `covers` joins it with the
+    /// current raw slots before every use, so bytes that changed after verification only miss.
     pub fn from_verified<V: StateReadOnly>(
         reader: &CertifiedChain<'_, V>,
         through: u64,
@@ -36,7 +38,7 @@ impl CertifiedHistorySource {
         }
         let view = reader.proof_source_view()?;
         let (height, wire) = reader.proof_source_cut()?;
-        if height != through || current_prefix_source(view, height)? != wire {
+        if height != through {
             return None;
         }
         Some(Self {
@@ -109,5 +111,41 @@ mod tests {
         drop(view);
         chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
         assert!(!source.covers(&chain.state().view(), 3));
+    }
+
+    #[test]
+    fn retained_history_keeps_the_verified_cut_and_joins_raw_bytes_only_at_use() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit_at(2_000, Vec::new());
+        chain.commit_at(3_000, Vec::new());
+        let original_qc = chain
+            .committed(2)
+            .block()
+            .commit_certificate()
+            .unwrap()
+            .commit_qc()
+            .to_vec();
+        let view = chain.state().view();
+        let mut reader = CertifiedChain::new(&view).unwrap();
+        CertifiedHistorySource::track(&mut reader, 3);
+        for block in reader.walk(1, 3) {
+            block.unwrap();
+        }
+        // The stored certificate changes after the walk verified it and before the evidence
+        // is kept. Creation records the verified cut; the first use refuses the new bytes.
+        chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+        let source = CertifiedHistorySource::from_verified(&reader, 3).unwrap();
+        assert!(!source.covers(&view, 2));
+        assert!(!source.covers(&view, 3));
+        // The kept digest is of the verified original, so restoring those bytes matches again.
+        chain
+            .kura()
+            .corrupt_commit_certificate_for_testing(
+                std::num::NonZeroUsize::new(2).unwrap(),
+                Some(original_qc),
+            )
+            .unwrap();
+        assert!(source.covers(&view, 3));
     }
 }
