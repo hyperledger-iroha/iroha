@@ -1772,6 +1772,16 @@ mod canonical_stream_handshake_tests {
         let inner = Arc::get_mut(&mut app).unwrap();
         inner.state = Arc::clone(chain.state());
         inner.kura = Arc::clone(chain.kura());
+        inner.chain_id = Arc::new(chain.state().chain_id_ref().clone());
+        inner.signed_query_admission = Arc::new(
+            crate::routing::SignedQueryAdmission::new(
+                chain.network_id(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(120),
+                std::num::NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("admit signed event subscriptions on the certified fixture network"),
+        );
         inner.require_api_token = true;
         inner.api_token_digests =
             Arc::new(limits::ApiTokenDigestSet::from_tokens(["fixture-token"]));

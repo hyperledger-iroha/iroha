@@ -1636,8 +1636,8 @@ async fn c10_manifest_http_requires_the_original_account_and_exact_representatio
         assert_eq!(actual, status, "{}", String::from_utf8_lossy(&body));
         if status.is_success() {
             assert_eq!(
-                headers[axum::http::header::CONTENT_TYPE],
-                REGISTERED_MANIFEST_MEDIA_TYPE
+                headers[axum::http::header::CONTENT_TYPE].to_str().unwrap(),
+                format!("{REGISTERED_MANIFEST_MEDIA_TYPE}; charset=utf-8")
             );
             assert!(
                 headers

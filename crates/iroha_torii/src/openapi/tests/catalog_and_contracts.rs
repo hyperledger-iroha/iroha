@@ -621,8 +621,8 @@ fn openapi_operations_equal_the_enabled_catalog_projection() {
     ))]
     assert_eq!(
         expected.len(),
-        652,
-        "the supported full Torii documentation profile must remain exactly 652 cataloged operations"
+        655,
+        "the supported full Torii documentation profile must contain all 655 cataloged operations"
     );
     let spec = generate_spec();
     let paths = spec
