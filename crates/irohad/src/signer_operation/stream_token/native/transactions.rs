@@ -130,7 +130,9 @@ impl NativeTransactionsV1 {
             .push_with_lane_with_state_and_routing_plan(accepted, &self.state, plan)
             .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
         while let Ok(remaining) = self.remaining(deadline) {
-            {
+            // A miss only delays the next poll. Recheck membership in the same full
+            // snapshot whose tip certificate is verified before accepting a hit.
+            if self.state.has_committed_entrypoint(hash) {
                 let view = self.state.view();
                 if view.has_entrypoint(hash) {
                     let height = view.block_hashes().len() as u64;

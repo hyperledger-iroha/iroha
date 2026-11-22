@@ -10,6 +10,12 @@ impl<'a> PublicationEngine<'a> {
     pub const fn new(store: &'a PublicationJournalStore) -> Self {
         Self { store }
     }
+    pub(crate) fn journal_phase(
+        &self,
+        operation_id: PublicationOperationIdV1,
+    ) -> Result<PublicationPhaseV1, PublicationError> {
+        self.store.load(operation_id).map(|journal| journal.phase)
+    }
     /// Persist a detached operation and return its resumable identifier.
     ///
     /// # Errors
@@ -497,10 +503,17 @@ impl<'a> PublicationEngine<'a> {
                 }
                 let location = checkpoint.location(registration)?;
                 let mut readbacks = Vec::with_capacity(2);
+                let mut pending = 0;
+                let mut first_pending = None;
                 let mut first_permanent_failure = None;
                 let mut first_retryable_failure = None;
                 let mut first_invalid_evidence = None;
                 for provider in &location.providers {
+                    // Poll just the receipts needed for this quorum. A different paid
+                    // provider is eligible when an attempt actually fails.
+                    if readbacks.len() + pending >= 2 {
+                        break;
+                    }
                     let evidence = match backend.readback_provider(
                         operation_id,
                         &journal.request,
@@ -509,6 +522,11 @@ impl<'a> PublicationEngine<'a> {
                         *provider,
                     ) {
                         Ok(evidence) => evidence,
+                        Err(error) if error.is_pending_native_operation() => {
+                            pending += 1;
+                            first_pending.get_or_insert(error);
+                            continue;
+                        }
                         Err(error) => {
                             match error.class() {
                                 PublicationBackendFailureClass::Permanent => {
@@ -538,6 +556,13 @@ impl<'a> PublicationEngine<'a> {
                     }
                 }
                 if readbacks.len() != 2 {
+                    // An acknowledged job may still reach quorum alongside a temporarily
+                    // unavailable provider. A permanent refusal cannot fill the second seat.
+                    if let Some(error) = first_pending
+                        && (readbacks.len() + pending >= 2 || first_retryable_failure.is_some())
+                    {
+                        return Err(PublicationError::Backend(error));
+                    }
                     if let Some(error) = first_permanent_failure.or(first_retryable_failure) {
                         return Err(PublicationError::Backend(error));
                     }

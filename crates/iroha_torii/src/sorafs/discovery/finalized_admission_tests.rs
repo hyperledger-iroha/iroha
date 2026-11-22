@@ -70,7 +70,10 @@ fn current_signed_genesis_admission_is_discoverable_and_keeps_expiry_and_replay_
         .map(|cap| cap.cap_type)
         .collect::<Vec<_>>();
     let mut cache = ProviderAdvertCache::new(capabilities, registry);
-    let prepared = cache.validation_policy().prepare(advert, now).unwrap();
+    let prepared = cache
+        .validation_policy()
+        .prepare(advert.clone(), now)
+        .unwrap();
     cache.commit_prepared(prepared, now).unwrap();
     assert!(cache.admitted_record_by_provider(&provider, now).is_some());
     assert!(
@@ -79,6 +82,25 @@ fn current_signed_genesis_admission_is_discoverable_and_keeps_expiry_and_replay_
             .is_some()
     );
     assert!(cache.unverified_record_for_native_proof(&[0; 32]).is_none());
+    assert!(
+        cache
+            .signed_candidate_for_discovery_snapshot(chain.state(), &provider, now)
+            .is_some()
+    );
+    assert!(
+        cache
+            .signed_candidate_for_discovery_snapshot(chain.state(), &provider, now + 61)
+            .is_none()
+    );
+    let fingerprint = cache.by_provider[&provider];
+    let record = cache.records.get_mut(&fingerprint).unwrap();
+    record.advert.signature.signature[0] ^= 1;
+    assert!(
+        cache
+            .signed_candidate_for_discovery_snapshot(chain.state(), &provider, now)
+            .is_none()
+    );
+    cache.records.get_mut(&fingerprint).unwrap().advert = advert;
     // ProviderAdvertV1 validates through the signed expires_at second.
     assert!(
         cache
@@ -91,6 +113,11 @@ fn current_signed_genesis_admission_is_discoverable_and_keeps_expiry_and_replay_
             .is_none()
     );
     cache.replay_checkpoint_poisoned = true;
+    assert!(
+        cache
+            .signed_candidate_for_discovery_snapshot(chain.state(), &provider, now)
+            .is_none()
+    );
     assert!(cache.admitted_record_by_provider(&provider, now).is_none());
     assert!(
         cache
@@ -155,6 +182,12 @@ fn live_finalized_revocation_fences_prepared_adverts_and_survives_registry_resta
         .prepare(advert.clone(), now)
         .unwrap();
     native.revoke();
+    let other = ProviderAdmissionTestFixtureV1::new_at(now.saturating_sub(1));
+    assert!(
+        cache
+            .signed_candidate_for_discovery_snapshot(other.state(), &provider, now)
+            .is_none()
+    );
     assert!(registry.entry(&provider).is_none());
     assert!(cache.admitted_record_by_provider(&provider, now).is_none());
     assert!(

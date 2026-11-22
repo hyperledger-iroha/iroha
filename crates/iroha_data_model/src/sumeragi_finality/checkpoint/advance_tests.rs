@@ -496,3 +496,89 @@ fn advance_epoch_boundary_keeps_parent_beacon_barrier_and_successor_refusals() {
         expected
     );
 }
+
+#[test]
+fn finality_observer_exports_only_its_exact_selected_witness() {
+    let fixture = Fixture::new();
+    let mut owner = parent(&fixture);
+    let mut witness = owner.verify_checkpoint_witness(&fixture.second).unwrap();
+    assert!(std::sync::Arc::get_mut(&mut witness).is_none());
+    let expected = owner
+        .export_checkpoint(&fixture.second)
+        .unwrap()
+        .encode_canonical()
+        .unwrap();
+    assert_eq!(
+        owner
+            .export_checkpoint(witness.proof())
+            .unwrap()
+            .encode_canonical()
+            .unwrap(),
+        expected
+    );
+    let alternate = fixture.alternate();
+    let actual = owner.export_checkpoint(&alternate).unwrap();
+    assert_eq!(actual.tip(), &alternate);
+    assert_ne!(actual.tip(), witness.proof());
+    let mut changed = witness.proof().clone();
+    changed.committee[0].proof_of_possession[0] ^= 1;
+    assert!(owner.export_checkpoint(&changed).is_err());
+    assert!(parent(&fixture).export_checkpoint(witness.proof()).is_err());
+    assert_eq!(
+        owner
+            .export_checkpoint(witness.proof())
+            .unwrap()
+            .encode_canonical()
+            .unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn finality_observer_export_preserves_inherited_allocation_and_refusal() {
+    let fixture = Fixture::new();
+    let mut owner = parent(&fixture);
+    let selected = owner.verify_checkpoint_witness(&fixture.second).unwrap();
+    let limits = |n| {
+        norito::DecodeLimits::new(
+            TEST_ALLOCATION_CEILING,
+            TEST_ALLOCATION_CEILING,
+            TEST_ALLOCATION_CEILING,
+            n,
+            64,
+        )
+    };
+    let mut metered_verifier = parent(&fixture);
+    let active = DecodeBudgetContext::new(limits(TEST_ALLOCATION_CEILING));
+    let mut active_selection = active
+        .with(|| metered_verifier.verify_checkpoint_witness(&fixture.second))
+        .unwrap();
+    assert!(std::sync::Arc::get_mut(&mut active_selection).is_some());
+    assert!(
+        metered_verifier
+            .export_checkpoint(active_selection.proof())
+            .is_ok()
+    );
+    let baseline = DecodeBudgetContext::new(limits(TEST_ALLOCATION_CEILING));
+    baseline
+        .with(|| owner.export_checkpoint(&fixture.second))
+        .unwrap();
+    let charge = usize::try_from(baseline.consumed_allocated_bytes()).unwrap();
+    assert!(charge > 1);
+    for maximum in [charge, charge - 1] {
+        let before = DecodeBudgetContext::new(limits(maximum));
+        let after = DecodeBudgetContext::new(limits(maximum));
+        let a = before
+            .with(|| owner.export_checkpoint(&fixture.second))
+            .map_err(|e| e.to_string());
+        let b = after
+            .with(|| owner.export_checkpoint(selected.proof()))
+            .map_err(|e| e.to_string());
+        assert_eq!(a, b);
+        assert_eq!(a.is_ok(), maximum == charge);
+        assert_eq!(
+            before.consumed_allocated_bytes(),
+            after.consumed_allocated_bytes()
+        );
+    }
+}

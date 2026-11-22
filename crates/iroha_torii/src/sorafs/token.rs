@@ -34,9 +34,11 @@ const MAX_STREAM_TOKEN_WIRE_BYTES: usize = STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 pub(crate) const MAX_CLIENT_ID_BYTES: usize = 128;
 /// Maximum echoed issuance nonce bytes.
 pub(crate) const MAX_NONCE_BYTES: usize = 128;
+pub(super) mod delivery;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[path = "token/native_issuer_test_fixture.rs"]
 pub mod native_issuer_test_fixture;
+pub(super) mod paid;
 mod signer_binding;
 mod signer_completed_finality;
 mod signer_finality;
@@ -60,6 +62,8 @@ pub struct StreamTokenIssuer {
     issuance_budgets: Mutex<BTreeMap<StreamTokenQuotaSubject, IssuanceBudget>>,
     max_issuance_budgets: usize,
     max_seen_epoch: AtomicU64,
+    undelivered: Mutex<Option<delivery::UndeliveredIssue>>,
+    paid_jobs: Mutex<BTreeMap<u8, paid::Entry>>,
 }
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
@@ -112,7 +116,7 @@ struct IssuanceBudget {
     used: u32,
 }
 /// Overrides supplied when minting a token.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TokenOverrides {
     /// Optional override for the token time-to-live in seconds.
     pub ttl_secs: Option<u64>,
@@ -213,6 +217,8 @@ impl StreamTokenIssuer {
             issuance_budgets: Mutex::new(BTreeMap::new()),
             max_issuance_budgets: MAX_ISSUANCE_SUBJECTS,
             max_seen_epoch: AtomicU64::new(0),
+            undelivered: Mutex::default(),
+            paid_jobs: Mutex::default(),
         })
     }
     /// Shared issuer with optional explicit admitted account-read ceilings.
@@ -226,6 +232,24 @@ impl StreamTokenIssuer {
         overrides: TokenOverrides,
         policy: Option<&sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1>,
     ) -> Result<TokenIssue, StreamTokenIssuerError> {
+        let (body, quota_limit) =
+            self.prepare_token(manifest_cid, provider_id, profile_handle, overrides, policy)?;
+        let remaining_quota =
+            self.reserve_issuance_budget(quota_subject, Instant::now(), quota_limit)?;
+        let token = self.signer.sign(body)?;
+        Ok(TokenIssue {
+            token,
+            remaining_quota,
+        })
+    }
+    fn prepare_token(
+        &self,
+        manifest_cid: Vec<u8>,
+        provider_id: [u8; 32],
+        profile_handle: String,
+        overrides: TokenOverrides,
+        policy: Option<&sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1>,
+    ) -> Result<(StreamTokenBodyV1, u32), StreamTokenIssuerError> {
         let mut limits = self.defaults;
         if let Some(policy) = policy {
             policy
@@ -273,16 +297,7 @@ impl StreamTokenIssuer {
         // Refuse before charging issuance quota when finalized completed-operation proof has
         // no production source. The signer repeats this check before provider I/O.
         self.signer.require_completed_proof_source()?;
-        let remaining_quota = self.reserve_issuance_budget(
-            quota_subject,
-            Instant::now(),
-            limits.requests_per_minute,
-        )?;
-        let token = self.signer.sign(body)?;
-        Ok(TokenIssue {
-            token,
-            remaining_quota,
-        })
+        Ok((body, limits.requests_per_minute))
     }
     /// Fresh signer custody authorization for this serving request, after static token checks.
     /// Returns the trusted final admission time; no qualification is cached for later requests.
@@ -462,6 +477,9 @@ pub enum StreamTokenIssuerError {
     /// Exact local committed history and its authenticated finality were unavailable.
     #[error("stream-token signer finality is unavailable")]
     SignerFinalityUnavailable,
+    /// The exact current custody reply predated a newly committed tip before provider dispatch.
+    #[error("stream-token current custody observation predates local finality")]
+    BeforeProviderTipAdvanced,
     /// The independently observed millisecond clock moved backwards.
     #[error("stream-token signer clock moved backwards")]
     SignerClockRollback,

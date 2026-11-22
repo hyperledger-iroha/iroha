@@ -1573,8 +1573,8 @@ mod world_journals;
 pub use keyed_state::FundedKeyedStateRows;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
-    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
-    WorldStateSnapshotError, WorldStateVerificationError,
+    NativeProviderSnapshotV1, NativeResourceNamesSnapshotV1, NativeZkX509StateV1,
+    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError, WorldStateVerificationError,
 };
 
 /// Exercise actual World capture while retaining journals through a test observation.

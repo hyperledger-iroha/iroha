@@ -47,23 +47,30 @@ impl FinalizedRegistrationCheckedStorageBackendV1 {
             registration: evidence.registration.clone(),
             expected_policy_revision: request.expected_policy_revision,
         };
-        let archive = self
-            .reader
-            .read_current_archive(&query)
-            .map_err(|error| match error {
-                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
-                | MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(_) => {
-                    MusubiPublicationServiceBackendErrorV1::Retryable
-                }
-                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {
-                    MusubiPublicationServiceBackendErrorV1::Permanent
-                }
-            })?;
-        if archive.registration_projection() != evidence.registration {
-            return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
-        }
-        Ok(())
+        verify_storage_registration(&self.reader, &query)
     }
+}
+
+/// Authenticate the original registration block and require its exact current projection.
+pub(super) fn verify_storage_registration(
+    reader: &MusubiPublicationFinalizedArchiveRegistrationReaderV1,
+    query: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+    let archive = reader
+        .read_current_archive(query)
+        .map_err(|error| match error {
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
+            | MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(_) => {
+                MusubiPublicationServiceBackendErrorV1::Retryable
+            }
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {
+                MusubiPublicationServiceBackendErrorV1::Permanent
+            }
+        })?;
+    if archive.registration_projection() != query.registration {
+        return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
+    }
+    Ok(())
 }
 impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageBackendV1 {
     fn verify_current_registration(
@@ -74,6 +81,14 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
         self.delegate.verify_current_registration(request)
     }
 
+    fn verify_coordination_source(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        self.verify_archive(request)?;
+        self.delegate.verify_coordination_source(request)
+    }
+
     fn coordinate_storage(
         &mut self,
         request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
@@ -81,9 +96,8 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
         if std::time::Instant::now() >= request.deadline() {
             return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
         }
-        // Fresh dispatch must honor both native finality and the delegate
-        // preflight, just as replay does, before any storage effect is invoked.
-        self.verify_current_registration(request.request())?;
+        // Both gates run before any effect, including the first operation's creation.
+        self.verify_coordination_source(request.request())?;
         if std::time::Instant::now() >= request.deadline() {
             return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
         }

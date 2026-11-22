@@ -97,14 +97,29 @@ impl Intent {
             return Err(invalid("generated reputation requires all three gateways"));
         }
         validate_gateway_label_bound(labels)?;
-        let mut expected = Vec::with_capacity(3);
-        for provider in &authority.manifest.providers {
-            let plan = authority.gateway_compliance_plan(provider.provider_id)?;
-            let label = plan.gateway_label().to_owned();
-            let id = derive_stream_token_gateway_id_v1(&authority.config.network_id, &label)
-                .map_err(|_| invalid("invalid original compliance gateway label"))?;
-            expected.push((id, label));
+        // Project the three immutable labels under one original image. Close the image
+        // on every ordinary result, including a rejected label. An active decoder and an
+        // independently owned profile retain their per-provider admission and accounting.
+        let intent = authority.original_intent_if_shared()?;
+        let expected = authority
+            .manifest
+            .providers
+            .iter()
+            .map(|provider| {
+                let plan = match &intent {
+                    Some(intent) => intent.gateway_compliance_plan(provider.provider_id)?,
+                    None => authority.gateway_compliance_plan(provider.provider_id)?,
+                };
+                let label = plan.gateway_label().to_owned();
+                let id = derive_stream_token_gateway_id_v1(&authority.config.network_id, &label)
+                    .map_err(|_| invalid("invalid original compliance gateway label"))?;
+                Ok((id, label))
+            })
+            .collect::<Result<Vec<_>>>();
+        if let Some(intent) = intent {
+            intent.finish()?;
         }
+        let mut expected = expected?;
         expected.sort_by_key(|(id, _)| *id);
         if !labels.iter().eq(expected.iter().map(|(_, label)| label)) {
             return Err(invalid(

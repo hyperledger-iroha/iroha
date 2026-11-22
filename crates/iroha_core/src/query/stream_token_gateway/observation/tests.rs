@@ -738,6 +738,40 @@ fn gateway_live_lease_is_checked_at_both_post_proof_clock_endpoints() {
 }
 
 #[test]
+fn publication_during_pending_verification_retries_the_original_signed_check() {
+    let mut fixture = Fixture::ready();
+    let pending = fixture.bind(fixture.prepare(Selector::Pending { max_items: 4 }));
+    fixture.publish(&pending);
+    let deadline = pending.deadline();
+    let signed = pending.signed_transaction().encode_wire_v1().unwrap();
+    let state = fixture.chain.state();
+    let manifests = state.lane_manifests.read().clone();
+    let clock = fixture.clock();
+
+    let Err(failure) = pending.verify_finalized(|| {
+        state.install_lane_manifests_for_testing(&manifests);
+        Ok(clock)
+    }) else {
+        panic!("the original view changed during verification");
+    };
+    assert!(failure.is_retryable());
+    assert_eq!(failure.rejection(), None);
+    assert_eq!(failure.deadline(), deadline);
+    assert_eq!(
+        failure.signed_transaction().encode_wire_v1().unwrap(),
+        signed
+    );
+
+    let verified = failure
+        .into_pending()
+        .verify_finalized(|| Ok(fixture.clock()))
+        .unwrap();
+    assert_eq!(verified.deadline(), deadline);
+    assert!(matches!(verified.readback(),
+        StreamTokenGatewayCheckReadbackV1::Pending(prefix) if prefix.records.is_empty()));
+}
+
+#[test]
 fn serving_consumption_rejects_every_intervening_state_publication() {
     for change in 0..5 {
         let mut fixture = Fixture::ready();

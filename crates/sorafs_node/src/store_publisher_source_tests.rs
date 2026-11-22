@@ -238,6 +238,111 @@ fn publisher_source_fixture(
 }
 
 #[test]
+fn publisher_source_observation_survives_restart_and_preserves_chunks_until_native_ingest() {
+    use PublisherSourceProgressV1::{Available, NeedsChunk, NeedsHeader};
+    let payload = vec![0x5a; 1024 * 1024 + 1];
+    let (_temp, backend, header, authorization) = publisher_source_fixture(&payload);
+    assert!(header.chunks.len() >= 3);
+    let now = crate::unix_now_secs();
+    let deadline = now + 900;
+    let progress = |backend: &StorageBackend, revision, end| {
+        backend.publisher_source_progress(
+            header.provider_id,
+            header.order_id,
+            authorization.manifest_digest(),
+            revision,
+            end,
+        )
+    };
+    assert_eq!(progress(&backend, 1, deadline).unwrap(), NeedsHeader);
+    let digest = backend
+        .stage_publisher_source(&header, deadline, now)
+        .unwrap();
+    let upload = |index: usize| {
+        let chunk = &header.chunks[index];
+        let offset = chunk.offset as usize;
+        publisher_chunk_request(
+            &header,
+            digest,
+            index as u32,
+            &payload[offset..offset + chunk.length as usize],
+        )
+    };
+    assert_eq!(progress(&backend, 1, deadline).unwrap(), NeedsChunk(0));
+    backend
+        .stage_publisher_source_chunk(&upload(0), now)
+        .unwrap();
+    // A later chunk can already exist from an independent upload or a prior crash.
+    backend
+        .stage_publisher_source_chunk(&upload(2), now)
+        .unwrap();
+    let chunk = backend
+        .root_dir
+        .join(PUBLISHER_SOURCE_DIR_V1)
+        .join(hex::encode(header.order_id))
+        .join("chunk-00000000");
+    let original = RetainedFile::open_regular(&chunk)
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    let config = backend.config.clone();
+    drop(backend);
+    let backend = StorageBackend::new(config).unwrap();
+    for _ in 0..2 {
+        assert_eq!(progress(&backend, 1, deadline).unwrap(), NeedsChunk(1));
+    }
+    assert_eq!(progress(&backend, 2, deadline).unwrap(), NeedsHeader);
+    assert_eq!(progress(&backend, 1, deadline + 1).unwrap(), NeedsHeader);
+    assert!(progress(&backend, 1, now - 1).is_err());
+    assert_eq!(
+        backend
+            .publisher_source_progress(header.provider_id, header.order_id, [0x11; 32], 1, deadline)
+            .unwrap(),
+        NeedsHeader
+    );
+    assert!(
+        backend
+            .publisher_source_progress(
+                [0x11; 32],
+                header.order_id,
+                authorization.manifest_digest(),
+                1,
+                deadline
+            )
+            .is_err()
+    );
+    backend
+        .stage_publisher_source_chunk(&upload(1), now)
+        .unwrap();
+    for index in 3..header.chunks.len() {
+        assert_eq!(progress(&backend, 1, deadline).unwrap(), NeedsChunk(index));
+        backend
+            .stage_publisher_source_chunk(&upload(index), now)
+            .unwrap();
+    }
+    assert_eq!(progress(&backend, 1, deadline).unwrap(), Available);
+    assert_eq!(
+        RetainedFile::open_regular(&chunk)
+            .unwrap()
+            .snapshot()
+            .unwrap(),
+        original
+    );
+    assert_eq!(backend.manifest_count(), 0);
+    write_atomic(&chunk, &vec![0x11; header.chunks[0].length as usize]).unwrap();
+    assert!(progress(&backend, 1, deadline).is_err());
+    backend
+        .stage_publisher_source_chunk(&upload(0), now)
+        .unwrap();
+    backend
+        .ingest_staged_publisher_source(&authorization, 1, &mut || Ok(()))
+        .unwrap()
+        .unwrap();
+    assert!(!chunk.exists());
+    assert_eq!(progress(&backend, 1, deadline).unwrap(), Available);
+}
+
+#[test]
 fn publisher_source_reloads_verified_metadata_once_after_restart_for_multiple_chunks() {
     let payload = vec![0x5a; 1024 * 1024 + 1];
     let (_temp, backend, header, _) = publisher_source_fixture(&payload);
@@ -457,4 +562,303 @@ fn publisher_source_reader_rechecks_buffered_reads_and_eof_with_sticky_failure()
         assert!(reader.read(&mut [0; 1]).is_err());
         assert!(reader.read(&mut []).is_err());
     }
+}
+
+#[test]
+fn complete_publisher_source_publishes_all_chunks_once_and_survives_restart() {
+    let payload = vec![0x5a; 1024 * 1024 + 1];
+    let (_temp, backend, header, authorization) = publisher_source_fixture(&payload);
+    let now = crate::unix_now_secs();
+    let end = now + 900;
+    let root = backend.root_dir.join(PUBLISHER_SOURCE_DIR_V1);
+    let target = root.join(hex::encode(header.order_id));
+    // A killed writer can leave an unpublished prefix. A restarted writer must not treat it
+    // as a session, charge a second reservation, or reuse any of its bytes.
+    let private = OwnerDirectory::open_or_create(&root)
+        .unwrap()
+        .create_child(PUBLISHER_SOURCE_PREPARATION_V1)
+        .unwrap();
+    private
+        .write_private_atomic("chunk-00000000", b"incomplete", PublishMode::CreateNew)
+        .unwrap();
+    drop(private);
+    let config = backend.config.clone();
+    drop(backend);
+    let backend = StorageBackend::new(config.clone()).unwrap();
+    let calls = Cell::new(0);
+    assert!(
+        backend
+            .stage_complete_publisher_source(
+                &header,
+                end,
+                &mut &payload[..],
+                || {
+                    calls.set(calls.get() + 1);
+                    assert_eq!(target.exists(), calls.get() == 3);
+                    Ok(now)
+                },
+                || Ok(())
+            )
+            .unwrap()
+    );
+    assert_eq!(calls.get(), 3);
+    assert!(!root.join(PUBLISHER_SOURCE_PREPARATION_V1).exists());
+    assert_eq!(
+        fs::read_dir(&target).unwrap().count(),
+        header.chunks.len() + 1
+    );
+    for (i, chunk) in header.chunks.iter().enumerate() {
+        let data = fs::read(target.join(format!("chunk-{i:08x}"))).unwrap();
+        assert_eq!(blake3::hash(&data).as_bytes(), &chunk.digest);
+    }
+    assert_eq!(backend.manifest_count(), 0);
+    drop(backend);
+    let backend = StorageBackend::new(config).unwrap();
+    assert_eq!(
+        backend
+            .publisher_source_progress(
+                header.provider_id,
+                header.order_id,
+                authorization.manifest_digest(),
+                1,
+                end
+            )
+            .unwrap(),
+        PublisherSourceProgressV1::Available
+    );
+    assert!(
+        backend
+            .ingest_staged_publisher_source(&authorization, 1, &mut || Ok(()))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(backend.manifest_count(), 1);
+}
+
+#[test]
+fn complete_publisher_source_refuses_corrupt_trailing_or_truncated_payloads() {
+    let payload = vec![0x42; 1024 * 1024 + 1];
+    let (_temp, backend, header, _) = publisher_source_fixture(&payload);
+    let now = crate::unix_now_secs();
+    let root = backend.root_dir.join(PUBLISHER_SOURCE_DIR_V1);
+    let mut corrupt = payload.clone();
+    corrupt[header.chunks[1].offset as usize] ^= 1;
+    let mut trailing = payload.clone();
+    trailing.push(0x13);
+    for bad in [&corrupt[..], &trailing, &payload[..payload.len() - 1]] {
+        let mut stream = bad;
+        assert!(
+            backend
+                .stage_complete_publisher_source(
+                    &header,
+                    now + 900,
+                    &mut stream,
+                    || Ok(now),
+                    || Ok(())
+                )
+                .is_err()
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn complete_publisher_source_requires_live_authority_on_both_sides_of_publication() {
+    let payload = b"retain original authorization until all effects finish";
+    let (_temp, backend, header, _) = publisher_source_fixture(payload);
+    let now = crate::unix_now_secs();
+    let root = backend.root_dir.join(PUBLISHER_SOURCE_DIR_V1);
+    let target = root.join(hex::encode(header.order_id));
+    for refusal in [2, 3] {
+        let mut calls = 0;
+        assert!(
+            backend
+                .stage_complete_publisher_source(
+                    &header,
+                    now + 900,
+                    &mut &payload[..],
+                    || {
+                        calls += 1;
+                        assert_eq!(target.exists(), calls == 3);
+                        if calls == refusal {
+                            return Err(publisher_source_rejected());
+                        }
+                        Ok(now)
+                    },
+                    || Ok(())
+                )
+                .is_err()
+        );
+        assert_eq!(calls, refusal);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    }
+    // The authenticated state read can take the caller past its original time bound.
+    let calls = Cell::new(0);
+    assert!(
+        backend
+            .stage_complete_publisher_source(
+                &header,
+                now + 900,
+                &mut &payload[..],
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(now)
+                },
+                || {
+                    if calls.get() == 2 {
+                        return Err(publisher_source_rejected());
+                    }
+                    Ok(())
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+}
+
+#[test]
+fn complete_publisher_source_leaves_an_existing_partial_session_untouched() {
+    let payload = vec![0x44; 1024 * 1024 + 1];
+    let (_temp, backend, header, authorization) = publisher_source_fixture(&payload);
+    let now = crate::unix_now_secs();
+    let end = now + 900;
+    let original = backend.stage_publisher_source(&header, end, now).unwrap();
+    backend
+        .stage_publisher_source_chunk(
+            &publisher_chunk_request(
+                &header,
+                original,
+                0,
+                &payload[..header.chunks[0].length as usize],
+            ),
+            now,
+        )
+        .unwrap();
+    let dir = backend
+        .root_dir
+        .join(PUBLISHER_SOURCE_DIR_V1)
+        .join(hex::encode(header.order_id));
+    let file = dir.join("chunk-00000000");
+    let identity = RetainedFile::open_regular(&file)
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert!(
+        !backend
+            .stage_complete_publisher_source(&header, end, &mut io::empty(), || Ok(now), || Ok(()))
+            .unwrap()
+    );
+    assert_eq!(
+        identity,
+        RetainedFile::open_regular(&file)
+            .unwrap()
+            .snapshot()
+            .unwrap()
+    );
+    assert_eq!(
+        backend
+            .publisher_source_progress(
+                header.provider_id,
+                header.order_id,
+                authorization.manifest_digest(),
+                1,
+                end
+            )
+            .unwrap(),
+        PublisherSourceProgressV1::NeedsChunk(1)
+    );
+}
+
+#[test]
+fn complete_publisher_source_does_not_replace_a_destination_created_during_copy() {
+    let payload = b"complete staged publisher bytes";
+    let (_temp, backend, header, _) = publisher_source_fixture(payload);
+    let now = crate::unix_now_secs();
+    let root = backend.root_dir.join(PUBLISHER_SOURCE_DIR_V1);
+    let target = root.join(hex::encode(header.order_id));
+    let mut calls = 0;
+    let result = backend.stage_complete_publisher_source(
+        &header,
+        now + 900,
+        &mut &payload[..],
+        || {
+            calls += 1;
+            if calls == 2 {
+                let directory =
+                    OwnerDirectory::open(&root)?.create_child(hex::encode(header.order_id))?;
+                directory.write_private_atomic(
+                    "existing",
+                    b"other session",
+                    PublishMode::CreateNew,
+                )?;
+            }
+            Ok(now)
+        },
+        || Ok(()),
+    );
+    assert!(result.is_err());
+    assert_eq!(fs::read(target.join("existing")).unwrap(), b"other session");
+    assert!(!target.join(PUBLISHER_SOURCE_METADATA_V1).exists());
+}
+
+#[test]
+fn complete_publisher_source_charges_header_and_payload_against_staging_quotas() {
+    let payload = b"publisher staging reservation";
+    let (temp, backend, header, _) = publisher_source_fixture(payload);
+    let now = crate::unix_now_secs();
+    let reset = |name, capacity, pins| {
+        StorageBackend::new(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(canonical_temp_path(&temp).join(name))
+                .provider_id(backend.config.provider_id())
+                .max_pins(pins)
+                .max_capacity_bytes(iroha_config::base::util::Bytes(capacity))
+                .build(),
+        )
+        .unwrap()
+    };
+    let disabled = reset("disabled", 1 << 20, 0);
+    assert!(matches!(
+        disabled.stage_complete_publisher_source(
+            &header,
+            now + 900,
+            &mut &payload[..],
+            || Ok(now),
+            || Ok(())
+        ),
+        Err(StorageError::PinLimitReached { limit: 0 })
+    ));
+    assert!(matches!(
+        disabled.stage_publisher_source(&header, now + 900, now),
+        Err(StorageError::PinLimitReached { limit: 0 })
+    ));
+    let capped = reset("capacity", payload.len() as u64, 4);
+    assert!(matches!(
+        capped.stage_complete_publisher_source(
+            &header,
+            now + 900,
+            &mut &payload[..],
+            || Ok(now),
+            || Ok(())
+        ),
+        Err(StorageError::CapacityExceeded { .. })
+    ));
+    let one = reset("pins", 1 << 20, 1);
+    one.stage_publisher_source(&header, now + 900, now).unwrap();
+    let other = PublisherSourceHeaderV1 {
+        order_id: [0x84; 32],
+        ..header
+    };
+    assert!(matches!(
+        one.stage_complete_publisher_source(
+            &other,
+            now + 900,
+            &mut &payload[..],
+            || Ok(now),
+            || Ok(())
+        ),
+        Err(StorageError::PinLimitReached { .. })
+    ));
 }

@@ -63,7 +63,7 @@ pub(super) fn prepare(
     // This closure is retained by the prepared configuration and every client built from it.
     // The original operation.lock therefore cannot be released between discovery and use.
     let owner = Mutex::new(authority);
-    let transport = PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+    let transport = PreparedMusubiArchiveFetchConfigV1::from_generated_local_build_registry(
         config.clone(),
         Arc::new(move |provider| {
             check_deadline(deadline)?;
@@ -75,6 +75,7 @@ pub(super) fn prepare(
         }),
         originals,
         DISCOVERY_FRESHNESS,
+        deadline,
     )
     .map_err(|_| invalid("cannot prepare generated build registry"))?;
     require_deadline(deadline)?;
@@ -122,7 +123,10 @@ fn observe_generated_service(
     let mut owner = ServiceAuthority::open_network(prepared, NetworkPurpose::ServiceObservation)?;
     let (current, block) = discover(&mut owner, provider, deadline)
         .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))?;
-    request.verify(&owner, policies, current, &block, deadline)
+    request
+        .verify_custody(&owner, policies, &block, deadline)?
+        .ok_or_else(|| invalid("current generated provider custody is unavailable"))?;
+    request.bind(&owner, policies, current, &block, deadline)
 }
 
 #[derive(Clone, Copy)]
@@ -157,7 +161,27 @@ impl ServiceRead<'_> {
         Ok(())
     }
 
-    fn verify(
+    fn verify_custody(
+        self,
+        owner: &ServiceAuthority,
+        policies: &GeneratedProviderPolicies,
+        block: &VerifiedSumeragiBlock,
+        deadline: Instant,
+    ) -> Result<Option<()>> {
+        // Only the custody owner qualifies the retained enrollment at the certified Global cut.
+        ManagedStreamTokenCustody::open_existing_from_original(owner, self.provider, None)?
+            .ok_or_else(|| invalid("original provider custody is absent"))?
+            .verify_current_enrollment_at(
+                self.enrollment,
+                &policies.custody,
+                self.required.height,
+                *self.required.block_hash.as_ref(),
+                block,
+                deadline,
+            )
+    }
+
+    fn bind(
         self,
         owner: &ServiceAuthority,
         policies: &GeneratedProviderPolicies,
@@ -170,18 +194,6 @@ impl ServiceRead<'_> {
             enrollment,
             required,
         } = self;
-        // The sole custody owner qualifies the exact retained record at discovery's same
-        // independently authenticated Global cut, including sequence, bytes and revocation.
-        ManagedStreamTokenCustody::open_existing_from_original(owner, provider, None)?
-            .ok_or_else(|| invalid("original provider custody is absent"))?
-            .verify_current_enrollment_at(
-                enrollment,
-                &policies.custody,
-                required.height,
-                *required.block_hash.as_ref(),
-                block,
-                deadline,
-            )?;
         if current.discovery().height() < required.height
             || current.token_public_key() != &policies.custody.binding.public_key
             || u64::from(current.token_key_revision()) != policies.custody.binding.key_revision
@@ -294,12 +306,11 @@ pub(in crate::managed) fn observe_generated_service_set(
         consistent_cuts(rows.map(|observation| observation.certified_cut))?;
         return Ok(rows);
     }
-    let parent = match renderer {
-        Some(renderer) => renderer.open_original_bootstrap(prepared)?,
-        None => crate::managed::service_bootstrap::ManagedServiceBootstrap::open(prepared)?,
+    let policies = match renderer {
+        Some(renderer) => renderer.selected_observation_policies(prepared)?,
+        None => crate::managed::service_bootstrap::ManagedServiceBootstrap::open(prepared)?
+            .selected_policies()?,
     };
-    let policies = parent.selected_policies()?;
-    drop(parent);
     for (request, original) in requests.iter().zip(&policies.providers) {
         if request.provider != original.provider_id {
             return Err(invalid("generated observation provider order differs"));
@@ -311,22 +322,107 @@ pub(in crate::managed) fn observe_generated_service_set(
         None => ServiceAuthority::open_network(prepared, NetworkPurpose::ServiceObservation)?,
     };
     owner.validate_profile()?;
-    let block = discovery_cut(&mut owner, deadline)
-        .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))?;
-    let read = |slot: usize| -> Result<GeneratedServiceObservation> {
-        let request = requests[slot];
-        owner.provider_inventory(request.provider)?;
-        owner.validate_profile()?;
-        let current = read_discovery_at(&owner, request.provider, &block, deadline)
-            .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))?;
-        request.verify(&owner, &policies.providers[slot], current, &block, deadline)
-    };
-    let result = crate::managed::provider_round::run([0, 1, 2], true, read, || {
-        invalid("generated provider proof worker failed")
-    });
+    let result = read_current_service_rows(
+        &mut owner,
+        deadline,
+        |owner| {
+            discovery_cut(owner, deadline)
+                .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))
+        },
+        |owner, block| {
+            let read = |slot: usize| {
+                let request = requests[slot];
+                owner.provider_inventory(request.provider)?;
+                owner.validate_profile()?;
+                let policies = &policies.providers[slot];
+                let current = read_service_proofs(
+                    || {
+                        read_discovery_at(owner, request.provider, block, deadline).map_err(|_| {
+                            invalid("fresh native generated provider discovery is unavailable")
+                        })
+                    },
+                    || request.verify_custody(owner, policies, block, deadline),
+                )?;
+                current
+                    .map(|value| request.bind(owner, policies, value, block, deadline))
+                    .transpose()
+            };
+            crate::managed::provider_round::run([0, 1, 2], true, read, || {
+                invalid("generated provider proof worker failed")
+            })
+        },
+    );
     owner.validate_profile()?;
     require_deadline(deadline)?;
     result
+}
+
+// Both endpoints serve only their live height. Start the independent custody proof while
+// obtaining discovery at the same immutable cut. Every worker is joined, including on a
+// refusal. Exact current-proof unavailability from either endpoint permits one whole-set
+// re-read at a newer certified cut. Any verification, transport or local refusal ends the turn.
+fn read_service_proofs<T>(
+    discovery: impl FnOnce() -> Result<Option<T>>,
+    custody: impl FnOnce() -> Result<Option<()>> + Send,
+) -> Result<Option<T>> {
+    if norito::core::decode_limits_active() {
+        return match discovery()? {
+            Some(current) => Ok(custody()?.map(|()| current)),
+            None => Ok(None),
+        };
+    }
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .spawn_scoped(scope, custody)
+            .map_err(|_| invalid("generated provider custody worker unavailable"))?;
+        let current = discovery();
+        let verified = worker
+            .join()
+            .map_err(|_| invalid("generated provider custody worker failed"))?;
+        let current = current?;
+        Ok(verified?.and(current))
+    })
+}
+
+// Each round reads every provider at one certified height. A typed current-height
+// refusal can race successive commits, so retry only on a strictly advancing cut.
+fn read_current_service_rows<T>(
+    owner: &mut ServiceAuthority,
+    deadline: Instant,
+    mut cut: impl FnMut(&mut ServiceAuthority) -> Result<VerifiedSumeragiBlock>,
+    mut read: impl FnMut(&ServiceAuthority, &VerifiedSumeragiBlock) -> Result<[Option<T>; 3]>,
+) -> Result<[T; 3]> {
+    use std::io::Write as _;
+
+    const MAX_ROUNDS: usize = 4;
+    let mut previous = None;
+    for _ in 0..MAX_ROUNDS {
+        require_deadline(deadline)?;
+        let started = Instant::now();
+        let block = cut(owner)?;
+        let height = block.height();
+        if previous.is_some_and(|last| height <= last) {
+            break;
+        }
+        require_deadline(deadline)?;
+        let rows_started = Instant::now();
+        let rows = read(owner, &block)?;
+        require_deadline(deadline)?;
+        if let [Some(a), Some(b), Some(c)] = rows {
+            return Ok([a, b, c]);
+        }
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "generated discovery current rows unavailable height={} cut_ms={} rows_ms={}",
+            height,
+            rows_started.duration_since(started).as_millis(),
+            rows_started.elapsed().as_millis(),
+        );
+        previous = Some(height);
+    }
+    Err(invalid(
+        "fresh native generated provider discovery is unavailable",
+    ))
 }
 
 fn consistent_cuts(cuts: [(u64, iroha_crypto::Hash); 3]) -> Result<()> {
@@ -354,7 +450,8 @@ fn discover(
         .validate_profile()
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?;
     let block = discovery_cut(owner, deadline)?;
-    let verified = read_discovery_at(owner, provider, &block, deadline)?;
+    let verified = read_discovery_at(owner, provider, &block, deadline)?
+        .ok_or(MusubiArchiveDiscoveryErrorV1::Unavailable)?;
     Ok((verified, block))
 }
 
@@ -362,10 +459,15 @@ fn discovery_cut(
     owner: &mut ServiceAuthority,
     deadline: Instant,
 ) -> std::result::Result<VerifiedSumeragiBlock, MusubiArchiveDiscoveryErrorV1> {
-    let finality = owner.observe_finality(deadline);
+    let finality = owner.observe_finality_with_source(deadline, |height, deadline| {
+        owner
+            .source(height, deadline)
+            .map(|source| source.at_durable_tip())
+    });
     check_deadline(deadline)?;
     let finality = finality.map_err(|_| MusubiArchiveDiscoveryErrorV1::Unavailable)?;
     let block = finality
+        .0
         .verified_tip()
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?;
     block
@@ -379,27 +481,47 @@ fn read_discovery_at(
     provider: ProviderId,
     block: &VerifiedSumeragiBlock,
     deadline: Instant,
-) -> std::result::Result<VerifiedAccountReadProviderV1, MusubiArchiveDiscoveryErrorV1> {
+) -> std::result::Result<Option<VerifiedAccountReadProviderV1>, MusubiArchiveDiscoveryErrorV1> {
     check_deadline(deadline)?;
     let schema = iroha_core::state::State::native_world_schema_hashes_v1()
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Unavailable)?;
-    let result = read_selected_peers(&owner.peers, deadline, |client, selected_deadline| {
+    let inventory = owner
+        .provider_inventory(provider)
+        .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?;
+    // Spread simultaneous proofs across their original validators. Each proof can still
+    // fall back to every other selected validator at the same independently certified cut.
+    let peers = owner
+        .peers
+        .iter()
+        .cycle()
+        .skip(usize::from(inventory.slot))
+        .take(owner.peers.len());
+    let mut only_current_unavailable = !owner.peers.is_empty();
+    let result = read_selected_peers(peers, deadline, |client, selected_deadline| {
+        let now = now_ms().inspect_err(|_| only_current_unavailable = false)?;
         client
             .with_request_deadline(selected_deadline)
-            .get_account_read_provider_discovery(provider, schema.as_slice(), block, now_ms()?)
-            .map_err(|_| invalid("generated native provider discovery unavailable or invalid"))
+            .get_account_read_provider_discovery(provider, schema.as_slice(), block, now)
+            .map_err(|error| {
+                only_current_unavailable &= error
+                    .downcast_ref::<iroha::client::ProviderDiscoveryUnavailable>()
+                    .is_some();
+                invalid("generated native provider discovery unavailable or invalid")
+            })
     });
     check_deadline(deadline)?;
-    let verified = result.map_err(|_| MusubiArchiveDiscoveryErrorV1::Unavailable)?;
+    let verified = match result {
+        Ok(verified) => verified,
+        Err(_) if only_current_unavailable => return Ok(None),
+        Err(_) => return Err(MusubiArchiveDiscoveryErrorV1::Unavailable),
+    };
     let discovery = verified.discovery();
     if verified.chain_id() != owner.config.chain.as_str()
         || discovery.network_id() != owner.config.network_id
         || discovery.height() != block.height()
         || discovery.context_id() != block.context_id()
         || discovery.owner()
-            != &owner
-                .provider_inventory(provider)
-                .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?
+            != &inventory
                 .authority(StreamTokenAuthorityRole::IssuerOperator)
                 .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?
                 .account
@@ -410,7 +532,7 @@ fn read_discovery_at(
         .validate_profile()
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?;
     check_deadline(deadline)?;
-    Ok(verified)
+    Ok(Some(verified))
 }
 
 #[cfg(test)]

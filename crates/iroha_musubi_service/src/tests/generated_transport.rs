@@ -190,6 +190,49 @@ fn counted(
     )
 }
 #[test]
+fn only_new_generated_storage_uses_the_full_signed_operation_window() {
+    use MusubiPublicationRuntimeOperationV1::{ProviderReadback, SeedIngress, StorageCoordination};
+    let (client, _) = client();
+    let timeout = Duration::from_secs(2);
+    let local = AuthenticatedMusubiPublicationRuntimeClientV1::from_generated_local_iroha_client(
+        &client,
+        selection(&client, 9443),
+        timeout,
+    )
+    .unwrap();
+    let remote =
+        AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(&client, timeout).unwrap();
+    let id = [7; 32];
+    let digest = [9; 32];
+    let issued = 1_000;
+    for (transport, operation, lifetime) in [
+        (&local, StorageCoordination, MAX_AUTHORIZATION_LIFETIME_MS),
+        (&local, SeedIngress, DEFAULT_AUTHORIZATION_LIFETIME_MS),
+        (&local, ProviderReadback, DEFAULT_AUTHORIZATION_LIFETIME_MS),
+        (
+            &remote,
+            StorageCoordination,
+            DEFAULT_AUTHORIZATION_LIFETIME_MS,
+        ),
+        (&remote, SeedIngress, DEFAULT_AUTHORIZATION_LIFETIME_MS),
+        (&remote, ProviderReadback, DEFAULT_AUTHORIZATION_LIFETIME_MS),
+    ] {
+        let signed = transport
+            .authorization_at(operation, id, digest, issued)
+            .unwrap();
+        assert_eq!(signed.payload.expires_at_ms, issued + lifetime);
+        signed
+            .verify(operation, id, digest, issued + lifetime - 1)
+            .unwrap();
+        assert!(
+            signed
+                .verify(operation, id, digest, issued + lifetime + 1)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn generated_constructor_binds_original_network_chain_and_independent_publisher() {
     let (client, _) = client();
     let selection = selection(&client, 9443);

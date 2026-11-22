@@ -12,7 +12,7 @@ impl Connection {
         use windows_sys::Win32::Networking::WinSock::{WSADuplicateSocketW, WSAPROTOCOL_INFOW};
         listener_count(listeners.len())?;
         let deadline = self.io_deadline();
-        self.set_deadline(deadline)?;
+        self.set_listener_handoff_deadline(deadline)?;
         let process = self.peer_process_id()?;
         let mut protocols = Vec::with_capacity(listeners.len());
         for listener in listeners {
@@ -68,7 +68,7 @@ impl Connection {
         };
         listener_count(expected_count)?;
         let deadline = self.io_deadline();
-        self.set_deadline(deadline)?;
+        self.set_listener_handoff_deadline(deadline)?;
         self.peer_process_id()?;
         let wire: ListenerSockets = self.receive_reply()?;
         listener_count(wire.protocols.len())?;
@@ -184,7 +184,8 @@ mod listener_handoff_tests {
 
     fn pair(directory: &PrivateDirectory) -> (Listener, Connection, Connection) {
         let server = Listener::bind(directory).unwrap();
-        let client = connect_until(directory, Instant::now() + IO_TIMEOUT).unwrap();
+        let client =
+            connect_listener_handoff_until(directory, Instant::now() + IO_TIMEOUT).unwrap();
         let deadline = Instant::now() + IO_TIMEOUT;
         let accepted = loop {
             if let Some(connection) = server.accept().unwrap() {
@@ -248,7 +249,11 @@ mod listener_handoff_tests {
         for address in addresses {
             assert!(TcpListener::bind(address).is_ok());
         }
-        assert!(receiver.set_deadline(Instant::now()).is_err());
+        assert!(
+            receiver
+                .set_listener_handoff_deadline(Instant::now())
+                .is_err()
+        );
         assert!(receiver.receive_tcp_listeners(1).is_err());
     }
 }

@@ -228,22 +228,21 @@ pub(super) fn reconcile(
         deadline: budget.deadline()?,
     };
     let mut turn = budget.call(|deadline| {
-        with_custody(prepared, provider, |custody| {
-            GeneratedRenewalTurn::begin(
-                custody,
-                &policies.provider(provider)?.custody,
-                Fees::from_options(&options)?,
-                minimum,
-                deadline,
-                Arc::clone(&budget.cancelled),
-            )
-        })
+        let mut custody = live.open_custody(prepared)?;
+        GeneratedRenewalTurn::begin(
+            &mut custody,
+            &policies.provider(provider)?.custody,
+            Fees::from_options(&options)?,
+            minimum,
+            deadline,
+            Arc::clone(&budget.cancelled),
+        )
     })?;
     loop {
         budget.check()?;
         validate_live(prepared, live, budget)?;
         let deadline = budget.deadline()?;
-        let result = with_custody(prepared, provider, |custody| {
+        let result = with_custody(live.open_custody(prepared), |custody| {
             custody.reconcile_generated_renewal(&mut turn, deadline)
         });
         budget.check()?;
@@ -275,11 +274,10 @@ pub(super) fn reconcile(
 // exclusive owner inside this call, including on errors; only the same finite renewal turn
 // survives between calls. Its original lease, cancellation and deadline are never replaced.
 pub(super) fn with_custody<T>(
-    prepared: &PreparedLocalnet,
-    provider: ProviderId,
+    custody: Result<ManagedStreamTokenCustody>,
     action: impl FnOnce(&mut ManagedStreamTokenCustody) -> Result<T>,
 ) -> Result<T> {
-    let mut custody = ManagedStreamTokenCustody::open(prepared, provider)?;
+    let mut custody = custody?;
     action(&mut custody)
 }
 

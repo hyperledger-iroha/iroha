@@ -6,6 +6,7 @@ use super::{
     signer_completed_finality::{CompletedFinalityV1, PendingCompletedFinalityV1},
 };
 use iroha_core::state::{State, StateReadOnly, WorldReadOnly};
+use iroha_core::sumeragi::finality::CertifiedHistorySource;
 use iroha_core::{
     query::stream_token_custody::read_stream_token_custody_control_at_v1,
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
@@ -22,7 +23,7 @@ use sorafs_manifest::signer::{
         SignerStreamTokenStateSubjectV1,
     },
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
 pub(super) struct FinalityFloorV1 {
@@ -70,15 +71,41 @@ pub(super) trait SignerFinalityV1: Send + Sync {
         observation: &SignerStreamTokenStateObservationBodyV1,
         completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError>;
+    fn validate_floors(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        for minimum in minima {
+            self.validate(
+                minimum,
+                candidate,
+                floor,
+                historical,
+                observation,
+                completed,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct CoreFinalityV1 {
+    history: Mutex<Option<Arc<CertifiedHistorySource>>>,
     pub(super) state: Arc<State>,
     pub(super) pins: StreamTokenSignerPinsV1,
 }
 impl CoreFinalityV1 {
     pub(super) fn new(state: Arc<State>, pins: StreamTokenSignerPinsV1) -> Self {
-        Self { state, pins }
+        Self {
+            state,
+            pins,
+            history: Mutex::new(None),
+        }
     }
 }
 impl SignerFinalityV1 for CoreFinalityV1 {
@@ -120,6 +147,7 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             .ok_or_else(unavailable)?;
         let verified = VerifiedFinalityTargetsV1::verify(
             &view,
+            &self.history,
             &[
                 HistoricalFinalityV1::Custody(minimum).coordinates(),
                 FinalityFloorV1 { height, block_hash },
@@ -144,6 +172,67 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         observation: &SignerStreamTokenStateObservationBodyV1,
         completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError> {
+        self.validate_cut(
+            [minimum; 2],
+            candidate,
+            floor,
+            historical,
+            observation,
+            completed,
+        )
+    }
+    fn validate_floors(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        if norito::core::decode_limits_active() {
+            // A finite outer decoder owns both original observations and their refusal order.
+            for minimum in minima {
+                self.validate(
+                    minimum,
+                    candidate,
+                    floor,
+                    historical,
+                    observation,
+                    completed,
+                )?;
+            }
+            return Ok(());
+        }
+        let initial_tip = self.state.latest_block_hash_fast();
+        self.validate_cut(minima, candidate, floor, historical, observation, completed)?;
+        if self.state.latest_block_hash_fast() != initial_tip {
+            // A newly committed block can change custody or registration. Give the
+            // serialized minimum its original independent observation on that tip.
+            self.validate(
+                minima[1],
+                candidate,
+                floor,
+                historical,
+                observation,
+                completed,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl CoreFinalityV1 {
+    fn validate_cut(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        let [minimum, serialized] = minima;
         if let Some(proof) = completed {
             proof.validate(observation)?;
         } else {
@@ -159,8 +248,8 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             return Err(unavailable());
         }
         // One fresh view and one ascending certified walk authenticate every endpoint. Reopening
-        // a reader for each endpoint would reverify the same prefix many times; retaining it
-        // across calls would conceal changed durable evidence or current policy.
+        // a reader for each endpoint would reverify the same prefix many times. Later calls
+        // may reuse its certification only after rechecking the complete durable source.
         let latest = u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())?;
         // Startup only qualifies custody; it grants no operation or serving authority. A
         // separately certified descendant may preserve that exact custody while this signed
@@ -179,6 +268,9 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             floor,
             HistoricalFinalityV1::Custody(candidate).coordinates(),
         ]);
+        if serialized != minimum {
+            targets.push(HistoricalFinalityV1::Custody(serialized).coordinates());
+        }
         targets.extend(historical.iter().map(|anchor| anchor.coordinates()));
         if startup_descendant {
             targets.push(FinalityFloorV1 {
@@ -190,8 +282,11 @@ impl SignerFinalityV1 for CoreFinalityV1 {
                     .ok_or_else(unavailable)?,
             });
         }
-        let verified = VerifiedFinalityTargetsV1::verify(&view, &targets)?;
+        let verified = VerifiedFinalityTargetsV1::verify(&view, &self.history, &targets)?;
         verified.check_anchor(&self.pins, minimum)?;
+        if serialized != minimum {
+            verified.check_anchor(&self.pins, serialized)?;
+        }
         let current = verified.check_anchor(&self.pins, candidate)?;
         check_observed_control(&current, candidate, observation)?;
         for anchor in historical {
@@ -215,10 +310,23 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             check_observed_control(&latest_state, candidate, observation)?;
         }
         if candidate.height < floor.height
-            || (candidate.height < latest && !startup_descendant)
             || candidate.height < minimum.height
             || (candidate.height == minimum.height && candidate != minimum)
+            || candidate.height < serialized.height
+            || (candidate.height == serialized.height && candidate != serialized)
         {
+            return Err(unavailable());
+        }
+        if candidate.height < latest && !startup_descendant {
+            if completed.is_none()
+                && observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider
+                && matches!(
+                    observation.subject,
+                    SignerStreamTokenStateSubjectV1::CurrentCustody { .. }
+                )
+            {
+                return Err(StreamTokenIssuerError::BeforeProviderTipAdvanced);
+            }
             return Err(unavailable());
         }
         Ok(())
@@ -266,7 +374,11 @@ struct VerifiedFinalityTargetsV1<'view, V: StateReadOnly> {
 }
 
 impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
-    fn verify(view: &'view V, targets: &[FinalityFloorV1]) -> Result<Self, StreamTokenIssuerError> {
+    fn verify(
+        view: &'view V,
+        history: &Mutex<Option<Arc<CertifiedHistorySource>>>,
+        targets: &[FinalityFloorV1],
+    ) -> Result<Self, StreamTokenIssuerError> {
         // Minimum, floor, candidate, optional startup tip and at most three historical endpoints.
         // Validate before allocating or iterating any caller-selected height range.
         if targets.is_empty()
@@ -287,7 +399,34 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
         if through > u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())? {
             return Err(unavailable());
         }
-        let reader = CertifiedChain::new(view).map_err(|_| unavailable())?;
+        let mut reader = CertifiedChain::new(view).map_err(|_| unavailable())?;
+        // A mismatching target must stop the ordinary walk at its own height. In particular,
+        // an attempted extension must not publish shared cursors beyond that refusal.
+        let track_history = !norito::core::decode_limits_active()
+            && targets.iter().all(|target| {
+                usize::try_from(target.height - 1)
+                    .ok()
+                    .and_then(|at| view.block_hashes().get(at).copied())
+                    .is_some_and(|hash| *hash.as_ref() == target.block_hash)
+            });
+        if track_history {
+            let previous = history.lock().ok().and_then(|entry| entry.clone());
+            let extended = previous
+                .as_ref()
+                .and_then(|source| source.extend(view, first, through));
+            if extended.is_some()
+                || (reader.shared_history_is_current(first, through)
+                    && previous.is_some_and(|source| source.covers(view, through)))
+            {
+                if let Some(source) = extended
+                    && let Ok(mut entry) = history.lock()
+                {
+                    *entry = Some(Arc::new(source));
+                }
+                return Ok(Self { view, targets });
+            }
+            CertifiedHistorySource::track(&mut reader, through);
+        }
         let mut matched = 0;
         for block in reader.walk(first, through) {
             let block = block.map_err(|_| unavailable())?;
@@ -306,6 +445,12 @@ impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
         }
         if matched != targets.len() {
             return Err(unavailable());
+        }
+        if track_history
+            && let Some(source) = CertifiedHistorySource::from_verified(&reader, through)
+            && let Ok(mut entry) = history.lock()
+        {
+            *entry = Some(Arc::new(source));
         }
         Ok(Self { view, targets })
     }
@@ -373,7 +518,7 @@ const fn unavailable() -> StreamTokenIssuerError {
 
 #[cfg(test)]
 mod tests {
-    use super::{FinalityFloorV1, VerifiedFinalityTargetsV1};
+    use super::{FinalityFloorV1, Mutex, VerifiedFinalityTargetsV1};
     use iroha_core::{
         state::World,
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
@@ -387,9 +532,12 @@ mod tests {
             height: 1,
             block_hash: *chain.genesis().hash().as_ref(),
         };
-        assert!(VerifiedFinalityTargetsV1::verify(&chain.state().view(), &[genesis]).is_err());
+        assert!(
+            VerifiedFinalityTargetsV1::verify(&chain.state().view(), &Mutex::default(), &[genesis])
+                .is_err()
+        );
         chain.commit_at(2_000, Vec::new());
-        VerifiedFinalityTargetsV1::verify(&chain.state().view(), &[genesis])
+        VerifiedFinalityTargetsV1::verify(&chain.state().view(), &Mutex::default(), &[genesis])
             .expect("the real successor certifies the genesis execution result");
     }
 
@@ -403,7 +551,7 @@ mod tests {
             height: 2,
             block_hash: *chain.committed(2).block_hash().as_ref(),
         };
-        VerifiedFinalityTargetsV1::verify(&view, &[valid; 7])
+        VerifiedFinalityTargetsV1::verify(&view, &Mutex::default(), &[valid; 7])
             .expect("seven independently matched targets are allowed");
         let mut conflicting = valid;
         conflicting.block_hash[0] ^= 1;
@@ -422,7 +570,7 @@ mod tests {
                 ..valid
             }],
         ] {
-            assert!(VerifiedFinalityTargetsV1::verify(&view, &invalid).is_err());
+            assert!(VerifiedFinalityTargetsV1::verify(&view, &Mutex::default(), &invalid).is_err());
         }
     }
 }

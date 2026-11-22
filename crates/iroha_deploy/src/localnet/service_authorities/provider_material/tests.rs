@@ -35,6 +35,48 @@ fn publish(directory: &PrivateDirectory, manifest: &StreamTokenAuthorityManifest
 }
 
 #[test]
+fn retained_provider_capacity_requires_matching_original_declaration_and_backing() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
+    let prepared = prepared(&temporary.path().join("generation"));
+    let manifest = prepared.stream_token_authorities().unwrap().unwrap();
+    let selected = &manifest.providers[0];
+    let operator = &selected
+        .authority(StreamTokenAuthorityRole::IssuerOperator)
+        .unwrap()
+        .account;
+    let network =
+        network_material::NetworkServicePlanV1::decode(&manifest.network.network_plan).unwrap();
+    let mut legacy = decode(&selected.provider_plan).unwrap();
+    legacy.reserve_terms.capacity_gib = 1;
+    assert!(
+        legacy
+            .validate(selected.provider_id, operator, &network)
+            .is_err()
+    );
+    legacy.declaration.committed_capacity_gib = 1;
+    legacy.declaration.chunker_commitments[0].committed_gib = 1;
+    assert!(
+        legacy
+            .validate(selected.provider_id, operator, &network)
+            .is_err()
+    );
+    let stake = "0.75".parse::<XorQuantity>().unwrap();
+    legacy.declaration.stake.stake_amount = stake.clone();
+    legacy.material.proposal.stake.stake_amount = stake.clone();
+    legacy.material.advert_body.stake.stake_amount = stake;
+    legacy
+        .validate(selected.provider_id, operator, &network)
+        .unwrap();
+    legacy.reserve_terms.capacity_gib = 0;
+    assert!(
+        legacy
+            .validate(selected.provider_id, operator, &network)
+            .is_err()
+    );
+}
+
+#[test]
 fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
     let _resources = crate::managed::native_test_guard();
     let temporary = crate::custody::test_support::private_tempdir().unwrap();
@@ -51,7 +93,7 @@ fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
         original.reserve_terms().provider_account,
         manifest.providers[0].authorities[0].account
     );
-    assert_eq!(original.reserve_terms().capacity_gib, 1);
+    assert_eq!(original.reserve_terms().capacity_gib, 2);
     assert_eq!(original.pricing(), &PricingScheduleRecord::launch_default());
     assert_eq!(
         original.declaration().stake,
@@ -59,7 +101,7 @@ fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
     );
     assert_eq!(
         original.declaration().stake.stake_amount,
-        "0.75".parse().unwrap()
+        "1.5".parse().unwrap()
     );
     let material = original.admission_material();
     let aliases: Vec<String> = sorafs_manifest::chunker_registry::lookup_by_handle(PROFILE)
@@ -73,7 +115,12 @@ fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
         material.advert_body.profile_aliases.as_ref(),
         Some(&aliases)
     );
+    assert_eq!(original.declaration().committed_capacity_gib, 2);
     assert_eq!(original.declaration().chunker_commitments.len(), 1);
+    assert_eq!(
+        original.declaration().chunker_commitments[0].committed_gib,
+        2
+    );
     assert_eq!(
         original.declaration().chunker_commitments[0]
             .profile_aliases

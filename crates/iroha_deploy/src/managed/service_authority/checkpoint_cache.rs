@@ -17,7 +17,7 @@ use iroha_data_model::{
 };
 use std::{
     mem::size_of,
-    sync::{Arc, Mutex, OnceLock, TryLockError},
+    sync::{Arc, Mutex, OnceLock, RwLock, TryLockError},
 };
 
 const SLOTS: usize = 3;
@@ -67,6 +67,14 @@ struct Entries {
 }
 
 impl Entries {
+    fn get(&self, bytes: &[u8], network: NetworkId, chain: &str) -> Option<FinalityVerifier> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|entry| entry.network == network && entry.chain == chain && entry.bytes == bytes)
+            .map(|entry| entry.verifier.clone())
+    }
+
     fn clear(&mut self) {
         for slot in &mut self.slots {
             drop(slot.take());
@@ -129,12 +137,35 @@ impl Entries {
 /// No entry is retained per body, purpose, height or peer, and no failure is remembered.
 #[derive(Default)]
 pub(super) struct CheckpointCache {
-    entry: Mutex<Entries>,
+    entry: RwLock<Entries>,
+    first_interval_checkpoint: Option<Box<FirstIntervalCheckpoint>>,
     // Only a lexical graph/census owns this boxed two-context workspace. Standalone authorities
     // retain only this optional pointer, keeping the existing large orchestration frames small.
     epoch_validation: Option<Box<Mutex<EpochValidationScope>>>,
     #[cfg(test)]
     decode_attempts: std::sync::atomic::AtomicUsize,
+}
+
+/// Schedule only the first bounded checkpoint encountered by a joined local interval read.
+/// The digest is a scheduling hint. The existing cache still compares full bytes, network and
+/// chain, and every caller performs its own import after a miss or a sibling refusal.
+#[derive(Default)]
+struct FirstIntervalCheckpoint {
+    digest: OnceLock<blake3::Hash>,
+    importing: Mutex<()>,
+}
+
+impl FirstIntervalCheckpoint {
+    fn enter(&self, bytes: &[u8]) -> Option<std::sync::MutexGuard<'_, ()>> {
+        if norito::core::decode_limits_active() || bytes.len() > MAX_CHECKPOINT_BYTES {
+            return None;
+        }
+        let digest = blake3::hash(bytes);
+        if self.digest.get_or_init(|| digest) != &digest {
+            return None;
+        }
+        self.importing.lock().ok()
+    }
 }
 
 /// One explicit lexical graph/census owner of the existing immutable import memo and at most
@@ -152,6 +183,13 @@ impl CheckpointImportScope {
     pub(in crate::managed) fn test_alive(&self) -> impl Fn() -> bool + 'static {
         let cache = Arc::downgrade(&self.cache);
         move || cache.strong_count() != 0
+    }
+
+    #[cfg(test)]
+    pub(in crate::managed) fn test_import_attempts(&self) -> usize {
+        self.cache
+            .decode_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -184,6 +222,13 @@ impl CheckpointImportScope {
     /// Begin cold pure-import work only for an inactive shared original graph.
     /// Owned profiles and active caller admission keep their original independent recipes.
     pub(in crate::managed) fn for_original(parent: &ServiceAuthority) -> Option<Self> {
+        Self::for_provider_intervals(parent, false)
+    }
+
+    pub(in crate::managed) fn for_provider_intervals(
+        parent: &ServiceAuthority,
+        joined: bool,
+    ) -> Option<Self> {
         if norito::core::decode_limits_active()
             || !matches!(&parent.profile, AuthorityProfile::Shared(_))
         {
@@ -191,6 +236,7 @@ impl CheckpointImportScope {
         }
         Some(Self {
             cache: Arc::new(CheckpointCache {
+                first_interval_checkpoint: joined.then(Box::default),
                 epoch_validation: Some(Box::new(Mutex::new(EpochValidationScope::new()))),
                 ..CheckpointCache::default()
             }),
@@ -263,14 +309,19 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
     }
 
     pub(in crate::managed) fn decode(&mut self, bytes: &[u8]) -> Result<FinalityVerifier> {
-        self.authority
-            .effective_checkpoint_cache()
-            .decode_for_scope(
-                bytes,
-                self.authority.config.network_id,
-                self.authority.config.chain.as_str(),
-                self.validation.as_deref_mut(),
-            )
+        let cache = self.authority.effective_checkpoint_cache();
+        // Only the pure import and exact-byte cache lookup run while the guard is held.
+        let _turn = cache
+            .first_interval_checkpoint
+            .as_ref()
+            .and_then(|first| first.enter(bytes));
+        cache.decode_for_scope(
+            bytes,
+            self.authority.config.network_id,
+            self.authority.config.chain.as_str(),
+            self.validation.as_deref_mut(),
+            None,
+        )
     }
 
     pub(in crate::managed) fn retained_finality(
@@ -284,9 +335,25 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
     }
 }
 
+impl ServiceAuthority {
+    pub(in crate::managed) fn decode_observation_checkpoint(
+        &self,
+        bytes: &[u8],
+        start: &mut crate::verify::finality::ObservationStart,
+    ) -> Result<FinalityVerifier> {
+        self.effective_checkpoint_cache().decode_for_scope(
+            bytes,
+            self.config.network_id,
+            self.config.chain.as_str(),
+            None,
+            Some(start),
+        )
+    }
+}
+
 impl CheckpointCache {
     fn decode(&self, bytes: &[u8], network: NetworkId, chain: &str) -> Result<FinalityVerifier> {
-        self.decode_for_scope(bytes, network, chain, None)
+        self.decode_for_scope(bytes, network, chain, None, None)
     }
 
     // Select only the existing canonical producer's borrowed pure workspace. Scoped contention
@@ -300,25 +367,26 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
         let Some(shared) = &self.epoch_validation else {
-            return self.decode_with_validation(bytes, network, chain, validation);
+            return self.decode_with_validation(bytes, network, chain, validation, start);
         };
         match shared.try_lock() {
             Ok(mut selected) => {
                 if norito::core::decode_limits_active() {
                     *selected = EpochValidationScope::new();
-                    self.decode_with_validation(bytes, network, chain, None)
+                    self.decode_with_validation(bytes, network, chain, None, start)
                 } else {
-                    self.decode_with_validation(bytes, network, chain, Some(&mut selected))
+                    self.decode_with_validation(bytes, network, chain, Some(&mut selected), start)
                 }
             }
             Err(TryLockError::Poisoned(mut poisoned)) => {
                 **poisoned.get_mut() = EpochValidationScope::new();
-                self.decode_with_validation(bytes, network, chain, None)
+                self.decode_with_validation(bytes, network, chain, None, start)
             }
             Err(TryLockError::WouldBlock) => {
-                self.decode_with_validation(bytes, network, chain, None)
+                self.decode_with_validation(bytes, network, chain, None, start)
             }
         }
     }
@@ -329,21 +397,28 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         mut validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
+        let mut start = start;
         // A scope entered after warming still receives its original physical admission.
         let active_owner = norito::core::decode_limits_active();
+        // Independent providers may read different warmed checkpoints at the same time.
+        // A busy writer or active decoder still takes the original physical path.
+        if !active_owner
+            && let Ok(selected) = self.entry.try_read()
+            && let Some(verifier) = selected.get(bytes, network, chain)
+        {
+            return Ok(verifier);
+        }
         let weight = retained_import_envelope(bytes.len());
-        let (may_store, retained_before_import) = match self.entry.try_lock() {
+        let (may_store, retained_before_import) = match self.entry.try_write() {
             Ok(mut selected) => {
                 if active_owner {
                     selected.clear();
                     (false, false)
                 } else {
-                    if let Some(entry) = selected.slots.iter().flatten().find(|entry| {
-                        entry.network == network && entry.chain == chain && entry.bytes == bytes
-                    }) {
-                        // Returning an Arc clone cannot advance this immutable original.
-                        return Ok(entry.verifier.clone());
+                    if let Some(verifier) = selected.get(bytes, network, chain) {
+                        return Ok(verifier);
                     }
                     // Account the incoming decoded envelope before its canonical producer runs.
                     let eligible =
@@ -371,6 +446,7 @@ impl CheckpointCache {
             } else {
                 validation.as_deref_mut()
             },
+            start.as_deref_mut(),
         );
         let verifier = match offered {
             Ok(verifier) => verifier,
@@ -379,7 +455,7 @@ impl CheckpointCache {
                 // release every accessible optional graph and retry the same canonical producer
                 // once; the two pure epoch contexts may remain, never an authority verdict.
                 let retry = if may_store {
-                    match self.entry.try_lock() {
+                    match self.entry.try_write() {
                         Ok(mut selected) => {
                             let retained = retained_before_import || !selected.is_empty();
                             selected.clear();
@@ -406,6 +482,7 @@ impl CheckpointCache {
                     network,
                     chain,
                     validation,
+                    start,
                 ) {
                     Ok(verifier) => verifier,
                     Err(error) => {
@@ -430,7 +507,7 @@ impl CheckpointCache {
                 image.extend_from_slice(bytes);
                 selected_chain.push_str(chain);
                 if let Some(weight) = weight
-                    && let Ok(mut selected) = self.entry.try_lock()
+                    && let Ok(mut selected) = self.entry.try_write()
                 {
                     // Recheck capacities and FIFO admission after concurrent cold work. Avoid
                     // duplicate entries when another importer selected the same original.
@@ -453,7 +530,7 @@ impl CheckpointCache {
     }
 
     fn clear_after_refusal(&self) {
-        match self.entry.try_lock() {
+        match self.entry.try_write() {
             Ok(mut selected) => selected.clear(),
             Err(TryLockError::Poisoned(mut poisoned)) => poisoned.get_mut().clear(),
             Err(TryLockError::WouldBlock) => {}
@@ -468,6 +545,7 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
         #[cfg(test)]
         graph_import_counts::record();
@@ -482,7 +560,7 @@ impl CheckpointCache {
                 decode_attempts.load(std::sync::atomic::Ordering::Relaxed),
             );
         }
-        decode_checkpoint_with_validation(bytes, network, chain, validation)
+        decode_checkpoint_with_validation(bytes, network, chain, validation, start)
     }
 }
 

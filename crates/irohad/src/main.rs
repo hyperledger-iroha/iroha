@@ -2520,9 +2520,11 @@ impl Iroha {
             listeners,
         } = prepared;
         let managed_launch = listeners.is_some();
-        let (p2p_listener, torii_listener) = match listeners {
-            Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
-            None => (None, None),
+        let (p2p_listener, torii_listener, managed_startup_deadline) = match listeners {
+            Some((listeners, deadline)) => {
+                (Some(listeners.p2p), Some(listeners.torii), Some(deadline))
+            }
+            None => (None, None, None),
         };
         let PreparedNative {
             mut config,
@@ -4763,13 +4765,15 @@ impl Iroha {
             )
         });
         let musubi_publication_factory =
-            musubi_publication_service::stock_installation::select_factory(
+            musubi_publication_service::stock_installation::select_factory_at_startup(
                 &config.musubi_publication,
                 musubi_publication_context.as_ref(),
                 shared_sorafs_cache.clone(),
                 musubi_publication_factory,
                 emergency_fast,
-            )
+                managed_startup_deadline,
+                supervisor.shutdown_signal(),
+            ).await
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let runtime_checkpoint_package = if config.torii.runtime_checkpoint.package_dir.is_some() {
             let source_config = config.torii.runtime_checkpoint.clone();
@@ -8827,7 +8831,7 @@ fn run_main_with_config_guard(
 fn adopt_managed_listeners(
     startup: &StartupArgs,
     config: &Config,
-) -> ReportResult<Option<iroha_managed_ipc::RuntimeListeners>, MainError> {
+) -> ReportResult<Option<(iroha_managed_ipc::RuntimeListeners, u128)>, MainError> {
     match (
         &startup.managed_listeners,
         startup.managed_listener_deadline_ns,
@@ -8850,7 +8854,7 @@ fn adopt_managed_listeners(
                 numeric(config.torii.address.value())?,
                 deadline,
             )
-            .map(Some)
+            .map(|listeners| Some((listeners, deadline)))
             .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))
         }
         _ => Err(Report::new(MainError::Config)
