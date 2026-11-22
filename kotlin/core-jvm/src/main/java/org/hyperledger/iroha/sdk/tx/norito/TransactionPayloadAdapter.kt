@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
+import org.hyperledger.iroha.sdk.address.compareMultisigMemberKeys
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.ContractInvocation
@@ -1295,15 +1296,20 @@ internal class TransactionPayloadAdapter private constructor(
 
         private class MultisigPolicyNoritoAdapter : TypeAdapter<MultisigPolicyPayload> {
             override fun encode(encoder: NoritoEncoder, value: MultisigPolicyPayload) {
-                UINT8_ADAPTER.encode(encoder, value.version.toLong())
-                UINT16_ADAPTER.encode(encoder, value.threshold.toLong())
-                MULTISIG_MEMBER_LIST_ADAPTER.encode(encoder, value.members)
+                encodeSizedField(encoder, UINT8_ADAPTER, value.version.toLong())
+                encodeSizedField(encoder, UINT16_ADAPTER, value.threshold.toLong())
+                encodeSizedField(encoder, MULTISIG_MEMBER_LIST_ADAPTER, value.members)
             }
 
             override fun decode(decoder: NoritoDecoder): MultisigPolicyPayload {
-                val version = Math.toIntExact(UINT8_ADAPTER.decode(decoder))
-                val threshold = Math.toIntExact(UINT16_ADAPTER.decode(decoder))
-                val members = MULTISIG_MEMBER_LIST_ADAPTER.decode(decoder)
+                val version = Math.toIntExact(decodeSizedField(decoder, UINT8_ADAPTER))
+                val threshold = Math.toIntExact(decodeSizedField(decoder, UINT16_ADAPTER))
+                val members = decodeSizedField(decoder, MULTISIG_MEMBER_LIST_ADAPTER)
+                for (index in 1 until members.size) {
+                    require(compareMultisigMemberKeys(members[index - 1], members[index]) < 0) {
+                        "Multisig members must be in canonical key order"
+                    }
+                }
                 return MultisigPolicyPayload.of(version, threshold, members)
             }
         }
@@ -1311,13 +1317,13 @@ internal class TransactionPayloadAdapter private constructor(
         private class MultisigMemberNoritoAdapter : TypeAdapter<MultisigMemberPayload> {
             override fun encode(encoder: NoritoEncoder, value: MultisigMemberPayload) {
                 val publicKeyPayload = compactPublicKeyPayload(value.curveId, value.publicKey)
-                BYTE_VECTOR_ADAPTER.encode(encoder, publicKeyPayload)
-                UINT16_ADAPTER.encode(encoder, value.weight.toLong())
+                encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, publicKeyPayload)
+                encodeSizedField(encoder, UINT16_ADAPTER, value.weight.toLong())
             }
 
             override fun decode(decoder: NoritoDecoder): MultisigMemberPayload {
-                val publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder)
-                val weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder))
+                val publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER)
+                val weight = Math.toIntExact(decodeSizedField(decoder, UINT16_ADAPTER))
                 val payload = decodeCompactPublicKeyPayload(publicKeyPayload)
                     ?: throw IllegalArgumentException("Invalid multisig member public key")
                 return MultisigMemberPayload(payload.curveId, weight, payload.keyBytes)
