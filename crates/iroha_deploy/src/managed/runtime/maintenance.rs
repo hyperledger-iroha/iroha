@@ -412,7 +412,7 @@ pub(super) fn refresh(
         observe_native_set(prepared, &live, floors, budget)?;
     budget.progress.enter(Phase::GatewayValidation);
     validate_gateways(prepared, &mut live, budget)?;
-    drop(live);
+    let read_plans = OwnedGateway::release_for_plan_read(live);
     budget.progress.enter(Phase::Selection);
     // The old aggregate remains current without interruption even after all fresh rows return.
     if !original.current().unwrap_or(false) {
@@ -445,10 +445,8 @@ pub(super) fn refresh(
             Ok::<_, crate::managed::Error>(next)
         };
         let providers = [replace(0)?, replace(1)?, replace(2)?];
-        // Release all owned gateway references before the original standalone profile capture.
-        let plans = prepared
-            .provider_service_plans()?
-            .ok_or_else(|| invalid("original provider plans absent"))?;
+        let plans =
+            read_plans(prepared)?.ok_or_else(|| invalid("original provider plans absent"))?;
         Observation::new(&plans, providers)
     })
 }

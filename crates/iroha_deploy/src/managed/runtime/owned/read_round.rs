@@ -3,6 +3,18 @@
 use super::*;
 
 impl OwnedGateway {
+    /// Release the child handles now. The later read reacquires only an existing
+    /// renderer, so this deferred projection cannot keep its operation lock alive.
+    pub(in crate::managed::runtime) fn release_for_plan_read(
+        live: [Self; 3],
+    ) -> impl FnOnce(&PreparedLocalnet) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
+        let owner = Arc::downgrade(&live[0].launch.owner);
+        move |prepared| match owner.upgrade() {
+            Some(owner) => owner.original_provider_plans(prepared),
+            None => prepared.provider_service_plans(),
+        }
+    }
+
     pub(in crate::managed::runtime) fn read_renderer(&self) -> Option<&GeneratedServiceRuntime> {
         self.launch
             .owner
