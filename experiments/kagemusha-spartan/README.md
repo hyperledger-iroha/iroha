@@ -80,8 +80,17 @@ native payment and restart test.
 The five-family compiler reproduced the registered 9,263,339-byte bundle with
 SHA-256 `844b031c4b19448f46f52080e00ca4b3c846b4d8e58d83be20e3a9b3ece084a3`.
 The complete host wallet credited the 10,615-byte Payment and recovered both
-original Payments after a cold restart. Physical qualification, the full
-soundness bound and issuer authorization for retail use remain open.
+original Payments after a cold restart.
+
+On 2026-11-22 the iPhone 17 Pro Max completed all five launches with this bundle
+and development fixture build `2026.11.25`. The holder confirmed Send with the
+hardware-backed key. Cold Receive took **71.433612 s**, including 4.602389 s in
+Prepare and 65.957400 s in Execute. The process reached **1,169,113,088 bytes**
+peak RSS. These exceed the 3 s and 730,144,440-byte release targets. A fresh
+process recovered all four operations and both 10,615-byte Payments. ArchiveSent
+produced a 30,147-byte completion at sequence 4 and returned the identical bytes
+after restart. The complete soundness bound and retail issuer authorization
+remain open. [Five-launch verification](device/ios/verify-returned-launches.py) ·
 [Five-family compiler procedure](#bootstrap-the-five-kind-monetary-compiler) ·
 [Security assumptions](research/CONTROL-SOUNDNESS.md)
 
