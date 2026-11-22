@@ -12,7 +12,7 @@
 
 use ff::Field;
 use iroha_pasta::PastaCurve;
-use iroha_pasta::fold::fold_generators_vartime;
+use iroha_pasta::fold::{fold_generators_vartime, folded_generators_vartime};
 use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_secret_ct_cancellable};
 use rayon::prelude::*;
 use zeroize::Zeroizing;
@@ -222,8 +222,8 @@ pub fn prove<C: PastaCurve>(
     // U as a base of the L/R sums: the value and blind terms are folded into
     // each sum instead of separate scalar multiplications.
     let u_affine = group::Curve::to_affine(&u_point);
-    // The first round reads the installed generators without a copy. Only
-    // folding them after the transcript challenge needs a writable vector.
+    // The first round reads the installed generators. Its fold allocates
+    // only the reduced vector, which later rounds update in place.
     let mut g = std::borrow::Cow::Borrowed(gens.g.as_slice());
     let mut lr = Vec::with_capacity(n.trailing_zeros() as usize);
     let mut len = n;
@@ -282,7 +282,14 @@ pub fn prove<C: PastaCurve>(
         }
         crate::prof::add("ipa.xb", xb_clock.elapsed().as_secs_f64());
         let fold_clock = std::time::Instant::now();
-        fold_generators_vartime::<C>(&mut g.to_mut()[..len], &u);
+        match &mut g {
+            std::borrow::Cow::Borrowed(initial) => {
+                g = std::borrow::Cow::Owned(folded_generators_vartime::<C>(initial, &u));
+            }
+            std::borrow::Cow::Owned(folded) => {
+                fold_generators_vartime::<C>(&mut folded[..len], &u);
+            }
+        }
         crate::prof::add(
             if len == n {
                 "ipa.fold1"
