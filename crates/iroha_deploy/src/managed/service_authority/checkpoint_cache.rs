@@ -178,6 +178,13 @@ impl CheckpointImportScope {
     }
 
     #[cfg(test)]
+    pub(in crate::managed) fn test_import_attempts(&self) -> usize {
+        self.cache
+            .decode_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
     /// Read an exact core projection with zero decoder charge; a miss may populate the workspace.
     pub(in crate::managed) fn test_epoch_projection(
         &self,

@@ -6,7 +6,9 @@ use crate::localnet::service_authorities::{
 };
 use crate::managed::{
     gateway_compliance::LiveGatewayProcess,
-    generated_service_runtime::{GeneratedServiceRuntime, GeneratedServiceRuntimeRevision},
+    generated_service_runtime::{
+        CatalogLaunchReads, GeneratedServiceRuntime, GeneratedServiceRuntimeRevision,
+    },
     native_operation::{ManagedTransactionFinality, invalid},
     stream_token_custody::RetainedCustodyEnrollment,
 };
@@ -39,10 +41,7 @@ impl GeneratedLaunch {
         self.validate_with(None)
     }
 
-    fn validate_with(
-        &self,
-        imports: Option<&mut crate::managed::generated_service_runtime::CatalogLaunchReads<'_>>,
-    ) -> Result<()> {
+    fn validate_with(&self, imports: Option<&mut CatalogLaunchReads<'_>>) -> Result<()> {
         #[cfg(all(test, unix))]
         tests::batch_validation_tests::revision();
         self.require_active()?;
@@ -58,8 +57,13 @@ impl GeneratedLaunch {
         Ok(())
     }
 
-    fn command(&self, daemon: &std::path::Path, index: usize) -> Result<Command> {
-        self.validate()?;
+    fn command(
+        &self,
+        daemon: &std::path::Path,
+        index: usize,
+        reads: Option<&mut CatalogLaunchReads<'_>>,
+    ) -> Result<Command> {
+        self.validate_with(reads)?;
         let peer = self.revision.peer(index)?;
         let mut command = Command::new(daemon);
         command
@@ -240,7 +244,7 @@ impl PeerProcesses {
         if !self.children.is_empty() || self.launch.is_some() {
             return Err(invalid("the owned generation must stop before restarting"));
         }
-        if let Some(launch) = &launch {
+        let mut reads = if let Some(launch) = &launch {
             if launch.original != retained.prepared
                 || !matches!(retained.root_kind, RootKind::Global)
             {
@@ -248,19 +252,25 @@ impl PeerProcesses {
                     "generated launch differs from its original global generation",
                 ));
             }
-            launch.validate()?;
-        }
+            // Keep only immutable checkpoint imports through this start. Each command still
+            // reopens its custody and configuration after opening its peer log.
+            let mut reads = launch.owner.catalog_launch_reads();
+            launch.validate_with(Some(&mut reads))?;
+            Some(reads)
+        } else {
+            None
+        };
         if daemon.path() != retained.daemon.path.as_path() {
             return Err(invalid("daemon differs from the retained runtime path"));
         }
         if daemon.pin()?.blake3 != retained.daemon.blake3 {
             return Err(invalid("daemon differs from the retained runtime contents"));
         }
-        self.launch = launch;
+        self.launch.clone_from(&launch);
         for (index, peer) in retained.prepared.peers.iter().enumerate() {
             let log = directory.open_append(&peer.log_name)?;
             let mut command = match &self.launch {
-                Some(launch) => launch.command(&retained.daemon.path, index)?,
+                Some(launch) => launch.command(&retained.daemon.path, index, reads.as_mut())?,
                 None => daemon_command(
                     &retained.daemon.path,
                     &peer.config_path,
@@ -318,7 +328,7 @@ impl PeerProcesses {
             )?;
         }
         if let Some(launch) = &self.launch {
-            launch.validate()?;
+            launch.validate_with(reads.as_mut())?;
         }
         Ok(())
     }

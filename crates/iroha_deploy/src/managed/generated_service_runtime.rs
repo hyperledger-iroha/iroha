@@ -323,7 +323,7 @@ impl GeneratedServiceRuntimeRevision {
     }
 }
 
-/// Restrict the immutable import workspace to four material checks on this one renderer.
+/// One renderer may share immutable checkpoint imports during one catalog observation or peer start.
 pub(super) struct CatalogLaunchReads<'a> {
     owner: &'a GeneratedServiceRuntime,
     imports: Option<CheckpointImportScope>,

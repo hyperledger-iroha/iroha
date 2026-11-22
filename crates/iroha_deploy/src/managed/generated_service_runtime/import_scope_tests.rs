@@ -435,3 +435,21 @@ fn catalog_launch_scope_refreshes_all_four_material_checks_and_releases_on_meter
     check_catalog_launch_scope(&fixture.owner, &fixture.prepared, &fixture.catalog);
     no_http(&fixture.peers());
 }
+
+#[test]
+fn peer_start_reuses_checkpoint_imports_across_six_material_reads() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::new("six-peer-start-checks", false, false);
+    let mut reads = fixture.owner.catalog_launch_reads();
+    let mut counts = Vec::new();
+    for _ in 0..6 {
+        fixture
+            .owner
+            .validate_catalog_launch(&fixture.prepared, &fixture.catalog, Some(&mut reads))
+            .unwrap();
+        counts.push(reads.imports.as_ref().unwrap().test_import_attempts());
+    }
+    assert!(counts[0] > 0);
+    assert_eq!(counts, [counts[0]; 6]);
+    no_http(&fixture.peers());
+}
