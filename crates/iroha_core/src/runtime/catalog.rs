@@ -38,6 +38,7 @@ mod native_amx_capture;
 mod native_escrow_capture;
 mod native_game_capture;
 pub(crate) mod parameters;
+pub(crate) mod parliament_runtime_enactment;
 mod retirement;
 mod service_addition;
 

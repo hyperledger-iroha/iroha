@@ -22,11 +22,17 @@
 
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
-    governance::types::{BeaconPulseId, BeaconSessionId},
+    governance::{
+        anonymous_ballot::RuntimeEnactmentReceiptV1,
+        types::{BeaconPulseId, BeaconSessionId},
+    },
 };
 use mv::storage::StorageReadOnly as _;
 
-use super::{StateBlock, StateBlockStartError, StateReadOnly as _, WorldReadOnly as _};
+use super::{
+    StateBlock, StateBlockStartError, StateReadOnly as _, StateStorageAdmissionError,
+    WorldReadOnly as _,
+};
 use crate::{
     governance::parliament_anonymous::{
         AnonymousSortitionPulseV1,
@@ -80,6 +86,8 @@ pub(crate) fn run_on_global_chain<E: std::fmt::Debug>(
     let mut sccp = SccpPassOwnerV1::<E>::default();
     let report = run_governance_pass(state, parliament, &mut sccp, before_enactments)
         .map_err(start_error)?;
+    require_published_enactments(state._curr_block.height().get(), &report.runtime_enactments)
+        .map_err(StateBlockStartError::Storage)?;
     state.governance_due_applied = report.governance_due_applied();
     if installed {
         state.governance_start_outputs = Some(report.rows);
@@ -136,6 +144,30 @@ fn committed_pulses(state: &StateBlock<'_>) -> Vec<AnonymousSortitionPulseV1> {
         .collect()
 }
 
+/// The selected G3 result owner admits each receipt before it applies the effect the receipt
+/// describes. No committed block output carries those receipts in this release, so a block
+/// whose pass admitted any cannot be sealed: this is a local unsupported-runtime refusal,
+/// never a verdict, and the abandoned block discards the effects with its State. No root can
+/// reach it yet: no compiled services profile selects the owner and no production
+/// certificate exists without P1.
+/// TODO(N14): bind the admitted receipts into the block's committed outputs instead.
+fn require_published_enactments(
+    height: u64,
+    receipts: &[RuntimeEnactmentReceiptV1],
+) -> Result<(), StateStorageAdmissionError> {
+    // SPEC/N14: admitted G3 receipts are never dropped while their effects are committed.
+    if receipts.is_empty() {
+        Ok(())
+    } else {
+        Err(StateStorageAdmissionError::UnsupportedRuntime {
+            height,
+            reason: "selected runtime enactment results have no committed block publication in \
+                     this release"
+                .into(),
+        })
+    }
+}
+
 /// The block-start refusal of a pass that did not complete.
 fn start_error<E: std::fmt::Debug>(
     error: GovernancePassErrorV1<GovernanceOwnerErrorV1<StateBlockStartError<E>>>,
@@ -166,7 +198,7 @@ pub(crate) fn parliament_error<E: std::fmt::Debug>(
         AnonymousPassWorldErrorV1::Receipt(
             iroha_data_model::governance::anonymous_ballot::AnonymousBallotCodecErrorV1::DecodeUnavailable(original),
         ) if local => StateBlockStartError::ExecutionDeferred(original.into()),
-        AnonymousPassWorldErrorV1::Output(_) if local => {
+        AnonymousPassWorldErrorV1::Output(_) | AnonymousPassWorldErrorV1::Results(_) if local => {
             StateBlockStartError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable.into())
         }
         _ if local => StateBlockStartError::ExecutionDeferred(
@@ -207,11 +239,35 @@ impl StateBlock<'_> {
 mod tests {
     use iroha_data_model::{
         block::output_budget::GovernanceStartOutputBudgetErrorV1,
-        governance::anonymous_ballot::AnonymousBallotCodecErrorV1,
+        governance::anonymous_ballot::{
+            AnonymousBallotCodecErrorV1, RuntimeEnactmentResultsErrorV1,
+        },
     };
 
     use super::*;
     use crate::smartcontracts::isi::sccp::test_support::{blank_state, header};
+
+    #[test]
+    fn admitted_runtime_enactments_without_publication_never_seal() {
+        assert!(require_published_enactments(5, &[]).is_ok());
+        let receipt = RuntimeEnactmentReceiptV1 {
+            anchor: iroha_data_model::governance::GovernanceAnchorV1 {
+                height: 5,
+                position: 0,
+                timestamp_ms: 300_000,
+            },
+            governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId::new(
+                [4; 32],
+            ),
+            status: iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted,
+            stage: iroha_data_model::governance::types::GovernanceStageV1::default(),
+            attempt_state_digest: [4; 64].into(),
+        };
+        assert!(matches!(
+            require_published_enactments(5, &[receipt]),
+            Err(StateStorageAdmissionError::UnsupportedRuntime { height: 5, .. })
+        ));
+    }
 
     #[test]
     fn a_local_refusal_defers_the_block_and_a_verdict_abandons_it() {
@@ -220,6 +276,7 @@ mod tests {
             AnonymousPassWorldErrorV1::Receipt(AnonymousBallotCodecErrorV1::FrameLayout(
                 "a pinned frame the node cannot produce",
             )),
+            AnonymousPassWorldErrorV1::Results(RuntimeEnactmentResultsErrorV1::Allocation),
         ] {
             assert!(local.is_local());
             assert!(
@@ -236,6 +293,8 @@ mod tests {
             AnonymousPassWorldErrorV1::Output(GovernanceStartOutputBudgetErrorV1::Refused(
                 "rows beyond the checked capacity",
             )),
+            AnonymousPassWorldErrorV1::Results(RuntimeEnactmentResultsErrorV1::Capacity),
+            AnonymousPassWorldErrorV1::Results(RuntimeEnactmentResultsErrorV1::DuplicateAttempt),
         ] {
             assert!(!verdict.is_local());
             assert!(matches!(

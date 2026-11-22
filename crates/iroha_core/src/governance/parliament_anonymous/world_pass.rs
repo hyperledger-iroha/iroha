@@ -18,7 +18,11 @@
 //! not fit stays due ([`GovernanceOccurrenceV1::NoOutputCapacity`]). Native G1–G2c rows enter
 //! the partition before their World transaction is applied: a compact receipt
 //! ([`LifecycleAppliedV1`]), then at most one ballot output. G3 runtime enactment has no
-//! native receipt variant and cannot publish through this partition.
+//! native receipt variant and cannot publish through this partition. Its receipt enters the
+//! pass's separate bounded [`RuntimeEnactmentResultsV1`] custody instead, before its effect
+//! is applied, and only on a root that selects the distinct G3 result owner; a live
+//! enactment whose receipt does not fit stays due the same way. The pass hands the admitted
+//! receipts to its caller ([`AnonymousPassReportV1::runtime_enactments`]).
 //!
 //! An item whose attempt ended or whose occurrence passed lapses, uncharged. Every other
 //! refusal of a listed item is an error of the pass: the caller abandons the block. A
@@ -26,11 +30,14 @@
 //! block and is never a verdict.
 //!
 //! Listing uses the derived due index, bounded by committed `K`. Runtime-upgrade certificates
-//! list their exact due G3 work; actual application refuses as unsupported before effects until
-//! a distinct selected result owner can commit the standalone receipt. Candidate certificates
-//! never list an enactment.
-//! TODO(design §12.3, slice 5; N14): implement that immutable result profile, qualify production
-//! ballot authority and implement the remaining proposal effects. Qualification remains `None`.
+//! list their exact due G3 work. Application consumes the prepared effect only through the
+//! distinct selected result owner (`world_pass::runtime_upgrade`), which admits the complete
+//! receipt before applying it; a root that selects no such owner refuses as unsupported before
+//! effects. This release composes the owner's service into no services profile. Candidate
+//! certificates never list an enactment.
+//! TODO(design §12.3, slice 5; N14): publish the admitted receipts with the block and compose
+//! the result service, qualify production ballot authority (P1) and implement the remaining
+//! proposal effects. Qualification remains `None`.
 
 use core::cell::RefCell;
 
@@ -47,7 +54,8 @@ use iroha_data_model::{
             AdvanceToNativeSlotV1, AnonymousBallotCodecErrorV1, BallotScopeV1,
             GovernanceBlockStartEventV1, GovernanceBlockStartOutputV1, GovernanceLifecycleItemV1,
             GovernanceOutputAnchorV1, LifecycleAppliedV1, LifecycleBoardDigestV1,
-            NativeSlotAdvancedV1, ParliamentBallotBoardRecordV1,
+            NativeSlotAdvancedV1, ParliamentBallotBoardRecordV1, RuntimeEnactmentReceiptV1,
+            RuntimeEnactmentResultsErrorV1, RuntimeEnactmentResultsV1,
             digests::{attempt_state_digest_v1, board_record_digest_v1},
         },
         types::{BodyInstanceId, GovernanceAttemptId, GovernanceAttemptStatusV1, ParliamentBody},
@@ -99,6 +107,9 @@ pub(crate) enum AnonymousPassWorldErrorV1 {
     /// A receipt digest could not be framed with the node's pinned codec.
     #[error("receipt digest: {0}")]
     Receipt(AnonymousBallotCodecErrorV1),
+    /// The selected G3 result custody refused a receipt whose capacity the owner had checked.
+    #[error("runtime enactment results: {0}")]
+    Results(RuntimeEnactmentResultsErrorV1),
 }
 
 impl AnonymousPassWorldErrorV1 {
@@ -109,6 +120,7 @@ impl AnonymousPassWorldErrorV1 {
             Self::Storage(_) | Self::Receipt(_) | Self::Execution(_) => true,
             Self::Reducer(error) => error.is_local(),
             Self::Output(error) => *error == GovernanceStartOutputBudgetErrorV1::Allocation,
+            Self::Results(error) => *error == RuntimeEnactmentResultsErrorV1::Allocation,
             Self::Policy(_) | Self::World(_) => false,
         }
     }
@@ -138,6 +150,9 @@ pub(crate) struct AnonymousPassReportV1 {
     pub(crate) clocks: u32,
     /// G1–G3 items the pass processed, the other owner's included.
     pub(crate) processed: u32,
+    /// The receipts the selected G3 result owner admitted, in pass order, before applying the
+    /// effects they describe. Always empty on a root that selects no such owner.
+    pub(crate) runtime_enactments: Vec<RuntimeEnactmentReceiptV1>,
 }
 
 impl AnonymousPassReportV1 {
@@ -611,8 +626,10 @@ fn height_progress_ticket(
 }
 
 /// The native rows `item` may emit, known before it mutates anything. G3 has no native
-/// receipt: its selected result owner must refuse before any effects, independently of
-/// native partition capacity. The common work budget still applies to that item.
+/// receipt: its receipt is bounded by the separate selected result custody
+/// (`runtime_upgrade::inspect_result_capacity`), independently of native partition capacity,
+/// and a root that selects no result owner refuses before any effects. The common work budget
+/// still applies to that item.
 fn output_ceiling(item: GovernancePassItemV1) -> Option<GovernanceStartItemCeilingV1> {
     Some(match item {
         GovernancePassItemV1::EnactParliament { .. } => return None,
@@ -987,8 +1004,9 @@ fn apply_open(
     Ok(())
 }
 
-/// Apply the live Parliament `item` at its position `at`, atomically: its rows enter `rows`
-/// before its World transaction is applied.
+/// Apply the live Parliament `item` at its position `at`, atomically: its rows enter `rows`,
+/// or a G3 receipt enters the selected `results` custody, before its World transaction is
+/// applied.
 fn apply(
     state: &mut StateBlock<'_>,
     item: GovernancePassItemV1,
@@ -996,6 +1014,7 @@ fn apply(
     pulse_at: &impl Fn(u64) -> Option<AnonymousSortitionPulseV1>,
     ticket: Option<AdvanceToNativeSlotV1>,
     rows: &mut GovernanceStartOutputBudgetV1,
+    results: &mut RuntimeEnactmentResultsV1,
 ) -> Result<(), PassError> {
     match item {
         GovernancePassItemV1::HeightProgress => apply_height_progress(ticket, at, rows),
@@ -1011,7 +1030,7 @@ fn apply(
             apply_open(state, attempt, body, at, rows)
         }
         GovernancePassItemV1::EnactParliament { attempt, .. } => {
-            runtime_upgrade::apply(state, attempt, at, rows)
+            runtime_upgrade::apply(state, attempt, at, results)
         }
         GovernancePassItemV1::PauseConclusion { .. }
         | GovernancePassItemV1::Reconciliation { .. }
@@ -1114,6 +1133,8 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
         &mut report.rows,
         GovernanceStartOutputBudgetV1::new(),
     ));
+    // The separate bounded custody of G3 receipts; only a selected result owner admits any.
+    let results = RefCell::new(RuntimeEnactmentResultsV1::new(height, now_ms));
     let foreign = RefCell::new(foreign);
     let mut before_enactments = Some(before_enactments);
     for segment in [
@@ -1184,6 +1205,13 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
                         .map_err(GovernanceOwnerErrorV1::Foreign)
                 } else {
                     inspect(state, item, casting_limit, &rows.borrow())
+                        .map(|occurrence| {
+                            runtime_upgrade::inspect_result_capacity(
+                                item,
+                                occurrence,
+                                &results.borrow(),
+                            )
+                        })
                         .map_err(GovernanceOwnerErrorV1::Parliament)
                 }
             },
@@ -1194,14 +1222,23 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
                         .apply(state, item, at)
                         .map_err(GovernanceOwnerErrorV1::Foreign)
                 } else {
-                    apply(state, item, at, &pulse_at, ticket, &mut rows.borrow_mut())
-                        .map_err(GovernanceOwnerErrorV1::Parliament)
+                    apply(
+                        state,
+                        item,
+                        at,
+                        &pulse_at,
+                        ticket,
+                        &mut rows.borrow_mut(),
+                        &mut results.borrow_mut(),
+                    )
+                    .map_err(GovernanceOwnerErrorV1::Parliament)
                 }
             },
         )?;
     }
     report.rows = rows.into_inner();
     report.processed = pass.processed();
+    report.runtime_enactments = results.into_inner().finish();
     Ok(report)
 }
 

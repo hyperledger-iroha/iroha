@@ -1,9 +1,19 @@
-//! G3 runtime preparation; publication waits for a distinct selected result profile.
+//! G3 runtime preparation and its distinct selected, bounded result owner (N14).
 //!
 //! Candidate certificates are never listed and are refused again before reading an effect.
-//! The native output grammar has no G3 receipt, so actual apply refuses before effects.
+//! The native output grammar has no G3 receipt. A production certificate's effect is
+//! prepared in its own child transaction, and only the selected result owner may consume it:
+//! that owner admits the complete receipt into the block's bounded
+//! [`RuntimeEnactmentResultsV1`] custody first and applies the original transaction only
+//! after admission. A root selects the owner through an exact composed services profile
+//! (`runtime::catalog::parliament_runtime_enactment`); this release composes it into no
+//! profile, so every root keeps the original unsupported-runtime refusal before effects.
 //! The retained private preparation drops a deterministically rejected effect transaction
 //! before a fresh failure child; local refusal keeps its original retry owner intact.
+//!
+//! Activation still needs, all together: the qualified ballot authority
+//! (`PARLIAMENT_BALLOT_QUALIFICATION_V1`, P1), the block publication of the admitted results
+//! (the block start refuses any admitted receipt until then) and the composed service.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
@@ -33,9 +43,9 @@ pub(super) fn live(attempt: &Attempt, due_ms: u64) -> bool {
         && attempt.enactment_due_ms() == Some(due_ms)
 }
 
-/// No current selected result profile can commit the standalone G3 receipt.
-/// This is local unsupported-runtime recovery, never a rejection or an applied item.
-/// TODO(N14): replace this refusal only with the original selected, bounded result owner.
+/// The root selects no G3 result owner, so no current result profile can commit the
+/// standalone G3 receipt. This is local unsupported-runtime recovery, never a rejection or an
+/// applied item, and it is reached before any effect is prepared.
 fn require_result_profile(state: &StateBlock<'_>) -> Result<core::convert::Infallible, PassError> {
     Err(PassError::Storage(
         StateStorageAdmissionError::UnsupportedRuntime {
@@ -45,11 +55,65 @@ fn require_result_profile(state: &StateBlock<'_>) -> Result<core::convert::Infal
     ))
 }
 
+/// Proof that this block's root selects the distinct G3 result owner: its committed selection
+/// installs the anonymous family and its exact services profile composes the result service.
+/// Outside tests only [`Self::of`] constructs it.
+struct SelectedResultOwner(());
+
+impl SelectedResultOwner {
+    /// The owner when the root of `state` selects it.
+    ///
+    /// # Errors
+    /// A selection this release cannot decide (an uncompiled services profile, the service
+    /// under another closure, or storage it does not implement) is a local unsupported-runtime
+    /// refusal, never "not selected".
+    fn of(state: &StateBlock<'_>) -> Result<Option<Self>, PassError> {
+        let selected = crate::runtime::catalog::parliament_runtime_enactment::selected(
+            state.world.runtime_selection(),
+        )
+        .map_err(|reason| {
+            PassError::Storage(StateStorageAdmissionError::UnsupportedRuntime {
+                height: state._curr_block.height().get(),
+                reason,
+            })
+        })?;
+        Ok(selected.then_some(Self(())))
+    }
+
+    /// A selected owner for boundary controls of [`produce`]. Without a qualification record
+    /// (P1) no production certificate exists, so no test can reach it through [`apply`].
+    #[cfg(test)]
+    const fn for_test() -> Self {
+        Self(())
+    }
+}
+
+/// The selected result custody's capacity, observed immediately before the item is charged.
+/// A live G3 enactment whose receipt would not fit stays due, uncharged, exactly like a native
+/// item whose rows do not fit; every other item and occurrence is returned unchanged. A root
+/// that selects no result owner never admits a receipt, so its custody always fits and its
+/// items still reach the original refusal.
+pub(super) fn inspect_result_capacity(
+    item: GovernancePassItemV1,
+    occurrence: GovernanceOccurrenceV1,
+    results: &RuntimeEnactmentResultsV1,
+) -> GovernanceOccurrenceV1 {
+    // SPEC/N14: a G3 enactment is charged only if its receipt fits the selected custody.
+    if matches!(item, GovernancePassItemV1::EnactParliament { .. })
+        && occurrence == GovernanceOccurrenceV1::Live
+        && !results.fits()
+    {
+        GovernanceOccurrenceV1::NoOutputCapacity
+    } else {
+        occurrence
+    }
+}
+
 pub(super) fn apply(
     state: &mut StateBlock<'_>,
     id: GovernanceAttemptId,
     at: GovernanceAnchorV1,
-    _rows: &mut GovernanceStartOutputBudgetV1,
+    results: &mut RuntimeEnactmentResultsV1,
 ) -> Result<(), PassError> {
     // Retain the original purpose/time/source error ordering. Reading this disposable
     // child grants no business effects, status mutation or output publication.
@@ -57,33 +121,53 @@ pub(super) fn apply(
     let attempt = stored_attempt(&tx, id)?;
     attempt.certificate_for_execution(id, at)?;
     drop(tx);
-    match require_result_profile(state) {
-        Err(error) => Err(error),
-        Ok(unavailable) => match unavailable {},
-    }
+    // Only the distinctly selected result owner may consume a prepared effect.
+    let Some(owner) = SelectedResultOwner::of(state)? else {
+        return match require_result_profile(state) {
+            Err(error) => Err(error),
+            Ok(unavailable) => match unavailable {},
+        };
+    };
+    with_prepared(state, id, at, |prepared| {
+        produce(&owner, prepared, at, results)
+    })
 }
 
 /// Disposable original effects plus their distinct, still-unpublished receipt.
-/// No caller-supplied receipt, raw World or boolean can apply this owner.
-#[expect(
-    dead_code,
-    reason = "N14 selected governed result producer is not implemented; native outputs must stay closed"
-)]
+/// No caller-supplied receipt, raw World or boolean can apply this owner: only [`produce`]
+/// applies its transaction, and only after the receipt entered the selected custody.
 struct PreparedRuntimeEnactment<'block, 'state> {
     transaction: StateTransaction<'block, 'state>,
-    receipt: iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1,
+    receipt: RuntimeEnactmentReceiptV1,
 }
 
-/// Prepare the original effect and receipt within their original child borrow.
-/// TODO(N14): only the genuinely selected result producer may consume this owner;
-/// it must admit the complete receipt before applying the original transaction.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "retained effect preparation awaits a real selected output custody owner"
-    )
-)]
+/// The selected G3 result owner: admit the complete original receipt into this block's bounded
+/// result custody, then apply the original effect transaction. Every refusal drops the
+/// transaction unapplied, so no business effect, terminal status or receipt survives it.
+fn produce(
+    _selected: &SelectedResultOwner,
+    prepared: PreparedRuntimeEnactment<'_, '_>,
+    at: GovernanceAnchorV1,
+    results: &mut RuntimeEnactmentResultsV1,
+) -> Result<(), PassError> {
+    let PreparedRuntimeEnactment {
+        transaction,
+        receipt,
+    } = prepared;
+    if receipt.anchor != at {
+        return Err(PassError::World(
+            "a prepared runtime receipt names another pass position",
+        ));
+    }
+    results.admit(receipt).map_err(PassError::Results)?;
+    // SPEC/N14: the complete receipt is in custody before any effect is applied.
+    transaction.apply();
+    Ok(())
+}
+
+/// Prepare the original effect and receipt within their original child borrow. Only the
+/// selected result owner ([`produce`]) consumes this owner; it admits the complete receipt
+/// before applying the original transaction.
 fn with_prepared<'state, R>(
     state: &mut StateBlock<'state>,
     id: GovernanceAttemptId,
@@ -125,7 +209,7 @@ fn with_prepared<'state, R>(
             }
         }
     }
-    let receipt = iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+    let receipt = RuntimeEnactmentReceiptV1 {
         anchor: at,
         governance_attempt_id: attempt.attempt().id,
         status: attempt.attempt().status,
@@ -137,7 +221,7 @@ fn with_prepared<'state, R>(
         .map_err(|_| PassError::World("runtime enactment produced an invalid receipt"))?;
     store_attempt(&mut tx.world, id, attempt);
     tx.require_storage_admission().map_err(PassError::Storage)?;
-    // Deliberately no tx.apply(): the distinct result owner does not exist yet.
+    // Deliberately no tx.apply(): only the selected result owner applies it, after admission.
     consume(PreparedRuntimeEnactment {
         transaction: tx,
         receipt,
@@ -502,7 +586,7 @@ mod tests {
             timestamp_ms: u64::MAX / 2,
         };
         let mut block = state.block(header(at.height, at.timestamp_ms));
-        let mut rows = GovernanceStartOutputBudgetV1::new();
+        let mut results = RuntimeEnactmentResultsV1::new(at.height, at.timestamp_ms);
         assert!(
             matches!(
                 with_prepared(&mut block, driver.id(), at, |_| -> Result<(), PassError> {
@@ -514,17 +598,17 @@ mod tests {
         );
         assert!(
             matches!(
-                apply(&mut block, driver.id(), at, &mut rows),
+                apply(&mut block, driver.id(), at, &mut results),
                 Err(PassError::Reducer(_))
             ),
-            "candidate purpose must refuse before the missing output profile"
+            "candidate purpose must refuse before the result owner is selected or consulted"
         );
         assert_eq!(
             block.world.parliament_anonymous_attempts.get(&driver.id()),
             Some(&original)
         );
         assert!(block.world.runtime_change_sets.iter().next().is_none());
-        assert!(rows.rows().is_empty());
+        assert!(results.is_empty());
         let full = RefCell::new(full_native_partition());
         let item = GovernancePassItemV1::EnactParliament {
             due_ms: 0,
@@ -539,18 +623,19 @@ mod tests {
         // unsupported result owner. This supplies no production qualification or effect.
         let mut pass = cursor_before_g3(&mut block, false);
         let original_rows = full.borrow().rows().len();
+        let results = RefCell::new(RuntimeEnactmentResultsV1::new(at.height, at.timestamp_ms));
         let failure = pass.run_segment(
             &mut block,
             GovernancePassSegmentV1::G3,
             vec![item],
             |_, item| {
-                Ok(inspect_native_capacity(
+                Ok(inspect_result_capacity(
                     item,
-                    GovernanceOccurrenceV1::Live,
-                    &full.borrow(),
+                    inspect_native_capacity(item, GovernanceOccurrenceV1::Live, &full.borrow()),
+                    &results.borrow(),
                 ))
             },
-            |state, _, at| apply(state, driver.id(), at, &mut full.borrow_mut()),
+            |state, _, at| apply(state, driver.id(), at, &mut results.borrow_mut()),
         );
         assert!(
             matches!(
@@ -561,6 +646,7 @@ mod tests {
         );
         assert_eq!(pass.processed(), 1);
         assert_eq!(full.borrow().rows().len(), original_rows);
+        assert!(results.borrow().is_empty());
         assert_eq!(
             block.world.parliament_anonymous_attempts.get(&driver.id()),
             Some(&original)
@@ -570,5 +656,247 @@ mod tests {
             iroha_data_model::governance::anonymous_ballot::PARLIAMENT_BALLOT_QUALIFICATION_V1
                 .is_none()
         );
+    }
+
+    // ---- N14 selected result owner -------------------------------------------------------
+    //
+    // With no qualification record (P1) no production certificate exists, so `with_prepared`
+    // cannot hand these controls a prepared owner. They build the owner directly with a real
+    // child transaction of a real block and exercise the actual consumer, custody and cursor.
+
+    fn effect_key() -> iroha_model_base::state_path::StatePath {
+        "g3-selected-effect".parse().unwrap()
+    }
+
+    /// A terminal receipt of attempt `tag` at `at`.
+    fn receipt_at(at: GovernanceAnchorV1, tag: u8) -> RuntimeEnactmentReceiptV1 {
+        RuntimeEnactmentReceiptV1 {
+            anchor: at,
+            governance_attempt_id: GovernanceAttemptId::new([tag; 32]),
+            status: GovernanceAttemptStatusV1::Enacted,
+            stage: iroha_data_model::governance::types::GovernanceStageV1::default(),
+            attempt_state_digest: [tag; 64].into(),
+        }
+    }
+
+    /// A prepared owner whose original child transaction writes `value` as its effect.
+    fn prepared<'block, 'state>(
+        block: &'block mut StateBlock<'state>,
+        receipt: RuntimeEnactmentReceiptV1,
+        value: u8,
+    ) -> PreparedRuntimeEnactment<'block, 'state> {
+        let mut transaction = block.try_transaction().unwrap();
+        transaction
+            .world
+            .smart_contract_state
+            .insert(effect_key(), vec![value]);
+        PreparedRuntimeEnactment {
+            transaction,
+            receipt,
+        }
+    }
+
+    const AT: GovernanceAnchorV1 = GovernanceAnchorV1 {
+        height: 5,
+        position: 3,
+        timestamp_ms: 300_000,
+    };
+
+    #[test]
+    fn selected_owner_admits_the_complete_receipt_before_applying_the_effect() {
+        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+        let mut block = state.block(header(AT.height, AT.timestamp_ms));
+        let mut results = RuntimeEnactmentResultsV1::new(AT.height, AT.timestamp_ms);
+        let receipt = receipt_at(AT, 4);
+        produce(
+            &SelectedResultOwner::for_test(),
+            prepared(&mut block, receipt, 9),
+            AT,
+            &mut results,
+        )
+        .unwrap();
+        assert_eq!(results.receipts(), &[receipt]);
+        assert_eq!(
+            block.world.smart_contract_state.get(&effect_key()),
+            Some(&vec![9])
+        );
+        drop(block);
+        assert!(
+            state
+                .world
+                .smart_contract_state
+                .view()
+                .get(&effect_key())
+                .is_none(),
+            "the block was never committed"
+        );
+    }
+
+    #[test]
+    fn a_refused_receipt_discards_the_whole_prepared_effect() {
+        use iroha_data_model::governance::anonymous_ballot::{
+            RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1, RuntimeEnactmentResultsErrorV1 as Refusal,
+        };
+        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+        let mut block = state.block(header(AT.height, AT.timestamp_ms));
+        let owner = SelectedResultOwner::for_test();
+        let mut results = RuntimeEnactmentResultsV1::new(AT.height, AT.timestamp_ms);
+        let effect =
+            |block: &StateBlock<'_>| block.world.smart_contract_state.get(&effect_key()).cloned();
+
+        // A receipt prepared for another pass position never enters custody.
+        let elsewhere = GovernanceAnchorV1 { position: 2, ..AT };
+        assert!(matches!(
+            produce(
+                &owner,
+                prepared(&mut block, receipt_at(elsewhere, 4), 1),
+                AT,
+                &mut results
+            ),
+            Err(PassError::World(_))
+        ));
+        // Neither does one the custody of another block refuses.
+        let mut foreign = RuntimeEnactmentResultsV1::new(AT.height + 1, AT.timestamp_ms);
+        assert!(matches!(
+            produce(
+                &owner,
+                prepared(&mut block, receipt_at(AT, 4), 2),
+                AT,
+                &mut foreign
+            ),
+            Err(PassError::Results(Refusal::OtherBlock))
+        ));
+        assert!(results.is_empty() && foreign.is_empty());
+        assert_eq!(effect(&block), None);
+
+        produce(
+            &owner,
+            prepared(&mut block, receipt_at(AT, 4), 3),
+            AT,
+            &mut results,
+        )
+        .unwrap();
+        assert_eq!(effect(&block), Some(vec![3]));
+
+        // A second receipt of the same attempt is refused and its effect discarded.
+        let next = GovernanceAnchorV1 { position: 4, ..AT };
+        assert!(matches!(
+            produce(
+                &owner,
+                prepared(&mut block, receipt_at(next, 4), 4),
+                next,
+                &mut results
+            ),
+            Err(PassError::Results(Refusal::DuplicateAttempt))
+        ));
+        assert_eq!(effect(&block), Some(vec![3]));
+        assert_eq!(results.receipts().len(), 1);
+
+        // A custody at its bound refuses before the effect (its owner checks `fits` first).
+        let mut position = next.position;
+        let mut tag = 10_u8;
+        while results.fits() {
+            results
+                .admit(receipt_at(GovernanceAnchorV1 { position, ..AT }, tag))
+                .unwrap();
+            position += 1;
+            tag += 1;
+        }
+        assert_eq!(
+            results.receipts().len(),
+            usize::try_from(RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1).unwrap()
+        );
+        let last = GovernanceAnchorV1 { position, ..AT };
+        assert!(matches!(
+            produce(
+                &owner,
+                prepared(&mut block, receipt_at(last, 0xee), 5),
+                last,
+                &mut results
+            ),
+            Err(PassError::Results(Refusal::Capacity))
+        ));
+        assert_eq!(effect(&block), Some(vec![3]));
+        assert!(!PassError::Results(Refusal::Capacity).is_local());
+        assert!(PassError::Results(Refusal::Allocation).is_local());
+    }
+
+    #[test]
+    fn a_full_result_custody_defers_live_g3_uncharged() {
+        use iroha_data_model::governance::anonymous_ballot::RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1;
+        let item = GovernancePassItemV1::EnactParliament {
+            due_ms: 0,
+            attempt: GovernanceAttemptId::new([4; 32]),
+        };
+        let mut results = RuntimeEnactmentResultsV1::new(5, 300_000);
+        assert_eq!(
+            inspect_result_capacity(item, GovernanceOccurrenceV1::Live, &results),
+            GovernanceOccurrenceV1::Live
+        );
+        for position in 0..RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1 {
+            let tag = 100 + u8::try_from(position).unwrap();
+            results
+                .admit(receipt_at(GovernanceAnchorV1 { position, ..AT }, tag))
+                .unwrap();
+        }
+        assert_eq!(
+            inspect_result_capacity(item, GovernanceOccurrenceV1::Live, &results),
+            GovernanceOccurrenceV1::NoOutputCapacity
+        );
+        assert_eq!(
+            inspect_result_capacity(item, GovernanceOccurrenceV1::Lapsed, &results),
+            GovernanceOccurrenceV1::Lapsed
+        );
+        assert_eq!(
+            inspect_result_capacity(
+                GovernancePassItemV1::HeightProgress,
+                GovernanceOccurrenceV1::Live,
+                &results
+            ),
+            GovernanceOccurrenceV1::Live,
+            "only G3 enactments read the result custody"
+        );
+        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+        let mut block = state.block(header(5, 300_000));
+        let mut pass = cursor_before_g3(&mut block, false);
+        let before = (pass.processed(), pass.remaining());
+        pass.run_segment::<PassError>(
+            &mut block,
+            GovernancePassSegmentV1::G3,
+            vec![item],
+            |_, item| {
+                Ok(inspect_result_capacity(
+                    item,
+                    GovernanceOccurrenceV1::Live,
+                    &results,
+                ))
+            },
+            |_, _, _| panic!("a full result custody stops G3 before any owner effect"),
+        )
+        .unwrap();
+        assert_eq!((pass.processed(), pass.remaining()), before);
+    }
+
+    #[test]
+    fn unselected_roots_keep_the_original_g3_refusal_before_effects() {
+        // A root that installs the anonymous family but composes no result service.
+        let state = Rows::default().state();
+        let block = state.block(header(5, 300_000));
+        assert!(
+            crate::runtime::parliament_anonymous_installed(block.world.runtime_selection())
+                .unwrap()
+        );
+        assert!(SelectedResultOwner::of(&block).unwrap().is_none());
+        assert!(matches!(
+            require_result_profile(&block),
+            Err(PassError::Storage(
+                StateStorageAdmissionError::UnsupportedRuntime { height: 5, .. }
+            ))
+        ));
+        drop(block);
+        // A root without the family selects nothing either.
+        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+        let block = state.block(header(5, 300_000));
+        assert!(SelectedResultOwner::of(&block).unwrap().is_none());
     }
 }
