@@ -324,6 +324,7 @@ pub(in crate::managed) fn observe_generated_service_set(
     owner.validate_profile()?;
     let result = read_current_service_rows(
         &mut owner,
+        deadline,
         |owner| {
             discovery_cut(owner, deadline)
                 .map_err(|_| invalid("fresh native generated provider discovery is unavailable"))
@@ -383,37 +384,41 @@ fn read_service_proofs<T>(
     })
 }
 
-// A 503 for the exact current-height proof can occur if consensus advances during
-// the round. Only a strictly newer certified cut warrants one complete replacement read.
+// Each round reads every provider at one certified height. A typed current-height
+// refusal can race successive commits, so retry only on a strictly advancing cut.
 fn read_current_service_rows<T>(
     owner: &mut ServiceAuthority,
+    deadline: Instant,
     mut cut: impl FnMut(&mut ServiceAuthority) -> Result<VerifiedSumeragiBlock>,
     mut read: impl FnMut(&ServiceAuthority, &VerifiedSumeragiBlock) -> Result<[Option<T>; 3]>,
 ) -> Result<[T; 3]> {
-    let started = Instant::now();
-    let first = cut(owner)?;
-    let first_cut_elapsed = started.elapsed();
-    if let [Some(a), Some(b), Some(c)] = read(owner, &first)? {
-        return Ok([a, b, c]);
-    }
-    // A typed current-height refusal can race ordinary publication. Log only locally
-    // verified height and physical durations, never an untrusted response or proof.
     use std::io::Write as _;
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "generated discovery current rows unavailable height={} cut_ms={} rows_ms={}",
-        first.height(),
-        first_cut_elapsed.as_millis(),
-        started
-            .elapsed()
-            .saturating_sub(first_cut_elapsed)
-            .as_millis(),
-    );
-    let next = cut(owner)?;
-    if next.height() > first.height()
-        && let [Some(a), Some(b), Some(c)] = read(owner, &next)?
-    {
-        return Ok([a, b, c]);
+
+    const MAX_ROUNDS: usize = 4;
+    let mut previous = None;
+    for _ in 0..MAX_ROUNDS {
+        require_deadline(deadline)?;
+        let started = Instant::now();
+        let block = cut(owner)?;
+        let height = block.height();
+        if previous.is_some_and(|last| height <= last) {
+            break;
+        }
+        require_deadline(deadline)?;
+        let rows_started = Instant::now();
+        let rows = read(owner, &block)?;
+        require_deadline(deadline)?;
+        if let [Some(a), Some(b), Some(c)] = rows {
+            return Ok([a, b, c]);
+        }
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "generated discovery current rows unavailable height={} cut_ms={} rows_ms={}",
+            height,
+            rows_started.duration_since(started).as_millis(),
+            rows_started.elapsed().as_millis(),
+        );
+        previous = Some(height);
     }
     Err(invalid(
         "fresh native generated provider discovery is unavailable",

@@ -477,6 +477,9 @@ pub enum StreamTokenIssuerError {
     /// Exact local committed history and its authenticated finality were unavailable.
     #[error("stream-token signer finality is unavailable")]
     SignerFinalityUnavailable,
+    /// The exact current custody reply predated a newly committed tip before provider dispatch.
+    #[error("stream-token current custody observation predates local finality")]
+    BeforeProviderTipAdvanced,
     /// The independently observed millisecond clock moved backwards.
     #[error("stream-token signer clock moved backwards")]
     SignerClockRollback,

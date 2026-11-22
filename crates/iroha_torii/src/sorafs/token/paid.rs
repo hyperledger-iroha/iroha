@@ -371,7 +371,7 @@ impl StreamTokenIssuer {
         let result = if recover {
             self.signer.recover_undelivered(original.body)
         } else {
-            self.signer.sign(original.body)
+            self.signer.sign_paid(original.body)
         };
         let issue = match result {
             Ok(token) => TokenIssue {

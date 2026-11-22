@@ -303,12 +303,23 @@ impl CoreFinalityV1 {
             check_observed_control(&latest_state, candidate, observation)?;
         }
         if candidate.height < floor.height
-            || (candidate.height < latest && !startup_descendant)
             || candidate.height < minimum.height
             || (candidate.height == minimum.height && candidate != minimum)
             || candidate.height < serialized.height
             || (candidate.height == serialized.height && candidate != serialized)
         {
+            return Err(unavailable());
+        }
+        if candidate.height < latest && !startup_descendant {
+            if completed.is_none()
+                && observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider
+                && matches!(
+                    observation.subject,
+                    SignerStreamTokenStateSubjectV1::CurrentCustody { .. }
+                )
+            {
+                return Err(StreamTokenIssuerError::BeforeProviderTipAdvanced);
+            }
             return Err(unavailable());
         }
         Ok(())

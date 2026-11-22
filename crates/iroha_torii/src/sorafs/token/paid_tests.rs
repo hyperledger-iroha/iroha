@@ -228,3 +228,183 @@ fn paid_operation_and_workspace_admission_are_bounded() {
     assert!(rx.try_recv().is_err());
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn paid_original_rechallenges_a_moving_tip_before_its_only_signer_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("jobs");
+    let fixture = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = fixture.issuer().unwrap();
+    let policy = policy();
+    let operation = op(17);
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(2, Ordering::SeqCst);
+    let (send, mut accepted) = oneshot::channel();
+    let result = issuer.issue_paid(&path, request(&operation, &policy), status(), send);
+    accepted.try_recv().unwrap();
+    assert!(
+        result.is_ok(),
+        "fresh challenged custody must qualify the already accepted original: {result:?}"
+    );
+    let issue = result.unwrap();
+    assert_eq!(issue.remaining_quota, 0);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.recover_calls.load(Ordering::SeqCst), 0);
+    let stored = std::fs::read_dir(&path)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| x == "nrt"))
+        .unwrap();
+    let original = std::fs::read(&stored).unwrap();
+    let (send, mut accepted) = oneshot::channel();
+    let again = issuer
+        .issue_paid(&path, request(&operation, &policy), status(), send)
+        .unwrap();
+    assert!(accepted.try_recv().is_err());
+    assert_eq!(again.token, issue.token);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(original, std::fs::read(stored).unwrap());
+    let requests = fixture.requests.lock().unwrap();
+    let challenges: std::collections::BTreeSet<_>=requests.iter().filter(|r|r.phase==sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenObservationPhaseV1::BeforeProvider).map(|r|r.challenge).collect();
+    assert_eq!(challenges.len(), 3);
+}
+
+#[test]
+fn paid_current_refusals_and_restart_cannot_authorize_another_sign() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("jobs");
+    let fixture = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = fixture.issuer().unwrap();
+    let policy = policy();
+    let operation = op(18);
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(25, Ordering::SeqCst);
+    let (send, mut accepted) = oneshot::channel();
+    assert!(
+        issuer
+            .issue_paid(&path, request(&operation, &policy), status(), send)
+            .is_err()
+    );
+    accepted.try_recv().unwrap();
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .finality
+            .before_provider_tip_advances
+            .load(Ordering::SeqCst),
+        16
+    );
+    drop(issuer);
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(0, Ordering::SeqCst);
+    let issuer = fixture.issuer().unwrap();
+    let (send, mut accepted) = oneshot::channel();
+    assert!(
+        issuer
+            .issue_paid(&path, request(&operation, &policy), status(), send)
+            .is_err()
+    );
+    accepted.try_recv().unwrap();
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.recover_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn paid_tip_refresh_stops_on_a_new_custody_revocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("jobs");
+    let fixture = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = fixture.issuer().unwrap();
+    let policy = policy();
+    let operation = op(19);
+    let before = fixture.observer_calls.load(Ordering::SeqCst);
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(1, Ordering::SeqCst);
+    fixture
+        .faults
+        .lock()
+        .unwrap()
+        .insert(before + 2, ObserverFault::SignerRevoked);
+    let (send, mut accepted) = oneshot::channel();
+    assert!(
+        issuer
+            .issue_paid(&path, request(&operation, &policy), status(), send)
+            .is_err()
+    );
+    accepted.try_recv().unwrap();
+    assert_eq!(fixture.observer_calls.load(Ordering::SeqCst), before + 2);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.recover_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn paid_tip_refresh_cannot_dispatch_after_the_original_grant_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("jobs");
+    let fixture = SignedFixture::with_clock_uncertainty(0);
+    let issuer = fixture.issuer().unwrap();
+    let mut policy = policy();
+    policy.ttl_secs = 1;
+    let operation = op(20);
+    let before = fixture.observer_calls.load(Ordering::SeqCst);
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(1, Ordering::SeqCst);
+    // The first cut advances. The next observer response is valid for five seconds,
+    // but finality verification finishes at the one-second grant's original boundary.
+    *fixture.finality.advance_clock.lock().unwrap() = Some((
+        fixture.finality.validations.load(Ordering::SeqCst) + 3,
+        fixture.clock.clone(),
+        (NOW_MS / 1000 + 1) * 1000,
+    ));
+    let (send, mut accepted) = oneshot::channel();
+    assert!(
+        issuer
+            .issue_paid(&path, request(&operation, &policy), status(), send)
+            .is_err()
+    );
+    accepted.try_recv().unwrap();
+    assert_eq!(
+        fixture.clock.now.load(Ordering::SeqCst),
+        (NOW_MS / 1000 + 1) * 1000
+    );
+    assert_eq!(fixture.observer_calls.load(Ordering::SeqCst), before + 2);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn ordinary_signing_does_not_rechallenge_a_paid_current_refusal() {
+    let fixture = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = fixture.issuer().unwrap();
+    let policy = policy();
+    fixture
+        .finality
+        .before_provider_tip_advances
+        .store(2, Ordering::SeqCst);
+    let before = fixture.observer_calls.load(Ordering::SeqCst);
+    let operation = op(21);
+    let r = request(&operation, &policy);
+    assert!(matches!(
+        issuer.issue_token(
+            r.subject,
+            r.manifest_cid.to_vec(),
+            r.provider,
+            r.profile.to_owned(),
+            r.overrides,
+            Some(r.policy)
+        ),
+        Err(Error::SignerFinalityUnavailable)
+    ));
+    assert_eq!(fixture.observer_calls.load(Ordering::SeqCst), before + 1);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+}

@@ -554,10 +554,18 @@ fn startup_custody_accepts_only_certified_unchanged_descendants() {
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
         ));
         for observation in &live {
-            assert!(matches!(
-                fixture.validate(&guard, floor, fixture.current.anchor, observation),
-                Err(StreamTokenIssuerError::SignerFinalityUnavailable)
-            ));
+            let refusal = fixture.validate(&guard, floor, fixture.current.anchor, observation);
+            if observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider {
+                assert!(matches!(
+                    refusal,
+                    Err(StreamTokenIssuerError::BeforeProviderTipAdvanced)
+                ));
+            } else {
+                assert!(matches!(
+                    refusal,
+                    Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+                ));
+            }
         }
     }
     // The added tip is an independent finality target, even when all observed custody is unchanged.

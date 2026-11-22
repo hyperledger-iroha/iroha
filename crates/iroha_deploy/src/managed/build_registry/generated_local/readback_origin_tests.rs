@@ -142,6 +142,7 @@ fn unavailable_discovery_and_refused_custody_do_not_request_another_cut() {
     let mut cuts = 0;
     let result = read_current_service_rows(
         &mut owner,
+        Instant::now() + Duration::from_secs(60),
         |_| {
             cuts += 1;
             Ok(first.clone())
@@ -184,52 +185,85 @@ fn active_decoder_keeps_discovery_and_custody_on_its_original_thread() {
 }
 
 #[test]
-fn provider_discovery_retries_all_rows_once_only_on_a_newer_certified_cut() {
+fn provider_discovery_retries_complete_rows_across_successive_advancing_cuts() {
     let _resources = crate::managed::native_test_guard();
     let (_tmp, _prepared, mut owner, mut native) = discovery_fixture();
-    let first = commit_discovery_cut(&mut native, &owner, "first cut");
-    let next = commit_discovery_cut(&mut native, &owner, "next cut");
-    let mut cuts = [first.clone(), next.clone()].into_iter();
+    let cuts = ["first", "second", "third", "fourth"]
+        .map(|message| commit_discovery_cut(&mut native, &owner, message));
+    let [first, second, third, fourth] = &cuts;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut available = cuts.iter();
     let mut heights = Vec::new();
     let rows = read_current_service_rows(
         &mut owner,
-        |_| Ok(cuts.next().unwrap()),
-        |_, cut| {
-            heights.push(cut.height());
-            if cut.height() == first.height() {
-                Ok([Some(cut.height()), None, Some(cut.height())])
+        deadline,
+        |_| Ok(available.next().unwrap().clone()),
+        |_, block| {
+            let height = block.height();
+            heights.push(height);
+            if height == first.height() {
+                Ok([Some(height), None, Some(height)])
+            } else if height == second.height() {
+                Ok([None, Some(height), Some(height)])
             } else {
-                Ok([Some(cut.height()); 3])
+                Ok([Some(height); 3])
             }
         },
     )
     .unwrap();
-    assert_eq!(heights, [first.height(), next.height()]);
-    assert_eq!(rows, [next.height(); 3]);
+    assert_eq!(heights, [first.height(), second.height(), third.height()]);
+    assert_eq!(rows, [third.height(); 3]);
 
-    // An unchanged head does not cause another read; a partial second round stays failed.
-    for (second, expected_reads) in [(&first, 1), (&next, 2)] {
-        let mut cuts = [&first, second].into_iter();
-        let mut reads = 0;
-        let result = read_current_service_rows(
-            &mut owner,
-            |_| Ok(cuts.next().unwrap().clone()),
-            |_, cut| {
-                reads += 1;
-                Ok([None, Some(cut.height()), None])
-            },
+    for (sequence, expected) in [
+        (vec![first, first], vec![first]),
+        (vec![second, first], vec![second]),
+        (
+            vec![first, second, third, fourth],
+            vec![first, second, third, fourth],
+        ),
+    ] {
+        let mut available = sequence.into_iter();
+        let mut heights = Vec::new();
+        assert!(
+            read_current_service_rows(
+                &mut owner,
+                deadline,
+                |_| Ok(available.next().expect("bounded cut acquisition").clone()),
+                |_, block| {
+                    heights.push(block.height());
+                    Ok([None, Some(block.height()), None])
+                },
+            )
+            .is_err()
         );
-        assert!(result.is_err());
-        assert_eq!(reads, expected_reads);
+        assert_eq!(
+            heights,
+            expected
+                .into_iter()
+                .map(|cut| cut.height())
+                .collect::<Vec<_>>()
+        );
+        assert!(available.next().is_none());
     }
-    // A local policy, invalid proof, or deadline refusal is terminal for this turn.
-    let mut cuts = [first].into_iter();
+    let mut available = cuts.iter();
     let result = read_current_service_rows::<u64>(
         &mut owner,
-        |_| Ok(cuts.next().unwrap()),
+        deadline,
+        |_| Ok(available.next().unwrap().clone()),
         |_, _| Err(invalid("original scope differs")),
     );
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(crate::managed::Error::Invalid(message)) if message == "original scope differs")
+    );
+    assert_eq!(available.len(), 3);
+
+    let result = read_current_service_rows::<u64>(
+        &mut owner,
+        Instant::now(),
+        |_| panic!("expired turn acquired a cut"),
+        |_, _| panic!("expired turn read rows"),
+    );
+    assert!(matches!(result, Err(crate::managed::Error::NativeDeadline)));
 }
 
 #[test]

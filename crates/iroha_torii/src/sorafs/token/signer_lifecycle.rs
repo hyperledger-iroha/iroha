@@ -65,6 +65,15 @@ struct QueryFloor {
     not_before: u64,
     challenge: [u8; 32],
 }
+// One paid grant cannot occupy the proof reader indefinitely on a continually advancing chain.
+const MAX_PAID_CURRENT_REFRESHES: usize = 8;
+
+enum Submission {
+    Sign,
+    Paid,
+    Recover,
+}
+
 pub(super) struct SignerDriverV1 {
     pins: StreamTokenSignerPinsV1,
     client: Arc<dyn StreamTokenSignerClientV1>,
@@ -290,7 +299,7 @@ impl SignerDriverV1 {
         &self,
         body: StreamTokenBodyV1,
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
-        self.complete(body, false)
+        self.complete(body, Submission::Sign)
     }
 
     /// Reopen only the existing exact signer receipt after a cancelled account delivery.
@@ -298,24 +307,59 @@ impl SignerDriverV1 {
         &self,
         body: StreamTokenBodyV1,
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
-        self.complete(body, true)
+        self.complete(body, Submission::Recover)
+    }
+
+    pub(super) fn sign_paid(
+        &self,
+        body: StreamTokenBodyV1,
+    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
+        self.complete(body, Submission::Paid)
     }
 
     fn complete(
         &self,
         body: StreamTokenBodyV1,
-        recover_only: bool,
+        submission: Submission,
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
         let prepared = SignerStreamTokenExpectedV1::new(&body, self.pins.binding())
             .map_err(|_| evidence_error())?;
         // Production cannot make a signer reservation while the completed-operation proof
         // required for release has no authoritative source. This is before provider I/O.
         self.require_completed_proof_source()?;
-        let (original, _) = self.current(Phase::BeforeProvider, None)?;
+        // A paid worker still owns its one original and its permits here. If the certified
+        // tip moved while authenticating Current, obtain a fresh challenge before any Sign.
+        // Restart/recovery and every phase following dispatch keep their original behavior.
+        let began = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(body.ttl_epoch.saturating_sub(body.issued_at));
+        let grant_live = || -> Result<bool, StreamTokenIssuerError> {
+            Ok(began.elapsed() < window && self.now_unix_ms()? / 1000 < body.ttl_epoch)
+        };
+        let mut refreshes = 0;
+        let original = loop {
+            if refreshes != 0 && !grant_live()? {
+                return Err(StreamTokenIssuerError::SignerStateChanged);
+            }
+            match self.current(Phase::BeforeProvider, None) {
+                Ok((original, _)) => break original,
+                Err(StreamTokenIssuerError::BeforeProviderTipAdvanced) => {
+                    if !matches!(submission, Submission::Paid)
+                        || refreshes == MAX_PAID_CURRENT_REFRESHES
+                    {
+                        return Err(StreamTokenIssuerError::SignerFinalityUnavailable);
+                    }
+                    refreshes += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if refreshes != 0 && !grant_live()? {
+            return Err(StreamTokenIssuerError::SignerStateChanged);
+        }
         self.check_handles()?;
         // The exact body and prepared operation survive an ambiguous result. Recovery is one
         // read-only lookup, never a second reservation, signature or HTTP issuance.
-        let raw_receipt = if recover_only {
+        let raw_receipt = if matches!(submission, Submission::Recover) {
             self.client
                 .recover(&prepared, &body)
                 .map_err(map_call_error)?
