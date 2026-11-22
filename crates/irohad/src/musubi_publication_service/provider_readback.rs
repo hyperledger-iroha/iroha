@@ -236,35 +236,15 @@ impl MusubiProviderReadbackBackendV1 for MusubiPublicationAuthenticatedProviderR
             self.verify_current_target(request)?;
             self.core.readback(request)?
         } else {
-            use std::io::Write as _;
-            let entered = std::time::Instant::now();
-            let mark = |stage: &str, success: bool| {
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "native provider readback provider={} stage={stage} ok={success} elapsed_ms={}",
-                    hex::encode(request.provider.as_bytes()),
-                    entered.elapsed().as_millis()
-                );
-            };
-            mark("entry", true);
-            self.verify_registered_target(request)
-                .inspect_err(|_| mark("registration", false))?;
-            mark("registration", true);
-            let plan = self
-                .core
-                .source
-                .storage_plan_with_origin_check(
-                    &request.location.pin_manifest,
-                    request.provider,
-                    &request.commitment,
-                    |origin| Self::verify_advert(&self.adverts, request.provider, origin),
-                    backend_error,
-                )
-                .inspect_err(|_| mark("plan", false))?;
-            mark("plan", true);
-            let result = self.core.readback_with_plan(request, &plan);
-            mark("car", result.is_ok());
-            result?
+            self.verify_registered_target(request)?;
+            let plan = self.core.source.storage_plan_with_origin_check(
+                &request.location.pin_manifest,
+                request.provider,
+                &request.commitment,
+                |origin| Self::verify_advert(&self.adverts, request.provider, origin),
+                backend_error,
+            )?;
+            self.core.readback_with_plan(request, &plan)?
         };
         self.verify_current_target(request)?;
         Ok(response)
@@ -399,13 +379,6 @@ fn verify_complete_readback(
 }
 
 fn backend_error(error: MusubiArchiveRuntimeErrorV1) -> MusubiPublicationServiceBackendErrorV1 {
-    use std::io::Write as _;
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "native readback refused code={} class={:?}",
-        error.code(),
-        error.class()
-    );
     match error.class() {
         MusubiArchiveRuntimeFailureClassV1::Retryable
         | MusubiArchiveRuntimeFailureClassV1::Unavailable => {
