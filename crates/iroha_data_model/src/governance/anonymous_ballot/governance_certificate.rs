@@ -1202,10 +1202,36 @@ mod tests {
                 matches!(changed.validate_checked_v1(), Err(CheckedAnonymousGovernanceCertificateErrorV1::Rejected(error)) if error == original)
             );
         }
-        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
-        assert!(
-            norito::core::with_decode_limits_scope(limits, || valid.validate_checked_v1()).is_ok()
-        );
+        // Public finding identities stream their inputs. The Policy Jury's result root
+        // hashes the canonical owned closure frame, debiting its exact byte length.
+        let ballot = valid
+            .body(ParliamentBody::PolicyJury)
+            .unwrap()
+            .ballot()
+            .unwrap();
+        let frame_bytes = norito::encode_canonical(&ballot.closure).unwrap().len();
+        let limits =
+            |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 64);
+        for short in [0, frame_bytes - 1] {
+            let error = norito::core::with_decode_limits_scope(limits(short), || {
+                valid.validate_checked_v1()
+            })
+            .unwrap_err();
+            let CheckedAnonymousGovernanceCertificateErrorV1::ClosureUnavailable(original) = error
+            else {
+                panic!("valid certificate lost its original ballot result refusal")
+            };
+            assert_eq!(
+                original.resource_error(),
+                norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: frame_bytes as u64,
+                    limit: short as u64,
+                }
+            );
+        }
+        let exact = norito::core::DecodeBudgetContext::new(limits(frame_bytes));
+        exact.with(|| valid.validate_checked_v1()).unwrap();
+        assert_eq!(exact.consumed_allocated_bytes(), frame_bytes as u64);
     }
 
     #[test]

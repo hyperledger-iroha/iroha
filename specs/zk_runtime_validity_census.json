@@ -3682,7 +3682,7 @@
    "gates": "KAGEMUSHA offline monetary authority: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "Outside the ZK delivery plan; recorded for visibility only.",
    "attribution": "path_rule",
-   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. Individually read added dispatch/native_owner sites distinguish unavailable original sigma artifact custody from invalid proof content and refuse a poisoned original-source lock. These local wallet preparation failures do not relax the separate hardware custody or qualified artifact checks. Deferred Archive distinguishes missing/regressed local wall observations and unavailable selected receipt/storage custody from an empty queue. verification_errors maps unsupported local multiopen domain construction to Attempt::Local; it does not turn unavailable construction into a proof verdict. Staged suffix missing originals, payout rows, cross-references, storage, entropy and cancellation failures remain local deferrals, distinct from exact-byte proof rejection. UnsupportedStep is scheduling data for non-Receive/non-Unload work; unsupported accumulator geometry maps to Profile. Neither classification supplies absent artifacts or relaxes the matching qualified source grant. kagemusha_spartan_native.rs and its account.rs map the future proof backend's unavailable engine, key or resource limit to the provider's local KagemushaWalletUnavailableV1::Platform refusal, and the bridge's kagemusha_wallet_ffi/spartan.rs only reports that refusal as its UNAVAILABLE status code; it is admitted only by its authenticated future artifact and supplies no artifact or qualification by itself.",
+   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. Individually read added dispatch/native_owner sites distinguish unavailable original sigma artifact custody from invalid proof content and refuse a poisoned original-source lock. These local wallet preparation failures do not relax the separate hardware custody or qualified artifact checks. Deferred Archive distinguishes missing/regressed local wall observations and unavailable selected receipt/storage custody from an empty queue. verification_errors maps unsupported local multiopen domain construction to Attempt::Local; it does not turn unavailable construction into a proof verdict. Staged suffix missing originals, payout rows, cross-references, storage, entropy and cancellation failures remain local deferrals, distinct from exact-byte proof rejection. UnsupportedStep is scheduling data for non-Receive/non-Unload work; unsupported accumulator geometry maps to Profile. Neither classification supplies absent artifacts or relaxes the matching qualified source grant. kagemusha_spartan_native.rs and its account.rs map the future proof backend's unavailable engine, key or resource limit to the provider's local KagemushaWalletUnavailableV1::Platform refusal, and the bridge's kagemusha_wallet_ffi/spartan.rs only reports that refusal as its UNAVAILABLE status code; it is admitted only by its authenticated future artifact and supplies no artifact or qualification by itself. The native five-program carrier requires a build-selected producer registry. Its typed CompilerUnavailable maps to the bridge artifact-unavailable result. Invalid carrier bytes, allocation refusal and other I/O failures retain their distinct outcomes. The native wallet returns UnavailableCustodyData when original Send or completion evidence is missing. Selection and preparation stop before a new monetary transition.",
    "sites": [
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "unavailable", "unavailable", 18],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "unavailable", "unsupported", 1],
@@ -3694,7 +3694,7 @@
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/registration.rs", "unavailable", "unavailable", 2],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/selection.rs", "unavailable", "unavailable", 1],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/selection/universal.rs", "unavailable", "unavailable", 2],
-    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/spartan.rs", "unavailable", "unavailable", 5],
+    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/spartan.rs", "unavailable", "unavailable", 6],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/open.rs", "unavailable", "unavailable", 4],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/platform.rs", "unavailable", "unavailable", 51],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/spartan.rs", "unavailable", "unavailable", 5],
@@ -3728,8 +3728,9 @@
     ["crates/iroha_core_zk/src/kagemusha_spartan_native/local_blacklist.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core_zk/src/kagemusha_spartan_native/open_request.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core_zk/src/kagemusha_spartan_native/settlement.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_actions.rs", "unavailable", "unavailable", 1],
+    ["crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_actions.rs", "unavailable", "unavailable", 3],
     ["crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_maps.rs", "unavailable", "unavailable", 1],
+    ["crates/iroha_core_zk/src/kagemusha_spartan_native/wallet_actions.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/advance.rs", "unavailable", "unavailable", 16],
@@ -3758,6 +3759,8 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/directory.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/snapshot.rs", "unavailable", "unavailable", 2],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/encoded/spartan.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/wallet.rs", "unavailable", "unavailable", 7],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker.rs", "unavailable", "unavailable", 3],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker_protocol.rs", "unavailable", "unavailable", 2],
@@ -6502,7 +6505,7 @@
    "gates": "Canonical anonymous-ballot envelope/context decoding can encounter an original allocator or enclosing local decode refusal.",
    "decided_by": "decode_canonical_for_admission and into_local_refusal retain the original local cause. Malformed bytes and protocol size/schema limits remain deterministic codec errors.",
    "attribution": "read",
-   "note": "framing.rs maps only an authenticated DecodeLocalRefusal into DecodeUnavailable; ballot.rs and context.rs propagate that original cause. This does not implement the missing State/context execution adapter recorded separately by voting.anonymous_entrypoint_unavailable. Checked canonical framing and context constructors use the same original DecodeLocalRefusal owner; the additional adapters do not turn local exhaustion into deterministic rejection.",
+   "note": "framing.rs maps only an authenticated DecodeLocalRefusal into DecodeUnavailable; ballot.rs and context.rs propagate that original cause. This does not implement the missing State/context execution adapter recorded separately by voting.anonymous_entrypoint_unavailable. Checked canonical framing and context constructors use the same original DecodeLocalRefusal owner; the additional adapters do not turn local exhaustion into deterministic rejection. Checked governance certificates preserve the original refusal when the local budget cannot fund the ballot closure frame.",
    "tests": [
     {
      "path": "crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs",
@@ -6511,12 +6514,17 @@
     {
      "path": "crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs",
      "name": "schema_limits_are_invalid_even_when_an_enclosing_limit_has_the_same_ceiling"
+    },
+    {
+     "path": "crates/iroha_data_model/src/governance/anonymous_ballot/governance_certificate.rs",
+     "name": "checked_certificate_validation_preserves_all_nested_rule_verdicts"
     }
    ],
    "sites": [
     ["crates/iroha_data_model/src/governance/anonymous_ballot/ballot.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_data_model/src/governance/anonymous_ballot/context.rs", "unavailable", "unavailable", 4],
-    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 3]
+    ["crates/iroha_data_model/src/governance/anonymous_ballot/framing.rs", "unavailable", "unavailable", 3],
+    ["crates/iroha_data_model/src/governance/anonymous_ballot/governance_certificate/checked.rs", "unavailable", "unavailable", 3]
    ]
   },
   {
@@ -7472,7 +7480,7 @@
  },
  "summary": {
   "entries": 245,
-  "sites": 1575,
+  "sites": 1579,
   "by_status": {"done": 18, "local_resource": 25, "not_a_gate": 126, "open": 37, "out_of_plan": 21, "unsupported": 18},
   "by_owner": {"-": 147, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 8, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

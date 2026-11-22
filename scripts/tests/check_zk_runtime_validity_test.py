@@ -1304,7 +1304,9 @@ def test_canonical_ballot_decode_refusal_is_distinct_from_missing_execution() ->
     assert {tuple(site) for site in decoding["sites"]} == {
         (f"crates/iroha_data_model/src/governance/anonymous_ballot/{name}.rs",
          "unavailable", "unavailable", count)
-        for name, count in (("ballot", 2), ("context", 4), ("framing", 3))
+        for name, count in (
+            ("ballot", 2), ("context", 4), ("framing", 3), ("governance_certificate/checked", 3),
+        )
     }
     source = (ROOT / decoding["path"]).read_text()
     assert "norito::decode_canonical_for_admission(bytes, limits).map_err(|error|" in source
