@@ -168,27 +168,6 @@ impl FinalitySource for HttpFinalitySource {
         Err(HttpFinalityError::Read)
     }
 
-    fn finality_interval(
-        &self,
-        from: NonZeroU64,
-        to: NonZeroU64,
-    ) -> Option<Vec<SumeragiFinalityProof>> {
-        // Only the installed durable-tip observation opts into this route. Leave
-        // independently configured peers and metered SDK callers on scalar reads.
-        if self.initial_height.is_some() || norito::core::decode_limits_active() {
-            return None;
-        }
-        ensure_deadline(self.deadline).ok()?;
-        let client = self.proof_clients.first()?;
-        let bounded =
-            client.with_request_deadline(self.deadline.min(Instant::now() + PER_PEER_BUDGET));
-        let proofs = bounded
-            .get_sumeragi_finality_interval(from, to, self.root_scope)
-            .ok()?;
-        ensure_deadline(self.deadline).ok()?;
-        Some(proofs)
-    }
-
     fn latest_attestation(
         &self,
         peer: &PeerId,

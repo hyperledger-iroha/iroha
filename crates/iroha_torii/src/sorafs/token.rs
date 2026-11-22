@@ -34,6 +34,7 @@ const MAX_STREAM_TOKEN_WIRE_BYTES: usize = STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 pub(crate) const MAX_CLIENT_ID_BYTES: usize = 128;
 /// Maximum echoed issuance nonce bytes.
 pub(crate) const MAX_NONCE_BYTES: usize = 128;
+pub(super) mod delivery;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[path = "token/native_issuer_test_fixture.rs"]
 pub mod native_issuer_test_fixture;
@@ -60,6 +61,7 @@ pub struct StreamTokenIssuer {
     issuance_budgets: Mutex<BTreeMap<StreamTokenQuotaSubject, IssuanceBudget>>,
     max_issuance_budgets: usize,
     max_seen_epoch: AtomicU64,
+    undelivered: Mutex<Option<delivery::UndeliveredIssue>>,
 }
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
@@ -112,7 +114,7 @@ struct IssuanceBudget {
     used: u32,
 }
 /// Overrides supplied when minting a token.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TokenOverrides {
     /// Optional override for the token time-to-live in seconds.
     pub ttl_secs: Option<u64>,
@@ -213,6 +215,7 @@ impl StreamTokenIssuer {
             issuance_budgets: Mutex::new(BTreeMap::new()),
             max_issuance_budgets: MAX_ISSUANCE_SUBJECTS,
             max_seen_epoch: AtomicU64::new(0),
+            undelivered: Mutex::default(),
         })
     }
     /// Shared issuer with optional explicit admitted account-read ceilings.

@@ -299,15 +299,6 @@ impl iroha::http::HttpTransport for CertifiedTipTransport {
                 "data_model_version": (iroha_data_model::DATA_MODEL_VERSION),
                 "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<iroha_data_model::transaction::SignedTransaction>()))
             })).unwrap(), "application/json")
-        } else if path.starts_with("/v1/bridge/finality/interval/") {
-            assert_eq!(
-                path,
-                format!("/v1/bridge/finality/interval/{0}/{0}", self.proof.height())
-            );
-            (
-                norito::encode_canonical(&vec![self.proof.clone()]).unwrap(),
-                "application/x-norito",
-            )
         } else {
             assert_eq!(path, format!("/v1/bridge/finality/{}", self.proof.height()));
             (
@@ -359,43 +350,5 @@ fn certified_tip_uses_one_public_endpoint_without_claiming_peer_readiness() {
     assert_eq!(
         source.latest_attestation(&peer(99), &[1; 32]).unwrap_err(),
         HttpFinalityError::MissingPeer
-    );
-}
-
-#[test]
-fn only_unmetered_durable_tip_requests_use_the_native_interval_route() {
-    let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
-    let proof = native.checkpoint().tip().clone();
-    let h = NonZeroU64::new(proof.height()).unwrap();
-    let transport = Arc::new(CertifiedTipTransport {
-        proof: proof.clone(),
-        paths: std::sync::Mutex::new(Vec::new()),
-    });
-    let client = client_with_transport(
-        native.network_id(),
-        "http://127.0.0.1:18080/",
-        Some(transport.clone()),
-    );
-    let source = HttpFinalitySource::new(
-        native.network_id(),
-        h,
-        vec![client.clone()],
-        vec![(peer(31), client)],
-        Instant::now() + Duration::from_secs(30),
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-    )
-    .unwrap();
-    assert!(source.finality_interval(h, h).is_none());
-    let source = source.at_durable_tip();
-    let limits = norito::canonical_decode_limits(1024);
-    assert!(norito::with_decode_limits_scope(limits, || source.finality_interval(h, h)).is_none());
-    assert!(transport.paths.lock().unwrap().is_empty());
-    assert_eq!(source.finality_interval(h, h).unwrap(), vec![proof]);
-    assert_eq!(
-        transport.paths.lock().unwrap().as_slice(),
-        [
-            "/v1/node/capabilities".to_owned(),
-            format!("/v1/bridge/finality/interval/{h}/{h}")
-        ]
     );
 }

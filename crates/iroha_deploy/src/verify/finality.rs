@@ -144,16 +144,6 @@ pub trait FinalitySource {
     /// # Errors
     /// Any transport failure.
     fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error>;
-    /// Optionally retrieve a bounded contiguous interval for the same independently verified
-    /// prefix. Sources without a complete interval keep the ordinary per-height transport.
-    /// The caller authenticates each successor and charges it to its original proof budget.
-    fn finality_interval(
-        &self,
-        _from: NonZeroU64,
-        _to: NonZeroU64,
-    ) -> Option<Vec<SumeragiFinalityProof>> {
-        None
-    }
     /// Fetch `peer`'s fresh native durable-tip attestation over `challenge`.
     ///
     /// # Errors
@@ -264,9 +254,6 @@ pub enum FinalityError {
         /// Returned height.
         actual: u64,
     },
-    /// The optional transport interval omitted or added a proof.
-    #[error("finality interval differs from the requested length")]
-    InvalidIntervalLength,
     /// Checkpoints never move backward.
     #[error("tip {height} precedes checkpoint {checkpoint}")]
     StaleTip {
@@ -1094,53 +1081,24 @@ impl Prefix {
         height: u64,
         budget: &mut Budget,
     ) -> Result<(), FinalityError> {
-        // One SDK interval shares the ordinary response ceiling. Limit read-ahead even
-        // when the caller has hundreds of successors left in its work budget.
-        const BATCH: usize = 8;
-        let mut try_interval = !norito::core::decode_limits_active();
         while self.height() < height {
-            let first = NonZeroU64::new(self.height() + 1).expect("successor is positive");
+            let expected = self.height() + 1;
             if budget.proofs == 0 {
                 return Err(FinalityError::ResourceLimit("proof count"));
             }
-            let count = (height - self.height()).min(budget.proofs.min(BATCH) as u64);
-            if try_interval && count > 1 {
-                let last = NonZeroU64::new(first.get() + (count - 1)).expect("positive range end");
-                if let Some(proofs) = source.finality_interval(first, last) {
-                    if proofs.len() as u64 != count {
-                        return Err(FinalityError::InvalidIntervalLength);
-                    }
-                    for proof in proofs {
-                        self.accept_fetched(&proof, budget)?;
-                    }
-                    continue;
-                }
-                // A peer may not support the interval or the aggregate may exceed the
-                // transport byte ceiling. Keep every original single-height check and
-                // the same absolute deadline, and do not probe the optional route again.
-                try_interval = false;
-            }
             let proof = source
-                .finality_proof(first)
+                .finality_proof(NonZeroU64::new(expected).expect("successor is positive"))
                 .map_err(FinalityError::transport)?;
-            self.accept_fetched(&proof, budget)?;
+            if proof.height() != expected {
+                return Err(FinalityError::UnexpectedHeight {
+                    expected,
+                    actual: proof.height(),
+                });
+            }
+            budget.charge(&proof)?;
+            self.push(&proof)?;
         }
         Ok(())
-    }
-    fn accept_fetched(
-        &mut self,
-        proof: &SumeragiFinalityProof,
-        budget: &mut Budget,
-    ) -> Result<(), FinalityError> {
-        let expected = self.height() + 1;
-        if proof.height() != expected {
-            return Err(FinalityError::UnexpectedHeight {
-                expected,
-                actual: proof.height(),
-            });
-        }
-        budget.charge(proof)?;
-        self.push(proof)
     }
     /// Extend toward members' claims, highest first, until a pass adds nothing. The source
     /// supplies every block it can below a claim, and a member's own proof extends the prefix
