@@ -178,6 +178,20 @@ async fn issue_storage_token(
             "provider_id_hex must be exactly 64 lowercase hexadecimal characters",
         );
     }
+    if let Some(operation) = &req.paid_readback
+        && (account.is_none()
+            || !super::token::paid::valid_operation(operation)
+            || single_header_value(&headers, crate::app_auth::HEADER_NONCE)
+                .ok()
+                .flatten()
+                .and_then(|v| v.to_str().ok())
+                != Some(nonce.as_str()))
+    {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid paid account-token operation",
+        );
+    }
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
         Err(response) => return response,
@@ -223,36 +237,62 @@ async fn issue_storage_token(
     let worker_state = state.state.clone();
     // The physical worker owns query and heavy-query admission until issuance finishes, even
     // if the HTTP request is cancelled. Custody checks and broker I/O must not run on an executor.
-    let issuance_result =
-        match sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
-            let policy = account
-                .as_ref()
-                .map(|account| {
-                    current_account_read_policy(
-                        &worker_state,
-                        account,
-                        ProviderId::new(provider_id),
-                    )
-                })
-                .transpose()?;
-            let delivery = policy
-                .as_ref()
-                .filter(|_| !norito::core::decode_limits_active())
-                .map(|policy| {
-                    super::token::delivery::AccountDelivery::new(
-                        quota_subject,
-                        req.manifest_id_hex,
-                        manifest_cid.clone(),
-                        provider_id,
-                        profile_handle.clone(),
-                        overrides,
-                        policy.clone(),
-                    )
-                });
-            let recovered = delivery
-                .as_ref()
-                .and_then(|request| worker_issuer.take_undelivered(request));
-            let issuance_result = match recovered {
+    let (acknowledge, mut accepted) = tokio::sync::oneshot::channel();
+    let pending = req.paid_readback.as_ref().map(|op| {
+        format!(r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{op}","provider":"{}","manifest":"{}"}}"#,req.provider_id_hex,req.manifest_id_hex)
+    });
+    let workspace = req.paid_readback.as_ref().map(|_| {
+        state
+            .sorafs_node
+            .config()
+            .data_dir()
+            .join("paid-account-tokens-v1")
+    });
+    let worker = sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
+        let policy = account
+            .as_ref()
+            .map(|account| {
+                current_account_read_policy(&worker_state, account, ProviderId::new(provider_id))
+            })
+            .transpose()?;
+        let delivery = policy
+            .as_ref()
+            .filter(|_| req.paid_readback.is_none() && !norito::core::decode_limits_active())
+            .map(|policy| {
+                super::token::delivery::AccountDelivery::new(
+                    quota_subject,
+                    req.manifest_id_hex.clone(),
+                    manifest_cid.clone(),
+                    provider_id,
+                    profile_handle.clone(),
+                    overrides,
+                    policy.clone(),
+                )
+            });
+        let recovered = delivery
+            .as_ref()
+            .and_then(|request| worker_issuer.take_undelivered(request));
+        let issuance_result = if let (Some(operation), Some(path), Some(policy)) = (
+            req.paid_readback.as_deref(),
+            workspace.as_deref(),
+            policy.as_ref(),
+        ) {
+            worker_issuer.issue_paid(
+                path,
+                super::token::paid::Request {
+                    subject: quota_subject,
+                    operation,
+                    manifest_id: &req.manifest_id_hex,
+                    manifest_cid: &manifest_cid,
+                    provider: provider_id,
+                    profile: &profile_handle,
+                    overrides,
+                    policy,
+                },
+                acknowledge,
+            )
+        } else {
+            match recovered {
                 Some(previous) => worker_issuer.recover_undelivered(previous),
                 None => worker_issuer.issue_token(
                     quota_subject,
@@ -262,30 +302,58 @@ async fn issue_storage_token(
                     overrides,
                     policy.as_ref(),
                 ),
-            };
-            // Issuance can await external custody. Do not release a token after an intervening
-            // finalized policy withdrawal, account deletion, expiry, or replacement.
-            if let Some(account) = &account
-                && Some(current_account_read_policy(
-                    &worker_state,
-                    account,
-                    ProviderId::new(provider_id),
-                )?) != policy
-            {
-                return Err(json_error(
-                    StatusCode::FORBIDDEN,
-                    "account-read policy changed during token issuance",
-                ));
             }
-            Ok(issuance_result.map(|issue| {
-                super::token::delivery::WorkerDelivery::new(worker_issuer, delivery, issue)
-            }))
-        })
-        .await
-        {
-            Ok(issuance_result) => issuance_result,
-            Err(response) => return response,
         };
+        // Issuance can await external custody. Do not release a token after an intervening
+        // finalized policy withdrawal, account deletion, expiry, or replacement.
+        if let Some(account) = &account
+            && Some(current_account_read_policy(
+                &worker_state,
+                account,
+                ProviderId::new(provider_id),
+            )?) != policy
+        {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "account-read policy changed during token issuance",
+            ));
+        }
+        let issuance_result = issuance_result.and_then(|mut issue| {
+            if req.paid_readback.is_some() {
+                if let Err(error) = worker_issuer.paid_release_time(&issue.token.body) {
+                    iroha_crypto::zeroize_value_for_confidential_discard(
+                        &mut issue.token.signature,
+                    );
+                    return Err(error);
+                }
+            }
+            Ok(issue)
+        });
+        Ok(issuance_result.map(|issue| {
+            super::token::delivery::WorkerDelivery::new(worker_issuer, delivery, issue)
+        }))
+    });
+    tokio::pin!(worker);
+    let completed = if let Some(body) = pending {
+        tokio::select! {
+            biased;
+            Ok(()) = &mut accepted => {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                headers.insert(header::HeaderName::from_static(HEADER_SORA_CLIENT),header_value(&client_id,"X-SoraFS-Client"));
+                headers.insert(header::HeaderName::from_static(HEADER_SORA_NONCE),header_value(&nonce,"X-SoraFS-Nonce"));
+                return (StatusCode::ACCEPTED,headers,body).into_response()
+            },
+            result = &mut worker => result,
+        }
+    } else {
+        worker.await
+    };
+    let issuance_result = match completed {
+        Ok(issuance_result) => issuance_result,
+        Err(response) => return response,
+    };
     let token_issue = match issuance_result {
         Ok(token) => token.receive(),
         Err(err) => {

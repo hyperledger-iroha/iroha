@@ -120,6 +120,18 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
         assert_entry(&authority, &images[index]);
     }
     assert_eq!(attempts(&authority), 3);
+    // A competing immutable reader must not cause another physical canonical import.
+    {
+        let _reader = authority
+            .effective_checkpoint_cache()
+            .entry
+            .try_read()
+            .unwrap();
+        for (image, expected) in images.iter().zip(&originals).take(3) {
+            assert_eq!(&authority.decode_checkpoint(image).unwrap(), expected);
+        }
+        assert_eq!(attempts(&authority), 3);
+    }
     let fourth = authority.decode_checkpoint(&images[3]).unwrap();
     assert_eq!(fourth, originals[3]);
     assert_eq!(attempts(&authority), 4);
@@ -127,7 +139,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
         let selected = authority
             .effective_checkpoint_cache()
             .entry
-            .try_lock()
+            .try_write()
             .unwrap();
         assert_eq!(selected.len, SLOTS);
         assert!(
@@ -185,7 +197,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
             authority
                 .effective_checkpoint_cache()
                 .entry
-                .try_lock()
+                .try_write()
                 .unwrap()
                 .is_empty()
         );
@@ -240,7 +252,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
             authority
                 .effective_checkpoint_cache()
                 .entry
-                .try_lock()
+                .try_write()
                 .unwrap()
                 .is_empty()
         );
@@ -293,7 +305,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
         let mut selected = authority
             .effective_checkpoint_cache()
             .entry
-            .try_lock()
+            .try_write()
             .unwrap();
         assert!(!selected.is_empty());
         let ceiling = retained_import_envelope(MAX_CHECKPOINT_BYTES).unwrap();

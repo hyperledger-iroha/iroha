@@ -138,6 +138,7 @@ pub struct MusubiArchiveRuntimeErrorV1 {
     class: MusubiArchiveRuntimeFailureClassV1,
     code: &'static str,
     integrity_surface: Option<MusubiArchiveRuntimeIntegritySurfaceV1>,
+    account_token_pending: bool,
 }
 impl MusubiArchiveRuntimeErrorV1 {
     const fn new(
@@ -149,8 +150,15 @@ impl MusubiArchiveRuntimeErrorV1 {
             class,
             code,
             integrity_surface,
+            account_token_pending: false,
         }
     }
+    /// The authenticated account-token endpoint acknowledged this exact paid operation.
+    #[must_use]
+    pub const fn is_account_token_pending(&self) -> bool {
+        self.account_token_pending
+    }
+
     /// Return the stable retry/integrity classification.
     #[must_use]
     pub const fn class(self) -> MusubiArchiveRuntimeFailureClassV1 {
@@ -232,6 +240,7 @@ struct PreparedPlanV1 {
 }
 #[derive(Clone)]
 struct GatewaySessionFactoryV1 {
+    paid_operation_id: Option<[u8; 32]>,
     runtime: ProviderRuntimeV1,
     network_id: NetworkId,
     pin_manifest: ManifestDigest,
@@ -545,6 +554,41 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
     ) -> Result<Box<dyn Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
+        self.open_car(pin_manifest, provider, commitment, plan, None)
+    }
+    /// Open a paid readback using a resumable account-token job for this original operation.
+    /// Operator credentials continue through their normal synchronous token route.
+    ///
+    /// # Errors
+    /// Includes a typed pending result only after the authenticated provider acknowledges
+    /// the same operation, manifest, provider, client and fresh request nonce.
+    pub fn open_authenticated_car_for_readback(
+        &mut self,
+        pin_manifest: &ManifestDigest,
+        provider: ProviderId,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
+        paid_operation_id: [u8; 32],
+    ) -> Result<Box<dyn Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
+        if paid_operation_id == [0; 32] {
+            return Err(permanent("MUSUBI_ARCHIVE_PAID_OPERATION_INVALID"));
+        }
+        self.open_car(
+            pin_manifest,
+            provider,
+            commitment,
+            plan,
+            Some(paid_operation_id),
+        )
+    }
+    fn open_car(
+        &mut self,
+        pin_manifest: &ManifestDigest,
+        provider: ProviderId,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
+        paid_operation_id: Option<[u8; 32]>,
+    ) -> Result<Box<dyn Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
         self.stream_failure = None;
         // Account the caller-retained allocation before cloning it into the worker. Exact plan
         // binding intentionally ignores Vec capacities, so this check must precede the clone.
@@ -569,6 +613,7 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             .filter(|length| *length != 0)
             .ok_or_else(|| integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"))?;
         let sessions = GatewaySessionFactoryV1 {
+            paid_operation_id,
             runtime: runtime.clone(),
             network_id: self.network_id,
             pin_manifest: *pin_manifest,
@@ -578,7 +623,7 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             max_chunk_bytes,
             request_timeout: self.request_timeout,
         };
-        let initial_session = sessions.open()?;
+        let initial_session = sessions.open(0)?;
         let stream_failure = Arc::new(Mutex::new(None));
         self.stream_failure = Some(Arc::clone(&stream_failure));
         canonical_car_reader(
@@ -609,13 +654,14 @@ fn parse_config_document(text: &str) -> Result<toml::Value, MusubiArchiveRuntime
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
 }
 impl GatewaySessionFactoryV1 {
-    fn open(&self) -> Result<GatewaySessionV1, MusubiArchiveRuntimeErrorV1> {
-        let token = mint_stream_token(
+    fn open(&self, chunk: usize) -> Result<GatewaySessionV1, MusubiArchiveRuntimeErrorV1> {
+        let token = mint_stream_token_for_operation(
             &self.runtime,
             &self.network_id,
             &self.pin_manifest,
             &self.client_id,
             self.max_chunk_bytes,
+            self.paid_operation_id.map(|id| (id, chunk as u64)),
         )?;
         let StreamTokenEvidenceV1 {
             encoded,
@@ -1083,6 +1129,7 @@ struct StreamTokenEvidenceV1 {
     ttl_epoch: u64,
     rate_limit_bytes: u64,
 }
+#[cfg(test)]
 fn mint_stream_token(
     runtime: &ProviderRuntimeV1,
     network_id: &NetworkId,
@@ -1090,11 +1137,28 @@ fn mint_stream_token(
     client_id: &str,
     max_chunk_bytes: u64,
 ) -> Result<StreamTokenEvidenceV1, MusubiArchiveRuntimeErrorV1> {
+    mint_stream_token_for_operation(
+        runtime,
+        network_id,
+        pin_manifest,
+        client_id,
+        max_chunk_bytes,
+        None,
+    )
+}
+fn mint_stream_token_for_operation(
+    runtime: &ProviderRuntimeV1,
+    network_id: &NetworkId,
+    pin_manifest: &ManifestDigest,
+    client_id: &str,
+    max_chunk_bytes: u64,
+    paid_operation: Option<([u8; 32], u64)>,
+) -> Result<StreamTokenEvidenceV1, MusubiArchiveRuntimeErrorV1> {
     if max_chunk_bytes == 0 || max_chunk_bytes > u64::try_from(MAX_STREAM_CHUNK_BYTES).unwrap_or(0)
     {
         return Err(integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"));
     }
-    let nonce = random_nonce()?;
+    let mut nonce = random_nonce()?;
     let account_authority = account_registry::refresh_account_authority(runtime, *network_id)?;
     // Reuse this exact fresh native result for both the mint and subsequent chunk transport.
     let local_transport = match (&runtime.local_transport, &account_authority) {
@@ -1140,6 +1204,13 @@ fn mint_stream_token(
     body.insert("max_streams".into(), norito::json::Value::from(1_u64));
     body.insert("rate_limit_bytes".into(), norito::json::Value::Null);
     body.insert("requests_per_minute".into(), norito::json::Value::Null);
+    let paid = paid_operation.filter(|_| account_authority.is_some());
+    if let Some((operation, chunk)) = paid {
+        body.insert(
+            "paid_readback".into(),
+            norito::json::Value::from(format!("{}:{chunk}", hex::encode(operation))),
+        );
+    }
     let body = norito::json::to_vec(&norito::json::Value::Object(body))
         .map_err(|_| permanent("MUSUBI_ARCHIVE_TOKEN_REQUEST_INVALID"))?;
     let request = runtime.http.post(url.clone());
@@ -1154,9 +1225,15 @@ fn mint_stream_token(
         }
         ProviderCredentialV1::Account {
             account, key_pair, ..
-        } => request.headers(account_request_headers(
-            account, key_pair, network_id, &url, &body,
-        )?),
+        } => {
+            let auth = account_request_headers(account, key_pair, network_id, &url, &body)?;
+            if paid.is_some() {
+                nonce = header_text(&auth, "x-iroha-nonce")
+                    .ok_or_else(|| permanent("MUSUBI_ARCHIVE_ACCOUNT_SIGNING_FAILED"))?
+                    .to_owned();
+            }
+            request.headers(auth)
+        }
     };
     let response = request
         .header(CLIENT_HEADER, client_id)
@@ -1167,6 +1244,7 @@ fn mint_stream_token(
         .body(body)
         .send()
         .map_err(|_| retryable("MUSUBI_ARCHIVE_TOKEN_REQUEST_FAILED"))?;
+    let accepted = response.status() == reqwest::StatusCode::ACCEPTED;
     let response_headers = response.headers().clone();
     let body = read_json_response(
         response,
@@ -1178,6 +1256,17 @@ fn mint_stream_token(
         || header_text(&response_headers, NONCE_HEADER) != Some(nonce.as_str())
     {
         return Err(control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"));
+    }
+    if accepted {
+        return Err(paid_token_ack(
+            &body,
+            paid,
+            &response_headers,
+            client_id,
+            &nonce,
+            runtime.provider.as_bytes(),
+            pin_manifest.as_bytes(),
+        ));
     }
     let verifying_key_hex = header_text(&response_headers, VERIFYING_KEY_HEADER)
         .filter(|value| is_lower_hex(value, 64))
@@ -1220,6 +1309,42 @@ fn mint_stream_token(
         rate_limit_bytes: token.body.rate_limit_bytes,
     })
 }
+fn paid_token_ack(
+    bytes: &[u8],
+    operation: Option<([u8; 32], u64)>,
+    headers: &HeaderMap,
+    client: &str,
+    nonce: &str,
+    provider: &[u8; 32],
+    manifest: &[u8; 32],
+) -> MusubiArchiveRuntimeErrorV1 {
+    let invalid = control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID");
+    let Some((operation, chunk)) = operation else {
+        return invalid;
+    };
+    for (name, expected) in [(CLIENT_HEADER, client), (NONCE_HEADER, nonce)] {
+        let mut values = headers.get_all(name).iter();
+        if values.next().and_then(|v| v.to_str().ok()) != Some(expected) || values.next().is_some()
+        {
+            return invalid;
+        }
+    }
+    // A closed response from this authenticated HTTPS peer binds the entire signed request.
+    let expected = format!(
+        r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{}:{chunk}","provider":"{}","manifest":"{}"}}"#,
+        hex::encode(operation),
+        hex::encode(provider),
+        hex::encode(manifest)
+    );
+    if bytes != expected.as_bytes() {
+        return invalid;
+    }
+    MusubiArchiveRuntimeErrorV1 {
+        account_token_pending: true,
+        ..retryable("MUSUBI_ARCHIVE_ACCOUNT_TOKEN_PENDING")
+    }
+}
+
 struct OperatorRequestHeadersV1 {
     public_key: String,
     timestamp_ms: String,
@@ -1468,7 +1593,7 @@ impl GatewayPayloadReaderV1 {
         if self.session.requests_remaining != 0 && now.saturating_add(1) < self.session.ttl_epoch {
             return Ok(false);
         }
-        self.session = match self.sessions.open() {
+        self.session = match self.sessions.open(self.next_chunk) {
             Ok(session) => session,
             Err(error) => return Err(self.fail(error)),
         };
@@ -2167,6 +2292,89 @@ mod tests {
         "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22";
     const TEST_OPERATOR_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+    #[test]
+    fn pending_account_token_requires_opt_in_exact_body_and_single_fresh_echoes() {
+        let id = [9; 32];
+        let provider = [3; 32];
+        let manifest = [4; 32];
+        let expected = format!(
+            r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{}:2","provider":"{}","manifest":"{}"}}"#,
+            hex::encode(id),
+            hex::encode(provider),
+            hex::encode(manifest)
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(CLIENT_HEADER, "account-client".parse().unwrap());
+        headers.insert(NONCE_HEADER, "fresh-1".parse().unwrap());
+        let check =
+            |bytes: &[u8], op, headers: &HeaderMap, nonce: &str, p: &[u8; 32], m: &[u8; 32]| {
+                paid_token_ack(bytes, op, headers, "account-client", nonce, p, m)
+                    .is_account_token_pending()
+            };
+        let bytes = expected.as_bytes();
+        assert!(check(
+            bytes,
+            Some((id, 2)),
+            &headers,
+            "fresh-1",
+            &provider,
+            &manifest
+        ));
+        assert!(!check(
+            bytes, None, &headers, "fresh-1", &provider, &manifest
+        ));
+        assert!(!check(
+            b"{}",
+            Some((id, 2)),
+            &headers,
+            "fresh-1",
+            &provider,
+            &manifest
+        ));
+        assert!(!check(
+            bytes,
+            Some((id, 1)),
+            &headers,
+            "fresh-1",
+            &provider,
+            &manifest
+        ));
+        assert!(!check(
+            bytes,
+            Some(([8; 32], 2)),
+            &headers,
+            "fresh-1",
+            &provider,
+            &manifest
+        ));
+        assert!(!check(
+            bytes,
+            Some((id, 2)),
+            &headers,
+            "fresh-1",
+            &manifest,
+            &provider
+        ));
+        assert!(!check(
+            bytes,
+            Some((id, 2)),
+            &headers,
+            "stale",
+            &provider,
+            &manifest
+        ));
+        headers.append(NONCE_HEADER, "fresh-1".parse().unwrap());
+        assert!(!check(
+            bytes,
+            Some((id, 2)),
+            &headers,
+            "fresh-1",
+            &provider,
+            &manifest
+        ));
+        assert!(!retryable("MUSUBI_ARCHIVE_ACCOUNT_TOKEN_PENDING").is_account_token_pending());
+    }
+
     #[test]
     fn authenticated_fetch_client_exposes_its_fixed_network() {
         let network_id: NetworkId = TEST_NETWORK_ID.parse().expect("test network identity");

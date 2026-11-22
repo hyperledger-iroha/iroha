@@ -38,6 +38,7 @@ pub(super) mod delivery;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[path = "token/native_issuer_test_fixture.rs"]
 pub mod native_issuer_test_fixture;
+pub(super) mod paid;
 mod signer_binding;
 mod signer_completed_finality;
 mod signer_finality;
@@ -62,6 +63,7 @@ pub struct StreamTokenIssuer {
     max_issuance_budgets: usize,
     max_seen_epoch: AtomicU64,
     undelivered: Mutex<Option<delivery::UndeliveredIssue>>,
+    paid_jobs: Mutex<BTreeMap<u8, paid::Entry>>,
 }
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
@@ -216,6 +218,7 @@ impl StreamTokenIssuer {
             max_issuance_budgets: MAX_ISSUANCE_SUBJECTS,
             max_seen_epoch: AtomicU64::new(0),
             undelivered: Mutex::default(),
+            paid_jobs: Mutex::default(),
         })
     }
     /// Shared issuer with optional explicit admitted account-read ceilings.
@@ -229,6 +232,24 @@ impl StreamTokenIssuer {
         overrides: TokenOverrides,
         policy: Option<&sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1>,
     ) -> Result<TokenIssue, StreamTokenIssuerError> {
+        let (body, quota_limit) =
+            self.prepare_token(manifest_cid, provider_id, profile_handle, overrides, policy)?;
+        let remaining_quota =
+            self.reserve_issuance_budget(quota_subject, Instant::now(), quota_limit)?;
+        let token = self.signer.sign(body)?;
+        Ok(TokenIssue {
+            token,
+            remaining_quota,
+        })
+    }
+    fn prepare_token(
+        &self,
+        manifest_cid: Vec<u8>,
+        provider_id: [u8; 32],
+        profile_handle: String,
+        overrides: TokenOverrides,
+        policy: Option<&sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1>,
+    ) -> Result<(StreamTokenBodyV1, u32), StreamTokenIssuerError> {
         let mut limits = self.defaults;
         if let Some(policy) = policy {
             policy
@@ -276,16 +297,7 @@ impl StreamTokenIssuer {
         // Refuse before charging issuance quota when finalized completed-operation proof has
         // no production source. The signer repeats this check before provider I/O.
         self.signer.require_completed_proof_source()?;
-        let remaining_quota = self.reserve_issuance_budget(
-            quota_subject,
-            Instant::now(),
-            limits.requests_per_minute,
-        )?;
-        let token = self.signer.sign(body)?;
-        Ok(TokenIssue {
-            token,
-            remaining_quota,
-        })
+        Ok((body, limits.requests_per_minute))
     }
     /// Fresh signer custody authorization for this serving request, after static token checks.
     /// Returns the trusted final admission time; no qualification is cached for later requests.

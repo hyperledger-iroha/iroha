@@ -372,3 +372,71 @@ async fn account_token_rejects_missing_auth_and_missing_native_policy_before_sig
     assert_eq!(fixture.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_storage_token_worker_permits(&context.app, 1);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn paid_account_job_requires_signed_subject_nonce_and_current_native_policy() {
+    let (context, fixture) = storage_token_worker_context(TestSignerMode::Sign);
+    let key = iroha_crypto::KeyPair::from_seed(vec![92; 32], iroha_crypto::Algorithm::Ed25519);
+    let verified = || {
+        Extension(crate::app_auth::VerifiedCanonicalRequest {
+            account: AccountId::new(key.public_key().clone()),
+            signer: key.public_key().clone(),
+            verified_signers: vec![key.public_key().clone()],
+            offchain_signing_key: false,
+        })
+    };
+    let request = || {
+        let mut request = context.token_request(TokenOverrides::default());
+        request.paid_readback = Some(format!("{}:0", "ab".repeat(32)));
+        JsonOnly(request)
+    };
+    let mut headers = storage_token_worker_headers(&context);
+    headers.insert(
+        crate::app_auth::HEADER_NONCE,
+        HeaderValue::from_static("different"),
+    );
+    let denied = handle_post_sorafs_storage_account_token(
+        None,
+        State(context.app.clone()),
+        headers.clone(),
+        request(),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let denied = handle_post_sorafs_storage_account_token(
+        Some(verified()),
+        State(context.app.clone()),
+        headers.clone(),
+        request(),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    headers.insert(
+        crate::app_auth::HEADER_NONCE,
+        HeaderValue::from_static("physical-issuance-worker"),
+    );
+    let denied = handle_post_sorafs_storage_token_authenticated(
+        Some(test_stream_token_operator()),
+        State(context.app.clone()),
+        headers.clone(),
+        request(),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    let denied = handle_post_sorafs_storage_account_token(
+        Some(verified()),
+        State(context.app.clone()),
+        headers,
+        request(),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(fixture.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .recover_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert_storage_token_worker_permits(&context.app, 1);
+}

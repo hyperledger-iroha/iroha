@@ -70,6 +70,23 @@ impl StreamTokenIssuer {
             );
         }
         let token = self.signer.recover_undelivered(old.body)?;
+        let remaining_quota = self.remaining_after_delivery(
+            old.request.subject,
+            &old.request.policy,
+            old.remaining_quota,
+        )?;
+        Ok(TokenIssue {
+            token,
+            remaining_quota,
+        })
+    }
+
+    pub(super) fn remaining_after_delivery(
+        &self,
+        subject: StreamTokenQuotaSubject,
+        policy: &RegisteredAccountReadV1,
+        charged: u32,
+    ) -> Result<u32, StreamTokenIssuerError> {
         // The original issuance spent quota. Account for any later issuances in the same window.
         let now = Instant::now();
         let budgets = self
@@ -79,17 +96,14 @@ impl StreamTokenIssuer {
         let limit = self
             .defaults
             .requests_per_minute
-            .min(old.request.policy.requests_per_minute);
+            .min(policy.requests_per_minute);
         let remaining = budgets
-            .get(&old.request.subject)
+            .get(&subject)
             .filter(|budget| {
                 now.saturating_duration_since(budget.window_start) < ISSUANCE_QUOTA_WINDOW
             })
             .map_or(limit, |budget| limit.saturating_sub(budget.used));
-        Ok(TokenIssue {
-            token,
-            remaining_quota: old.remaining_quota.min(remaining),
-        })
+        Ok(charged.min(remaining))
     }
 }
 

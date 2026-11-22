@@ -109,7 +109,7 @@ impl Fixture {
             FileIdentity::of(&b.lock).unwrap()
         );
         for child in [&a, &b] {
-            assert!(child.checkpoint_cache.entry.try_lock().unwrap().is_empty());
+            assert!(child.checkpoint_cache.entry.try_write().unwrap().is_empty());
             assert_eq!(
                 child
                     .checkpoint_cache
@@ -388,7 +388,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
     b.decode_checkpoint(&images[3]).unwrap();
     assert_eq!(attempts(&a), 4);
     {
-        let selected = scope.cache.entry.try_lock().unwrap();
+        let selected = scope.cache.entry.try_write().unwrap();
         assert_eq!(selected.len, SLOTS);
         for offset in 0..SLOTS {
             assert_eq!(
@@ -403,7 +403,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
     let escaped = a.decode_checkpoint(&images[0]).unwrap();
     assert_eq!(attempts(&b), 5);
     {
-        let mut selected = scope.cache.entry.try_lock().unwrap();
+        let mut selected = scope.cache.entry.try_write().unwrap();
         assert!(selected.make_room(
             MAX_CHECKPOINT_BYTES,
             retained_import_envelope(MAX_CHECKPOINT_BYTES).unwrap()
@@ -422,7 +422,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
         for image in &images[..3] {
             a.decode_checkpoint(image).unwrap();
         }
-        assert_eq!(scope.cache.entry.try_lock().unwrap().len, SLOTS);
+        assert_eq!(scope.cache.entry.try_write().unwrap().len, SLOTS);
         let ordinary = DecodeBudgetContext::new(checkpoint_limits(cap));
         let original_result = ordinary
             .with(|| decode_checkpoint(&images[0], a.config.network_id, a.config.chain.as_str()));
@@ -447,18 +447,18 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
         assert!(
             a.effective_checkpoint_cache()
                 .entry
-                .try_lock()
+                .try_write()
                 .unwrap()
                 .is_empty()
         );
         assert!(
             b.effective_checkpoint_cache()
                 .entry
-                .try_lock()
+                .try_write()
                 .unwrap()
                 .is_empty()
         );
-        assert!(a.checkpoint_cache.entry.try_lock().unwrap().is_empty());
+        assert!(a.checkpoint_cache.entry.try_write().unwrap().is_empty());
     }
 
     // Passing a scope cannot bypass full constructor admission or attach it to an active child.
@@ -535,7 +535,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
 
     // A held or poisoned optional shared gate remains a cold, nonwaiting canonical path.
     a.decode_checkpoint(&images[0]).unwrap();
-    let held = scope.cache.entry.try_lock().unwrap();
+    let held = scope.cache.entry.try_write().unwrap();
     let before = attempts(&a);
     assert_eq!(b.decode_checkpoint(&images[0]).unwrap(), originals[0]);
     let mut changed = images[0].clone();
@@ -546,7 +546,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
     assert_entry(&a, &images[0]);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _held = scope.cache.entry.lock().unwrap();
+            let _held = scope.cache.entry.write().unwrap();
             panic!("poison only the shared optional import memo");
         }))
         .is_err()
@@ -555,7 +555,7 @@ fn graph_scope_preserves_effective_fifo_limits_and_active_owned_fallback() {
     assert!(b.decode_checkpoint(&changed).is_err());
     assert_eq!(a.decode_checkpoint(&images[0]).unwrap(), originals[0]);
     assert_eq!(attempts(&b), before + 2);
-    match scope.cache.entry.try_lock() {
+    match scope.cache.entry.try_write() {
         Err(TryLockError::Poisoned(poisoned)) => assert!(poisoned.into_inner().is_empty()),
         _ => panic!("the same actual selected memo must remain poisoned"),
     }
@@ -678,7 +678,7 @@ fn graph_epoch_scope_keeps_exact_inline_projections_across_cold_imports_and_lexi
     );
 
     // A caller-local workspace must preserve the same projection after the shared import.
-    scope.cache.entry.try_lock().unwrap().clear();
+    scope.cache.entry.try_write().unwrap().clear();
     {
         let mut local = EpochValidationScope::new();
         let mut imports = CheckpointImports::new(&b, Some(&mut local));
@@ -734,7 +734,7 @@ fn graph_epoch_scope_keeps_exact_inline_projections_across_cold_imports_and_lexi
         b.decode_checkpoint(&malformed).unwrap_err().to_string(),
         original_error
     );
-    assert!(scope.cache.entry.try_lock().unwrap().is_empty());
+    assert!(scope.cache.entry.try_write().unwrap().is_empty());
     assert_eq!(a.decode_checkpoint(&first_bytes).unwrap(), first);
     a.validate_profile().unwrap();
     b.validate_profile().unwrap();
@@ -812,7 +812,7 @@ fn graph_epoch_scope_keeps_active_decode_charges_and_nonwaiting_fallback() {
             (Err(actual), Err(raw)) => assert_eq!(actual.to_string(), raw.to_string()),
             other => panic!("the original active producer must match: {other:?}"),
         }
-        assert!(scope.cache.entry.try_lock().unwrap().is_empty());
+        assert!(scope.cache.entry.try_write().unwrap().is_empty());
         // Probe both exact projections only after observing the original active return.
         assert_eq!(
             graph_epoch_projection(&scope.cache, &context),
@@ -824,7 +824,7 @@ fn graph_epoch_scope_keeps_active_decode_charges_and_nonwaiting_fallback() {
     // Hold the real epoch gate while forcing a cold checkpoint miss on this same thread.
     // Completion itself proves nonwaiting fallback; projection probes do not reveal local insertion.
     assert_eq!(a.decode_checkpoint(&bytes).unwrap(), original);
-    scope.cache.entry.try_lock().unwrap().clear();
+    scope.cache.entry.try_write().unwrap().clear();
     let shared = scope.cache.epoch_validation.as_ref().unwrap();
     let mut held = shared.try_lock().unwrap();
     {
@@ -853,7 +853,7 @@ fn graph_epoch_scope_keeps_active_decode_charges_and_nonwaiting_fallback() {
         }))
         .is_err()
     );
-    scope.cache.entry.try_lock().unwrap().clear();
+    scope.cache.entry.try_write().unwrap().clear();
     {
         let mut local = EpochValidationScope::new();
         let mut imports = CheckpointImports::new(&b, Some(&mut local));

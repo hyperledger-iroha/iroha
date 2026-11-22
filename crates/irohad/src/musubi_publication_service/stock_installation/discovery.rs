@@ -3,11 +3,13 @@
 use super::{Cache, Error as FactoryError};
 use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_core::{
-    state::{State, StateReadOnly},
+    state::{BlockHashRead, State, StateReadOnly},
     sumeragi::finality::{NativeFinalityCursorErrorV1, NativeFinalityCursorV1},
 };
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
+    block::BlockHeader,
     sorafs::{
         capacity::ProviderId,
         provider_admission::discovery::{
@@ -89,26 +91,40 @@ impl Discovery {
             .checked_add(self.timeout)
             .ok_or(Error::Deadline)?;
         let started = now()?;
-        let view = self.state.view();
-        let height = u64::try_from(view.height()).map_err(|_| Error::Unavailable)?;
-        if height < 2
-            || view.network_id() != &self.network
-            || view.chain_id().as_str() != self.chain
-        {
-            return Err(Error::Unavailable);
-        }
-        let mut cursor = self.cursor.try_lock().map_err(|_| Error::Unavailable)?;
-        let current = cursor
-            .advance_current(&view, &self.budget, deadline, NonZeroU16::new(64).unwrap())
-            .map_err(|error| match error {
-                NativeFinalityCursorErrorV1::Deadline => Error::Deadline,
-                _ => Error::Unavailable,
-            })?
-            .ok_or(Error::Unavailable)?;
+        let mut cursor = None;
+        let mut previous_cut = None;
+        let (height, current) =
+            advance_current_in_slices(norito::core::decode_limits_active(), |steps| {
+                check(deadline)?;
+                let view = self.state.view();
+                let height = view.height();
+                if height < 2
+                    || view.network_id() != &self.network
+                    || view.chain_id().as_str() != self.chain
+                {
+                    return Err(Error::Unavailable);
+                }
+                require_previous_cut(previous_cut, view.block_hashes())?;
+                let cursor = match &mut cursor {
+                    Some(held) => held,
+                    None => cursor.insert(self.cursor.try_lock().map_err(|_| Error::Unavailable)?),
+                };
+                let current = cursor
+                    .advance_current(&view, &self.budget, deadline, steps)
+                    .map_err(|error| match error {
+                        NativeFinalityCursorErrorV1::Deadline => Error::Deadline,
+                        _ => Error::Unavailable,
+                    })?;
+                if let Some(current) = current {
+                    let height = u64::try_from(height).map_err(|_| Error::Unavailable)?;
+                    return Ok(Some((height, current)));
+                }
+                previous_cut = Some((height, view.latest_block_hash().ok_or(Error::Unavailable)?));
+                Ok(None)
+            })?;
         drop(cursor);
         check(deadline)?;
         let tip = current.native_block();
-        drop(view);
         let observed = now()?;
         if observed < started {
             return Err(Error::Unavailable);
@@ -221,6 +237,37 @@ impl Discovery {
         Ok(result)
     }
 }
+// A newer selection may only extend the original physical view. A regressed or
+// forked view must never make a prior incomplete native call current.
+fn require_previous_cut(
+    previous: Option<(usize, HashOf<BlockHeader>)>,
+    hashes: &dyn BlockHashRead,
+) -> Result<(), Error> {
+    if let Some((height, hash)) = previous
+        && height.checked_sub(1).and_then(|index| hashes.get(index)) != Some(&hash)
+    {
+        return Err(Error::Unavailable);
+    }
+    Ok(())
+}
+
+// Each incomplete native call retains its authenticated progress. Reopen the current
+// view before the next group so a long catch-up does not pin its original tip throughout.
+// All calls share the same cursor, deadline and maximum aggregate successor count.
+fn advance_current_in_slices<T>(
+    metered: bool,
+    mut advance: impl FnMut(NonZeroU16) -> Result<Option<T>, Error>,
+) -> Result<T, Error> {
+    const TOTAL: u16 = 64;
+    let slice = if metered { TOTAL } else { 4 };
+    let steps = NonZeroU16::new(slice).expect("fixed nonzero finality step count");
+    for _ in 0..TOTAL / slice {
+        if let Some(current) = advance(steps)? {
+            return Ok(current);
+        }
+    }
+    Err(Error::Unavailable)
+}
 fn check(deadline: Instant) -> Result<(), Error> {
     if Instant::now() < deadline {
         Ok(())
@@ -237,4 +284,65 @@ fn now() -> Result<u64, Error> {
         .ok()
         .filter(|value| *value != 0)
         .ok_or(Error::Unavailable)
+}
+
+#[cfg(test)]
+mod cut_tests {
+    use super::*;
+
+    #[test]
+    fn current_views_follow_only_successful_bounded_progress() {
+        let mut rounds = 0;
+        let answer = advance_current_in_slices(false, |steps| {
+            assert_eq!(steps.get(), 4);
+            rounds += 1;
+            Ok((rounds == 5).then_some(76))
+        })
+        .unwrap();
+        assert_eq!((rounds, answer), (5, 76));
+        for metered in [false, true] {
+            let mut requested = Vec::new();
+            assert!(matches!(
+                advance_current_in_slices::<()>(metered, |steps| {
+                    requested.push(steps.get());
+                    Ok(None)
+                }),
+                Err(Error::Unavailable)
+            ));
+            assert_eq!(requested.iter().sum::<u16>(), 64);
+            assert_eq!(requested.len(), if metered { 1 } else { 16 });
+        }
+    }
+
+    #[test]
+    fn refreshed_view_requires_the_original_ancestor() {
+        let hash = |byte| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([byte; 32]))
+        };
+        let first = hash(1);
+        let second = hash(2);
+        let third = hash(3);
+        let cut = Some((2, second));
+        assert!(require_previous_cut(cut, &[first, second]).is_ok());
+        assert!(require_previous_cut(cut, &[first, second, third]).is_ok());
+        assert_eq!(require_previous_cut(cut, &[first]), Err(Error::Unavailable));
+        assert_eq!(
+            require_previous_cut(cut, &[first, third, second]),
+            Err(Error::Unavailable)
+        );
+    }
+
+    #[test]
+    fn any_native_refusal_stops_the_original_discovery() {
+        for error in [Error::Rejected, Error::Unavailable, Error::Deadline] {
+            let mut rounds = 0;
+            let observed = advance_current_in_slices::<()>(false, |_| {
+                rounds += 1;
+                if rounds == 1 { Ok(None) } else { Err(error) }
+            })
+            .unwrap_err();
+            assert_eq!(observed, error);
+            assert_eq!(rounds, 2);
+        }
+    }
 }
