@@ -2362,6 +2362,27 @@ def test_every_linux_docker_producer_resolves_mandatory_backend(dockerfile: str,
             checker.docker_shipping_targets(tmp_path, catalog, Path(dockerfile))
 
 
+def test_root_dockerfile_reviews_every_profile_daemon(tmp_path: Path) -> None:
+    checker = load_checker()
+    names = ("iroha3d", "iroha3d_taira", "sorafs_governance_dag", "iroha", "kagami", "attachment_sanitizer", "sorafs_external_software_signer")
+    catalog = checker.WorkspaceCatalog(
+        package_features={"irohad": frozenset({"external-software-signer-bin"})},
+        binaries={name: (checker.CargoBinary("irohad", name, ()),) for name in names},
+        native_libraries={}, workspace_docker_bins=names,
+    )
+    source = (REPO / "Dockerfile").read_text()
+    default = source.split('ARG BINARIES="', 1)[1].split('"', 1)[0].split()
+    # The default links neither daemon; CONFIG_PROFILE selects one, and both stay reviewed.
+    assert "iroha3d" not in default and "iroha3d_taira" not in default
+    shipped = {row.binary for row in checker.docker_shipping_targets(REPO, catalog, Path("Dockerfile"))}
+    assert shipped == set(names)
+    (tmp_path / "Dockerfile").write_text(
+        source.replace("profile_daemon=iroha3d_taira", 'profile_daemon="${TAIRA_DAEMON}"')
+    )
+    with pytest.raises(RuntimeError, match="profile daemon must be a literal binary name"):
+        checker.docker_shipping_targets(tmp_path, catalog, Path("Dockerfile"))
+
+
 def test_release_workflow_overrides_keep_cuda_and_forward_public_review_input() -> None:
     checker = load_checker()
     # Parsing declarations is bounded and does not invoke Cargo or Docker.
