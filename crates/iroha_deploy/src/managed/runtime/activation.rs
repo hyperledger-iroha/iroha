@@ -379,17 +379,21 @@ impl Recheck {
             &budget.progress.readiness,
         )?;
         budget.check()?;
-        confirm_carriers(prepared, &self.required, budget)?;
         let observation = observe_published_gateways(
             &mut live,
-            |index, gateway| self.publish_provider(prepared, index, gateway, budget),
+            budget,
+            |barrier| confirm_carriers(prepared, &self.required, barrier),
+            |index, gateway| self.check_promoted(prepared, index, gateway, budget),
+            |gateway| self.advertise(prepared, gateway, budget),
             |gateways, floors| self.observe_providers(prepared, gateways, floors, budget),
         )?;
         validate_gateways(prepared, &mut live, budget)?;
         budget.check()?;
         Ok(Outcome::Complete(Some(Box::new(observation))))
     }
-    fn publish_provider(
+    /// Read-only half of one provider's publication: the exact floor and its promoted catalog.
+    /// It signs and publishes nothing; its advertisement follows only after it returns.
+    fn check_promoted(
         &self,
         prepared: &PreparedLocalnet,
         index: usize,
@@ -405,11 +409,20 @@ impl Recheck {
                 deadline,
             )
         })?;
+        Ok(floor)
+    }
+
+    /// The sole write half: open the advert purpose and publish, bracketed by live checks.
+    fn advertise(
+        &self,
+        prepared: &PreparedLocalnet,
+        gateway: &mut OwnedGateway,
+        budget: &Budget,
+    ) -> std::result::Result<(), Failure> {
         budget.progress.enter(Phase::ProviderAdvertisement);
         validate_live(prepared, gateway, budget)?;
         budget.call(|deadline| gateway.open_provider_advert(prepared)?.publish(deadline))?;
-        validate_live(prepared, gateway, budget)?;
-        Ok(floor)
+        validate_live(prepared, gateway, budget)
     }
 
     fn observe_providers(
@@ -536,16 +549,68 @@ fn observe_enrolled_set(
 
 // Complete all three publications before sampling either shared observation clock.
 // Each native row and the final aggregate still check the applicable expiry.
+// Only the read-only carrier barrier overlaps the first read-only promoted-catalog check.
+// Every advertisement still follows its own check, in provider order, and the first one
+// starts only after the barrier and that check have both returned successfully.
 fn observe_published_gateways<G, P, O>(
     gateways: &mut [G; 3],
-    mut publish: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
+    budget: &Budget,
+    carriers: impl Fn(&Budget) -> std::result::Result<(), Failure> + Sync,
+    mut check: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
+    mut advertise: impl FnMut(&mut G) -> std::result::Result<(), Failure>,
     observe: impl FnOnce(&mut [G; 3], [P; 3]) -> std::result::Result<O, Failure>,
 ) -> std::result::Result<O, Failure> {
     let [first, second, third] = gateways;
-    let first_floor = publish(0, first)?;
-    let second_floor = publish(1, second)?;
-    let third_floor = publish(2, third)?;
+    let first_floor = beside_carrier_barrier(budget, &carriers, || check(0, first))?;
+    advertise(first)?;
+    let second_floor = check(1, second)?;
+    advertise(second)?;
+    let third_floor = check(2, third)?;
+    advertise(third)?;
     observe(gateways, [first_floor, second_floor, third_floor])
+}
+
+// Scheduling only. The carrier barrier opens no service purpose, holds no lock and signs
+// nothing, so it shares no lock or write effect with the read-only check. Its result keeps its
+// original precedence over the check's, and the caller performs no write until both return.
+// The barrier reports its closed phases through a progress forked at the current phase, so
+// its failures carry the phases the serial barrier reported and the shared diagnostic still
+// advances in the original order. Active decode limits, which are thread-local, and a failed
+// spawn keep the original serial order on the caller's thread.
+fn beside_carrier_barrier<P>(
+    budget: &Budget,
+    barrier: &(impl Fn(&Budget) -> std::result::Result<(), Failure> + Sync),
+    check: impl FnOnce() -> std::result::Result<P, Failure>,
+) -> std::result::Result<P, Failure> {
+    if norito::core::decode_limits_active() {
+        barrier(budget)?;
+        return check();
+    }
+    let private = Budget {
+        started: budget.started,
+        timeout: budget.timeout,
+        startup_deadline_ns: budget.startup_deadline_ns,
+        utc_ceiling_unix_ms: budget.utc_ceiling_unix_ms,
+        cancelled: Arc::clone(&budget.cancelled),
+        progress: Arc::new(budget.progress.fork()),
+    };
+    thread::scope(|scope| {
+        let Ok(worker) = thread::Builder::new().spawn_scoped(scope, || barrier(&private)) else {
+            barrier(budget)?;
+            return check();
+        };
+        // The serial barrier leaves this phase for the first floor check; here it also names
+        // the barrier that is still running until the check enters its own catalog phase.
+        budget.progress.enter(Phase::CarrierPeers);
+        let checked = check();
+        // Join even after a check failure; a panicked barrier is a closed unconfirmed result.
+        let reached = worker.join().unwrap_or(Err(Failure::Activation {
+            phase: Phase::CarrierPeers,
+            cause: super::progress::Cause::Unconfirmed,
+        }));
+        reached?;
+        checked
+    })
 }
 
 pub(super) fn validate_gateways(
@@ -875,6 +940,10 @@ fn join_carrier_peer_reads(
         Ok(())
     })
 }
+
+#[cfg(test)]
+#[path = "activation/barrier_overlap_tests.rs"]
+mod barrier_overlap_tests;
 
 #[cfg(test)]
 #[path = "activation/peer_round_tests.rs"]

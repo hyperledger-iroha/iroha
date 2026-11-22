@@ -1,5 +1,5 @@
 //! Genuine catalog revisions and directly owned children exercise the callback-free round.
-//! Sleeping children are ownership fixtures, never daemon or service-readiness evidence.
+//! Child handles exercise the original process ownership and liveness checks.
 
 use super::*;
 use crate::managed::runtime::progress::{Cause, Failure, Phase, Progress};
@@ -127,7 +127,12 @@ fn fixture() -> Fixture {
     };
     for _ in 0..4 {
         processes.children.push(Arc::new(Mutex::new(
-            Command::new("/bin/sleep").arg("120").spawn().unwrap(),
+            // The fixture owns the input pipe until EOF or explicit process cleanup.
+            // Each validation receives its own original budget.
+            Command::new("/bin/cat")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
         )));
     }
     let gateways = processes.gateways().unwrap();

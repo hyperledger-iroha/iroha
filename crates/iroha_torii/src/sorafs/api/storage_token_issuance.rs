@@ -126,11 +126,9 @@ fn current_account_read_policy(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| denied())?
         .as_secs();
-    let admitted = iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
-        &view, provider, now,
-    )
-    .map_err(|_| denied())?
-    .ok_or_else(denied)?;
+    let admitted = crate::sorafs::admission::current_transport_admission(&view, provider, now)
+        .map_err(|_| denied())?
+        .ok_or_else(denied)?;
     RegisteredAccountReadV1::from_capabilities(&admitted.envelope().proposal.capabilities)
         .map_err(|_| denied())?
         .ok_or_else(denied)

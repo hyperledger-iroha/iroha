@@ -20,6 +20,27 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
+/// Read current admission for one Torii operation. A metered caller owns the full
+/// original execution walk. Other transport reads may resume it from a verified
+/// native history checkpoint and still reread the selected provider's actual originals.
+pub(super) fn current_transport_admission(
+    view: &iroha_core::state::StateView<'_>,
+    provider: iroha_data_model::sorafs::capacity::ProviderId,
+    now: u64,
+) -> Result<Option<AdmissionRecord>, iroha_core::query::provider_admission::ProviderAdmissionErrorV1>
+{
+    use iroha_core::query::provider_admission::{
+        read_finalized_provider_admission_v1, read_finalized_provider_admission_with_block_v1,
+    };
+    if norito::core::decode_limits_active() {
+        return read_finalized_provider_admission_v1(view, provider, now);
+    }
+    Ok(
+        read_finalized_provider_admission_with_block_v1(view, provider, now)?
+            .map(|(record, _)| record),
+    )
+}
+
 /// Maximum number of admission envelopes loaded from one registry directory.
 pub const MAX_ADMISSION_ENVELOPES: usize = 4_096;
 /// Maximum canonical Norito size of one admission envelope (1 MiB).
@@ -325,7 +346,7 @@ impl AdmissionRegistry {
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()?
                 .as_secs();
-            return iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
+            return current_transport_admission(
                 &state.view(),
                 iroha_data_model::sorafs::capacity::ProviderId::new(*provider_id),
                 now,
