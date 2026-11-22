@@ -171,6 +171,79 @@ final class KagemushaSpartanWalletV1Tests: XCTestCase {
     }
   }
 
+  func testDeferredArchiveSentFramesTheExactSendAndCreditedAndRefusesDebitFields() throws {
+    let send = Data(1...32)
+    var payload = Data(repeating: 0, count: 10_000)
+    payload.replaceSubrange(0..<7, with: "KGSCST3".utf8)
+    for flag: UInt8 in [0, 1] {
+      payload[8] = flag
+      let status = try IrohaPeerWireMessageV1(profile: .kagemushaSpartanPaymentV3, kind: .credited,
+                                               schemaVersion: 3, canonicalPayload: payload)
+      XCTAssertEqual(status.encoded.count, 10_084)
+      let expected = Data([75, 83, 79, 49, 5, 32, 0, 0, 0]) + send + Data([100, 39, 0, 0]) + status.encoded
+      XCTAssertEqual(try KagemushaSpartanWalletV1.archiveSentCommand(sendOperationId: send, credited: status), expected)
+      for invalid in [Data(repeating: 0, count: 32), send.dropLast(), send + Data([1])] {
+        XCTAssertThrowsError(try KagemushaSpartanWalletV1.archiveSentCommand(sendOperationId: invalid, credited: status))
+      }
+    }
+    var original = projection()
+    original[2] = 5
+    original.resetBytes(in: 131..<227)
+    let review = try KagemushaSpartanReviewProjectionV1(original)
+    XCTAssertEqual(review.operation, .archiveSent)
+    XCTAssertEqual(review.bytes, original)
+    for offset in 131..<227 {
+      var invalid = original
+      invalid[offset] = 1
+      XCTAssertThrowsError(try KagemushaSpartanReviewProjectionV1(invalid))
+    }
+  }
+
+  func testFoldedSendCreditStatusPreservesBothOutcomesAndOpeningShapes() throws {
+    if let path = ProcessInfo.processInfo.environment["KAGEMUSHA_SPARTAN_LATER_STATUS_FIXTURE"] {
+      let exact = try Data(contentsOf: URL(fileURLWithPath: path))
+      let wire = try IrohaPeerWireMessageV1.decode(exact, expectedProfile: .kagemushaSpartanPaymentV3, expectedKind: .credited)
+      XCTAssertEqual(wire.encoded, exact)
+      XCTAssertEqual(wire.canonicalPayload.first.map { $0 & 0xe0 }, 0xa0)
+      XCTAssertEqual(wire.spartanCreditOutcome, .credited)
+      let issued = KagemushaSpartanReplyV1(status: 104, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: exact)
+      XCTAssertEqual(try KagemushaSpartanReceiverCreditStatusV1(issued).message, wire)
+      let retained = KagemushaSpartanReplyV1(status: 105, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data([1]))
+      XCTAssertEqual(try retained.verifiedCreditOutcome(for: wire), .credited)
+    }
+    let offset = 541
+    for burned: UInt8 in [0, 1] {
+      for dense in [false, true] {
+        var raw = Data(repeating: 0, count: offset)
+        raw[0] = 0xa0 | burned | (dense ? 0x10 : 0)
+        raw[8] = 77  // An ordinary statement byte in this form.
+        if dense { raw.append(Data(repeating: 3, count: 32 * 32)) }
+        else { raw.append(contentsOf: [0, 0, 0, 2]); raw.append(Data(repeating: 3, count: 32)) }
+        func wrap(_ original: Data) throws -> IrohaPeerWireMessageV1 {
+          try .init(profile: .kagemushaSpartanPaymentV3, kind: .credited, schemaVersion: 3, canonicalPayload: original)
+        }
+        XCTAssertThrowsError(try wrap(raw))
+        raw.append(9)
+        let message = try wrap(raw)
+        let restored = try IrohaPeerWireMessageV1.decode(message.encoded)
+        XCTAssertEqual(restored.canonicalPayload, raw)
+        let expected: KagemushaSpartanCreditOutcomeV1 = burned == 1 ? .burned : .credited
+        XCTAssertEqual(restored.spartanCreditOutcome, expected)
+        let issued = KagemushaSpartanReplyV1(status: 104, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: message.encoded)
+        XCTAssertEqual(try KagemushaSpartanReceiverCreditStatusV1(issued).outcome, expected)
+        func verdict(_ bit: UInt8) -> KagemushaSpartanReplyV1 {
+          .init(status: 105, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data([bit]))
+        }
+        XCTAssertEqual(try verdict(1 - burned).verifiedCreditOutcome(for: message), expected)
+        XCTAssertThrowsError(try verdict(burned).verifiedCreditOutcome(for: message))
+        if !dense {
+          raw.replaceSubrange(offset..<(offset + 4), with: [255, 255, 255, 255])
+          XCTAssertThrowsError(try wrap(raw))
+        }
+      }
+    }
+  }
+
   func testCreditStatusTransportRequiresCanonicalFieldsAndACompleteOpaqueProofBody() throws {
     func wrap(_ bytes: Data) throws -> IrohaPeerWireMessageV1 {
       try .init(profile: .kagemushaSpartanPaymentV3, kind: .credited, schemaVersion: 3, canonicalPayload: bytes)
@@ -375,7 +448,10 @@ final class KagemushaSpartanWalletV1Tests: XCTestCase {
   }
 
   private func unloadReviewOriginal() throws -> Data {
-    #if os(iOS)
+    #if SWIFT_PACKAGE
+    let resource = try XCTUnwrap(Bundle.module.url(forResource: "spartan_unload_review_v3", withExtension: "bin"))
+    return try Data(contentsOf: resource)
+    #elseif os(iOS)
     let resource = try XCTUnwrap(Bundle(for: Self.self).url(
       forResource: "spartan_unload_review_v3", withExtension: "bin"))
     return try Data(contentsOf: resource)
