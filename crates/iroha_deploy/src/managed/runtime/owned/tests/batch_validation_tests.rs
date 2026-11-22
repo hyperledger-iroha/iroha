@@ -611,6 +611,7 @@ fn catalog_status_round_checks_three_original_children_and_their_independent_pla
             &f.prepared,
             &f.gateways,
             indices.map(|index| &plans[index]),
+            None,
         )
     };
     let (success, accounted) = trace(|| check(&fixture, [0, 1, 2]));

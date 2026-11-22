@@ -36,10 +36,18 @@ impl GeneratedLaunch {
     }
 
     fn validate(&self) -> Result<()> {
+        self.validate_with(None)
+    }
+
+    fn validate_with(
+        &self,
+        imports: Option<&mut crate::managed::generated_service_runtime::CatalogLaunchReads<'_>>,
+    ) -> Result<()> {
         #[cfg(all(test, unix))]
         tests::batch_validation_tests::revision();
         self.require_active()?;
-        self.owner.validate_for(&self.original, &self.revision)?;
+        self.owner
+            .validate_catalog_launch(&self.original, &self.revision, imports)?;
         self.require_active()
     }
 

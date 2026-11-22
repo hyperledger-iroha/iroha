@@ -80,12 +80,25 @@ impl RuntimeSelection {
     }
 
     fn read_provider_intervals(authority: &ServiceAuthority, parallel: bool) -> Result<Self> {
+        Self::read_intervals(authority, parallel, None)
+    }
+
+    fn read_intervals(
+        authority: &ServiceAuthority,
+        parallel: bool,
+        catalog_imports: Option<&CheckpointImportScope>,
+    ) -> Result<Self> {
         let intent = authority.original_intent()?;
-        // This read owns one bounded immutable import workspace for its three fresh children.
-        // It carries no source, wallet, current-state or authority verdict beyond this call.
+        // Each selection always opens three fresh children. A catalog check may borrow its
+        // renderer's bounded workspace for pure imports from the complete original bytes.
         let read = intent.runtime_read();
-        let imports =
-            CheckpointImportScope::for_provider_intervals(authority, parallel && read.is_some());
+        let imports = if parallel && read.is_some() {
+            catalog_imports
+                .cloned()
+                .or_else(|| CheckpointImportScope::for_provider_intervals(authority, true))
+        } else {
+            CheckpointImportScope::for_provider_intervals(authority, false)
+        };
         #[cfg(test)]
         let imports = tests::import_scope_tests::select_scope(imports);
         // Only immutable projections share this view. Every mutable child read below retains
@@ -310,10 +323,32 @@ impl GeneratedServiceRuntimeRevision {
     }
 }
 
+/// Restrict the immutable import workspace to four material checks on this one renderer.
+pub(super) struct CatalogLaunchReads<'a> {
+    owner: &'a GeneratedServiceRuntime,
+    imports: Option<CheckpointImportScope>,
+}
+
+impl CatalogLaunchReads<'_> {
+    fn imports_for(&mut self, owner: &GeneratedServiceRuntime) -> Option<&CheckpointImportScope> {
+        if !std::ptr::eq(self.owner, owner) || !owner.shares_original_for_read() {
+            self.imports = None;
+        }
+        self.imports.as_ref()
+    }
+}
+
 pub(super) struct GeneratedServiceRuntime {
     authority: ServiceAuthority,
 }
 impl GeneratedServiceRuntime {
+    pub(super) fn catalog_launch_reads(&self) -> CatalogLaunchReads<'_> {
+        CatalogLaunchReads {
+            owner: self,
+            imports: CheckpointImportScope::for_provider_intervals(&self.authority, true),
+        }
+    }
+
     /// A read-only projection shares a renderer only outside a caller's physical admission.
     pub(super) fn shares_original_for_read(&self) -> bool {
         self.authority.shares_original_for_read()
@@ -417,12 +452,23 @@ impl GeneratedServiceRuntime {
         prepared: &PreparedLocalnet,
         revision: &GeneratedServiceRuntimeRevision,
     ) -> Result<()> {
+        self.validate_catalog_launch(prepared, revision, None)
+    }
+
+    pub(super) fn validate_catalog_launch(
+        &self,
+        prepared: &PreparedLocalnet,
+        revision: &GeneratedServiceRuntimeRevision,
+        reads: Option<&mut CatalogLaunchReads<'_>>,
+    ) -> Result<()> {
         if prepared != &self.authority.prepared {
             return Err(invalid(
                 "runtime revision belongs to another prepared generation",
             ));
         }
-        self.validate(revision)
+        let imports = reads.and_then(|reads| reads.imports_for(self));
+        self.validate_material_with(revision, imports)?
+            .validate_interval(revision.components.as_ref())
     }
     pub(super) fn validate(&self, revision: &GeneratedServiceRuntimeRevision) -> Result<()> {
         self.validate_material(revision)?
@@ -432,9 +478,17 @@ impl GeneratedServiceRuntime {
         &self,
         revision: &GeneratedServiceRuntimeRevision,
     ) -> Result<RuntimeSelection> {
+        self.validate_material_with(revision, None)
+    }
+
+    fn validate_material_with(
+        &self,
+        revision: &GeneratedServiceRuntimeRevision,
+        imports: Option<&CheckpointImportScope>,
+    ) -> Result<RuntimeSelection> {
         // Each child reads its own custody interval. The selection owner keeps an active
         // decoder or an owned original on the caller's serial path.
-        let selection = RuntimeSelection::read_provider_intervals(&self.authority, true)?;
+        let selection = RuntimeSelection::read_intervals(&self.authority, true, imports)?;
         let root = PrivateDirectory::open_exact(generation_path(&self.authority.prepared)?)?;
         let expected = encode(&revision.manifest, MAX_MANIFEST_BYTES)?;
         let required_identities: &[RequiredTransaction] = revision

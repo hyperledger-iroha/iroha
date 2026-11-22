@@ -10,7 +10,10 @@ impl OwnedGateway {
             .then_some(self.launch.owner.as_ref())
     }
 
-    fn shared_read_launch(live: &[Self; 3]) -> Result<&GeneratedLaunch> {
+    fn shared_read_launch<'a>(
+        live: &'a [Self; 3],
+        imports: Option<&mut crate::managed::generated_service_runtime::CatalogLaunchReads<'_>>,
+    ) -> Result<&'a GeneratedLaunch> {
         let launch = &live[0].launch;
         for (index, gateway) in live.iter().enumerate() {
             if !Arc::ptr_eq(launch, &gateway.launch)
@@ -24,7 +27,7 @@ impl OwnedGateway {
             }
             gateway.require_running()?;
         }
-        launch.validate()?;
+        launch.validate_with(imports)?;
         Ok(launch)
     }
 
@@ -34,8 +37,9 @@ impl OwnedGateway {
         prepared: &PreparedLocalnet,
         live: &[Self; 3],
         plans: [&RetainedGatewayCompliancePlan; 3],
+        imports: Option<&mut crate::managed::generated_service_runtime::CatalogLaunchReads<'_>>,
     ) -> Result<()> {
-        Self::shared_read_launch(live)?;
+        Self::shared_read_launch(live, imports)?;
         for (gateway, plan) in live.iter().zip(plans) {
             gateway.require_original(prepared)?;
             gateway.validate_binding(prepared, plan)?;
@@ -59,7 +63,7 @@ impl OwnedGateway {
                 live[2].selected_enrollment(floors[2])?,
             ]);
         }
-        let launch = Self::shared_read_launch(live)?;
+        let launch = Self::shared_read_launch(live, None)?;
         let current = launch.revision.observation_floor()?;
         if floors.iter().any(|floor| *floor != current) {
             return Err(invalid(

@@ -1,7 +1,10 @@
 //! Same-State provider admission heads, immutable history and authenticated current lookup.
 
 mod originals;
-pub use originals::with_genesis_provider_admission_originals_v1;
+pub use originals::{
+    GenesisProviderOriginalsReadErrorV1, classify_genesis_provider_admission_originals_v1,
+    with_genesis_provider_admission_originals_v1,
+};
 
 use crate::{
     query::signer_finality::certified_block_v1,
@@ -243,14 +246,7 @@ pub fn read_finalized_provider_admission_with_block_v1(
     let certified = certify_current_block(view)?;
     // An off-chain lookup can resume the original execution walk from a locally
     // verified identity. The target is physically reread from this view's Kura.
-    let mut genesis = GenesisRead::new(view);
-    if !norito::core::decode_limits_active() {
-        genesis.read = |view| {
-            view.canonical_history()
-                .executed_receipt_from_checkpoints(std::num::NonZeroUsize::MIN)
-                .map_err(|_| ProviderAdmissionErrorV1)
-        };
-    }
+    let genesis = GenesisRead::at_start(view, AdmissionHistoryStart::offchain());
     Ok(
         read_current_provider_admission(genesis, provider, now_secs)?
             .map(|record| (record, certified)),
@@ -297,6 +293,40 @@ pub(crate) fn read_provider_admission_at_native_current_v1(
     provider: ProviderId,
     now_secs: u64,
 ) -> Result<Option<AdmissionRecord>, Error> {
+    read_at_native_current(
+        view,
+        current,
+        provider,
+        now_secs,
+        AdmissionHistoryStart::Tip,
+    )
+}
+
+/// Select the execution walk for genesis material. An inherited decoder owns its full tip walk.
+#[derive(Clone, Copy)]
+pub(super) enum AdmissionHistoryStart {
+    Tip,
+    VerifiedCheckpoint,
+}
+
+impl AdmissionHistoryStart {
+    /// Capture the calling decoder before installing the native transport read allowance.
+    pub(super) fn offchain() -> Self {
+        if norito::core::decode_limits_active() {
+            Self::Tip
+        } else {
+            Self::VerifiedCheckpoint
+        }
+    }
+}
+
+pub(super) fn read_at_native_current(
+    view: &crate::state::StateView<'_>,
+    current: &super::signer_check::SignerCertifiedBlockV1<'_, '_>,
+    provider: ProviderId,
+    now_secs: u64,
+    start: AdmissionHistoryStart,
+) -> Result<Option<AdmissionRecord>, Error> {
     let block = current
         .in_view(view)
         .map_err(|_| ProviderAdmissionErrorV1)?;
@@ -305,7 +335,7 @@ pub(crate) fn read_provider_admission_at_native_current_v1(
     {
         return Err(ProviderAdmissionErrorV1);
     }
-    read_current_provider_admission(GenesisRead::new(view), provider, now_secs)
+    read_current_provider_admission(GenesisRead::at_start(view, start), provider, now_secs)
 }
 
 fn authenticate_current(view: &impl StateReadOnly) -> Result<(), Error> {
@@ -413,6 +443,19 @@ impl<'a, V: StateReadOnly> GenesisRead<'a, V> {
             block: None,
             read: |view| committed_block(view, 1).map_err(|_| ProviderAdmissionErrorV1),
         }
+    }
+
+    fn at_start(view: &'a V, start: AdmissionHistoryStart) -> Self {
+        let mut genesis = Self::new(view);
+        if let AdmissionHistoryStart::VerifiedCheckpoint = start {
+            // Each target read still opens the original H1 frame in this captured Kura.
+            genesis.read = |view| {
+                view.canonical_history()
+                    .executed_receipt_from_checkpoints(std::num::NonZeroUsize::MIN)
+                    .map_err(|_| ProviderAdmissionErrorV1)
+            };
+        }
+        genesis
     }
 
     fn authenticate(

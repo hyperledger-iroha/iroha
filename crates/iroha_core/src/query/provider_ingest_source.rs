@@ -2,8 +2,8 @@
 use crate::{
     query::{
         provider_admission::{
+            AdmissionHistoryStart, read_at_native_current,
             read_finalized_provider_admission_with_block_v1,
-            read_provider_admission_at_native_current_v1,
         },
         signer_check::{
             SignerCertifiedBlockV1, SignerCertifiedWalkV1, with_native_check_read_limits,
@@ -141,6 +141,7 @@ pub fn authorize_provider_source_v1(
     request: &SorafsAssignedSourceRequestV1,
     now_secs: u64,
 ) -> Result<(), ProviderSourceAuthorizationErrorV1> {
+    let start = AdmissionHistoryStart::offchain();
     with_native_check_read_limits(|| {
         let rejected = ProviderSourceAuthorizationErrorV1;
         if now_secs == 0
@@ -181,7 +182,7 @@ pub fn authorize_provider_source_v1(
             return Err(rejected);
         }
         for provider in [target, ProviderId::new(request.source_provider)] {
-            read_provider_admission_at_native_current_v1(view, &current, provider, now_secs)
+            read_at_native_current(view, &current, provider, now_secs, start)
                 .map_err(|_| rejected)?
                 .ok_or(rejected)?;
         }
@@ -278,6 +279,7 @@ fn read_provider_source_cut_v1<'view, 'state>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::provider_admission::read_provider_admission_at_native_current_v1;
     use crate::query::{
         provider_admission::read_finalized_provider_admission_v1,
         signer_finality::verify_signer_finality_v1,
@@ -509,6 +511,67 @@ mod tests {
                 "admission and valid finality alone do not confer completion or assignment authority"
             );
         }
+    }
+
+    #[test]
+    fn transport_admission_keeps_each_original_and_the_inherited_meter() {
+        use crate::query::provider_admission::ORIGINAL_GENESIS_READS;
+        use crate::smartcontracts::isi::sorafs_provider_admission::test_fixture::NOW;
+        use crate::sumeragi::certified_chain::relation_counts;
+        let (mut chain, providers, _) = native_admissions(30);
+        for offset in 1..=6 {
+            chain.commit_at((NOW + offset) * 1_000, Vec::new());
+        }
+        let view = chain.state().view();
+        let read = |start| {
+            with_native_check_read_limits(|| {
+                let reader = SignerCertifiedWalkV1::new(&view).unwrap();
+                let current = read_provider_source_cut_v1(
+                    &view,
+                    &reader,
+                    1,
+                    *chain.genesis().hash().as_ref(),
+                )
+                .unwrap();
+                ORIGINAL_GENESIS_READS.with(|reads| reads.set(0));
+                let rows = providers.map(|provider| {
+                    read_at_native_current(&view, &current, provider, NOW + 6, start)
+                        .unwrap()
+                        .unwrap()
+                        .envelope()
+                        .clone()
+                });
+                assert_eq!(ORIGINAL_GENESIS_READS.with(|reads| reads.get()), 4);
+                rows
+            })
+        };
+        let start = AdmissionHistoryStart::offchain();
+        read(start);
+        let (selected, fast) = relation_counts::measure(|| read(start));
+        let (reference, original) = relation_counts::measure(|| read(AdmissionHistoryStart::Tip));
+        let (inherited, metered) = relation_counts::measure(|| {
+            with_native_check_read_limits(|| read(AdmissionHistoryStart::offchain()))
+        });
+        assert_eq!(selected, reference);
+        assert_eq!(inherited, reference);
+        assert_eq!(metered.frames, original.frames);
+        assert!(fast.frames.len() < original.frames.len());
+        assert!(fast.frames.contains(&1));
+        with_native_check_read_limits(|| {
+            let reader = SignerCertifiedWalkV1::new(&view).unwrap();
+            let current = read_provider_source_cut_v1(
+                &view,
+                &reader,
+                view.height() as u64,
+                *view.latest_block_hash().unwrap().as_ref(),
+            )
+            .unwrap();
+            chain
+                .kura()
+                .corrupt_canonical_body_for_testing(std::num::NonZeroUsize::MIN)
+                .unwrap();
+            assert!(read_at_native_current(&view, &current, providers[0], NOW + 6, start).is_err());
+        });
     }
 
     /// Compare only exact authorization read work, not full order authorization or HTTP.
