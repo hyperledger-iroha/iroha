@@ -12,6 +12,8 @@ use crate::{pipeline_gas_policy::RetainedStateParameters, sumeragi::amx::Retaine
 /// Empty-World controls, excluding retained parameter graphs and retired generations.
 pub(super) fn world_live_bytes() -> usize {
     let maps = [
+        super::ArtifactStorage::initial_allocation_demand(),
+        super::CarrierStorage::initial_allocation_demand(),
         sccp_reconciliation_store::Records::initial_allocation_demand(),
         sccp_reconciliation_store::Proofs::initial_allocation_demand(),
         sccp_reconciliation_store::Refunds::initial_allocation_demand(),
