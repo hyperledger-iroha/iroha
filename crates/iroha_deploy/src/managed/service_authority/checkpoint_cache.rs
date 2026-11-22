@@ -130,11 +130,34 @@ impl Entries {
 #[derive(Default)]
 pub(super) struct CheckpointCache {
     entry: Mutex<Entries>,
+    first_interval_checkpoint: Option<Box<FirstIntervalCheckpoint>>,
     // Only a lexical graph/census owns this boxed two-context workspace. Standalone authorities
     // retain only this optional pointer, keeping the existing large orchestration frames small.
     epoch_validation: Option<Box<Mutex<EpochValidationScope>>>,
     #[cfg(test)]
     decode_attempts: std::sync::atomic::AtomicUsize,
+}
+
+/// Schedule only the first bounded checkpoint encountered by a joined local interval read.
+/// The digest is a scheduling hint. The existing cache still compares full bytes, network and
+/// chain, and every caller performs its own import after a miss or a sibling refusal.
+#[derive(Default)]
+struct FirstIntervalCheckpoint {
+    digest: OnceLock<blake3::Hash>,
+    importing: Mutex<()>,
+}
+
+impl FirstIntervalCheckpoint {
+    fn enter(&self, bytes: &[u8]) -> Option<std::sync::MutexGuard<'_, ()>> {
+        if norito::core::decode_limits_active() || bytes.len() > MAX_CHECKPOINT_BYTES {
+            return None;
+        }
+        let digest = blake3::hash(bytes);
+        if self.digest.get_or_init(|| digest) != &digest {
+            return None;
+        }
+        self.importing.lock().ok()
+    }
 }
 
 /// One explicit lexical graph/census owner of the existing immutable import memo and at most
@@ -184,6 +207,13 @@ impl CheckpointImportScope {
     /// Begin cold pure-import work only for an inactive shared original graph.
     /// Owned profiles and active caller admission keep their original independent recipes.
     pub(in crate::managed) fn for_original(parent: &ServiceAuthority) -> Option<Self> {
+        Self::for_provider_intervals(parent, false)
+    }
+
+    pub(in crate::managed) fn for_provider_intervals(
+        parent: &ServiceAuthority,
+        joined: bool,
+    ) -> Option<Self> {
         if norito::core::decode_limits_active()
             || !matches!(&parent.profile, AuthorityProfile::Shared(_))
         {
@@ -191,6 +221,7 @@ impl CheckpointImportScope {
         }
         Some(Self {
             cache: Arc::new(CheckpointCache {
+                first_interval_checkpoint: joined.then(Box::default),
                 epoch_validation: Some(Box::new(Mutex::new(EpochValidationScope::new()))),
                 ..CheckpointCache::default()
             }),
@@ -263,15 +294,19 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
     }
 
     pub(in crate::managed) fn decode(&mut self, bytes: &[u8]) -> Result<FinalityVerifier> {
-        self.authority
-            .effective_checkpoint_cache()
-            .decode_for_scope(
-                bytes,
-                self.authority.config.network_id,
-                self.authority.config.chain.as_str(),
-                self.validation.as_deref_mut(),
-                None,
-            )
+        let cache = self.authority.effective_checkpoint_cache();
+        // Only the pure import and exact-byte cache lookup run while the guard is held.
+        let _turn = cache
+            .first_interval_checkpoint
+            .as_ref()
+            .and_then(|first| first.enter(bytes));
+        cache.decode_for_scope(
+            bytes,
+            self.authority.config.network_id,
+            self.authority.config.chain.as_str(),
+            self.validation.as_deref_mut(),
+            None,
+        )
     }
 
     pub(in crate::managed) fn retained_finality(

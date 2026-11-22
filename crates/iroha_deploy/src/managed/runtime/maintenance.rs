@@ -380,6 +380,7 @@ pub(super) fn refresh(
     budget: &Budget,
 ) -> std::result::Result<Observation, Failure> {
     let RefreshSelection { original, slot } = selected;
+    budget.progress.enter(Phase::GatewayValidation);
     budget.check()?;
     for (gateway, provider) in live.iter().zip(&original.providers) {
         if gateway.provider() != provider.selection.continuation.provider() {
@@ -409,8 +410,10 @@ pub(super) fn refresh(
         .map(|provider| provider.selection.terminal);
     let (currents, observed_at, observed_utc) =
         observe_native_set(prepared, &live, floors, budget)?;
+    budget.progress.enter(Phase::GatewayValidation);
     validate_gateways(prepared, &mut live, budget)?;
     drop(live);
+    budget.progress.enter(Phase::Selection);
     // The old aggregate remains current without interruption even after all fresh rows return.
     if !original.current().unwrap_or(false) {
         return Err(Failure::ObservationExpired);

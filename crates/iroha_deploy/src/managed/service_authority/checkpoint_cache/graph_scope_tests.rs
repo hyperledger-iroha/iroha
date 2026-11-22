@@ -873,3 +873,33 @@ fn graph_epoch_scope_keeps_active_decode_charges_and_nonwaiting_fallback() {
     b.validate_profile().unwrap();
     assert!(fixture.unavailable.requests.lock().unwrap().is_empty());
 }
+
+#[test]
+fn joined_provider_interval_checkpoint_uses_only_the_first_frame_for_scheduling() {
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let first = FirstIntervalCheckpoint::default();
+    let held = first.enter(b"first original frame").unwrap();
+    let ready = Barrier::new(2);
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            assert!(first.enter(b"other original frame").is_none());
+            let limits = norito::DecodeLimits::new(8, 8, 8, 0, 8);
+            norito::core::with_decode_limits_scope(limits, || {
+                assert!(first.enter(b"first original frame").is_none());
+            });
+            ready.wait();
+            let _second = first.enter(b"first original frame").unwrap();
+            finished.store(true, Ordering::Release);
+        });
+        ready.wait();
+        assert!(!finished.load(Ordering::Acquire));
+        drop(held);
+        worker.join().unwrap();
+    });
+    assert!(finished.load(Ordering::Acquire));
+}

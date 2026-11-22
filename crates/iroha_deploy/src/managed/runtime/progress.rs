@@ -24,6 +24,7 @@ pub(super) enum Phase {
     CustodyMaterial,
     StreamTokenRevision,
     CarrierPeers,
+    GatewayValidation,
 }
 impl Phase {
     fn description(self) -> &'static str {
@@ -49,6 +50,7 @@ impl Phase {
             Self::PromotedCatalog => "checking the exact promoted catalog after restart",
             Self::ProviderAdvertisement => "publishing the original provider advertisement",
             Self::Discovery => "authenticating current native provider and signer discovery",
+            Self::GatewayValidation => "checking the owned gateways and their launch configuration",
             Self::CustodyRenewal => "recovering and advancing the exact bounded custody renewal",
         }
     }
@@ -91,6 +93,7 @@ impl Progress {
             15 => Phase::CustodyMaterial,
             16 => Phase::StreamTokenRevision,
             17 => Phase::CarrierPeers,
+            18 => Phase::GatewayValidation,
             _ => Phase::Selection,
         }
     }

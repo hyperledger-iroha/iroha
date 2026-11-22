@@ -83,12 +83,13 @@ impl RuntimeSelection {
         let intent = authority.original_intent()?;
         // This read owns one bounded immutable import workspace for its three fresh children.
         // It carries no source, wallet, current-state or authority verdict beyond this call.
-        let imports = CheckpointImportScope::for_original(authority);
+        let read = intent.runtime_read();
+        let imports =
+            CheckpointImportScope::for_provider_intervals(authority, parallel && read.is_some());
         #[cfg(test)]
         let imports = tests::import_scope_tests::select_scope(imports);
         // Only immutable projections share this view. Every mutable child read below retains
         // its ordinary native admission, and no projection escapes the full-image exit check.
-        let read = intent.runtime_read();
         let result = (|| {
             // RuntimeSelection owns its original projection; copy only at that ownership boundary.
             let plans = intent.provider_plans()?.clone();
