@@ -196,8 +196,26 @@ public final class KagemushaSpartanWalletV1: @unchecked Sendable {
     return try prepareOwned(.receive, [requestId, payment.encoded])
   }
 
+  /// Prepare one deferred ArchiveSent from the exact receipt retained for this Send.
+  public func prepareArchiveSent(sendOperationId: Data, credited: IrohaPeerWireMessageV1) throws -> KagemushaSpartanReviewV1 {
+    guard !retainedOutputsOnly else { throw KagemushaWalletErrorV1.invalidInput }
+    return try prepareCommand(.archiveSent, Self.archiveSentCommand(sendOperationId: sendOperationId, credited: credited))
+  }
+
+  static func archiveSentCommand(sendOperationId: Data, credited: IrohaPeerWireMessageV1) throws -> Data {
+    guard sendOperationId.count == 32, sendOperationId.contains(where: { $0 != 0 }),
+          credited.profile == .kagemushaSpartanPaymentV3, credited.kind == .credited, credited.encoding == .none,
+          credited.canonicalPayload.count <= 10_084 - IrohaPeerWireMessageV1.headerBytes else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    return try ownedCommand(.archiveSent, [sendOperationId, credited.encoded])
+  }
+
   private func prepareOwned(_ operation: KagemushaSpartanOperationV1, _ originals: [Data]) throws -> KagemushaSpartanReviewV1 {
-    let command = try Self.ownedCommand(operation, originals)
+    try prepareCommand(operation, Self.ownedCommand(operation, originals))
+  }
+
+  private func prepareCommand(_ operation: KagemushaSpartanOperationV1, _ command: Data) throws -> KagemushaSpartanReviewV1 {
     return try prepare(witness: command, predecessorHead: Data()) { original in
       let projection = try KagemushaSpartanReviewProjectionV1(original)
       guard projection.operation == operation else { throw KagemushaWalletErrorV1.invalidNativeOutput }
@@ -621,7 +639,7 @@ public struct KagemushaSpartanTimeIntervalV1: Sendable {
 }
 
 public enum KagemushaSpartanOutputV1: UInt32, Sendable { case head = 0, payment = 1, completion = 2, unloadClaim = 3 }
-public enum KagemushaSpartanOperationV1: UInt8, Sendable { case bootstrap = 1, load = 2, send = 3, receive = 4 }
+public enum KagemushaSpartanOperationV1: UInt8, Sendable { case bootstrap = 1, load = 2, send = 3, receive = 4, archiveSent = 5 }
 
 public enum KagemushaSpartanRetainedOutputV1: Sendable {
   case unknown, pending, archived, deliveryLoss, released(Data)
@@ -656,6 +674,9 @@ public struct KagemushaSpartanReviewProjectionV1: Sendable {
     guard bytes[0] == 1, bytes[1] == 0,
       let operation = KagemushaSpartanOperationV1(rawValue: bytes[2])
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    if operation == .archiveSent && bytes[131..<227].contains(where: { $0 != 0 }) {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
     func word(_ offset: Int) -> UInt64 {
       (0..<8).reduce(UInt64(0)) { $0 | (UInt64(bytes[offset + $1]) << ($1 * 8)) }
     }
@@ -953,7 +974,8 @@ public struct KagemushaSpartanReceiverCreditStatusV1: Sendable {
   init(_ reply: KagemushaSpartanReplyV1) throws {
     let issued = try reply.issuedCreditStatus()
     message = issued
-    outcome = issued.canonicalPayload[8] == 0 ? .credited : .burned
+    guard let status = issued.spartanCreditOutcome else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    outcome = status
   }
 }
 
@@ -992,9 +1014,9 @@ struct KagemushaSpartanReplyV1 {
     guard message.profile == .kagemushaSpartanPaymentV3, message.kind == .credited else {
       throw KagemushaWalletErrorV1.invalidInput
     }
-    switch (bytes[0], message.canonicalPayload[8]) {
-    case (1, 0): return .credited
-    case (0, 1): return .burned
+    switch (bytes[0], message.spartanCreditOutcome) {
+    case (1, .credited): return .credited
+    case (0, .burned): return .burned
     default: throw KagemushaWalletErrorV1.invalidNativeOutput
     }
   }

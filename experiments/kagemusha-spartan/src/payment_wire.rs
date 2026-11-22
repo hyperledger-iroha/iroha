@@ -67,7 +67,7 @@ pub(crate) fn admit_send_profile(pair: &TrustedProfile) -> Result<Sizes, String>
     genuine_sizes(pair_bytes)
 }
 
-fn genuine_sizes(pair: usize) -> Result<Sizes, String> {
+pub(crate) fn genuine_sizes(pair: usize) -> Result<Sizes, String> {
     if pair > MAX_ENVELOPE_BYTES {
         return Err("installed Send exceeds Payment envelope limit".into());
     }

@@ -184,7 +184,7 @@ fn prove_funded_pair(parents: Option<RootedParents<'_>>) {
     );
     let payer_key = &credential.bytes[130..195];
     assert_eq!(
-        &payer_key[..],
+        payer_key,
         &bootstrap_objects::sec1(bootstrap_objects::key(
             bootstrap_objects::Identity::Payer.secret()
         ))

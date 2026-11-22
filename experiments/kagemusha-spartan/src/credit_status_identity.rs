@@ -35,7 +35,17 @@ impl VerifiedSentDelivery<'_> {
     }
 
     pub(in crate::native) fn wire_status(&self) -> Result<KagemushaWalletCreditStatusV1> {
-        let e = self.receiver_evidence();
+        self.receiver_evidence().wire_status(
+            self.payment().statement()[17], self.payment().digest(), self.outcome(),
+        )
+    }
+}
+
+impl crate::native::sent_delivery::ReceiverEvidence {
+    pub(in crate::native) fn wire_status(
+        &self, credit: Fp, payment: Fp, outcome: VerifiedCreditStatus,
+    ) -> Result<KagemushaWalletCreditStatusV1> {
+        let e = self;
         let s = &e.statement;
         let context = &e.profile[bc::CONTEXT_IO..bc::CONTEXT_IO + bc::FIELDS];
         let lineage = &e.profile[bc::LINEAGE_IO..bc::LINEAGE_IO + bc::LINEAGE_FIELDS];
@@ -105,9 +115,9 @@ impl VerifiedSentDelivery<'_> {
             receipt,
             lineage: KagemushaWalletLineageV1 { public, proof: e.exact_pair.clone() },
             opening: KagemushaWalletCreditOpeningV1 {
-                credit_id: self.payment().statement()[17].to_repr(),
-                payment_digest: self.payment().digest().to_repr(),
-                burned: self.outcome() == VerifiedCreditStatus::Burned,
+                credit_id: credit.to_repr(),
+                payment_digest: payment.to_repr(),
+                burned: outcome == VerifiedCreditStatus::Burned,
                 next_key: e.next.to_repr(),
                 slot: e.slot,
                 siblings: e.siblings.iter().flat_map(|word| word.to_repr()).collect(),

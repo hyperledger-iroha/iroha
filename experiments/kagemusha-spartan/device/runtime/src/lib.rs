@@ -61,7 +61,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     };
     let (bundle, manifest, signature) = read_artifacts(artifacts)?;
     measurements.program_bundle(&bundle);
-    let parameters = native::device_fixture::install(&bundle, &manifest, signature)
+    let parameters = install_device_parameters(artifacts, &bundle, &manifest, signature)
         .map_err(|e| format!("authenticate signed device parameters: {e:?}"))?;
     let scheme = native::device_fixture::scheme();
     let mut f = advance::engineering_fixture::installed_fixture(
@@ -228,7 +228,7 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     ];
     let runtime =
         FutureRuntime::from_installed(provider, parameters, native::device_fixture::scheme(), ());
-    #[cfg(test)]
+    let five_families = native::AuthenticatedParameters::is_five_manifest(&manifest);
     let verification = runtime.authenticated_parameters();
     let mut runtime = SessionAdapter::new(runtime, &bundle, &manifest, &signature)?;
     // Each later owner re-reads the immutable artifact files, as a restarted
@@ -244,9 +244,29 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     let slot = admission.slot;
     #[cfg(test)]
     if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
-        && matches!(stage.as_str(), "refresh-prepare" | "refresh-execute" | "refresh-recover")
+        && matches!(
+            stage.as_str(),
+            "ordinary-receive" | "ordinary-recover" | "ordinary-verify-prepare" | "ordinary-prepare"
+        )
     {
-        let wallet = bootstrap.input.credential.body[66..98].try_into().expect("credential wallet");
+        let wallet = bootstrap.input.credential.body[66..98]
+            .try_into()
+            .expect("credential wallet");
+        drop(verification);
+        return host_tests::ordinary_receive::exercise(
+            root, &mut runtime, &slot.0, &wallet, &stage, measurements,
+        );
+    }
+    #[cfg(test)]
+    if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
+        && matches!(
+            stage.as_str(),
+            "refresh-prepare" | "refresh-execute" | "refresh-recover"
+        )
+    {
+        let wallet = bootstrap.input.credential.body[66..98]
+            .try_into()
+            .expect("credential wallet");
         return host_tests::retained_refresh::check(root, &mut runtime, &slot.0, wallet, &stage);
     }
     #[cfg(test)]
@@ -256,6 +276,30 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         return host_tests::verify_retained_credit(root, &mut runtime, &slot.0, &verification);
     }
     #[cfg(test)]
+    if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
+        && matches!(stage.as_str(), "retained-archive-refusal-v4" | "archive-execute-v5" | "archive-recover-v5")
+    {
+        let stage = match stage.as_str() {
+            "archive-execute-v5" => ArchiveStage::Execute,
+            "archive-recover-v5" => ArchiveStage::Recover,
+            _ => ArchiveStage::Unavailable,
+        };
+        return verify_retained_archive(root, &mut runtime, &slot.0, &verification, stage, measurements);
+    }
+    let archive_ready = root.join("archive-ready-after-receive.bin");
+    if five_families && archive_ready.try_exists().map_err(fail)? {
+        let operation = read_fixture_digest(&archive_ready, "saved Receive operation")?;
+        let receive = runtime.output(&slot.0, &operation, 2)?;
+        if receive.status != 1 {
+            return Err("ArchiveSent fixture requires the exact retained Receive".into());
+        }
+        let stage = if root.join("archive-completion.norito").try_exists().map_err(fail)? {
+            ArchiveStage::Recover
+        } else {
+            ArchiveStage::Execute
+        };
+        return verify_retained_archive(root, &mut runtime, &slot.0, &verification, stage, measurements);
+    }
     drop(verification);
     let operation = operation_id(&witness);
     let exact = complete(
@@ -545,7 +589,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             "cold_receiver_source_and_independent_peer",
             || {
                 let status = runtime.credit_status_for_payment(
-                    slot.0, [0x39; 32], receive_operation, &payment_bytes,
+                    slot.0,
+                    [0x39; 32],
+                    receive_operation,
+                    &payment_bytes,
                 )?;
                 let verify =
                     |wire: &[u8], request: &[u8], payer: &native::VerifiedIncomingPayment| {
@@ -684,7 +731,12 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     }
     #[cfg(test)]
     credit_status_check?;
-    std::fs::write(root.join("complete-payment.bin"), &outgoing).map_err(fail)?;
+    save_fixture_input(&root.join("complete-payment.bin"), &outgoing)?;
+    // Handset launches four and five exercise ArchiveSent only after launch three
+    // has recovered Receive and both exact Payments without another transfer.
+    if five_families && measurements.was_retained("Receive") {
+        save_fixture_input(&archive_ready, &receive_operation)?;
+    }
     Ok(format!(
         "{key_type} keys. C dispatch, account admission and its rejection cases, finalized Load100, Send10, receipt of the returned Payment and cold recovery passed. Native verified the credit and both original Payments. Outgoing and incoming Payments are {} and {} bytes.",
         outgoing.len(),
@@ -711,7 +763,7 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
     fn open(&self) -> Result<(SessionAdapter, Arc<native::AuthenticatedParameters>)> {
         let (bundle, manifest, signature) = read_artifacts(self.artifacts)?;
         let parameters =
-            native::device_fixture::install(&bundle, &manifest, signature).map_err(fail)?;
+            install_device_parameters(self.artifacts, &bundle, &manifest, signature)?;
         let provider: NativeProviderV1<_, _> = advance::KagemushaWalletProviderV1::open(
             advance::KagemushaWalletStdFsV1::open(self.custody).map_err(fail)?,
             self.platform.clone(),
@@ -737,6 +789,32 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
         )?;
         Ok((runtime, verification))
     }
+}
+
+fn read_fixture_digest(path: &Path, name: &str) -> Result<[u8; 32]> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{name}: {e}"))?;
+    let mut digest = [0; 32];
+    file.read_exact(&mut digest).map_err(fail)?;
+    if file.read(&mut [0; 1]).map_err(fail)? != 0 {
+        return Err(format!("{name} length"));
+    }
+    Ok(digest)
+}
+
+fn install_device_parameters(
+    artifacts: &Path,
+    bundle: &[u8],
+    manifest: &[u8],
+    signature: [u8; 64],
+) -> Result<native::AuthenticatedParameters> {
+    let selected = if native::AuthenticatedParameters::is_five_manifest(manifest) {
+        Some(read_fixture_digest(&artifacts.join("world-manifest-digest.bin"), "fixture World manifest digest")?)
+    } else {
+        None
+    };
+    native::device_fixture::install_selected(bundle, manifest, signature, selected.as_ref())
+        .map_err(fail)
 }
 
 fn read_artifacts(artifacts: &Path) -> Result<(Vec<u8>, Vec<u8>, [u8; 64])> {
@@ -857,6 +935,111 @@ fn software_advance(
     Ok((capsule, completed))
 }
 
+#[derive(Clone, Copy)]
+enum ArchiveStage {
+    Execute,
+    Recover,
+    Unavailable,
+}
+
+/// Exercise the public ArchiveSent action against the selected fixture generation.
+fn verify_retained_archive(
+    root: &Path,
+    runtime: &mut SessionAdapter,
+    slot: &[u8; 32],
+    parameters: &native::AuthenticatedParameters,
+    stage: ArchiveStage,
+    measurements: &mut Measurements,
+) -> Result<String> {
+    let outgoing = std::fs::read(root.join("complete-payment.bin")).map_err(fail)?;
+    let credited = std::fs::read(root.join("outgoing-credit-status.bin")).map_err(fail)?;
+    let payment = native::NativeEngine::default()
+        .verify_payment(&outgoing, parameters)
+        .map_err(fail)?;
+    let send = payment.receipt().body[114..146]
+        .try_into()
+        .expect("fixed Send operation");
+    if !runtime.verify_credit_status(*slot, send, &[], &credited)? {
+        return Err("retained CreditStatus must verify as credited".into());
+    }
+    let before = runtime.output(slot, &[0; 32], 3)?;
+    if before.status != 101 || before.bytes.len() != 196 || before.bytes[2] != 3 {
+        return Err("ArchiveSent fixture requires a released wallet".into());
+    }
+    let command = wallet_action(5, &[&send, &credited])?;
+    if !matches!(stage, ArchiveStage::Unavailable) {
+        let recovered = matches!(stage, ArchiveStage::Recover);
+        let completion_path = root.join("archive-completion.norito");
+        if recovered != completion_path.is_file() {
+            return Err("ArchiveSent fixture stage does not match its saved completion".into());
+        }
+        let mut damaged = credited;
+        *damaged.last_mut().ok_or("empty CreditStatus")? ^= 1;
+        if runtime.prepare(slot, &wallet_action(5, &[&send, &damaged])?, &[]).is_ok()
+            || before.bytes != runtime.output(slot, &[0; 32], 3)?.bytes
+        {
+            return Err("altered CreditStatus was admitted or moved the released head".into());
+        }
+        let prepared = measurements.measure("ArchiveSent", "prepare", || runtime.prepare(slot, &command, &[]))?;
+        let review = prepared.review;
+        if review.len() != 291 || review[..3] != [1, 0, 5] || review[131..227] != [0; 96] {
+            return Err("ArchiveSent must have zero monetary and destination review terms".into());
+        }
+        let operation: [u8; 32] = review[67..99].try_into().expect("fixed financial review");
+        let selected = before.bytes[68..100] == operation;
+        if (recovered && !selected) || (!selected && review[227..259] != before.bytes[100..132]) {
+            return Err("ArchiveSent review does not follow the released state".into());
+        }
+        let phase = if selected { "exact_retry" } else { "execute" };
+        let reply = measurements.measure("ArchiveSent", phase, || runtime.execute(prepared.token))?;
+        runtime.discard(prepared.token)?;
+        let after = runtime.output(slot, &[0; 32], 3)?;
+        let retained = runtime.output(slot, &operation, 2)?;
+        if reply.status != 1 || retained.status != 1 || retained.bytes != reply.bytes
+            || after.status != 101 || after.bytes.len() != 196 || after.bytes[2] != 3
+            || after.bytes[68..100] != operation || after.bytes[100..132] != review[259..291]
+            || before.bytes[148..196] != after.bytes[148..196]
+        {
+            return Err("ArchiveSent did not retain the reviewed successor and wallet value".into());
+        }
+        let wallet = review[35..67].try_into().expect("fixed review wallet");
+        let completion = native::CompletionRecord::decode(&reply.bytes, &wallet).map_err(fail)?;
+        if completion.operation_id() != &operation || !completion.output_part(1).map_err(fail)?.is_empty() {
+            return Err("ArchiveSent completion changed operation or produced a Payment".into());
+        }
+        if selected && after.bytes != before.bytes {
+            return Err("exact ArchiveSent retry moved the released head".into());
+        }
+        if recovered {
+            if reply.bytes != std::fs::read(completion_path).map_err(fail)? {
+                return Err("cold ArchiveSent replay changed the selected state or exact completion".into());
+            }
+        } else {
+            let sequence = |head: &[u8]| u128::from_le_bytes(head[132..148].try_into().unwrap());
+            if !selected && sequence(&before.bytes).checked_add(1) != Some(sequence(&after.bytes)) {
+                return Err("ArchiveSent must advance the wallet sequence exactly once".into());
+            }
+            save_fixture_input(&completion_path, &reply.bytes)?;
+        }
+        runtime.close()?;
+        return Ok(format!("Verified ArchiveSent {phase}, {} exact completion bytes, sequence {}.",
+            reply.bytes.len(), u128::from_le_bytes(after.bytes[132..148].try_into().unwrap())));
+    }
+    for _ in 0..2 {
+        runtime.require_invalid_prepare(slot, &command, &[])?;
+        let head = runtime.output(slot, &[0; 32], 3)?;
+        let retry = runtime.output(slot, &send, 1)?;
+        if head.status != before.status
+            || head.bytes != before.bytes
+            || retry.status != 1
+            || retry.bytes != outgoing
+        {
+            return Err("ArchiveSent refusal changed the selected head or outgoing Payment".into());
+        }
+    }
+    Ok("The signed four-kind wallet retained the original head and exact Payment after two ArchiveSent refusals.".into())
+}
+
 fn save_fixture_input(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -928,6 +1111,7 @@ fn operation_id(witness: &native::ExactOperationWitness) -> [u8; 32] {
         | native::ExactOperationWitness::Unload { step, .. } => &step.receipt.body,
         native::ExactOperationWitness::Send(step) => &step.receipt.body,
         native::ExactOperationWitness::Receive { step, .. } => &step.receipt.body,
+        native::ExactOperationWitness::ArchiveSent { step, .. } => &step.receipt.body,
     };
     body[114..146].try_into().unwrap()
 }
@@ -1054,7 +1238,7 @@ fn complete(
     }
     #[cfg(test)]
     let prepared = match counterparty {
-        Some(counterparty) => {
+        Some(counterparty) => measurements.measure(name, "blacklist_reprepare_drill", || {
             let initial_version = if kind == 3 { 1 } else { 3 };
             host_tests::local_blacklist::check(
                 runtime,
@@ -1072,8 +1256,8 @@ fn complete(
                 );
             }
             runtime.discard(prepared.token)?;
-            fresh
-        }
+            Ok(fresh)
+        })?,
         None => prepared,
     };
     if kind == 3 {

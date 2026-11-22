@@ -124,6 +124,13 @@ class IrohaPeerCanonicalPayload(
         validateTypedCanonicalPayload(profile, kind, canonicalBytes)
     }
 
+    /** Outcome bit carried by a structurally valid Spartan receipt. Native authenticates it against its Send. */
+    fun spartanCreditStatusBurned(): Boolean {
+        require(profile == IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 && kind == IrohaPeerPayloadKind.CREDITED)
+        val tag = canonicalBytes[0].toInt() and 0xff
+        return if (tag and 0xe0 == 0xa0) tag and 1 != 0 else canonicalBytes[8].toInt() == 1
+    }
+
     override fun equals(other: Any?): Boolean = other is IrohaPeerCanonicalPayload &&
         profile == other.profile && kind == other.kind && schemaVersion == other.schemaVersion &&
         canonicalBytes.contentEquals(other.canonicalBytes)
@@ -153,6 +160,19 @@ private fun ByteArray.boundedCanonicalCopy(): ByteArray {
  * validates and verifies the message and its companion, and decides its scheme, before acting on it.
  */
 private fun validateSpartanCreditStatus(b: ByteArray) {
+    val flags = b[0].toInt() and 0xff
+    if (flags and 0xe0 == 0xa0) {
+        // Folded later Send. The fixed fields end with the indexed opening's next word and index.
+        val openingEnd = 1 + 336 + 128 + 8 + 32 + 32 + 4
+        val proofStart = if (flags and 0x10 != 0) openingEnd + 32 * 32 else {
+            require(b.size >= openingEnd + 4)
+            val siblings = (openingEnd until openingEnd + 4).sumOf { Integer.bitCount(b[it].toInt() and 0xff) }
+            require(siblings < 32) { "A full opening requires the dense encoding" }
+            openingEnd + 4 + siblings * 32
+        }
+        require(b.size > proofStart) { "The folded Send opening and linked proof are required" }
+        return
+    }
     require(b.size in 9..10_000 && b.copyOfRange(0,8).contentEquals("KGSCST3\u0000".toByteArray(Charsets.US_ASCII)) && b[8].toInt() in 0..1)
     var at = 9
     fun field() {

@@ -16,8 +16,37 @@ use iroha_pasta::{Ep, Eq};
 use std::sync::Arc;
 
 use crate::native::PRODUCER_MATRIX_DIMENSIONS as DIMENSIONS;
+/// Each offline compiler pass explicitly selects the shape it emits and imports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompilerGroup {
+    Three,
+    Four,
+}
+
+impl CompilerGroup {
+    pub(crate) fn import<F: Scalar>(
+        self,
+        bytes: &[u8],
+        primary: bool,
+    ) -> Result<UniformCircuit<F>, String> {
+        match self {
+            Self::Three => UniformCircuit::<F>::import_program(bytes, primary),
+            Self::Four => UniformCircuit::<F>::import_four_variable_program(bytes, primary),
+        }
+    }
+
+    fn of(p: &UniformCircuit<Fp>, s: &UniformCircuit<Fq>) -> Self {
+        match (p.shape.k, s.shape.k) {
+            (3, 3) => Self::Three,
+            (4, 4) => Self::Four,
+            k => panic!("unexpected compiler grouping {k:?}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RunConfig {
+    group: CompilerGroup,
     p_columns: usize,
     s_columns: usize,
     output: std::path::PathBuf,
@@ -55,6 +84,7 @@ impl RunConfig {
         )
         .unwrap();
         Self {
+            group: CompilerGroup::Three,
             p_columns,
             s_columns,
             output,
@@ -64,11 +94,27 @@ impl RunConfig {
 
 type Built<F> = (UniformCircuit<F>, Instance<F>, Witness<F>);
 
-struct Generation {
+/// The compiler computes the pin directly on the in-memory relation before
+/// encoding. The independent reader must reproduce it from the public bytes.
+#[derive(Default)]
+pub(crate) struct CompiledTape {
+    pub(crate) pin: [u8; 32],
+    pub(crate) bytes: Vec<u8>,
+}
+
+impl CompiledTape {
+    pub(crate) fn capture<F: Scalar>(circuit: &UniformCircuit<F>) -> Self {
+        let pin = circuit.program_digest();
+        let bytes = circuit.export_program().expect("canonical public program");
+        Self { pin, bytes }
+    }
+}
+
+pub(crate) struct Generation {
     config: RunConfig,
     /// Selector order is Receive, Send, Bootstrap, Control.
-    kinds: [UniformPair; 4],
-    receiver_boot: UniformPair,
+    pub(crate) kinds: [UniformPair; 4],
+    pub(crate) receiver_boot: UniformPair,
 }
 
 impl Generation {
@@ -118,19 +164,45 @@ fn build<F: Scalar>(
     primary: bool,
     target: Option<Layout>,
 ) -> Built<F> {
+    let columns = if primary {
+        config.p_columns
+    } else {
+        config.s_columns
+    };
+    build_monetary_program_grouped(w, columns, primary, target, config.group)
+}
+
+/// Compile either curve with the label and transcript namespace accepted by
+/// the compact public monetary-program encoder.
+pub(crate) fn build_monetary_program<F: Scalar>(
+    w: Wiring<F>,
+    columns: usize,
+    primary: bool,
+    target: Option<Layout>,
+) -> Built<F> {
+    build_monetary_program_grouped(w, columns, primary, target, CompilerGroup::Three)
+}
+
+pub(crate) fn build_monetary_program_grouped<F: Scalar>(
+    w: Wiring<F>,
+    columns: usize,
+    primary: bool,
+    target: Option<Layout>,
+    group: CompilerGroup,
+) -> Built<F> {
     let (arrays, pi, counts, tables, copies) = w.finish();
-    UniformCircuit::build_with_copies_at(
+    let builder = match group {
+        CompilerGroup::Three => UniformCircuit::build_with_copies_at,
+        CompilerGroup::Four => UniformCircuit::build_group_four_with_copies_at,
+    };
+    builder(
         if primary { "P-uniform" } else { "S-uniform" },
         arrays,
         pi,
         counts,
         tables,
         copies,
-        if primary {
-            config.p_columns
-        } else {
-            config.s_columns
-        },
+        columns,
         64,
         if primary {
             b"full backend P"
@@ -141,7 +213,7 @@ fn build<F: Scalar>(
     )
 }
 
-fn empty_generators(config: &RunConfig) -> PairGens {
+fn empty_generators<const KINDS: usize>(config: &RunConfig) -> PairGens {
     fn empty<F: Scalar>() -> Kind<F> {
         Kind {
             sx: 0,
@@ -155,12 +227,12 @@ fn empty_generators(config: &RunConfig) -> PairGens {
         p: Gens::<Eq>::new(1 << config.p_columns),
         s: Gens::<Ep>::new(1 << config.s_columns),
         defer_p: MatPoly::with_min(
-            std::array::from_fn::<_, 4, _>(|_| empty()),
+            std::array::from_fn::<_, KINDS, _>(|_| empty()),
             DIMENSIONS.0.0,
             DIMENSIONS.0.1,
         ),
         defer_s: MatPoly::with_min(
-            std::array::from_fn::<_, 4, _>(|_| empty()),
+            std::array::from_fn::<_, KINDS, _>(|_| empty()),
             DIMENSIONS.1.0,
             DIMENSIONS.1.1,
         ),
@@ -187,9 +259,15 @@ fn pin_fixture_arrays(w: &mut Wiring<Fp>, start: usize) {
 }
 
 fn seed_secondary(gens: &PairGens, kind: usize) -> Wiring<Fq> {
+    seed_secondary_with_claim(gens, kind, None)
+}
+
+fn seed_secondary_with_claim(
+    gens: &PairGens, kind: usize, claim: Option<&crate::ipa::Claim<Ep>>,
+) -> Wiring<Fq> {
     let mut w = Wiring::default();
     let f = w.family(0, 1);
-    let (_, pin) = kind_pin(&mut w, f, kind);
+    let (_, pin) = kind_pin_in(&mut w, f, gens.defer_s.kinds.len(), kind);
     let bits = w.push(Array {
         name: "seed bit table",
         family: f,
@@ -216,7 +294,11 @@ fn seed_secondary(gens: &PairGens, kind: usize) -> Wiring<Fq> {
         (kind == CONTROL).then_some((crate::control::Mode::Load, shared, 1)),
     );
     deferral::expose_constant(&mut w, f, &gens.defer_s.empty_claim(), LATE_IO);
-    generator_integration::expose_empty(&mut w, f, &gens.s);
+    if let Some(claim) = claim {
+        generator_integration::expose_compiler_claim(&mut w, f, &gens.s, claim);
+    } else {
+        generator_integration::expose_empty(&mut w, f, &gens.s);
+    }
     w
 }
 
@@ -287,12 +369,19 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
         }
         _ => unreachable!(),
     };
-    kind_pin(&mut w, f, step.kind());
-    let is_control = step.kind() == CONTROL;
+    finish_seed(w, f, gens, complete, step.kind(), None)
+}
+
+fn finish_seed(
+    mut w: Wiring<Fp>, f: usize, gens: &PairGens, complete: CompleteOperation, kind: usize,
+    claim: Option<&crate::ipa::Claim<Eq>>,
+) -> Wiring<Fp> {
+    kind_pin_in(&mut w, f, gens.defer_p.kinds.len(), kind);
+    let is_control = kind == CONTROL;
     let values = if is_control {
-        vec![step.kind() as u128, 0, 0]
+        vec![kind as u128, 0, 0]
     } else {
-        vec![step.kind() as u128]
+        vec![kind as u128]
     };
     let shared = p_binding(&mut w, f, &binding_mu(&values), &values);
     let modes = bind_mode_io(
@@ -302,7 +391,11 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
     );
     expose_operation(&mut w, f, &complete, modes);
     deferral::expose_constant(&mut w, f, &gens.defer_p.empty_claim(), LATE_IO);
-    generator_integration::expose_empty(&mut w, f, &gens.p);
+    if let Some(claim) = claim {
+        generator_integration::expose_compiler_claim(&mut w, f, &gens.p, claim);
+    } else {
+        generator_integration::expose_empty(&mut w, f, &gens.p);
+    }
     let mut seen = std::collections::HashSet::new();
     w.tables.retain(|(_, t)| seen.insert(*t));
     w
@@ -433,6 +526,16 @@ fn layouts(
     gens: &PairGens,
     previous: Option<&Generation>,
 ) -> (Layout, Layout) {
+    let (p, s) = ordinary_requirements(config, chain, gens, previous);
+    (bootstrap_layout::common_requirements(&p), bootstrap_layout::common_requirements(&s))
+}
+
+fn ordinary_requirements(
+    config: &RunConfig,
+    chain: &Chain,
+    gens: &PairGens,
+    previous: Option<&Generation>,
+) -> (Vec<Requirements>, Vec<Requirements>) {
     let mut p = Vec::new();
     let mut s = Vec::new();
     // Each natural witness is released before constructing the next kind.
@@ -449,10 +552,7 @@ fn layouts(
         let (c, _, _) = build(config, secondary(gens, plan.as_ref(), step), false, None);
         s.push(Requirements::of(&c));
     }
-    (
-        bootstrap_layout::common_requirements(&p),
-        bootstrap_layout::common_requirements(&s),
-    )
+    (p,s)
 }
 
 /// A completed proof needs only its public verifier program. Dropping the
@@ -585,6 +685,13 @@ fn generation(
     generation: usize,
 ) -> Generation {
     let layout = layouts(config, chain, gens, previous);
+    generation_at(config, chain, gens, previous, generation, layout)
+}
+
+fn generation_at(
+    config: &RunConfig, chain: &Chain, gens: &PairGens, previous: Option<&Generation>,
+    generation: usize, layout: (Layout,Layout),
+) -> Generation {
     eprintln!(
         "full backend generation {generation}: P {:#?}, S {:#?}",
         layout.0, layout.1
@@ -964,6 +1071,40 @@ fn compile_wallet_program_bundle() {
     run_recursive_chain(ChainRun::Compile);
 }
 
+
+/// Construct the ordinary monetary seed predecessors with the proposed three-coordinate
+/// selector and both complete folded claims. The recursive compiler consumes these
+/// private sizing witnesses on its first iteration. It cannot publish any seed tape.
+#[test]
+#[ignore = "proves each complete monetary sizing seed at the proposed five-kind dimensions"]
+fn build_five_kind_monetary_seed_predecessors() {
+    use crate::r1cs::Circuit;
+    let config = RunConfig::from_environment();
+    let gens = empty_generators::<{ crate::deferral::MAX_KINDS }>(&config);
+    let chain = crate::native::device_fixture::chain(&gens.p);
+    let seed = generation(&config, &chain, &gens, None, 0);
+    for p in &seed.kinds {
+        let kind = p.kind;
+        let corner = crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind).unwrap();
+        for (i, slot) in [KIND_IO, KIND_IO + 1, KIND_C2_IO].into_iter().enumerate() {
+            assert_eq!(p.ip.io[slot], Fp::from(corner[i]));
+            assert_eq!(p.is.io[slot], Fq::from(corner[i]));
+        }
+        assert_eq!(p.cp.wallet_io(), Some(TABLE_IO));
+        assert_eq!(p.cs.wallet_io(), None);
+        assert!(p.cp.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_p.n()+1).collect::<Vec<_>>()));
+        assert!(p.cs.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_s.n()+1).collect::<Vec<_>>()));
+        let traced = trace_uniform(p.clone(), &gens);
+        assert_eq!(traced.acc_p, gens.defer_p.empty_claim());
+        assert_eq!(traced.acc_s, gens.defer_s.empty_claim());
+        assert_eq!(matrix_checks(p, &gens), (true, true));
+        let pgen = inherited_generator_claim(&traced.tr_p, &gens.p).unwrap();
+        let sgen = inherited_generator_claim(&traced.tr_s, &gens.s).unwrap();
+        assert!(crate::generator_claim::decide(&gens.p, &pgen));
+        assert!(crate::generator_claim::decide(&gens.s, &sgen));
+    }
+}
+
 enum ChainRun {
     Compile,
     Measure,
@@ -973,7 +1114,7 @@ enum ChainRun {
 fn run_recursive_chain(mode: ChainRun) {
     let config = RunConfig::from_environment();
     eprintln!("full backend test config: {config:?}; dimensions={DIMENSIONS:?}");
-    let seed_gens = empty_generators(&config);
+    let seed_gens = empty_generators::<4>(&config);
     let chain = crate::native::device_fixture::chain(&seed_gens.p);
     let mut previous = generation(&config, &chain, &seed_gens, None, 0);
     let mut unchanged_geometry = 0;
@@ -1598,5 +1739,304 @@ fn fixed_point_compares_all_eight_complete_programs_exactly() {
                 differences[1].starts_with(&format!("kind {kind} {name}: canonical program bytes"))
             );
         }
+    }
+}
+
+/// Initial proof inputs for the ArchiveSent compiler use complete signed monetary
+/// witnesses. As in the ordinary bootstrap compiler, the pre-existing authenticated
+/// profiles are pinned constants in this first sizing pass only.
+pub(crate) struct ArchiveTransferSeed<'a> {
+    pub(crate) predecessor: [Fp; 64],
+    pub(crate) incoming: Option<([Fp; 64], Fp)>,
+    pub(crate) operation: OperationWitness<'a>,
+    pub(crate) primary_opening: crate::ipa::Claim<Eq>,
+    pub(crate) secondary_opening: crate::ipa::Claim<Ep>,
+}
+
+fn archive_seed_primary(generators: &PairGens, seed: ArchiveTransferSeed<'_>) -> Wiring<Fp> {
+    let ArchiveTransferSeed {
+        predecessor,
+        incoming,
+        operation,
+        primary_opening,
+        ..
+    } = seed;
+    let kind = operation.kind();
+    let mut wiring = Wiring::default();
+    let family = wiring.family(0, 1);
+    let prior = VerifiedPredecessor::fixture(&mut wiring, family, predecessor);
+    let incoming = incoming.map(|(profile, digest)| {
+        IncomingProofFacts::fixture(&mut wiring, family, profile, Fp::ONE, digest)
+    });
+    pin_fixture_arrays(&mut wiring, 0);
+    let complete = match operation {
+        OperationWitness::Send(witness) => {
+            assert!(incoming.is_none());
+            CompleteOperation::Send(
+                crate::send::append(&mut wiring, family, witness, &prior).unwrap(),
+            )
+        }
+        OperationWitness::Receive(witness) => CompleteOperation::Receive(
+            crate::receive::append(&mut wiring, family, witness, &prior, &incoming.unwrap())
+                .unwrap(),
+        ),
+        _ => panic!("compiler transfer seeds are signed Send and Receive originals"),
+    };
+    finish_seed(wiring, family, generators, complete, kind, Some(&primary_opening))
+}
+
+pub(crate) fn archive_seed_transfer(
+    generators: &PairGens,
+    layout: (Layout, Layout),
+    seed: ArchiveTransferSeed<'_>,
+    group: CompilerGroup,
+) -> UniformPair {
+    let kind = seed.operation.kind();
+    let secondary = seed_secondary_with_claim(generators, kind, Some(&seed.secondary_opening));
+    let wiring = archive_seed_primary(generators, seed);
+    let (cp, ip, mut wp) = build_monetary_program_grouped(
+        wiring,
+        generators.p.g.len().ilog2() as usize,
+        true,
+        Some(layout.0),
+        group,
+    );
+    let (cs, is, mut ws) = build_monetary_program_grouped(
+        secondary,
+        generators.s.g.len().ilog2() as usize,
+        false,
+        Some(layout.1),
+        group,
+    );
+    let proof = crate::prove_linked_pair(
+        "ArchiveSent compiler transfer seed",
+        kind,
+        &cp,
+        &ip,
+        &wp,
+        &cs,
+        &is,
+        &ws,
+    );
+    assert!(proof.ok);
+    zeroize::Zeroize::zeroize(&mut wp);
+    zeroize::Zeroize::zeroize(&mut ws);
+    let cp = retain_public_program(cp, true);
+    let cs = retain_public_program(cs, false);
+    crate::linked_uniform(&cp, ip, &cs, is, proof, kind)
+}
+
+/// The exact five-coordinate ordinary IO and both folds are already present
+/// in genuine Bootstrap programs. At the proposed common target these tapes
+/// determine the retail proof byte layout before proving a seed operation.
+pub(crate) fn archive_seed_bootstrap_programs(
+    primary: &UniformCircuit<Fp>,
+    secondary: &UniformCircuit<Fq>,
+    chain: &Chain,
+) -> (PairGens, UniformCircuit<Fp>, UniformCircuit<Fq>) {
+    let config = archive_config(primary, secondary);
+    let empty = empty_generators::<{ crate::deferral::MAX_KINDS }>(&config);
+    let p = build(
+        &config,
+        seed_primary(chain, &empty, Step::SenderBoot),
+        true,
+        Some(primary.layout()),
+    )
+    .0;
+    let s = build(
+        &config,
+        seed_secondary(&empty, BOOTSTRAP),
+        false,
+        Some(secondary.layout()),
+    )
+    .0;
+    assert_eq!(
+        (p.layout(), s.layout()),
+        (primary.layout(), secondary.layout())
+    );
+    (empty, p, s)
+}
+
+pub(crate) fn archive_seed_family(
+    primary: &Arc<UniformCircuit<Fp>>,
+    secondary: &Arc<UniformCircuit<Fq>>,
+    chain: &Chain,
+    generators: &PairGens,
+) -> (UniformPair, UniformPair, UniformPair) {
+    let cfg = archive_config(primary, secondary);
+    let target = (primary.layout(), secondary.layout());
+    let run = |step| prove_step(&cfg, chain, generators, None, step, target, 0);
+    let boot = run(Step::SenderBoot);
+    let receiver_boot = run(Step::ReceiverBoot);
+    let control = run(Step::Load);
+    (boot, receiver_boot, control)
+}
+
+fn archive_config(p: &UniformCircuit<Fp>, s: &UniformCircuit<Fq>) -> RunConfig {
+    RunConfig {
+        group: CompilerGroup::of(p, s),
+        p_columns: p.shape.col_bits,
+        s_columns: s.shape.col_bits,
+        output: Default::default(),
+    }
+}
+
+impl Generation {
+    pub(crate) fn compiler_group(&self) -> CompilerGroup {
+        self.config.group
+    }
+
+    pub(crate) fn transfer_seeds(kinds: [UniformPair; 4], receiver_boot: UniformPair) -> Self {
+        let config = archive_config(&kinds[0].cp, &kinds[0].cs);
+        assert_eq!(
+            receiver_boot.cp.program_digest(),
+            kinds[BOOTSTRAP].cp.program_digest()
+        );
+        assert_eq!(
+            receiver_boot.cs.program_digest(),
+            kinds[BOOTSTRAP].cs.program_digest()
+        );
+        Self {
+            config,
+            kinds,
+            receiver_boot,
+        }
+    }
+
+    pub(crate) fn archive_seed_requirements(
+        chain: &Chain,
+        columns: [usize; 2],
+        group: CompilerGroup,
+        send: ArchiveTransferSeed<'_>,
+        receive: ArchiveTransferSeed<'_>,
+    ) -> (Vec<Requirements>, Vec<Requirements>) {
+        let config = RunConfig {
+            group,
+            p_columns: columns[0],
+            s_columns: columns[1],
+            output: Default::default(),
+        };
+        let empty = empty_generators::<{ crate::deferral::MAX_KINDS }>(&config);
+        let mut p = Vec::with_capacity(4);
+        let mut s = Vec::with_capacity(4);
+        for (step, exact) in [
+            (Step::Receive, Some(receive)),
+            (Step::Send, Some(send)),
+            (Step::SenderBoot, None),
+            (Step::Load, None),
+        ] {
+            let secondary = seed_secondary_with_claim(
+                &empty, step.kind(), exact.as_ref().map(|seed| &seed.secondary_opening),
+            );
+            let wire = match exact {
+                Some(seed) => archive_seed_primary(&empty, seed),
+                None => seed_primary(chain, &empty, step),
+            };
+            p.push(Requirements::of(&build(&config, wire, true, None).0));
+            s.push(Requirements::of(
+                &build(&config, secondary, false, None).0,
+            ));
+        }
+        (p, s)
+    }
+
+    pub(crate) fn archive_ordinary_requirements(
+        &self,
+        chain: &Chain,
+        gens: &PairGens,
+    ) -> (Vec<Requirements>, Vec<Requirements>) {
+        ordinary_requirements(&self.config, chain, gens, Some(self))
+    }
+
+    pub(crate) fn archive_targets(
+        &self,
+        chain: &Chain,
+        gens: &PairGens,
+        archive: [Requirements; 2],
+        limits: [usize; 2],
+    ) -> (Layout, Layout) {
+        let (mut p, mut s) = ordinary_requirements(&self.config, chain, gens, Some(self));
+        p.push(archive[0]);
+        s.push(archive[1]);
+        let target = |r: &[Requirements], cap| {
+            eprintln!("five natural program requirements {r:?} fixed row limit {cap}");
+            bootstrap_layout::common_export_layout(r, cap).unwrap()
+        };
+        (target(&p, limits[0]), target(&s, limits[1]))
+    }
+
+    pub(crate) fn next_archive_round(
+        &self,
+        chain: &Chain,
+        gens: &PairGens,
+        round: usize,
+        target: (Layout, Layout),
+    ) -> Self {
+        generation_at(&self.config, chain, gens, Some(self), round, target)
+    }
+
+    pub(crate) fn final_wallet_chain(self, chain: &Chain, gens: &PairGens) -> Self {
+        final_chain(chain, gens, self)
+    }
+
+    // Export all eight ordinary tapes at the common five-kind layout BEFORE
+    // proving the round. The fifth tape for either curve comes from ArchiveSent.
+    pub(crate) fn preflight_ordinary(
+        &self,
+        chain: &Chain,
+        gens: &PairGens,
+        target: (Layout, Layout),
+    ) -> ([CompiledTape; 4], [CompiledTape; 4]) {
+        let mut p = std::array::from_fn(|_| CompiledTape::default());
+        let mut s = std::array::from_fn(|_| CompiledTape::default());
+        for step in [Step::Receive, Step::Send, Step::SenderBoot, Step::Load] {
+            let plan = OperationPlan::new(gens, self, step);
+            let kind = step.kind();
+            p[kind] = CompiledTape::capture(
+                &build(
+                    &self.config,
+                    primary(chain, gens, Some(&plan), step),
+                    true,
+                    Some(target.0),
+                )
+                .0,
+            );
+            s[kind] = CompiledTape::capture(
+                &build(
+                    &self.config,
+                    secondary(gens, Some(&plan), step),
+                    false,
+                    Some(target.1),
+                )
+                .0,
+            );
+            eprintln!(
+                "five-kind program preflight {step:?}: P {} B, S {} B",
+                p[kind].bytes.len(),
+                s[kind].bytes.len()
+            );
+        }
+        (p, s)
+    }
+
+    pub(crate) fn receive_witness(
+        &self,
+        chain: &Chain,
+        gens: &PairGens,
+    ) -> crate::receive::Witness {
+        let pairs = recursive_pairs(self, gens, Step::Receive);
+        let raw = incoming_encoding(&pairs[1]);
+        let valid = incoming_verdict_values(gens, &pairs[1])
+            .into_iter()
+            .all(|b| b == 1);
+        crate::receive_fixture::from_send_with_validity(
+            &chain.receiver_bootstrap,
+            &chain.receiver_key,
+            &chain.send,
+            &raw.bytes,
+            pairs[0].inst_p.io.clone().try_into().unwrap(),
+            valid,
+        )
+        .unwrap()
     }
 }

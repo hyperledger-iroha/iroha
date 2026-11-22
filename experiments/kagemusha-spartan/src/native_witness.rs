@@ -6,6 +6,9 @@ use crate::{
     send_controls::{Charge, QuotaWitness, Segment, Window, WindowSlot},
 };
 use ff::{Field, PrimeField};
+use iroha_data_model::kagemusha::{
+    KagemushaWalletIndexedLeafV1, KagemushaWalletIndexedOpeningV1, KagemushaWalletIndexedRemoveV1,
+};
 
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha.research.kagemusha_spartan.native.ExactWitness.v1")]
@@ -102,6 +105,22 @@ impl Writer {
     fn blob(&mut self, b: &[u8]) {
         self.uint(b.len() as u128, 4);
         self.raw(b);
+    }
+    /// Wire v1 removal witness: each leaf `key ‖ value ‖ next_key`, each opening
+    /// `LE32 slot ‖ 32 siblings`, in removal order. Bytes are kept exactly.
+    fn removal(&mut self, x: &KagemushaWalletIndexedRemoveV1) {
+        for (leaf, opening) in [
+            (&x.predecessor, &x.predecessor_opening),
+            (&x.leaf, &x.leaf_opening),
+        ] {
+            self.raw(&leaf.key);
+            self.raw(&leaf.value);
+            self.raw(&leaf.next_key);
+            self.uint(opening.slot as u128, 4);
+            for sibling in &opening.siblings {
+                self.raw(sibling);
+            }
+        }
     }
 }
 struct Reader<'a> {
@@ -228,12 +247,35 @@ impl<'a> Reader<'a> {
         }
         Ok(q)
     }
-    fn blob(&mut self) -> Result<Arc<[u8]>> {
+    fn blob(&mut self) -> Result<&'a [u8]> {
         let n = usize::try_from(self.uint(4)?).map_err(|_| Error::ResourceLimit)?;
         if n > MAX_RECOVERY_BYTES {
             return Err(Error::ResourceLimit);
         }
-        Ok(self.raw(n)?.into())
+        self.raw(n)
+    }
+    fn removal(&mut self) -> Result<KagemushaWalletIndexedRemoveV1> {
+        let mut pair = || -> Result<(KagemushaWalletIndexedLeafV1, KagemushaWalletIndexedOpeningV1)> {
+            let leaf = KagemushaWalletIndexedLeafV1 {
+                key: self.fixed()?,
+                value: self.fixed()?,
+                next_key: self.fixed()?,
+            };
+            let slot = self.uint(4)? as u32;
+            let mut siblings = [[0; 32]; 32];
+            for sibling in &mut siblings {
+                *sibling = self.fixed()?;
+            }
+            Ok((leaf, KagemushaWalletIndexedOpeningV1 { slot, siblings }))
+        };
+        let (predecessor, predecessor_opening) = pair()?;
+        let (leaf, leaf_opening) = pair()?;
+        Ok(KagemushaWalletIndexedRemoveV1 {
+            predecessor,
+            predecessor_opening,
+            leaf,
+            leaf_opening,
+        })
     }
 }
 pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>> {
@@ -355,6 +397,28 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.blob(incoming_payment);
             4
         }
+        ExactOperationWitness::ArchiveSent {
+            step: x,
+            send_capsule,
+            send_completion,
+            open_request,
+            credit_status,
+        } => {
+            w.fields(&x.before_core);
+            w.fields(&x.before_rest);
+            w.fields(&x.after_core);
+            w.fields(&x.after_rest);
+            w.credential(&x.credential);
+            w.fields(&x.statement);
+            w.receipt(&x.receipt);
+            w.removal(&x.core_removal);
+            w.removal(&x.adjusted_removal);
+            w.blob(send_capsule);
+            w.blob(send_completion);
+            w.blob(open_request);
+            w.blob(credit_status);
+            5
+        }
     };
     super::encode(&Frame {
         version: if kind == 3 { 2 } else { 1 },
@@ -377,8 +441,8 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             let scheme = r.fixed()?;
             let relation = r.fixed()?;
             let root = p256::Point {
-                x: BigUint::from_bytes_be(&r.blob()?),
-                y: BigUint::from_bytes_be(&r.blob()?),
+                x: BigUint::from_bytes_be(r.blob()?),
+                y: BigUint::from_bytes_be(r.blob()?),
             };
             let certificate = crate::certificate::Certificate {
                 body: r.fixed()?,
@@ -413,8 +477,8 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             });
             ExactOperationWitness::Load {
                 step,
-                receipt_original: r.blob()?,
-                finality_original: r.blob()?,
+                receipt_original: r.blob()?.into(),
+                finality_original: r.blob()?.into(),
             }
         }
         3 => ExactOperationWitness::Send(Box::new(crate::send::Witness {
@@ -471,7 +535,27 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             });
             ExactOperationWitness::Receive {
                 step,
-                incoming_payment: r.blob()?,
+                incoming_payment: r.blob()?.into(),
+            }
+        }
+        5 => {
+            let step = Box::new(ArchiveSentWitness {
+                before_core: r.fields()?,
+                before_rest: r.fields()?,
+                after_core: r.fields()?,
+                after_rest: r.fields()?,
+                credential: r.credential()?,
+                statement: r.fields()?,
+                receipt: r.receipt()?,
+                core_removal: r.removal()?,
+                adjusted_removal: r.removal()?,
+            });
+            ExactOperationWitness::ArchiveSent {
+                step,
+                send_capsule: Arc::new(Zeroizing::new(r.blob()?.to_vec())),
+                send_completion: r.blob()?.into(),
+                open_request: r.blob()?.into(),
+                credit_status: r.blob()?.into(),
             }
         }
         6 => {
@@ -486,7 +570,7 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
                 recovery: r.insert()?,
             });
             let bytes = r.blob()?;
-            let destinations = UnloadDestinations::decode_bounded(&bytes)?;
+            let destinations = UnloadDestinations::decode_bounded(bytes)?;
             ExactOperationWitness::Unload {
                 step: Box::new(step),
                 destinations: Box::new(destinations),
@@ -513,7 +597,10 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
         ))),
         _ => return Err(Error::Malformed("recovery operation kind")),
     };
-    if !r.fields.is_empty() || !r.bytes.is_empty() || encode_witness(&out)? != bytes {
+    if !r.fields.is_empty()
+        || !r.bytes.is_empty()
+        || Zeroizing::new(encode_witness(&out)?).as_slice() != bytes
+    {
         return Err(Error::Malformed("recovery canonical original"));
     }
     Ok(out)
@@ -595,6 +682,27 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
             insert(&mut x.maps.consumed_insert);
             search(&mut x.maps.credit_search);
             insert(&mut x.maps.credit_insert);
+        }
+        ExactOperationWitness::ArchiveSent { step: x, .. } => {
+            fn removal(x: &mut KagemushaWalletIndexedRemoveV1) {
+                for (leaf, opening) in [
+                    (&mut x.predecessor, &mut x.predecessor_opening),
+                    (&mut x.leaf, &mut x.leaf_opening),
+                ] {
+                    leaf.key.zeroize();
+                    leaf.value.zeroize();
+                    leaf.next_key.zeroize();
+                    opening.slot.zeroize();
+                    opening.siblings.iter_mut().for_each(Zeroize::zeroize);
+                }
+            }
+            x.before_core.zeroize();
+            x.before_rest.zeroize();
+            x.after_core.zeroize();
+            x.after_rest.zeroize();
+            x.statement.zeroize();
+            removal(&mut x.core_removal);
+            removal(&mut x.adjusted_removal);
         }
     }
 }

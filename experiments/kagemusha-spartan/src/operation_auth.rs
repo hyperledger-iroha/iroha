@@ -353,3 +353,42 @@ pub fn append_current(
 #[cfg(test)]
 #[path = "operation_auth_tests.rs"]
 pub(crate) mod tests;
+
+pub(crate) fn expose(w: &mut Wiring<Fp>, family: usize, offset: usize, values: &[Source]) {
+    let n = values.len().next_power_of_two();
+    let mut v: Vec<_> = values.iter().map(|s| s.value(w)).collect();
+    v.resize(n, Fp::ZERO);
+    let io = w.push(Array {
+        name: "authentication test outputs",
+        family,
+        rho: n.trailing_zeros() as usize,
+        r_count: values.len(),
+        fixed: false,
+        lookups: vec![],
+        widths: vec![255],
+        rows: vec![],
+        values: vec![v],
+    });
+    w.io_arrays.push((io, offset));
+    w.push(Array {
+        name: "authentication test output binding",
+        family,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: vec![],
+        widths: vec![],
+        values: vec![],
+        rows: values
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                [
+                    plus(&s.linear(), &link(io, 0, vec![Some(i)], -Fp::ONE)),
+                    constant(vec![Fp::ONE]),
+                    vec![],
+                ]
+            })
+            .collect(),
+    });
+}

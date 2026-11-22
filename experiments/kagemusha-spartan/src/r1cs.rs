@@ -129,6 +129,84 @@ impl<F: zeroize::Zeroize> zeroize::Zeroize for Witness<F> {
     }
 }
 
+/// A built witness and its public row layout. Dropping it wipes every
+/// written row without materializing the zero and public padding rows.
+pub(crate) struct WrittenWitness<S: zeroize::Zeroize> {
+    witness: Witness<S>,
+    rows: Vec<RowFill>,
+}
+
+impl<S: zeroize::Zeroize> WrittenWitness<S> {
+    pub(crate) fn new(witness: Witness<S>, rows: Vec<RowFill>) -> Self {
+        Self { witness, rows }
+    }
+
+    pub(crate) fn rows(&self) -> &[RowFill] {
+        &self.rows
+    }
+
+    /// Mutable authored values remain under this guard until the proof consumes it.
+    pub(crate) fn parts_mut(&mut self) -> (&mut Witness<S>, &[RowFill]) {
+        (&mut self.witness, &self.rows)
+    }
+
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.witness.w.capacity() * std::mem::size_of::<S>()
+            + self.rows.capacity() * std::mem::size_of::<RowFill>()
+    }
+}
+
+impl<S: zeroize::Zeroize> std::ops::Deref for WrittenWitness<S> {
+    type Target = Witness<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.witness
+    }
+}
+
+impl<S: zeroize::Zeroize> Drop for WrittenWitness<S> {
+    fn drop(&mut self) {
+        let cols = self.witness.w.len() / self.rows.len().max(1);
+        for (row, fill) in self.witness.w.chunks_mut(cols.max(1)).zip(&self.rows) {
+            if *fill == RowFill::Values {
+                row.iter_mut().for_each(zeroize::Zeroize::zeroize);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod written_witness_tests {
+    use super::{RowFill, Witness, WrittenWitness};
+    use std::cell::Cell;
+
+    struct ObserveWipe<'a>(&'a Cell<usize>);
+
+    impl zeroize::Zeroize for ObserveWipe<'_> {
+        fn zeroize(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn releasing_or_unwinding_a_built_witness_wipes_only_written_rows() {
+        for unwind in [false, true] {
+            let cells = [const { Cell::new(0) }; 6];
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _witness = WrittenWitness::new(
+                    Witness { w: cells.iter().map(ObserveWipe).collect() },
+                    vec![RowFill::Values, RowFill::Zero, RowFill::Unit],
+                );
+                if unwind {
+                    panic!("exercise the guard when proving unwinds");
+                }
+            }));
+            assert_eq!(outcome.is_err(), unwind);
+            assert_eq!(cells.map(Cell::into_inner), [1, 1, 0, 0, 0, 0]);
+        }
+    }
+}
+
 /// The relation a proof is about (the toy uniform R1CS, or a sparse circuit).
 /// `z = (w || io)` padded to `2^sz`.
 pub trait Rel<F: Scalar>: Sync {
@@ -153,6 +231,25 @@ pub trait Rel<F: Scalar>: Sync {
     ) -> crate::kern::Split<F> {
         let ex = crate::prof::time("i.eq", || crate::grid::eq_table(rx));
         self.m_table_split(shape, &ex, ra, rb, rc)
+    }
+    /// The first inner round over `M(r_x, .)` and `z`, the relation's last
+    /// use: its values, the challenges `challenge` draws after committing
+    /// them, and M folded by those challenges. By default from the whole
+    /// split table ([`Rel::m_table_split_at`]), the relation dropped first.
+    fn m_first_inner(
+        self: Box<Self>,
+        shape: &Shape,
+        rx: &[F],
+        rabc: [F; 3],
+        basis: &crate::kern::Basis,
+        z: &crate::kern::ZView<'_, '_, F>,
+        challenge: &mut dyn FnMut(&[F]) -> Vec<F>,
+    ) -> crate::kern::FirstInner<F> {
+        let m = crate::prof::time("i.mtable", || {
+            self.m_table_split_at(shape, rx, rabc[0], rabc[1], rabc[2])
+        });
+        drop(self);
+        crate::kern::first_inner_split(basis, m, z, challenge)
     }
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F);
     /// Nonzero entries of A, B and C (0 when the relation is structured).

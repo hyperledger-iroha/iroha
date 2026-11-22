@@ -175,7 +175,7 @@ impl Drop for OutputAllocation {
     }
 }
 
-fn call(f: impl FnOnce(*mut ffi::WalletResult) -> i32) -> Result<Reply> {
+fn call(f: impl FnOnce(&mut ffi::WalletResult) -> i32) -> Result<Reply> {
     let mut out = ffi::WalletResult::default();
     let status = f(&mut out);
     let _allocation = OutputAllocation(out.bytes);
@@ -459,8 +459,51 @@ impl SessionAdapter {
 
     /// Prepare the exact witness and current head through the production C entry.
     pub fn prepare(&mut self, slot: &[u8; 32], witness: &[u8], head: &[u8]) -> Result<Prepared> {
+        let reply = call(|out| self.prepare_export(slot, witness, head, out))?;
+        if reply.status != 82 || reply.token == 0 || !valid_review_projection(&reply.bytes) {
+            return Err("wrong native review response".into());
+        }
+        Ok(Prepared {
+            token: reply.token,
+            review: reply.bytes,
+        })
+    }
+
+    /// Require a generic INVALID refusal with the C entry's empty failure outputs.
+    pub fn require_invalid_prepare(
+        &mut self,
+        slot: &[u8; 32],
+        witness: &[u8],
+        head: &[u8],
+    ) -> Result<()> {
+        let mut out = ffi::WalletResult::default();
+        let returned = self.prepare_export(slot, witness, head, &mut out);
+        let _allocation = OutputAllocation(out.bytes);
+        if empty_invalid_prepare(returned, &out) {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected empty generic INVALID prepare refusal, got return={returned}, status={}, reason={}, platform={}, has_token={}, detail={}, bytes={}",
+                out.status,
+                out.reason,
+                out.platform_code,
+                out.sequence_high != 0 || out.sequence_low != 0,
+                out.detail,
+                out.length,
+            ))
+        }
+    }
+
+    fn prepare_export(
+        &mut self,
+        slot: &[u8; 32],
+        witness: &[u8],
+        head: &[u8],
+        out: &mut ffi::WalletResult,
+    ) -> i32 {
         self.calls[3] += 1;
-        let reply = call(|out| unsafe {
+        // The slot and input slices remain live, and the result is exclusively writable.
+        unsafe {
             ffi::connect_norito_kagemusha_spartan_prepare_v1(
                 self.handle,
                 slot.as_ptr(),
@@ -470,18 +513,7 @@ impl SessionAdapter {
                 head.len(),
                 out,
             )
-        })?;
-        let valid_projection = matches!(
-            (reply.bytes.get(..3), reply.bytes.len()),
-            (Some([1, 0, 1..=4]), 291) | (Some([2, 0, 7]), 243)
-        );
-        if reply.status != 82 || reply.token == 0 || !valid_projection {
-            return Err("wrong native review response".into());
         }
-        Ok(Prepared {
-            token: reply.token,
-            review: reply.bytes,
-        })
     }
 
     /// Registry owner for the Android SDK confirmation of this live fixture review.
@@ -667,8 +699,67 @@ impl Drop for SessionAdapter {
     }
 }
 
+fn valid_review_projection(bytes: &[u8]) -> bool {
+    match (bytes.get(..3), bytes.len()) {
+        (Some([1, 0, 1..=4]), 291) | (Some([2, 0, 7]), 243) => true,
+        (Some([1, 0, 5]), 291) => bytes[131..227].iter().all(|byte| *byte == 0),
+        _ => false,
+    }
+}
+
+fn empty_invalid_prepare(returned: i32, out: &ffi::WalletResult) -> bool {
+    returned == ffi::INVALID
+        && out.status == ffi::INVALID
+        && out.reason == -1
+        && out.platform_code == 0
+        && out.sequence_low == 0
+        && out.sequence_high == 0
+        && out.detail == 0
+        && out.length == 0
+        && out.bytes.is_null()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn archive_prepare_requires_a_native_invalid_refusal_with_empty_outputs() {
+        let refused = || ffi::WalletResult {
+            status: ffi::INVALID,
+            ..ffi::WalletResult::default()
+        };
+        assert!(empty_invalid_prepare(ffi::INVALID, &refused()));
+        assert!(!empty_invalid_prepare(0, &refused()));
+        let changes: [fn(&mut ffi::WalletResult); 9] = [
+            |r| r.status = 82,
+            |r| r.status = ffi::UNAVAILABLE,
+            |r| r.reason = 220,
+            |r| r.platform_code = 20,
+            |r| r.sequence_low = 1,
+            |r| r.sequence_high = 1,
+            |r| r.detail = 1,
+            |r| r.length = 1,
+            |r| r.bytes = std::ptr::dangling_mut(),
+        ];
+        for change in changes {
+            let mut reply = refused();
+            change(&mut reply);
+            assert!(!empty_invalid_prepare(ffi::INVALID, &reply));
+        }
+    }
+    #[test]
+    fn archive_sent_review_refuses_value_or_destination_fields() {
+        let mut review = [0; 291];
+        review[..3].copy_from_slice(&[1, 0, 5]);
+        review[227..].fill(9);
+        assert!(super::valid_review_projection(&review));
+        for i in 131..227 {
+            review[i] = 1;
+            assert!(!super::valid_review_projection(&review));
+            review[i] = 0;
+        }
+        assert!(!super::valid_review_projection(&review[..290]));
+    }
+
     use super::*;
     #[test]
     fn process_metrics_report_actual_os_values_and_parse_threads_strictly() {

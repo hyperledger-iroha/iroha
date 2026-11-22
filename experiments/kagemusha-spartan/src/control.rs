@@ -56,7 +56,8 @@ impl Mode {
     }
 
     /// Decode the complete ordinary-IO mode under the selected matrix kind.
-    /// Non-Control circuits admit the zero mode only.
+    /// Non-Control circuits, ArchiveSent among them, admit the zero mode only:
+    /// no mode word selects a program.
     pub fn for_program(kind: usize, bits: [Fp; 2]) -> Result<Option<Self>, &'static str> {
         let mode = match bits {
             [u, r] if u == Fp::ZERO && r == Fp::ZERO => Self::Load,
@@ -66,7 +67,10 @@ impl Mode {
         };
         match kind {
             crate::full::CONTROL => Ok(Some(mode)),
-            crate::full::BOOTSTRAP | crate::full::SEND | crate::full::RECEIVE
+            crate::full::BOOTSTRAP
+            | crate::full::SEND
+            | crate::full::RECEIVE
+            | crate::full::ARCHIVE_SENT
                 if mode == Self::Load =>
             {
                 Ok(None)

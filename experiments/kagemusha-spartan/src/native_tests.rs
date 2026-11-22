@@ -594,6 +594,7 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
         witness: Arc::new(ExactOperationWitness::Send(Box::new(chain.send.clone()))),
         receipt_body: body,
         receive: None,
+            archive: None,
         predecessor: head,
     };
     let signature = bootstrap::sign(

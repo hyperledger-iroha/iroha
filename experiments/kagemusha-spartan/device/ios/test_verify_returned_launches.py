@@ -7,7 +7,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-verify = runpy.run_path(str(Path(__file__).with_name("verify-returned-launches.py")))["verify"]
+verifier = runpy.run_path(str(Path(__file__).with_name("verify-returned-launches.py")))
+verify, fixture_namespace = verifier["verify"], verifier["fixture_namespace"]
+DOMAIN = b"kagemusha-spartan-fixture-build-namespace-v1"
+
+
+def executable(path, marker, build=b"build-a", size=4096, at=None):
+    """Write a stand-in signed executable; the verifier only hashes and scans its bytes."""
+    data = bytearray(build.ljust(size, b"\0"))
+    if marker:
+        at = size // 2 if at is None else at
+        data[at:at + len(DOMAIN) + 1] = DOMAIN + b"\0"
+    path.write_bytes(bytes(data))
+    return hashlib.sha256(data).hexdigest()
 
 
 class ReturnedLaunchTests(unittest.TestCase):
@@ -19,7 +31,8 @@ class ReturnedLaunchTests(unittest.TestCase):
         assets = self.app / "native-device"
         assets.mkdir(parents=True)
         (self.app / "Info.plist").write_bytes(plistlib.dumps(
-            {"CFBundleIdentifier": "jp.co.soramitsu.kagemusha.spartanfixture"}))
+            {"CFBundleIdentifier": "jp.co.soramitsu.kagemusha.spartanfixture", "CFBundleExecutable": "Fixture"}))
+        self.build = executable(self.app / "Fixture", marker=False)
         (assets / "parameter-manifest.norito").write_bytes(b"unit-test manifest")
         (assets / "program-bundle.norito").write_bytes(b"unit-test programs")
         self.launches = [root / str(i) for i in range(3)]
@@ -57,11 +70,79 @@ class ReturnedLaunchTests(unittest.TestCase):
             (directory / "result.json").write_text(json.dumps(dict(report, result=report["result"] + "\n" + line)))
             (directory / "device-measurements.jsonl").write_bytes(history)
 
+    def build_scoped(self, **change):
+        self.build = executable(self.app / "Fixture", marker=True, **change)
+        manifest = hashlib.sha256(b"unit-test manifest").hexdigest()
+        scope = hashlib.sha256(DOMAIN + b"\0" + bytes.fromhex(self.build) + bytes.fromhex(manifest)).hexdigest()
+        for report in self.reports:
+            report.update(schema="kagemusha-spartan-device-runtime-v2", fixture_namespace=scope,
+                          build_executable_sha256=self.build)
+        return scope
+
     def test_consecutive_launches_and_receive(self):
         self.write_copies()
         result = verify(self.app, self.launches)
         self.assertEqual(result["receive"], {"normal_flow_us": 100, "process_lifetime_peak_rss_bytes": 1200})
         self.assertEqual(result["payments"]["incoming"]["bytes"], 23)
+        manifest = hashlib.sha256(b"unit-test manifest").hexdigest()
+        self.assertEqual((result["scheme"], result["fixture_namespace"], result["build_executable_sha256"]),
+                         ("retained-manifest-only", manifest, self.build))
+
+    def test_verified_archive_and_exact_retry_must_follow_payment_history(self):
+        for index, phase in enumerate(("execute", "exact_retry"), start=3):
+            directory = self.launches[0].parent / str(index)
+            directory.mkdir()
+            self.launches.append(directory)
+            self.reports.append(dict(self.reports[-1], result=f"PASS: Verified ArchiveSent {phase}, 30147 exact completion bytes, sequence 4."))
+            self.metrics.append(dict(self.metrics[-1], events=[{"operation": "ArchiveSent", "phase": p, "returned_ok": True}
+                                                               for p in ("prepare", phase)]))
+        self.write_copies()
+        self.assertEqual([entry["phase"] for entry in verify(self.app, self.launches)["archive"]], ["execute", "exact_retry"])
+        self.metrics[-1]["events"][1]["phase"] = "execute"
+        self.write_copies()
+        with self.assertRaisesRegex(ValueError, "execution on cold retry"):
+            verify(self.app, self.launches)
+
+    def test_retained_app_refuses_build_scoped_reports(self):
+        self.build_scoped()
+        executable(self.app / "Fixture", marker=False)
+        self.write_copies()
+        with self.assertRaisesRegex(ValueError, "build namespace"):
+            verify(self.app, self.launches)
+
+    def test_build_scoped_reports_bind_the_executable_and_manifest(self):
+        scope = self.build_scoped()
+        self.write_copies()
+        result = verify(self.app, self.launches)
+        self.assertEqual((result["scheme"], result["fixture_namespace"], result["build_executable_sha256"]),
+                         ("build-and-manifest-v1", scope, self.build))
+        self.assertNotEqual(scope, result["manifest_sha256"])
+        described = fixture_namespace(self.app)
+        self.assertEqual(described["history_path"], "Library/Application Support/kagemusha-wallet-v1/"
+                         f"spartan-runtime-fixture-{scope}/device-measurements.jsonl")
+        self.assertEqual((described["report_path"], described["payment_key_tag_prefix"]),
+                         (f"Documents/spartan-runtime-result-{scope}.json", f"kgm-ns-w1-{scope}-"))
+        for key, value in [("schema", "kagemusha-spartan-device-runtime-v1"), ("fixture_namespace", None),
+                           ("fixture_namespace", result["manifest_sha256"]),
+                           ("build_executable_sha256", "00" * 32), ("manifest_sha256", "00" * 32)]:
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, "build namespace"):
+                old, self.reports[2][key] = self.reports[2][key], value
+                self.write_copies()
+                verify(self.app, self.launches)
+            self.reports[2][key] = old
+        # Another build (or a re-signed one) with the same manifest selects another namespace.
+        executable(self.app / "Fixture", marker=True, build=b"build-b")
+        self.write_copies()
+        with self.assertRaisesRegex(ValueError, "build namespace"):
+            verify(self.app, self.launches)
+
+    def test_marker_spanning_read_chunks_selects_the_build_scheme(self):
+        for at in [(1 << 20) - 20, (2 << 20) - len(DOMAIN), (1 << 20) - 1]:
+            with self.subTest(at=at):
+                scope = self.build_scoped(size=3 << 20, at=at)
+                self.assertEqual(fixture_namespace(self.app)["fixture_namespace"], scope)
+        executable(self.app / "Fixture", marker=False, size=3 << 20)
+        self.assertEqual(fixture_namespace(self.app)["scheme"], "retained-manifest-only")
 
     def test_resumes_funding_after_interrupted_send_review(self):
         funded = self.metrics[0]

@@ -4,7 +4,7 @@ This standalone crate links the current canonical Rust provider and complete exp
 
 `./build-apple.sh` builds the real iPhone static archive in the persistent `target/aarch64-apple-ios/release/` lane. The explicit iOS 18 deployment floor applies to Rust and C dependencies. The Apple app project lives in `../ios/runtime-project.yml`; it consumes `SPARTAN_DEVICE_ARCHIVE` and `SPARTAN_DEVICE_ARTIFACTS`. The C callbacks are specified in `spartan_device_fixture.h`.
 
-The final host recursive-chain test emits `program-bundle.norito`, `parameter-manifest.norito`, and `parameter-signature.bin` when `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` names an output directory. They contain the actual eight fixed-point verifier programs and independent fixture-root authentication. No placeholder artifact is accepted.
+The final host recursive-chain test emits `program-bundle.norito`, `parameter-manifest.norito`, and `parameter-signature.bin` when `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` names an output directory. They contain the actual eight fixed-point verifier programs and independent fixture-root authentication. No placeholder artifact is accepted. Five-kind device fixtures also carry `world-manifest-digest.bin`, the 32 raw bytes of the independently selected `manifest_digest` from the prepared fixture World. The initial launch and every resumed owner authenticate that selection before opening custody.
 
 The run performs real native enrollment custody and existing Ed25519 account admission, actual hardware Bootstrap, restart recovery, a fixture-genesis BLS-certified synthetic Load100 event, and a Send10 to the fixture's software counterparty wallet B (B signs the Request), confirmed through the platform authentication UI. B then Bootstraps, verifies and Receives that Payment, and pays the same 10 back under a Request signed by this wallet's hardware key through the canonical Request domain. The return Payment is retained in `incoming-payment.bin`, and the launch that proved B's operations stops there (report `stage 1 of 2`): B's proving leaves memory resident that a receiving phone would not hold. The next launch, a fresh process, performs this wallet's Receive from the retained bytes to a verified, durable output in platform custody; that is the measured operation. The completed-Request relation refuses payer == receiver, so the earlier self-transfer cannot be prepared. B's key is a public fixture scalar and B has no platform custody; its three operations are proved in the same process by the same engine and installed programs and are measured separately (`Counterparty*`). Each custody operation checks retained custody before preparing. Re-running after process termination must return the same retained Payments without another Send. After the Receive, a new owner of the same custody (fresh parameter authentication, provider, runtime, C session and account admission, as after a process restart) must return the Receive's exact completion and the exact outgoing Payment through the C output entry, and the verified new head must show the credit and an unchanged burned total. Fresh Native admission refuses invalid Payments before selection. The recursive relation also supports historical Burn outcomes. The generated `complete-payment.bin` (this wallet's outgoing Payment) and `incoming-payment.bin` are complete peer objects; their actual sizes are reported separately from performance or qualification claims. `device-measurements.json` (schema v2) records every phase's wall time and its own peak RSS: exact on Linux/Android (VmHWM reset before the phase), a 5 ms sample maximum elsewhere (`phase_peak_method`; one extra fixture thread). Phases named `*_drill` are fixture checks; `receive_normal_flow_us` is the observed Receive minus its drills and measurement overhead.
 
@@ -74,7 +74,7 @@ done
 
 Apple E5 uses the real App Attest service and key-binding assertion, with effect dispatches and returned originals retained through the actual EnrollmentOwner. Android uses the actual nonexportable hardware key and its original KeyMint attestation chain. This fixture issuer **does not independently verify FI attestation policy before signing E6**. Therefore these runs test native proof/key custody and recovery, not production FI admission, pinned-root/revocation qualification, or physical cross-device payment. The separate host chain covers two wallet identities. No successful full device run is claimed until its actual output is preserved.
 
-Android instrumentation entry: `KagemushaSpartanRuntimeDeviceTest`. Package the actual `libkagemusha_spartan_device_fixture.so` as an androidTest JNI library and the three programs under androidTest assets `spartan-artifacts/`. Use the explicit disposable application namespace through the existing `kagemushaEnrollmentProbeApplicationId` test property. The dedicated nonexported Activity presents the retail SDK's amount, fee, asset and recipient review. The SDK signs the exact Native challenge with the admitted slot's Android Keystore P-256 confirmation key through AndroidX BiometricPrompt and its CryptoObject. Native verifies the signature, its platform origin and the exact review before the device debit can be selected and completed.
+Android instrumentation entry: `KagemushaSpartanRuntimeDeviceTest`. Package the actual `libkagemusha_spartan_device_fixture.so` as an androidTest JNI library and the fixture originals under androidTest assets `spartan-artifacts/`. A five-kind fixture includes the independent World selection alongside the bundle, manifest and signature. Use the explicit disposable application namespace through the existing `kagemushaEnrollmentProbeApplicationId` test property. The dedicated nonexported Activity presents the retail SDK's amount, fee, asset and recipient review. The SDK signs the exact Native challenge with the admitted slot's Android Keystore P-256 confirmation key through AndroidX BiometricPrompt and its CryptoObject. Native verifies the signature, its platform origin and the exact review before the device debit can be selected and completed.
 
 Build the Pixel instrumentation APK from the Iroha root. Set
 `ANDROID_NDK_HOME` to the installed NDK 30.0.16248370, `FIXTURE_INPUTS`
@@ -91,6 +91,9 @@ mkdir -p "$resources/assets/spartan-artifacts" "$resources/jniLibs/arm64-v8a"
 for original in program-bundle.norito parameter-manifest.norito parameter-signature.bin; do
   cp "$FIXTURE_INPUTS/$original" "$resources/assets/spartan-artifacts/$original" || exit 1
 done
+if test -f "$FIXTURE_INPUTS/world-manifest-digest.bin"; then
+  cp "$FIXTURE_INPUTS/world-manifest-digest.bin" "$resources/assets/spartan-artifacts/" || exit 1
+fi
 cargo ndk -t arm64-v8a --platform 26 build --release --locked --offline \
   --manifest-path "$fixture/Cargo.toml" --target-dir "$fixture/target" || exit 1
 cp "$fixture/target/aarch64-linux-android/release/libkagemusha_spartan_device_fixture.so" \
@@ -134,3 +137,14 @@ Select `--resource measurements` or `--resource events` to retain the
 Native measurement JSON or event stream after each launch. The reader checks
 the reported manifest and paths against the APK and the retained report
 against its `spartanReportSha256` from that launch. Measurement retrieval also checks the SHA-256 printed by that launch.
+
+
+### ArchiveSent on the governed five-family fixture
+
+Preserve the first three launch reports for Send, Receive and cold recovery.
+Launch the same build against the same private installation a fourth time.
+It verifies the genuine CreditStatus, refuses a changed status, and archives
+the delivered Send through the public wallet API. A fifth cold launch retries
+the same operation. Its completion bytes, balance and sequence must match the
+fourth launch. The reports name the ArchiveSent phases `execute` and
+`exact_retry`. Both operations use the holder’s existing hardware wallet.

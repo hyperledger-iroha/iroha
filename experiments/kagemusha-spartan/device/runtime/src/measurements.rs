@@ -150,6 +150,9 @@ impl Measurements {
     pub fn retained(&mut self, operation: &str) {
         self.retained_operations.push(operation.into());
     }
+    pub fn was_retained(&self, operation: &str) -> bool {
+        self.retained_operations.iter().any(|name| name == operation)
+    }
     pub fn test_drill_us(&self, operation: &str) -> u64 {
         self.events
             .iter()

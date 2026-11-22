@@ -228,8 +228,26 @@ where
         .map(F::<C>::from_u128)
         .to_vec();
     values.resize(4 + gens.g.len().ilog2() as usize, F::<C>::ZERO);
+    expose_constant_words(w, family, &values, "Bootstrap exact empty generator claim");
+}
+
+/// A transfer component used by the offline compiler binds the actual public
+/// opening of its authenticated retained proof. Its challenges are the exact
+/// transcript values that a monetary Send transports.
+#[cfg(test)]
+pub(super) fn expose_compiler_claim<C: PastaCurve>(
+    w: &mut Wiring<F<C>>, family: usize, gens: &Gens<C>, claim: &Claim<C>,
+) where F<C>: Scalar {
+    assert_eq!(claim.us.len(), gens.g.len().ilog2() as usize);
+    assert!(gc::decide(gens, claim), "retained IPA opening on the compiler generator basis");
+    let mut words = coordinate_limbs::<C>(&claim.g).map(F::<C>::from_u128).to_vec();
+    words.extend_from_slice(&claim.us);
+    expose_constant_words(w, family, &words, "retained compiler generator claim");
+}
+
+fn expose_constant_words<S: Scalar>(w: &mut Wiring<S>, family: usize, values: &[S], name: &'static str) {
     let a = w.push(Array {
-        name: "Bootstrap exact empty generator claim",
+        name,
         family,
         rho: 0,
         r_count: 1,
@@ -242,7 +260,7 @@ where
             .map(|(i, v)| {
                 [
                     plus(&own(i, 1), &constant(vec![-*v])),
-                    constant(vec![F::<C>::ONE]),
+                    constant(vec![S::ONE]),
                     vec![],
                 ]
             })

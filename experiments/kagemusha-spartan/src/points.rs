@@ -105,18 +105,22 @@ struct SqueezeSpec<F> {
     out: [F; 3],
 }
 
-/// A verifier slot that takes a proof of any of three circuit kinds of one
-/// layout (Receive, Send, Bootstrap): the kinds' fixed-row commitments (their
-/// keys' constants) and the binding index of the slot's kind bits c0 (then
-/// c1 next), shared values with c0 c1 = 0. The fixed rows are pinned to
-/// `key0 + c0 (key1 - key0) + c1 (key2 - key0)`, linear in the bits.
+/// A verifier slot that takes a proof of any of two to five circuit kinds of
+/// one layout (Receive, Send, Bootstrap, Control, ArchiveSent): the kinds'
+/// fixed-row commitments (their keys' constants) and the binding index of the
+/// slot's kind bits c0 (then c1 next, and c2 after it with five keys). The
+/// fixed rows are pinned to `key0 + c0 (key1 - key0) + c1 (key2 - key0)`,
+/// plus `c0 c1 (key3 - key2 - key1 + key0)` with four or five keys and
+/// `c2 (key4 - key0)` with five. Fewer than four keys forbid `c0 c1`; five
+/// forbid `c0 c2` and `c1 c2` (the reserved corners), so the selected key is
+/// exactly one installed kind's.
 pub struct KeySelect<'a, C: PastaCurve> {
     pub fixed: Vec<&'a [Aff<C>]>,
     pub kind_at: usize,
 }
 
-/// A constant input's alternative keys: the three kinds' coordinates and the
-/// kind bits' first binding index.
+/// A constant input's alternative keys: the kinds' coordinates and the kind
+/// bits' first binding index.
 type KeyAlt<F> = (Vec<(F, F)>, usize);
 
 /// Binding indices for one proof's shared values.
@@ -664,8 +668,8 @@ where
                 );
                 if let Some(ks) = keys {
                     assert!(
-                        (2..=4).contains(&ks.fixed.len()),
-                        "two to four circuit kinds"
+                        (2..=crate::deferral::MAX_KINDS).contains(&ks.fixed.len()),
+                        "two to five circuit kinds"
                     );
                     assert!(
                         ks.fixed.iter().all(|f| f.len() == ct.fixed.len() - nw),
@@ -1216,8 +1220,12 @@ where
                 let pick = |p: (Fb<C>, Fb<C>)| if cell == 0 { p.0 } else { p.1 };
                 let mut mask = vec![Fb::<C>::ZERO; n_p];
                 let mut val = vec![Fb::<C>::ZERO; n_p];
-                let mut kind_map = [vec![None; n_p], vec![None; n_p]];
-                let mut kind_coef = [vec![Fb::<C>::ZERO; n_p], vec![Fb::<C>::ZERO; n_p]];
+                let mut kind_map = [vec![None; n_p], vec![None; n_p], vec![None; n_p]];
+                let mut kind_coef = [
+                    vec![Fb::<C>::ZERO; n_p],
+                    vec![Fb::<C>::ZERO; n_p],
+                    vec![Fb::<C>::ZERO; n_p],
+                ];
                 let mut product_coef = vec![Fb::<C>::ZERO; n_p];
                 for (i, alt) in &self.consts {
                     let i = *i;
@@ -1231,9 +1239,14 @@ where
                                 kind_coef[b][i] =
                                     pick(keys[0]) - pick(*keys.get(b + 1).unwrap_or(&keys[0]));
                             }
-                            if keys.len() == 4 {
+                            if keys.len() >= 4 {
                                 product_coef[i] = -(pick(keys[3]) - pick(keys[1]) - pick(keys[2])
                                     + pick(keys[0]));
+                            }
+                            if keys.len() == crate::deferral::MAX_KINDS {
+                                // ArchiveSent at (0, 0, 1): linear in c2.
+                                kind_map[2][i] = Some(*at + 2);
+                                kind_coef[2][i] = pick(keys[0]) - pick(keys[4]);
                             }
                         }
                     }
@@ -1272,13 +1285,16 @@ where
         }
         // The fourth kind uses the bilinear basis c0*c1. Three-kind slots
         // still reject 11; four-kind slots authenticate the fourth key exactly.
-        let mut kind_maps = [vec![None; n_p], vec![None; n_p]];
+        let mut kind_maps = [vec![None; n_p], vec![None; n_p], vec![None; n_p]];
         let mut forbidden = vec![Fb::<C>::ZERO; n_p];
         let mut two_kind = vec![Fb::<C>::ZERO; n_p];
         for (i, alt) in &self.consts {
             if let Some((keys, at)) = alt {
                 kind_maps[0][*i] = Some(*at);
                 kind_maps[1][*i] = Some(*at + 1);
+                if keys.len() == crate::deferral::MAX_KINDS {
+                    kind_maps[2][*i] = Some(*at + 2);
+                }
                 pv[4][*i] =
                     w.arrays[shared_a].values[0][*at] * w.arrays[shared_a].values[0][*at + 1];
                 if keys.len() < 4 {
@@ -1294,6 +1310,14 @@ where
         prow.push([c0.clone(), c1.clone(), o(4)]);
         prow.push([o(4), constant(forbidden), vec![]]);
         prow.push([c1.clone(), constant(two_kind), vec![]]);
+        // A five-key slot's c2: Boolean, and never with c0 or c1 (the
+        // reserved corners select no key).
+        if kind_maps[2].iter().any(Option::is_some) {
+            let c2 = shared_link(kind_maps[2].clone(), one);
+            prow.push([c0.clone(), c2.clone(), vec![]]);
+            prow.push([c1.clone(), c2.clone(), vec![]]);
+            prow.push([c2.clone(), c2.clone(), c2]);
+        }
         // These selectors are authenticated shared values, and are locally
         // constrained to the same Boolean domain as the scalar-side selector.
         prow.push([c0.clone(), c0.clone(), c0]);
@@ -2145,3 +2169,7 @@ mod tests {
 #[cfg(test)]
 #[path = "points_total_tests.rs"]
 mod total_tests;
+
+#[cfg(test)]
+#[path = "points_kind_select_tests.rs"]
+mod kind_select_tests;

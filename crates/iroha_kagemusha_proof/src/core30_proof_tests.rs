@@ -144,7 +144,11 @@ fn candidate_send_binds_lean_receive_incoming_q() {
     let total = Instant::now();
     let relation = crate::common::SEND_EVERY;
     let (verifier, send, ordinary_statement) = candidate_step(relation);
-    prove_incoming_q(relation, verifier, send, ordinary_statement, 5, total);
+    let (incoming, _, _) = prove_incoming_q(relation, verifier, send, ordinary_statement, 5, total);
+    incoming
+        .part
+        .decide(&crate::common::vesta_params(16), iroha_pasta::msm::MemoryBudget::DEFAULT)
+        .unwrap();
 }
 
 #[cfg(unix)]

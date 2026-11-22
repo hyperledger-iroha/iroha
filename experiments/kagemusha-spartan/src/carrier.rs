@@ -85,6 +85,23 @@ impl Layout {
     }
 }
 
+/// Compact proof layout retained after checking one circuit tape.
+pub(crate) struct ProjectedSide {
+    pub(crate) shape: Shape,
+    layout: Layout,
+    late_slots: Vec<usize>,
+}
+
+impl ProjectedSide {
+    pub(crate) fn measure<S: Scalar>(shape: Shape, circuit: &dyn Circuit<S>) -> Self {
+        Self {
+            shape,
+            layout: Layout::new(&shape, circuit, 64),
+            late_slots: circuit.late_slots(),
+        }
+    }
+}
+
 /// Trusted fixture context, supplied independently of untrusted carrier bytes.
 /// `id` must identify the caller's exact authorized scheme/VK, not just geometry.
 /// The measurement hook uses an in-memory run-specific fixture context, which
@@ -168,18 +185,33 @@ impl TrustedProfile {
         secondary: &dyn Circuit<Fq>,
         lean: bool,
     ) -> Result<Self, String> {
-        let profile = Self {
+        Self::from_sides(
             id,
-            p_shape,
-            s_shape,
-            p: Layout::new(&p_shape, primary, 64),
-            s: Layout::new(&s_shape, secondary, 64),
-            late_slots: [primary.late_slots(), secondary.late_slots()],
+            [
+                ProjectedSide::measure(p_shape, primary),
+                ProjectedSide::measure(s_shape, secondary),
+            ],
             lean,
-        };
-        profile.p.check(&p_shape)?;
-        profile.s.check(&s_shape)?;
-        Ok(profile)
+        )
+    }
+
+    pub(crate) fn from_sides(
+        id: [u8; 32],
+        sides: [ProjectedSide; 2],
+        lean: bool,
+    ) -> Result<Self, String> {
+        let [p, s] = sides;
+        p.layout.check(&p.shape)?;
+        s.layout.check(&s.shape)?;
+        Ok(Self {
+            id,
+            p_shape: p.shape,
+            s_shape: s.shape,
+            p: p.layout,
+            s: s.layout,
+            late_slots: [p.late_slots, s.late_slots],
+            lean,
+        })
     }
 }
 
@@ -247,7 +279,11 @@ impl ProjectedInputs {
         bits: [Fp; 2],
     ) -> Result<Self, String> {
         let mode = crate::control::Mode::for_program(kind, bits)?;
-        if kind > crate::full::CONTROL || crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
+        // Whether `kind` is installed is the parameter owner's decision (its
+        // program count); this reconstruction only names its exact corner.
+        let corner = crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind)
+            .map_err(|_| "invalid projected kind or table commitment")?;
+        if crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
             return Err("invalid projected kind or table commitment".into());
         }
         let mut p = vec![Fp::ZERO; 64];
@@ -262,11 +298,14 @@ impl ProjectedInputs {
         let start = crate::bootstrap_context::LINEAGE_IO;
         p[start..start + lineage.len()].copy_from_slice(&lineage);
         p[crate::full::TABLE_IO..crate::full::TABLE_IO + 4].copy_from_slice(&table);
-        let (a, b) = crate::deferral::kind_bits(kind);
-        p[crate::full::KIND_IO] = Fp::from(a as u64);
-        p[crate::full::KIND_IO + 1] = Fp::from(b as u64);
-        s[crate::full::KIND_IO] = Fq::from(a as u64);
-        s[crate::full::KIND_IO + 1] = Fq::from(b as u64);
+        let [a, b, c2] = corner;
+        p[crate::full::KIND_IO] = Fp::from(a);
+        p[crate::full::KIND_IO + 1] = Fp::from(b);
+        s[crate::full::KIND_IO] = Fq::from(a);
+        s[crate::full::KIND_IO + 1] = Fq::from(b);
+        // Zero for the four signed kinds, exactly as their unused input.
+        p[crate::full::KIND_C2_IO] = Fp::from(c2);
+        s[crate::full::KIND_C2_IO] = Fq::from(c2);
         let offset = crate::control::MODE_IO;
         p[offset..offset + 2].copy_from_slice(&bits);
         s[offset..offset + 2].copy_from_slice(&mode.map_or([0, 0], |m| m.bits()).map(Fq::from));

@@ -10,6 +10,27 @@ use iroha_pasta::{
 };
 use std::ops::Range;
 
+/// Extent of a deferred matrix query. The x and y coordinates unused by
+/// every selected circuit are identically zero, including after folding.
+pub(in crate::native) struct MatrixQueryLayout {
+    pub words: usize,
+    pub dimensions: [usize; 2],
+    pub occupied: [usize; 2],
+}
+
+impl MatrixQueryLayout {
+    fn from_polynomial<S: Scalar>(poly: &deferral::MatPoly<S>) -> Self {
+        Self {
+            words: poly.n(),
+            dimensions: [poly.x, poly.y],
+            occupied: [
+                poly.kinds.iter().map(|kind| kind.sx).max().unwrap_or(0),
+                poly.kinds.iter().map(|kind| kind.sz).max().unwrap_or(0),
+            ],
+        }
+    }
+}
+
 struct Side {
     query: Vec<usize>,
     value: usize,
@@ -18,9 +39,9 @@ struct Side {
 }
 
 impl Side {
-    fn new<S: Scalar>(
+    fn new(
         layout: (usize, &[usize], usize),
-        poly: &deferral::MatPoly<S>,
+        matrix: MatrixQueryLayout,
     ) -> Result<Self, String> {
         let (start, slots, columns) = layout;
         let offset = |slot: usize| {
@@ -30,20 +51,22 @@ impl Side {
                 .map(|i| start + 32 * i)
                 .ok_or_else(|| "missing installed Receive late slot".to_owned())
         };
-        let query = (0..poly.n())
+        let query = (0..matrix.words)
             .map(|i| offset(full::LATE_IO + i))
             .collect::<Result<Vec<_>, _>>()?;
-        let value = offset(full::LATE_IO + poly.n())?;
+        let value = offset(full::LATE_IO + matrix.words)?;
         let generator = (0..4 + columns)
             .map(|i| offset(generator_claim::IO_START + i))
             .collect::<Result<Vec<_>, _>>()?;
         // A fresh matrix query pads the unused x/y coordinates with zero. Empty claims do too.
         // Cubic interpolation through four such claims keeps each of those coordinates at zero.
-        let fixed: Vec<_> = (0..poly.kinds.len())
-            .map(|k| poly.fixed_coords(k))
-            .collect();
-        let zeroes = (4..4 + poly.x + poly.y)
-            .filter(|&i| fixed.iter().all(|row| row[i] == Some(S::ZERO)))
+        let [x, y] = matrix.dimensions;
+        let [used_x, used_y] = matrix.occupied;
+        if used_x > x || used_y > y || 4 + x + y > query.len() {
+            return Err("invalid Receive matrix query geometry".into());
+        }
+        let zeroes = (4 + used_x..4 + x)
+            .chain(4 + x + used_y..4 + x + y)
             .map(|i| query[i])
             .collect();
         Ok(Self {
@@ -117,10 +140,22 @@ impl Codec {
         profile: &carrier::TrustedProfile,
         gens: &full::PairGens,
     ) -> Result<Self, String> {
+        Self::from_matrix_layouts(
+            profile,
+            MatrixQueryLayout::from_polynomial(&gens.defer_p),
+            MatrixQueryLayout::from_polynomial(&gens.defer_s),
+        )
+    }
+
+    pub(super) fn from_matrix_layouts(
+        profile: &carrier::TrustedProfile,
+        primary: MatrixQueryLayout,
+        secondary: MatrixQueryLayout,
+    ) -> Result<Self, String> {
         let (raw_len, entries) = profile.payment_generator_words()?;
         let prefix = carrier::projected_prefix(profile);
-        let primary = Side::new(profile.projected_late_layout(true)?, &gens.defer_p)?;
-        let secondary = Side::new(profile.projected_late_layout(false)?, &gens.defer_s)?;
+        let primary = Side::new(profile.projected_late_layout(true)?, primary)?;
+        let secondary = Side::new(profile.projected_late_layout(false)?, secondary)?;
         let mut omitted: Vec<_> = std::iter::once(0..prefix.len())
             .chain(primary.omitted())
             .chain(secondary.omitted())

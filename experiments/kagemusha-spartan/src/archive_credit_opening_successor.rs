@@ -8,18 +8,19 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub(super) struct StatusOpening {
-    pub(super) root: Fp,
-    pub(super) burned: bool,
-    pub(super) next: Fp,
-    pub(super) index: u32,
-    pub(super) siblings: [Fp; 32],
+pub(in crate::native::engine) struct StatusOpening {
+    pub(in crate::native::engine) root: Fp,
+    pub(in crate::native::engine) burned: bool,
+    pub(in crate::native::engine) next: Fp,
+    pub(in crate::native::engine) index: u32,
+    pub(in crate::native::engine) siblings: [Fp; 32],
 }
 
 impl StatusOpening {
     // This fixture reads only an already authenticated representation. The two program
     // inputs are the opening carried by that exact original and the receiver's folded root.
-    pub(super) fn from_verified(delivery: &VerifiedSentDelivery<'_>, root: Fp) -> Result<Self> {
+    #[cfg(test)]
+    pub(in crate::native::engine) fn from_verified(delivery: &VerifiedSentDelivery<'_>, root: Fp) -> Result<Self> {
         fn take<'a>(bytes: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
             let (head, tail) = bytes
                 .split_at_checked(n)
@@ -86,7 +87,8 @@ impl StatusOpening {
         })
     }
 
-    pub(super) fn words(&self) -> Vec<Fp> {
+    #[cfg(test)]
+    pub(in crate::native::engine) fn words(&self) -> Vec<Fp> {
         [
             self.root,
             Fp::from(u64::from(self.burned)),
@@ -100,7 +102,7 @@ impl StatusOpening {
 
     // Authenticate a raw opening with the same leaf and node domains as the compact
     // verifier. Root agreement is a total predicate, never a hard success shortcut.
-    pub(super) fn append(
+    pub(in crate::native::engine) fn append(
         &self,
         w: &mut Wiring<Fp>,
         family: usize,

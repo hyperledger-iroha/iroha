@@ -522,8 +522,8 @@ fn bundle_parameters(
     )
     .unwrap();
     let mut manifest = read("parameter-manifest.norito");
-    let mut signature: [u8; 64] = read("parameter-signature.bin").try_into().unwrap();
-    if reissue_artifact_certificate {
+    let original_signature: [u8; 64] = read("parameter-signature.bin").try_into().unwrap();
+    let signature = if reissue_artifact_certificate {
         // Reissue the Artifact-role certificate under the same root while preserving
         // the producer's key, programs and relation.
         let mut decoded: native::ParameterManifest = norito::decode_from_bytes(&manifest).unwrap();
@@ -547,8 +547,10 @@ fn bundle_parameters(
         let digest =
             kagemusha_wallet_poseidon_bytes_v1(u64::from_le_bytes(*b"kgwparm1"), &manifest);
         let signed: P256Signature = artifact.sign(&digest);
-        signature = low_s(signed.to_bytes().into());
-    }
+        low_s(signed.to_bytes().into())
+    } else {
+        original_signature
+    };
     native::AuthenticatedParameters::install(
         &read("program-bundle.norito"),
         &manifest,

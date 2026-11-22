@@ -7,26 +7,76 @@
 #if !TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST
 #ifdef IROHA_SPARTAN_DEVICE_FIXTURE
 #import <CommonCrypto/CommonDigest.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-static NSString *fixtureManifestDigest(NSData *manifest) {
-    // InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES.
-    if (!manifest.length || manifest.length > 16 * 1024) return nil;
-    uint8_t hash[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(manifest.bytes, (CC_LONG)manifest.length, hash);
-    NSMutableString *digest = [NSMutableString stringWithCapacity:2 * sizeof(hash)];
-    for (size_t i = 0; i < sizeof(hash); i++) [digest appendFormat:@"%02x", hash[i]];
-    return digest;
+// Development-only diagnostic namespace: the single implementation shared with FixtureCustody.swift
+// (custody, payment-key prefix, rollback anchor and report) through spartan_device_fixture.h. The
+// namespace is SHA-256 of this preimage; the array's terminating NUL is the 0x00 separator:
+//   "kagemusha-spartan-fixture-build-namespace-v1" || 0x00
+//   || SHA-256(signed main executable file) || SHA-256(native-device/parameter-manifest.norito)
+// The signed executable is each build's immutable identity, so builds embedding the same signed
+// manifest never share keys, and relaunching or reinstalling one build restores its own.
+static const char fixtureNamespaceDomain[] = "kagemusha-spartan-fixture-build-namespace-v1";
+#define FIXTURE_PREIMAGE_BYTES (sizeof(fixtureNamespaceDomain) + 2 * CC_SHA256_DIGEST_LENGTH)
+
+// Bounded streaming SHA-256 of a non-empty regular file of at most `limit` bytes.
+static BOOL fixtureFileDigest(NSString *path, off_t limit, uint8_t digest[CC_SHA256_DIGEST_LENGTH]) {
+    int file = path ? open(path.fileSystemRepresentation, O_RDONLY | O_CLOEXEC) : -1;
+    if (file < 0) return NO;
+    struct stat status;
+    BOOL valid = !fstat(file, &status) && S_ISREG(status.st_mode) && status.st_size > 0 && status.st_size <= limit;
+    if (valid) {
+        NSMutableData *buffer = [NSMutableData dataWithLength:1 << 20];
+        CC_SHA256_CTX context;
+        CC_SHA256_Init(&context);
+        off_t total = 0;
+        ssize_t count;
+        while ((count = read(file, buffer.mutableBytes, buffer.length)) > 0 && count <= status.st_size - total) {
+            CC_SHA256_Update(&context, buffer.bytes, (CC_LONG)count);
+            total += count;
+        }
+        CC_SHA256_Final(digest, &context);
+        valid = !count && total == status.st_size;
+    }
+    close(file);
+    return valid;
+}
+
+static BOOL fixturePreimageFor(NSString *executable, NSString *manifest, uint8_t preimage[FIXTURE_PREIMAGE_BYTES]) {
+    memcpy(preimage, fixtureNamespaceDomain, sizeof(fixtureNamespaceDomain));
+    uint8_t *digests = preimage + sizeof(fixtureNamespaceDomain);
+    // InstallKagemushaSpartanProgramsV1::MAX_MANIFEST_BYTES bounds the manifest.
+    return fixtureFileDigest(executable, (off_t)1 << 30, digests) &&
+           fixtureFileDigest(manifest, 16 * 1024, digests + CC_SHA256_DIGEST_LENGTH);
+}
+
+static const uint8_t *fixturePreimage(void) {
+    static uint8_t preimage[FIXTURE_PREIMAGE_BYTES];
+    static BOOL ready;
+    static dispatch_once_t load;
+    dispatch_once(&load, ^{
+        NSBundle *bundle = NSBundle.mainBundle;
+        ready = fixturePreimageFor(bundle.executablePath,
+            [bundle pathForResource:@"parameter-manifest" ofType:@"norito" inDirectory:@"native-device"], preimage);
+    });
+    return ready ? preimage : NULL;
 }
 
 static NSString *fixtureNamespace(void) {
-    static NSString *digest;
+    static NSString *scope;
     static dispatch_once_t load;
     dispatch_once(&load, ^{
-        NSURL *url = [NSBundle.mainBundle URLForResource:@"parameter-manifest" withExtension:@"norito"
-                                            subdirectory:@"native-device"];
-        if (url) digest = fixtureManifestDigest([NSData dataWithContentsOfURL:url]);
+        const uint8_t *preimage = fixturePreimage();
+        if (!preimage) return;
+        uint8_t hash[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(preimage, (CC_LONG)FIXTURE_PREIMAGE_BYTES, hash);
+        NSMutableString *hex = [NSMutableString stringWithCapacity:2 * sizeof(hash)];
+        for (size_t i = 0; i < sizeof(hash); i++) [hex appendFormat:@"%02x", hash[i]];
+        scope = hex;
     });
-    return digest;
+    return scope;
 }
 #endif
 
@@ -225,6 +275,25 @@ void kagemusha_apple_debit_close_prompt(uint64_t generation) {
     }
 #endif
 }
+
+#ifdef IROHA_SPARTAN_DEVICE_FIXTURE
+// Declared for the Swift fixture in experiments/kagemusha-spartan/device/runtime/spartan_device_fixture.h.
+__attribute__((visibility("hidden")))
+int32_t kagemusha_apple_fixture_namespace_preimage_v1(uint8_t *output, size_t capacity, size_t *written) {
+#if TARGET_OS_SIMULATOR || TARGET_OS_MACCATALYST
+    return errSecNotAvailable;
+#else
+    @autoreleasepool {
+        const uint8_t *preimage = fixturePreimage();
+        if (!preimage) return errSecDecode;
+        if (!output || !written || capacity < FIXTURE_PREIMAGE_BYTES) return errSecParam;
+        memcpy(output, preimage, FIXTURE_PREIMAGE_BYTES);
+        *written = FIXTURE_PREIMAGE_BYTES;
+        return errSecSuccess;
+    }
+#endif
+}
+#endif
 
 // Native supplies the pin from marker-selected custody, plus the frozen review and challenge.
 __attribute__((visibility("hidden")))

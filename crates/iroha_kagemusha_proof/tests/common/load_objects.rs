@@ -38,36 +38,8 @@ pub fn funded(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>, Ord
     let ordinary = OrdinaryReceipt {
         bytes: body.try_into().unwrap(),
     };
-    let mut after = *before;
-    after.core[core::BALANCE] += Fp::from(100);
-    after.core[core::NEXT_LOAD] += Fp::ONE;
-    after.core[core::SEQUENCE] += Fp::ONE;
-    after.core[core::STATE_NONCE] += Fp::ONE;
-    let ordinal = before.core[core::NEXT_LOAD];
-    let key = Fp::from(2).pow_vartime([128]) + ordinal;
-    let value = hash_with_domain(LOAD_DOMAIN, &[ordinal, ordinary.digest(), Fp::from(100)]);
-    let mut tree = IndexedTree::new();
-    assert_eq!(tree.root(), before.core[core::LOAD_REDEEM_ROOT]);
-    let insertion = tree.insert(key, value).unwrap();
-    after.core[core::LOAD_REDEEM_ROOT] = tree.root();
-    super::bootstrap::rebind(&mut after);
-    let mut statement = after.statement;
-    statement[14] = before.lineage[5];
-    statement[16] = Fp::from(2);
-    statement[17..].fill(Fp::ZERO);
-    statement[17] = ordinary.digest();
-    statement[18] = ordinal;
-    statement[19] = Fp::from(100);
-    statement[20] = Fp::from(3);
-    (
-        LoadWitness {
-            predecessor: StateWitness::from(before),
-            successor: StateWitness::from(&after),
-            statement,
-        },
-        insertion,
-        ordinary,
-    )
+    let (witness, insertion) = from_finalized_receipt(before, &ordinary.bytes);
+    (witness, insertion, ordinary)
 }
 pub fn receipt(w: &LoadWitness, sigma: &[u8]) -> Signed {
     let mut tape = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();

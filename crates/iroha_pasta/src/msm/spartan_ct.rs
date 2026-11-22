@@ -11,10 +11,11 @@
 //!
 //! A fixed-window Straus sum over complete projective formulas:
 //!
-//! - every base `P` of a chunk gets the table `[0, P, 2P, ..., (2^w - 1) P]`,
-//!   built from the public base with complete doublings and mixed additions;
-//! - each scalar is read in unsigned `w`-bit windows of its canonical limbs,
-//!   by shifts and masks at public bit positions;
+//! - each public base gets a table of its successive multiples, built with
+//!   complete doublings and mixed additions;
+//! - four-bit windows use signed radix-16 digits from overlapping public bit
+//!   positions. Their magnitudes use the table from 0 through 8. Smaller
+//!   windows use unsigned digits and the table from 0 through `2^w - 1`;
 //! - a digit selects its entry by scanning every possible nonzero digit with
 //!   constant-time conditional selection, and the entry (the identity for a
 //!   zero digit) is added with the complete addition formula;
@@ -22,7 +23,8 @@
 //!   doublings are shared by all bases of the chunk.
 //!
 //! A column's sum is `sum_j scalars[j] * bases[j]` exactly. A column's public
-//! bound `bits` fixes `ceil(bits / w)` windows. The caller must have
+//! bound fixes the number of windows, including a final signed radix-16 carry.
+//! The caller must have
 //! established the bound (see [`BoundedSecretScalars`]): digits above it are
 //! never read.
 //!
@@ -44,7 +46,7 @@
 //!
 //! # Memory
 //!
-//! A claiming loop holds one chunk's tables (`chunk * 2^w` projective points),
+//! A claiming loop holds one chunk's tables (up to nine projective points per base),
 //! the chunk's canonical limbs and one accumulator per column; the merged sums
 //! add one point per column. A plan never exceeds the per-kernel
 //! [`MemoryBudget`] and is admitted against the [`SharedMemoryBudget`] without
@@ -72,7 +74,7 @@ use crate::{CancellationToken, Cancelled};
 #[path = "spartan_ct_tests.rs"]
 mod ct_tests;
 
-/// Widest window: a table of 16 projective points per base.
+/// Widest window, using magnitudes up to eight.
 pub const MAX_CT_WINDOW: usize = 4;
 
 /// Most bases sharing one set of doublings in a claimed chunk.
@@ -115,8 +117,8 @@ pub fn msm_secret_ct_cancellable<C: PastaCurve>(
 
 /// Constant-time MSM of private scalars below an independently public bound.
 ///
-/// Reads `ceil(bits / w)` windows of every scalar; the bound was checked in
-/// constant time when `scalars` was constructed. A zero bound gives the
+/// The public bound determines every window, including the radix-16 carry.
+/// Construction checks that bound in constant time. A zero bound gives the
 /// identity without reading any scalar.
 ///
 /// # Errors
@@ -169,7 +171,7 @@ pub fn msm_secret_ct_bounded_columns_cancellable<C: PastaCurve>(
 /// The window width for columns of public bounds `bits`.
 ///
 /// Minimises a public operation count in units of 1/32 complete addition:
-/// `2^w` additions per base to build its table, shared by every column, and per
+/// `2^w` table additions per base under the unsigned cost model, and per
 /// column `ceil(bits / w)` additions, each after a scan of `2^w` entries
 /// counted as 1/32 addition per entry. Ties take the narrower window.
 pub(crate) fn ct_window(bits: impl IntoIterator<Item = usize>) -> usize {
@@ -202,11 +204,21 @@ pub(crate) struct CtPlan {
     pub(crate) bytes: usize,
 }
 
+/// Four-bit digits range from -8 through 8. Narrower unsigned digits
+/// retain their original tables and public window schedule.
+const fn table_entries(window: usize) -> usize {
+    if window == 4 {
+        9
+    } else {
+        1 << window
+    }
+}
+
 /// Heap scratch of one claiming loop: a chunk's tables and canonical limbs,
 /// and one accumulator per column.
 fn loop_bytes<C: PastaCurve>(chunk: usize, window: usize, columns: usize) -> Option<usize> {
     let tables = chunk
-        .checked_mul(1_usize << window)?
+        .checked_mul(table_entries(window))?
         .checked_mul(size_of::<C>())?;
     let limbs = chunk.checked_mul(LIMB_BYTES)?;
     tables
@@ -348,7 +360,7 @@ fn run_plan<C: PastaCurve>(
     let chunks = n.div_ceil(plan.chunk);
     let next = AtomicUsize::new(0);
     let claim = || -> Result<Zeroizing<Vec<C>>, Cancelled> {
-        let mut tables = Zeroizing::new(vec![C::identity(); plan.chunk << plan.window]);
+        let mut tables = Zeroizing::new(vec![C::identity(); plan.chunk * table_entries(plan.window)]);
         let mut limbs = Zeroizing::new(vec![[0_u64; 4]; plan.chunk]);
         let mut partial = Zeroizing::new(vec![C::identity(); columns.len()]);
         loop {
@@ -403,7 +415,7 @@ fn run_stack<C: PastaCurve>(
     cancellation: Option<&CancellationToken>,
     sums: &mut [C],
 ) -> Result<(), MsmError> {
-    let mut tables = Zeroizing::new([C::identity(); 1 << MAX_CT_WINDOW]);
+    let mut tables = Zeroizing::new([C::identity(); table_entries(MAX_CT_WINDOW)]);
     let mut limbs = Zeroizing::new([[0_u64; 4]; 1]);
     for (start, base) in bases.iter().enumerate() {
         CancellationToken::checkpoint(cancellation)?;
@@ -425,7 +437,7 @@ fn run_stack<C: PastaCurve>(
     Ok(())
 }
 
-/// One claiming loop's chunk buffers: at least `bases << window` table entries
+/// One claiming loop's chunk buffers: `bases * table_entries(window)` table entries
 /// and `bases` canonical limbs for the chunk being added.
 struct Chunk<'a, C> {
     tables: &'a mut [C],
@@ -446,7 +458,8 @@ fn add_chunk<C: PastaCurve>(
     sums: &mut [C],
     cancellation: Option<&CancellationToken>,
 ) -> Result<(), Cancelled> {
-    let entries = 1_usize << window;
+    let signed = window == 4;
+    let entries = table_entries(window);
     let tables = &mut chunk.tables[..bases.len() * entries];
     let limbs = &mut chunk.limbs[..bases.len()];
     // Public multiples of public bases: entry `k` of a base's table is `k P`.
@@ -459,14 +472,17 @@ fn add_chunk<C: PastaCurve>(
             table[2 * i] = even;
             table[2 * i + 1] = even + *base;
         }
+        if signed {
+            table[8] = table[4].double();
+        }
     }
     let tables = &*tables;
     for (&(scalars, bits), sum) in columns.iter().zip(sums.iter_mut()) {
         // A zero bound admits only zero: public, and no scalar is read.
-        let windows = bits.div_ceil(window);
-        if windows == 0 {
+        if bits == 0 {
             continue;
         }
+        let windows = (bits + usize::from(signed)).div_ceil(window);
         CancellationToken::checkpoint(cancellation)?;
         for (limb, scalar) in limbs
             .iter_mut()
@@ -482,15 +498,43 @@ fn add_chunk<C: PastaCurve>(
                     *column = column.double();
                 }
             }
-            // The public bound fixes the range of the top digit. A zero
-            // digit retains the identity through the same scan.
-            let digit_bits = window.min(bits - w * window);
-            let candidates = 1 << digit_bits;
+            let start_bit = w * window;
+            let digit_bits = window.min(bits.saturating_sub(start_bit));
+            // Every scan length and every address below depend only on the
+            // public window index and bound. A shorter top window includes
+            // the possible carry from the preceding signed digit.
+            let largest = if signed && digit_bits == window {
+                8
+            } else {
+                (1_usize << digit_bits) - 1 + usize::from(signed && w != 0)
+            };
             for (limb, table) in limbs.iter().zip(tables.chunks_exact(entries)) {
-                let digit = window_bits(limb, w * window, digit_bits);
+                let raw = window_bits(limb, start_bit, digit_bits);
+                // The previous window's high bit is its carry. Subtracting
+                // radix * sign here and adding that carry to the next digit
+                // preserves the integer, including the most significant bit.
+                let (magnitude, sign) = if signed {
+                    let carry = if w == 0 {
+                        0
+                    } else {
+                        window_bits(limb, start_bit - 1, 1)
+                    };
+                    let sign = raw >> 3;
+                    let value = (raw + carry).wrapping_sub(sign << 4);
+                    ((value ^ 0_u64.wrapping_sub(sign)).wrapping_add(sign), sign)
+                } else {
+                    (raw, 0)
+                };
                 *entry = C::identity();
-                for (index, candidate) in (1_u64..).zip(&table[1..candidates]) {
-                    *entry = C::conditional_select(&*entry, candidate, index.ct_eq(&digit));
+                for (index, candidate) in (1_u64..).zip(&table[1..=largest]) {
+                    *entry = C::conditional_select(&*entry, candidate, index.ct_eq(&magnitude));
+                }
+                if signed && digit_bits == window {
+                    *entry = C::conditional_select(
+                        &*entry,
+                        &(-*entry),
+                        subtle::Choice::from(sign as u8),
+                    );
                 }
                 *column += *entry;
             }

@@ -54,7 +54,7 @@ fn certified_outcome_and_restart(activation: bool) {
         network: fixture.network_id(),
         scheme: &scheme,
         asset: &asset,
-        manifest: &manifest,
+        manifest_digest: &manifest,
         claim,
         activation: activation.then_some((&wallet, &account)),
     };
@@ -94,7 +94,7 @@ fn certified_outcome_and_restart(activation: bool) {
         let signed_wire = signed.encode_wire_v1().unwrap();
         let tx = scope.envelope(&signed_wire).unwrap();
         let wrong = ClaimScope {
-            manifest: &[8; 32],
+            manifest_digest: &[8; 32],
             ..scope
         };
         assert!(wrong.envelope(&signed_wire).is_err());

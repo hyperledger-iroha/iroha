@@ -122,3 +122,62 @@ Run focused component tests with
 `cargo iroha-fast -- test -p iroha_core_zk --features dev-tools --bin kagemusha_wallet_artifacts`.
 Full integration additionally needs the current four-validator registration,
 issuer and funding flow in [integration_tests](../../../../../integration_tests/README.md).
+
+## Five-kind Spartan compiler output
+
+```sh
+kagemusha_wallet_artifacts --inspect-spartan-v2-bundle "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE"
+```
+
+Supply absolute paths to the V2 program bundle and a separately retained
+compiler profile in the same read-only file custody used by the other inspection
+commands. The profile accepts up to 4,096 bytes of JSON with exactly these fields.
+
+| Field | Value |
+| --- | --- |
+| `schema` | `iroha.kagemusha.spartan.public-program-inspection.v2` |
+| `primary`, `secondary` | Five canonical program digests each, in Receive, Send, Bootstrap, Control, ArchiveSent order. Each digest is 64 lowercase hexadecimal digits. |
+| `primary_dimensions`, `secondary_dimensions` | Objects with integer `x` and `y` accumulator dimensions. Use the compiler's selected dimensions for each curve. |
+
+The command imports all ten tapes, compares their program digests and recursive
+layouts, and reports the complete bundle size and geometry on each curve.
+It measures the compact Payment pair, envelope and complete peer message with
+the wallet serializer. It also checks both maximum-depth CreditStatus messages,
+from a Receive head and from a later Send head, with all 32 siblings present. The signing and verification commands apply the
+same transport ceilings to the selected tapes.
+
+### Select the mobile source compiler
+
+For mobile builds, `--spartan-source-compiler CARRIER SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST`
+authenticates the pack and compares its program digests with the local producer
+registry. Its `SPARTAN_SOURCE_COMPILER kinds=4` or `kinds=5` result selects the
+compiler for that installation. Pass the same five arguments and the independently
+regenerated bundle to `--verify-spartan-sources` to check all carrier originals
+and the compiled bytes before packaging.
+
+### Prepare and verify a five-kind parameter manifest
+
+Use the same program bundle and independent compiler profile as the inspection
+command. The release scope JSON has six fields.
+
+| Field | Value |
+| --- | --- |
+| `schema` | `iroha.kagemusha.spartan.manifest-scope.v5` |
+| `scheme_original`, `signed_genesis` | Absolute paths to the selected canonical public scheme and signed genesis originals. |
+| `scheme_id_hex` | The independently selected 32-byte scheme identity in lowercase hexadecimal. |
+| `genesis_public_key`, `chain_id` | The selected Ed25519 genesis authority and ledger chain identifier. |
+
+```sh
+kagemusha_wallet_artifacts --prepare-spartan-v2-manifest "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE" "$SCOPE" "$ARTIFACT_CERTIFICATE"
+kagemusha_wallet_artifacts --verify-spartan-v2-manifest "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE" "$SCOPE" "$PARAMETER_MANIFEST" "$ARTIFACT_SIGNATURE" "$MANIFEST_DIGEST_HEX"
+```
+
+Preparation authenticates the genesis and the Artifact certificate, checks the
+ten compiler outputs and prints the unsigned manifest and exact 32-byte signing
+message in hexadecimal. The certificate file contains the 172-byte Spartan
+certificate transcript. The independent Artifact signer uses ECDSA P-256 with
+SHA-256 and returns the canonical low-S 64-byte signature. Verification takes
+the raw manifest and signature files and the independently selected manifest
+digest. It authenticates the signature, reconstructs the generator and wallet
+table profile from the public tapes and compares the canonical manifest bytes.
+Both commands operate offline.

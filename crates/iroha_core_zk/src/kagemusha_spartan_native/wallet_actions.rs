@@ -16,6 +16,10 @@ fn invalid(field: &'static str) -> ProviderError {
     ProviderError::Invalid { field }
 }
 
+/// The complete CreditStatus IPM1 original a payer verifies (wallet wire v1 §§2 and 6:
+/// 10,034 canonical bytes, 10,084 with the IPM1 header), as `verify_sent_credit_status`.
+const ARCHIVE_SENT_STATUS_MAX_BYTES: usize = native::MAX_CREDIT_STATUS_ORIGINAL_BYTES;
+
 pub(super) struct WalletInputs<'a>(&'a [u8]);
 
 impl<'a> WalletInputs<'a> {
@@ -23,14 +27,14 @@ impl<'a> WalletInputs<'a> {
         let (word, rest) = self
             .0
             .split_at_checked(4)
-            .ok_or(invalid("wallet action length"))?;
+            .ok_or_else(|| invalid("wallet action length"))?;
         let size = u32::from_le_bytes(word.try_into().unwrap()) as usize;
         if size == 0 || size > maximum {
             return Err(invalid("wallet action original size"));
         }
         let (bytes, trailing) = rest
             .split_at_checked(size)
-            .ok_or(invalid("truncated wallet action"))?;
+            .ok_or_else(|| invalid("truncated wallet action"))?;
         self.0 = trailing;
         Ok(bytes)
     }
@@ -50,7 +54,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         slot: &Slot,
         action: &[u8],
     ) -> Result<native::PreparedOperation, ProviderError> {
-        let (&kind, bytes) = action.split_first().ok_or(invalid("wallet action tag"))?;
+        let (&kind, bytes) = action
+            .split_first()
+            .ok_or_else(|| invalid("wallet action tag"))?;
         let mut inputs = WalletInputs(bytes);
         match kind {
             1 => {
@@ -76,6 +82,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 let payment = inputs.original(12_182)?;
                 inputs.finish()?;
                 self.wallet_prepare_receive(slot, request_id, payment)
+            }
+            5 => {
+                let (sent_operation, credit_status) = archive_sent_inputs(inputs)?;
+                self.wallet_archive_sent(slot, &sent_operation, credit_status)
             }
             6 => {
                 let request = UnloadRequest::parse(inputs)?;
@@ -185,6 +195,76 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         Ok(prepared)
     }
 
+    fn wallet_archive_sent(
+        &mut self,
+        slot: &Slot,
+        sent_operation: &[u8; 32],
+        credit_status: &[u8],
+    ) -> Result<native::PreparedOperation, ProviderError> {
+        use crate::kagemusha_wallet_advance_v1::KagemushaWalletLookupV1 as Lookup;
+
+        self.require_account(slot, None)?;
+        self.parameters.require_archive_sent_program().map_err(provider_error)?;
+        let wallet = self.authorized_wallet_id(slot)?;
+        let selected_send = match self.provider.lookup(slot, sent_operation)? {
+            Lookup::Retained(row) => row.capsule_digest,
+            Lookup::Archived(row) if row.kind == 3 => row.capsule_digest,
+            _ => {
+                return Err(ProviderError::UnavailableCustodyData {
+                    object: "released Send",
+                });
+            }
+        };
+        let key = native::wallet_archive_sent_replay_key(&selected_send, &wallet, credit_status)
+            .map_err(provider_error)?;
+        if let Some(prepared) =
+            self.recover_transfer_action(slot, 5, &key, Some(credit_status), None)?
+        {
+            return Ok(prepared);
+        }
+        let (sent, completion) = self.provider.retained_transition(slot, sent_operation)?;
+        if sent.wallet() != &wallet
+            || sent.kind() != 3
+            || sent.operation_id() != sent_operation
+            || completion.capsule_digest != selected_send
+        {
+            return Err(invalid("ArchiveSent released Send scope"));
+        }
+        let original = self
+            .engine_for_capsule(slot, &sent)?
+            .resume(&sent, &self.parameters)
+            .map_err(provider_error)?;
+        let request = self.retained_send_request(slot, &original)?.ok_or(
+            ProviderError::UnavailableCustodyData {
+                object: "released Send open Request",
+            },
+        )?;
+        drop(original);
+        let sent = zeroize::Zeroizing::new(sent.encode().map_err(provider_error)?);
+        let Status::Released(marker) = self.provider.status(slot)? else {
+            return Err(invalid("ArchiveSent requires a released wallet"));
+        };
+        let (source, completed) = self.released_operation(slot, &marker)?;
+        let (prepared, raw) = self.with_transfer_maps(slot, |engine, parameters, maps| {
+            let head = completed.head();
+            let witness = engine.wallet_archive_sent_witness(
+                &source,
+                head,
+                &sent,
+                &completion.frame,
+                &request,
+                credit_status,
+                maps,
+                parameters,
+            )?;
+            let prepared = engine.prepare(&witness, head, parameters)?;
+            let raw = zeroize::Zeroizing::new(witness.encode()?);
+            Ok((prepared, raw))
+        })?;
+        self.retain_transfer_action(slot, key, &prepared, Some(credit_status), &raw)?;
+        Ok(prepared)
+    }
+
     fn wallet_unload(
         &mut self,
         slot: &Slot,
@@ -281,6 +361,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         self.retain_transfer_action(slot, key, &prepared, Some(&input), &raw)?;
         Ok(prepared)
     }
+}
+
+/// ArchiveSent (wallet wire v1 §3.3 tag 5): exactly the nonzero operation id of one of this
+/// wallet's released Sends and the receiver's complete CreditStatus original. Native reads the
+/// open Request, the Send capsule, completion and Payment only from protected custody.
+fn archive_sent_inputs(mut inputs: WalletInputs<'_>) -> Result<([u8; 32], &[u8]), ProviderError> {
+    let sent_operation: [u8; 32] = inputs
+        .original(32)?
+        .try_into()
+        .map_err(|_| invalid("ArchiveSent Send operation length"))?;
+    if sent_operation == [0; 32] {
+        return Err(invalid("ArchiveSent Send operation"));
+    }
+    let credit_status = inputs.original(ARCHIVE_SENT_STATUS_MAX_BYTES)?;
+    inputs.finish()?;
+    Ok((sent_operation, credit_status))
 }
 
 /// The signed canonical anchor and its TimeAnchor-role issuer, within the direct-exchange bounds.
@@ -469,5 +565,65 @@ mod tests {
         for refused in [&wire[..5], &oversized[..], &trailing[..]] {
             assert!(time_anchor_inputs(WalletInputs(refused)).is_err());
         }
+    }
+
+    #[test]
+    fn archive_sent_action_takes_one_send_operation_and_one_bounded_credit_status() {
+        fn append(bytes: &mut Vec<u8>, original: &[u8]) {
+            bytes.extend_from_slice(&(original.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(original);
+        }
+        fn refusal(bytes: &[u8]) -> &'static str {
+            match archive_sent_inputs(WalletInputs(bytes)) {
+                Err(ProviderError::Invalid { field }) => field,
+                other => panic!("accepted malformed ArchiveSent input: {other:?}"),
+            }
+        }
+        // The framing after `KSO1 5`: LE32 32 ‖ operation ‖ LE32 n ‖ CreditStatus.
+        let mut wire = Vec::new();
+        append(&mut wire, &[0x5a; 32]);
+        append(&mut wire, &[7, 8, 9]);
+        assert_eq!(wire.len(), 4 + 32 + 4 + 3);
+        assert_eq!(
+            archive_sent_inputs(WalletInputs(&wire)).unwrap(),
+            ([0x5a; 32], &[7, 8, 9][..])
+        );
+        let mut longest = Vec::new();
+        append(&mut longest, &[1; 32]);
+        append(&mut longest, &[2; ARCHIVE_SENT_STATUS_MAX_BYTES]);
+        let (_, status) = archive_sent_inputs(WalletInputs(&longest)).unwrap();
+        assert_eq!(status.len(), ARCHIVE_SENT_STATUS_MAX_BYTES);
+
+        // The operation id is exactly 32 nonzero bytes.
+        let mut zero = Vec::new();
+        append(&mut zero, &[0; 32]);
+        append(&mut zero, &[7]);
+        assert_eq!(refusal(&zero), "ArchiveSent Send operation");
+        let mut short = Vec::new();
+        append(&mut short, &[1; 31]);
+        append(&mut short, &[7]);
+        assert_eq!(refusal(&short), "ArchiveSent Send operation length");
+        let mut long = Vec::new();
+        append(&mut long, &[1; 33]);
+        append(&mut long, &[7]);
+        assert_eq!(refusal(&long), "wallet action original size");
+        // The status is present, nonempty and within the payer's CreditStatus bound.
+        assert_eq!(refusal(&wire[..36]), "wallet action length");
+        let mut empty = wire[..36].to_vec();
+        append(&mut empty, &[]);
+        assert_eq!(refusal(&empty), "wallet action original size");
+        let mut oversized = Vec::new();
+        append(&mut oversized, &[1; 32]);
+        append(&mut oversized, &[2; ARCHIVE_SENT_STATUS_MAX_BYTES + 1]);
+        assert_eq!(refusal(&oversized), "wallet action original size");
+        // A truncated original or any trailing byte, including a supplied Request, is refused.
+        assert_eq!(refusal(&wire[..wire.len() - 1]), "truncated wallet action");
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert_eq!(refusal(&trailing), "wallet action trailing bytes");
+        let mut supplied_request = wire.clone();
+        append(&mut supplied_request, &[3; 64]);
+        assert_eq!(refusal(&supplied_request), "wallet action trailing bytes");
+        assert_eq!(refusal(&[]), "wallet action length");
     }
 }

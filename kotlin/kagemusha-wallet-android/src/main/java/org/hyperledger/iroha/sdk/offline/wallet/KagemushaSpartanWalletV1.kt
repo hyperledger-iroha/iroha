@@ -165,8 +165,17 @@ class KagemushaSpartanWalletV1 internal constructor(
         return prepareOwned(KagemushaSpartanOperationV1.RECEIVE, requestId, payment.encode())
     }
 
+    /** Prepare one deferred ArchiveSent from the exact receipt retained for this Send. */
+    fun prepareArchiveSent(sendOperationId: ByteArray, credited: IrohaPeerWireMessageV1): KagemushaSpartanReviewV1 {
+        require(!retainedOutputsOnly)
+        return prepareCommand(KagemushaSpartanOperationV1.ARCHIVE_SENT, archiveSentCommand(sendOperationId, credited))
+    }
+
     private fun prepareOwned(operation: KagemushaSpartanOperationV1, vararg originals: ByteArray): KagemushaSpartanReviewV1 =
-        prepare(ownedCommand(operation,*originals), byteArrayOf()) { token, bytes ->
+        prepareCommand(operation, ownedCommand(operation, *originals))
+
+    private fun prepareCommand(operation: KagemushaSpartanOperationV1, command: ByteArray): KagemushaSpartanReviewV1 =
+        prepare(command, byteArrayOf()) { token, bytes ->
             val projection = KagemushaSpartanReviewProjectionV1(bytes)
             if (projection.operation != operation) invalidSpartanOutput()
             KagemushaSpartanReviewV1(this, token, projection)
@@ -387,6 +396,15 @@ class KagemushaSpartanWalletV1 internal constructor(
             return original
         }
 
+        internal fun archiveSentCommand(sendOperationId: ByteArray, credited: IrohaPeerWireMessageV1): ByteArray {
+            val operation = sendOperationId.copyOf()
+            require(operation.size == 32 && operation.any { it != 0.toByte() })
+            require(credited.canonicalPayload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 &&
+                credited.canonicalPayload.kind == IrohaPeerPayloadKind.CREDITED && credited.encoding == IrohaPeerContentEncodingV1.NONE)
+            require(credited.canonicalPayload.byteCount <= 10_084 - IrohaPeerWireMessageV1.HEADER_LENGTH)
+            return ownedCommand(KagemushaSpartanOperationV1.ARCHIVE_SENT, operation, credited.encode())
+        }
+
         internal fun unloadCommand(requestId: ByteArray, amount: KagemushaWalletUInt128V1,
                                    quote: ByteArray, certificates: ByteArray, beneficiary: ByteArray): ByteArray {
             require(requestId.size == 32 && requestId.any { it != 0.toByte() } && (amount.low != 0L || amount.high != 0L))
@@ -549,7 +567,7 @@ class KagemushaSpartanTimeIntervalV1 internal constructor(bytes: ByteArray) {
 }
 
 enum class KagemushaSpartanOutputV1 { HEAD, PAYMENT, COMPLETION, UNLOAD_CLAIM }
-enum class KagemushaSpartanOperationV1 { BOOTSTRAP, LOAD, SEND, RECEIVE }
+enum class KagemushaSpartanOperationV1 { BOOTSTRAP, LOAD, SEND, RECEIVE, ARCHIVE_SENT }
 
 sealed class KagemushaSpartanRetainedOutputV1 {
     data object Unknown : KagemushaSpartanRetainedOutputV1()
@@ -590,6 +608,9 @@ class KagemushaSpartanReviewProjectionV1 internal constructor(bytes: ByteArray) 
     init {
         if (original[0] != 1.toByte() || original[1] != 0.toByte()) invalidSpartanOutput()
         operation = KagemushaSpartanOperationV1.entries.getOrNull((original[2].toInt() and 255) - 1) ?: invalidSpartanOutput()
+        if (operation == KagemushaSpartanOperationV1.ARCHIVE_SENT && (131 until 227).any { original[it] != 0.toByte() }) {
+            invalidSpartanOutput()
+        }
         val view = ByteBuffer.wrap(original).order(ByteOrder.LITTLE_ENDIAN)
         amount = KagemushaWalletUInt128V1(view.getLong(131), view.getLong(139))
         fee = KagemushaWalletUInt128V1(view.getLong(147), view.getLong(155))
@@ -844,7 +865,7 @@ enum class KagemushaSpartanCreditOutcomeV1 { CREDITED, BURNED }
 /** An immutable receiver decision derived from the native wallet's released Receive and protected opening. */
 class KagemushaSpartanReceiverCreditStatusV1 internal constructor(reply: KagemushaSpartanReplyV1) {
     val message: IrohaPeerWireMessageV1 = reply.issuedCreditStatus()
-    val outcome: KagemushaSpartanCreditOutcomeV1 = if (message.canonicalPayload.bytes[8] == 0.toByte())
+    val outcome: KagemushaSpartanCreditOutcomeV1 = if (!message.canonicalPayload.spartanCreditStatusBurned())
         KagemushaSpartanCreditOutcomeV1.CREDITED else KagemushaSpartanCreditOutcomeV1.BURNED
 }
 
@@ -877,10 +898,10 @@ internal class KagemushaSpartanReplyV1(
         requireShape(105, 1)
         require(message.canonicalPayload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 &&
             message.canonicalPayload.kind == IrohaPeerPayloadKind.CREDITED)
-        val flag = message.canonicalPayload.bytes[8].toInt()
+        val burned = message.canonicalPayload.spartanCreditStatusBurned()
         return when {
-            retained[0] == 1.toByte() && flag == 0 -> KagemushaSpartanCreditOutcomeV1.CREDITED
-            retained[0] == 0.toByte() && flag == 1 -> KagemushaSpartanCreditOutcomeV1.BURNED
+            retained[0] == 1.toByte() && !burned -> KagemushaSpartanCreditOutcomeV1.CREDITED
+            retained[0] == 0.toByte() && burned -> KagemushaSpartanCreditOutcomeV1.BURNED
             else -> invalidSpartanOutput()
         }
     }

@@ -66,11 +66,29 @@ pub fn install(
     manifest: &[u8],
     signature: [u8; 64],
 ) -> Result<AuthenticatedParameters> {
+    install_selected(bundle, manifest, signature, None)
+}
+
+/// Authenticate against the manifest digest supplied by the fixture World installation.
+/// A five-program-family manifest requires that independent selection.
+pub fn install_selected(
+    bundle: &[u8],
+    manifest: &[u8],
+    signature: [u8; 64],
+    selected: Option<&[u8; 32]>,
+) -> Result<AuthenticatedParameters> {
     let fixture = NativeFinalityFixture::new_with_explicit_parameters();
     let finality = SumeragiCommitVerifierV1::new(&fixture.verifier())
         .map_err(|e| Error::Rejected(e.to_string()))?;
-    let parameters =
-        AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?;
+    let parameters = match selected {
+        Some(digest) => AuthenticatedParameters::install_governed(
+            bundle, manifest, signature, digest, &scheme(), finality,
+        )?,
+        None if AuthenticatedParameters::is_five_manifest(manifest) => {
+            return Err(Error::AuthorityMismatch("missing fixture World manifest selection"));
+        }
+        None => AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?,
+    };
     // Only a host simulation uses the stand-in approval for its primary wallet.
     // On either phone the standard installed custody gate remains mandatory.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1438,7 +1456,7 @@ pub fn receive_from(
             (state.core, state.rest, state.statement) =
                 (step.after_core, step.after_rest, step.statement);
         }
-        ExactOperationWitness::Receive { .. } => {
+        ExactOperationWitness::Receive { .. } | ExactOperationWitness::ArchiveSent { .. } => {
             return Err(Error::Malformed(
                 "fixture Receive builds only a first Receive",
             ));

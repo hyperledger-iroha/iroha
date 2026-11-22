@@ -6,6 +6,7 @@
 //! implement a second journal or expose a caller-supplied acceptance Boolean.
 
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 use ff::PrimeField;
 use iroha_pasta::Fp;
@@ -17,7 +18,7 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 #[path = "engine.rs"]
 pub(crate) mod engine;
 pub use engine::{
-    BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim,
+    BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim, GovernedManifest,
     credential_signing_message_for_body, CredentialIssuerParameters, MAX_UNLOAD_CLAIM_BYTES, NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest,
     UnloadDestinations, VerifiedUnloadClaim, VerifiedCreditStatus, SpartanWalletMap, SpartanWalletMaps, wallet_send_replay_key, wallet_receive_replay_key, OpenRequestPeer, decode_open_request_peer, encode_open_request_peer,
 };
@@ -45,9 +46,94 @@ mod owned_unload;
 pub(crate) const PRODUCER_MATRIX_DIMENSIONS: ((usize, usize), (usize, usize)) =
     ((24, 25), (24, 24));
 
-/// Native compiler's qualified primary and secondary program digests, in
-/// Receive, Send, Bootstrap, Control order. An unpublished compiler profile
-/// cannot acquire a device provider or select a wallet generation.
+/// Published independently of any incoming signature, profile or program bytes.
+/// Populated by the compiler after all ten monetary tapes reach a fixed point.
+const FIVE_KIND_PRODUCER: Option<FiveKindProducer> = Some(FiveKindProducer {
+    programs: ProgramProfileV2 {
+        primary: [
+            [
+                0xd7, 0x38, 0x6a, 0x1c, 0x3f, 0x72, 0x69, 0x9e,
+                0x9d, 0x75, 0x06, 0x37, 0xab, 0x29, 0x81, 0x3d,
+                0xf7, 0x9c, 0xc0, 0x35, 0xc2, 0xd2, 0xde, 0x03,
+                0xe9, 0xfc, 0x7c, 0x0a, 0xa3, 0x73, 0xa4, 0x27,
+            ],
+            [
+                0xa8, 0x72, 0x46, 0xfa, 0xdb, 0x1d, 0x1a, 0xf6,
+                0x89, 0x0b, 0x46, 0xe7, 0x11, 0xf2, 0x0f, 0xc0,
+                0xab, 0x77, 0xfc, 0x47, 0xef, 0xea, 0xe0, 0x1f,
+                0xc2, 0xce, 0x57, 0xa3, 0x2b, 0x53, 0x01, 0xa5,
+            ],
+            [
+                0x9f, 0xb7, 0xe3, 0x0b, 0x15, 0x12, 0x30, 0x67,
+                0xe9, 0xc4, 0x7f, 0x48, 0xb9, 0x29, 0x56, 0x07,
+                0x2e, 0xc6, 0xf2, 0x20, 0x3c, 0x77, 0x37, 0xe2,
+                0x30, 0x17, 0x1d, 0x85, 0x5e, 0xea, 0x4e, 0x95,
+            ],
+            [
+                0x06, 0x31, 0x4f, 0x45, 0x6e, 0xec, 0xa8, 0x88,
+                0x34, 0x43, 0x79, 0xcb, 0xae, 0x92, 0x0f, 0x5e,
+                0x9a, 0x3b, 0xee, 0xd3, 0x86, 0x75, 0x64, 0xe5,
+                0x29, 0x2b, 0x3f, 0xba, 0xa9, 0xa8, 0xd2, 0x42,
+            ],
+            [
+                0x24, 0x74, 0x6e, 0x59, 0xa8, 0x0a, 0x3d, 0x23,
+                0x52, 0x66, 0xbf, 0xea, 0x57, 0xec, 0x90, 0xb7,
+                0x11, 0x1d, 0x9c, 0x54, 0xa0, 0xaf, 0x39, 0x9d,
+                0x1a, 0x84, 0xaf, 0x0e, 0x20, 0x02, 0xc0, 0x98,
+            ],
+        ],
+        secondary: [
+            [
+                0xdc, 0x2b, 0xa2, 0x81, 0xa1, 0x34, 0xb2, 0x41,
+                0x22, 0xbb, 0x8d, 0xe0, 0xff, 0xd1, 0xa0, 0x83,
+                0x13, 0x04, 0x65, 0x17, 0xbd, 0x66, 0x74, 0xbb,
+                0x66, 0xa0, 0xf5, 0x4a, 0xfc, 0xbc, 0xd5, 0xb8,
+            ],
+            [
+                0x46, 0x29, 0x4d, 0xf5, 0xaa, 0xbc, 0xe0, 0x33,
+                0x28, 0xc2, 0x1e, 0xf3, 0x5d, 0xd9, 0x22, 0x56,
+                0xca, 0x9c, 0x8f, 0xec, 0x34, 0x51, 0x54, 0x75,
+                0x7f, 0x86, 0xc4, 0xfa, 0x7e, 0x12, 0xed, 0x44,
+            ],
+            [
+                0x9c, 0xb3, 0x92, 0xb8, 0x82, 0xc7, 0xd1, 0xcf,
+                0xce, 0x58, 0x93, 0x9f, 0x3f, 0x95, 0x8b, 0x29,
+                0x65, 0x78, 0x38, 0x71, 0x37, 0xd1, 0xa7, 0x24,
+                0x49, 0x0e, 0xad, 0xa7, 0x8f, 0x66, 0x16, 0x5b,
+            ],
+            [
+                0xe7, 0x16, 0x5d, 0x8e, 0x70, 0x56, 0x47, 0x3e,
+                0x10, 0x44, 0x6d, 0x0e, 0x12, 0xdc, 0x67, 0x81,
+                0x7e, 0xf1, 0xea, 0x48, 0x72, 0x20, 0x9c, 0x64,
+                0xde, 0xe3, 0x2b, 0x34, 0x82, 0xfb, 0x45, 0x63,
+            ],
+            [
+                0xc5, 0x39, 0xdc, 0xa3, 0x39, 0x20, 0xf5, 0xc3,
+                0x9a, 0x0c, 0xfd, 0x24, 0x5a, 0x62, 0x21, 0xa5,
+                0x3f, 0x2e, 0x7f, 0x4a, 0x3a, 0x34, 0x6e, 0x49,
+                0x45, 0x93, 0xf7, 0x60, 0x14, 0x9a, 0x2a, 0x95,
+            ],
+        ],
+        dimensions: [[24, 25], [24, 24]],
+    },
+    generator_capacity_bits: [18, 17],
+    grouping: [program_bundle::SumcheckGroup::Four; 2],
+});
+
+struct FiveKindProducer {
+    programs: ProgramProfileV2,
+    generator_capacity_bits: [usize; 2],
+    grouping: [program_bundle::SumcheckGroup; 2],
+}
+
+/// Five-kind program pins supported by this native producer build.
+pub fn built_in_five_programs() -> Option<ProgramProfileV2> {
+    FIVE_KIND_PRODUCER
+        .as_ref()
+        .map(|source| source.programs.clone())
+}
+
+/// Native compiler digests in Receive, Send, Bootstrap and Control order.
 pub fn built_in_producer_programs() -> Option<([[u8; 32]; 4], [[u8; 32]; 4])> {
     // v4 p18-s17. Each canonical program was byte-identical across compiler passes 4 and 5.
     Some((
@@ -124,75 +210,12 @@ pub struct ProgramBundle {
     pub primary: [Vec<u8>; 4],
     pub secondary: [Vec<u8>; 4],
 }
-impl ProgramBundle {
-    fn validate(&self) -> Result<()> {
-        if self.version != 1
-            || self
-                .primary
-                .iter()
-                .chain(&self.secondary)
-                .any(Vec::is_empty)
-        {
-            return Err(Error::Malformed("program bundle"));
-        }
-        let total = self
-            .primary
-            .iter()
-            .chain(&self.secondary)
-            .try_fold(0usize, |n, p| n.checked_add(p.len()))
-            .ok_or(Error::ResourceLimit)?;
-        if total > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        Ok(())
-    }
-
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        self.validate()?;
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-        let bytes = norito::to_bytes(self).map_err(|e| Error::Rejected(e.to_string()))?;
-        if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        Ok(bytes)
-    }
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        let limits = norito::DecodeLimits::new(
-            MAX_PROGRAM_BUNDLE_BYTES,
-            MAX_PROGRAM_BUNDLE_BYTES,
-            2 * MAX_PROGRAM_BUNDLE_BYTES,
-            4 * MAX_PROGRAM_BUNDLE_BYTES,
-            16,
-        );
-        // Use the object-specific archive bound without changing Norito's
-        // process default; the payload still inherits stricter caller budgets.
-        let bundle: Self = norito::core::with_decode_limits(limits, || {
-            let payload = norito::canonical_frame_payload_with_archive_limit::<Self>(
-                bytes,
-                norito::core::V1_LAYOUT_FLAGS,
-                MAX_PROGRAM_BUNDLE_BYTES as u64,
-            )?;
-            let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-            let (value, used) = norito::core::decode_field_canonical(payload)?;
-            if used != payload.len() {
-                return Err(norito::Error::LengthMismatch);
-            }
-            Ok(value)
-        })
-        .map_err(|_| Error::Malformed("bounded program bundle"))?;
-        bundle.validate()?;
-        norito::verify_exact_canonical_frame_with_layout(
-            &bundle,
-            bytes,
-            norito::core::WireLayout::Fixed,
-        )
-        .map_err(|_| Error::Malformed("canonical program bundle"))?;
-        Ok(bundle)
-    }
-}
+#[path = "program_bundle.rs"]
+mod program_bundle;
+pub use program_bundle::{ProgramBundleGeometry, ProgramBundleV2, ProgramTransportSizes};
+#[path = "successor_manifest.rs"]
+mod successor_manifest;
+pub use successor_manifest::{AuthenticatedManifestHeaderV5, ProgramProfileV2};
 
 #[derive(Debug)]
 pub enum Error {
@@ -320,6 +343,25 @@ pub struct BootstrapWitness {
     pub relation: [u8; 32],
     pub input: bootstrap::Inputs,
 }
+/// Private payer state of one ArchiveSent step (wallet wire §3.3, tag 5). Every field other
+/// than the successor nonce `after_core[29]` is recomputed by Native from the selected
+/// predecessor, the exact retained originals and the two removal openings; a witness that
+/// differs in any derived word is refused.
+#[derive(Clone)]
+pub struct ArchiveSentWitness {
+    pub before_core: [Fp; 30],
+    pub before_rest: [Fp; 6],
+    pub after_core: [Fp; 30],
+    pub after_rest: [Fp; 6],
+    pub credential: Credential,
+    pub statement: [Fp; 26],
+    /// Unsigned receipt template: zero signature, proof and capsule digests.
+    pub receipt: bootstrap::Receipt,
+    /// Removal of the Payment's pending-outgoing leaf under the committed core root.
+    pub core_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+    /// The same removal under the predecessor head's lineage-adjusted pending root.
+    pub adjusted_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+}
 #[derive(Clone)]
 pub enum ExactOperationWitness {
     Bootstrap(Box<BootstrapWitness>),
@@ -342,6 +384,19 @@ pub enum ExactOperationWitness {
         /// verification verdict; the Receive relation constrains valid credit or
         /// Burn, retaining malformed cryptographic words without rewriting them.
         incoming_payment: Arc<[u8]>,
+    },
+    /// Payer ArchiveSent of one delivered Send. The four exact originals are its fold
+    /// witnesses: the released Send capsule and completion (historical payer credential,
+    /// certificate and the exact Payment), the hosted open Request and the Credited
+    /// CreditStatus. A five-kind installation reopens all four during preparation
+    /// and recovery. A four-kind installation refuses before custody selection.
+    ArchiveSent {
+        step: Box<ArchiveSentWitness>,
+        /// Contains the original private Send witness. Erase it when the last owner drops.
+        send_capsule: Arc<Zeroizing<Vec<u8>>>,
+        send_completion: Arc<[u8]>,
+        open_request: Arc<[u8]>,
+        credit_status: Arc<[u8]>,
     },
 }
 impl ExactOperationWitness {
@@ -377,6 +432,7 @@ impl ExactOperationWitness {
             Self::RefreshTimeAnchor(w) | Self::Unload { step: w, .. } => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
+            Self::ArchiveSent { step, .. } => &step.credential,
         }
     }
     /// Decode bounded canonical private witness data, without granting authority.
@@ -506,13 +562,14 @@ struct PreparedReceive {
 pub struct PreparedOperation {
     // Present only after a cold reconstruction checked the captured predecessor and
     // reproduced the exact capsule. Neither identity is part of the wallet wire.
-    resumed_under: Option<(Arc<()>, Arc<()>)>,
+    resumed_under: Option<Box<engine::ResumedSelection>>,
     manifest_digest: [u8; 32],
     parameters_id: [u8; 32],
     capsule: RecoveryCapsule,
     witness: Arc<ExactOperationWitness>,
     receipt_body: [u8; 338],
     receive: Option<Box<PreparedReceive>>,
+    archive: Option<Box<engine::PreparedArchive>>,
     predecessor: VerifiedWalletHead,
 }
 impl PreparedOperation {
@@ -554,6 +611,7 @@ impl PreparedOperation {
             | ExactOperationWitness::RefreshTimeAnchor(step) => {
                 (&step.after_core, &step.after_rest)
             }
+            ExactOperationWitness::ArchiveSent { step, .. } => (&step.after_core, &step.after_rest),
         }
     }
 
@@ -950,7 +1008,7 @@ impl RecoveryCapsule {
         if capsule.scheme() != scheme {
             return Err(Error::AuthorityMismatch("capsule scheme"));
         }
-        if capsule.encode()? != bytes {
+        if Zeroizing::new(capsule.encode()?).as_slice() != bytes {
             return Err(Error::Malformed("capsule canonical frame"));
         }
         Ok(capsule)
@@ -958,7 +1016,7 @@ impl RecoveryCapsule {
     fn validate(&self) -> Result<()> {
         let f = &self.frame;
         if f.version != RECOVERY_CAPSULE_VERSION
-            || ![1, 2, 3, 4, 6, 7].contains(&f.kind)
+            || !(1..=7).contains(&f.kind)
             || f.receipt_body.len() != 338
             || f.recovery.is_empty()
             || f.recovery.len() > MAX_RECOVERY_BYTES
@@ -1097,6 +1155,25 @@ impl CompletionRecord {
         custody_digest(b"spartan-future-completion-v1", bytes)
     }
 }
+/// Maximum complete IPM1 CreditStatus original, including its transport header.
+pub const MAX_CREDIT_STATUS_ORIGINAL_BYTES: usize = 10_084;
+
+/// Stable private reservation for one exact Credited original from a released Send.
+pub fn wallet_archive_sent_replay_key(
+    send_capsule_digest: &[u8; 32],
+    wallet: &[u8; 32],
+    credited: &[u8],
+) -> Result<[u8; 32]> {
+    if credited.is_empty() || credited.len() > MAX_CREDIT_STATUS_ORIGINAL_BYTES {
+        return Err(Error::Malformed("ArchiveSent CreditStatus length"));
+    }
+    let mut identity = Vec::with_capacity(64 + credited.len());
+    identity.extend_from_slice(send_capsule_digest);
+    identity.extend_from_slice(wallet);
+    identity.extend_from_slice(credited);
+    Ok(custody_digest(b"spartan-archive-sent-action-v1", &identity))
+}
+
 fn custody_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(domain);

@@ -4,15 +4,13 @@
 use super::{field, reverse_insertion};
 use crate::{
     bootstrap_context as bc,
-    certificate::{self, Cells},
-    fs::SpikeRng,
+    certificate::Cells,
     full::Wiring,
-    indexed_map::{self, InsertWitness},
-    monetary_state::{self, StateCells},
+    monetary_state,
     operation_auth::tests::{Built, expose, finish, holds, proof},
     send_arithmetic::Source,
     send_maps::PENDING_DOMAIN,
-    uniform::{Array, constant, own, plus, scaled},
+    uniform::{Array, constant, own},
 };
 use ff::{Field, PrimeField};
 use iroha_data_model::kagemusha::{KagemushaWalletIndexedTreeV1, KagemushaWalletOperationKindV1};
@@ -22,157 +20,7 @@ const SEQUENCE: usize = 11;
 const PENDING: usize = 18;
 const NONCE: usize = 29;
 
-fn source(array: usize, cell: usize) -> Source {
-    Source {
-        array,
-        cell,
-        instance: 0,
-    }
-}
-
-struct ArchiveState<'a> {
-    state: &'a StateCells,
-    lineage: [Source; bc::LINEAGE_FIELDS],
-}
-
-struct ArchiveInputs {
-    tag: Source,
-    credit: Source,
-    descriptor: [Source; 7],
-    results: [Source; 4],
-}
-
-/// Both map paths are hard constraints, even on the adjusted no-op branch.
-/// The three evidence results and the absence of a required correction are
-/// separately exposed composition ports. There is no independent branch selector.
-fn append(
-    w: &mut Wiring<Fp>,
-    family: usize,
-    before: &ArchiveState<'_>,
-    after: &ArchiveState<'_>,
-    inputs: ArchiveInputs,
-    core_path: &InsertWitness<32>,
-    adjusted_path: &InsertWitness<32>,
-) {
-    let ArchiveInputs {
-        tag,
-        credit,
-        descriptor,
-        results,
-    } = inputs;
-    let core = indexed_map::append_insert(w, family, core_path);
-    let adjusted = indexed_map::append_insert(w, family, adjusted_path);
-    let fields = descriptor.map(|s| (s.value(w), s.linear()));
-    let hash = poseidon::hash_with_domain(PENDING_DOMAIN, &descriptor.map(|s| s.value(w)));
-    let mut c = Cells::new(family);
-    c.a.name = "ArchiveSent committed and adjusted pending effects";
-    c.eq(
-        tag.linear(),
-        constant(vec![Fp::from(u64::from(
-            KagemushaWalletOperationKindV1::ArchiveSent.tag(),
-        ))]),
-    );
-    c.eq(credit.linear(), descriptor[0].linear());
-    let digest = [
-        c.cell(Fp::ZERO, 255),
-        c.cell(hash, 255),
-        c.cell(Fp::ZERO, 255),
-    ];
-    for map in [&core, &adjusted] {
-        c.eq(source(map.local, map.key).linear(), descriptor[0].linear());
-        c.eq(source(map.local, map.value).linear(), own(digest[1], 1));
-    }
-    // The insertion gadget runs in reverse: its new root contains the descriptor.
-    c.eq(
-        source(core.local, core.new_root).linear(),
-        source(before.state.local, before.state.core[PENDING]).linear(),
-    );
-    c.eq(
-        source(core.local, core.old_root).linear(),
-        source(after.state.local, after.state.core[PENDING]).linear(),
-    );
-    c.eq(
-        source(adjusted.local, adjusted.new_root).linear(),
-        before.lineage[bc::PENDING_ROOT].linear(),
-    );
-    let bits = results.map(|s| {
-        let b = c.bit(s.value(w) == Fp::ONE);
-        c.eq(own(b, 1), s.linear());
-        b
-    });
-    let accepted = bits[1..].iter().fold(bits[0], |acc, &bit| {
-        let product = c.cell(c.a.values[acc][0] * c.a.values[bit][0], 1);
-        c.a.rows.push([own(acc, 1), own(bit, 1), own(product, 1)]);
-        product
-    });
-    let old = before.lineage[bc::PENDING_ROOT].linear();
-    c.a.rows.push([
-        own(accepted, 1),
-        plus(
-            &source(adjusted.local, adjusted.old_root).linear(),
-            &scaled(&old, -Fp::ONE),
-        ),
-        plus(
-            &after.lineage[bc::PENDING_ROOT].linear(),
-            &scaled(&old, -Fp::ONE),
-        ),
-    ]);
-    let b = |i| source(before.state.local, before.state.core[i]).linear();
-    let a = |i| source(after.state.local, after.state.core[i]).linear();
-    c.eq(a(SEQUENCE), plus(&b(SEQUENCE), &constant(vec![Fp::ONE])));
-    // Both canonical openings constrain uint128 sequences and nonzero state nonces.
-    for i in 0..monetary_state::CORE_FIELDS {
-        if !matches!(i, SEQUENCE | NONCE | PENDING) {
-            c.eq(b(i), a(i));
-        }
-    }
-    for (&old, &new) in before.state.rest.iter().zip(&after.state.rest) {
-        c.eq(
-            source(before.state.local, old).linear(),
-            source(after.state.local, new).linear(),
-        );
-    }
-    for i in 0..bc::LINEAGE_FIELDS {
-        if i != bc::PENDING_ROOT {
-            c.eq(before.lineage[i].linear(), after.lineage[i].linear());
-        }
-    }
-    for (i, j) in [
-        (bc::LIFECYCLE, 0),
-        (bc::POLICY_EPOCH, 27),
-        (bc::ENABLED_CONTROLS, 22),
-    ] {
-        c.eq(before.lineage[i].linear(), b(j));
-    }
-    let local = w.push(c.a);
-    certificate::hash_relation(
-        w,
-        family,
-        local,
-        PENDING_DOMAIN,
-        &fields,
-        digest,
-        &mut SpikeRng::new(b"ArchiveSent pending descriptor"),
-    );
-}
-
-#[derive(Clone)]
-struct State {
-    core: [Fp; 30],
-    rest: [Fp; 6],
-    lineage: [Fp; bc::LINEAGE_FIELDS],
-}
-#[derive(Clone)]
-struct Case {
-    before: State,
-    after: State,
-    tag: Fp,
-    credit: Fp,
-    descriptor: [Fp; 7],
-    results: [Fp; 4],
-    core_path: InsertWitness<32>,
-    adjusted_path: InsertWitness<32>,
-}
+use crate::native::engine::transfers::archive_sent::relation::{append, ArchiveInputs, ArchiveState, State, Case, source, credit_opening, receiver_signature, request_original};
 
 impl Case {
     fn credited() -> Self {
@@ -403,12 +251,3 @@ fn successor_archive_pending_effect_refuses_unrelated_changes_and_discretionary_
 
 #[path = "archive_authenticated_successor.rs"]
 mod authenticated;
-
-#[path = "archive_receipt_successor.rs"]
-mod receiver_signature;
-
-#[path = "archive_credit_opening_successor.rs"]
-mod credit_opening;
-
-#[path = "archive_request_successor.rs"]
-mod request_original;

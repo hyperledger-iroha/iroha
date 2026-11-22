@@ -7,6 +7,7 @@
 //! C session, the engine and the installed programs are the ones phones run.
 use super::*;
 pub(super) mod local_blacklist;
+pub(super) mod ordinary_receive;
 pub(super) mod recovery;
 pub(super) mod retained_refresh;
 use iroha_core_zk::kagemusha_wallet_advance_v1::{

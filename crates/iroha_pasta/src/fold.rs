@@ -298,6 +298,25 @@ pub fn fold_generators_vartime<C: PastaCurve>(g: &mut [C::AffineExt], u: &C::Sca
     }
 }
 
+/// Folds the public generator pairs of a borrowed input into a new half-length
+/// vector, preserving the installed bases. Each output is
+/// `g[i] + u * g[i + g.len()/2]`, as in [`fold_generators_vartime`].
+///
+/// Public challenges only.
+#[must_use]
+pub fn folded_generators_vartime<C: PastaCurve>(
+    g: &[C::AffineExt],
+    u: &C::ScalarExt,
+) -> Vec<C::AffineExt> {
+    let half = g.len() / 2;
+    let (lo, rest) = g.split_at(half);
+    let mut output = lo.to_vec();
+    let challenge = FoldChallenge::new::<C>(u);
+    fold_halves::<C>(&mut output, &rest[..half], u, challenge.as_ref(), None)
+        .expect("no cancellation signal");
+    output
+}
+
 /// [`fold_generators_vartime`] with a precomputed recoding of the challenge.
 ///
 /// The challenge scalar is `challenge.scalar()`, used both by the lockstep
@@ -339,14 +358,24 @@ fn fold_blocks<C: PastaCurve>(
     challenge: Option<&FoldChallenge<C::ScalarExt>>,
     cancellation: Option<&CancellationToken>,
 ) -> Result<usize, Cancelled> {
+    let half = g.len() / 2;
+    let (lo, rest) = g.split_at_mut(half);
+    fold_halves::<C>(lo, &rest[..half], u, challenge, cancellation)
+}
+
+fn fold_halves<C: PastaCurve>(
+    lo: &mut [C::AffineExt],
+    hi: &[C::AffineExt],
+    u: &C::ScalarExt,
+    challenge: Option<&FoldChallenge<C::ScalarExt>>,
+    cancellation: Option<&CancellationToken>,
+) -> Result<usize, Cancelled> {
     CancellationToken::checkpoint(cancellation)?;
     debug_assert!(challenge.is_none_or(|ch| ch.scalar() == *u));
-    let half = g.len() / 2;
+    let half = lo.len();
     if half == 0 {
         return Ok(0);
     }
-    let (lo, rest) = g.split_at_mut(half);
-    let hi = &rest[..half];
     let block = block_lanes(half, rayon::current_num_threads().max(1));
     // Every block is its own task: an idle worker takes the next block
     // instead of a share of the blocks fixed when the fold starts.
@@ -478,6 +507,29 @@ mod tests {
             );
             assert_eq!(&ours[..1100], &expected[..], "threads = {threads}");
         }
+    }
+
+    #[test]
+    fn borrowed_fold_owns_only_the_reduced_vector_on_both_curves() {
+        fn check<C: PastaCurve>() {
+            let mut rng = ChaCha20Rng::seed_from_u64(63);
+            let points: Vec<_> = (0..129).map(|_| C::random(&mut rng).to_affine()).collect();
+            assert_eq!(std::mem::size_of::<C::AffineExt>(), 64);
+            for len in [0, 1, 2, 128, 129] {
+                let bases = &points[..len];
+                for challenge in [
+                    C::ScalarExt::ZERO,
+                    C::ScalarExt::ONE,
+                    C::ScalarExt::random(&mut rng),
+                ] {
+                    let result = folded_generators_vartime::<C>(bases, &challenge);
+                    assert_eq!(result, reference::<C>(bases, &challenge));
+                    assert_eq!(result.capacity(), len / 2);
+                }
+            }
+        }
+        check::<Ep>();
+        check::<Eq>();
     }
 
     #[test]

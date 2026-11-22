@@ -28,7 +28,8 @@ int32_t spartan_fixture_apple_journal_v1(void *journal, uint32_t operation,
 /* Call on a background thread. root/artifacts are absolute UTF-8 paths. root must
  * be a dedicated new fixture directory; it is reused for exact cold-start recovery.
  * Required artifacts: program-bundle.norito, parameter-manifest.norito,
- * parameter-signature.bin emitted by the real full recursive chain compiler.
+ * parameter-signature.bin. A five-kind fixture also supplies world-manifest-digest.bin,
+ * the 32-byte selection from its independently prepared fixture World.
  * output receives a UTF-8 report; return 0 means all executed assertions passed,
  * negative means failure/pending. Passing this fixture is not FI admission. */
 int32_t spartan_fixture_run_apple_v1(
@@ -38,6 +39,13 @@ int32_t spartan_fixture_run_apple_v1(
     void *context, SpartanFixtureCollectAppleV1 collect,
     SpartanFixtureConfirmV1 confirm,
     uint8_t *output, size_t capacity, size_t *output_len);
+/* Development-only diagnostic namespace preimage of this build, from the debug branch of
+ * connect_norito_bridge's apple_debit_key.m (which scopes Native approval keys by it):
+ * "kagemusha-spartan-fixture-build-namespace-v1" || 0x00 || SHA-256(signed main executable file)
+ * || SHA-256(native-device/parameter-manifest.norito). The namespace is its SHA-256. Writes
+ * *written bytes; returns 0, or an OSStatus when absent or capacity is too small. */
+int32_t kagemusha_apple_fixture_namespace_preimage_v1(uint8_t *output, size_t capacity,
+    size_t *written);
 #ifdef __cplusplus
 }
 #endif

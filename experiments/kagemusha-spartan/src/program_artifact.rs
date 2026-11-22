@@ -82,7 +82,7 @@ fn check_register_degrees(
     }
     let row = |r: Slot| r as usize * vars..(r as usize + 1) * vars;
     let mut next = vec![0u8; vars];
-    for &(op, d) in &regs.ops {
+    for (op, d) in regs.ops.iter() {
         match op {
             Op::Add(a, b) | Op::Sub(a, b) => {
                 for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
@@ -238,6 +238,11 @@ fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<FixedVal
     })
 }
 impl<F: Scalar> UniformCircuit<F> {
+    /// Maximum ordinary fixed rows this canonical tape can expand at its column count.
+    pub(crate) fn max_exported_fixed_rows(&self) -> usize {
+        (MAX_PROGRAM_BYTES / 32) / self.shape.cols()
+    }
+
     /// Serialize only exact public verification instructions and constants.
     pub fn export_program(&self) -> Result<Vec<u8>, String> {
         let side = match self.shape.label {
@@ -303,6 +308,22 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Decode a bounded verifier-only program. Its digest must subsequently be
     /// authenticated by the independent scheme-root manifest before use.
     pub fn import_program(bytes: &[u8], primary: bool) -> Result<Self, String> {
+        Self::import_with_sumcheck_group::<3>(bytes, primary)
+    }
+
+    /// Read a four-variable tape when the producer profile independently selects
+    /// that grouping. The caller must authenticate the resulting program digest.
+    pub(crate) fn import_four_variable_program(
+        bytes: &[u8],
+        primary: bool,
+    ) -> Result<Self, String> {
+        Self::import_with_sumcheck_group::<4>(bytes, primary)
+    }
+
+    fn import_with_sumcheck_group<const GROUP: usize>(
+        bytes: &[u8],
+        primary: bool,
+    ) -> Result<Self, String> {
         let p = compact::decode::<PublicProgram>(bytes)?;
         if p.version != 3
             || p.side != if primary { 1 } else { 2 }
@@ -329,7 +350,7 @@ impl<F: Scalar> UniformCircuit<F> {
             || !(2..=18).contains(&row_bits)
             || !(9..=18).contains(&col_bits)
             || row_bits + col_bits > 30
-            || k != 3
+            || k != GROUP
             || io_len != 64
             || !matches!(p.challenges, 0 | 2)
             || p.degrees[0] > 1
@@ -385,11 +406,14 @@ impl<F: Scalar> UniformCircuit<F> {
             return Err("duplicate late program IO".into());
         }
         let pool = unpack_fields(&p.constants)?;
+        drop(p.constants);
         let fixed_count = (fixed_rows - wallet_rows)
             .checked_mul(shape.cols())
             .ok_or("fixed program field count overflow")?;
         let fixed_values = unpack_fixed_fields(&p.fixed, fixed_count)?;
+        drop(p.fixed);
         let ops = compact::unpack(p.inputs, pool.len(), &p.operations)?;
+        drop(p.operations);
         let muls = ops.iter().filter(|op| matches!(op, Op::Mul(..))).count();
         let scales = ops.iter().filter(|op| matches!(op, Op::Scale(..))).count();
         if p.outputs
@@ -524,7 +548,7 @@ impl<F: Scalar> UniformCircuit<F> {
 }
 
 /// An instruction's public-program record: tag, then its two words.
-fn op_words(op: Op) -> [u32; 3] {
+pub(super) fn op_words(op: Op) -> [u32; 3] {
     match op {
         Op::Add(a, b) => [0, a, b],
         Op::Sub(a, b) => [1, a, b],

@@ -41,6 +41,13 @@ mod tests {
         let phases = c.phase_memory_accounting();
         assert_eq!(c.first_phase_memory_bytes(), phases.phase1_bytes);
         assert_eq!(c.preparation_memory_bytes(), phases.preparation_bytes);
+        let k = c.shape.inner_blocks()[0];
+        let cube = 1u64 << k;
+        let grid = 3u64.pow(k as u32);
+        // All these field arrays coexist in Projection::finish.
+        let low = (2u64 << c.shape.sw()) >> k;
+        let final_grid = low + cube * cube + grid * cube + cube + 2 * grid;
+        assert!(phases.matrix_bytes >= phases.phase1_bytes + final_grid * size_of::<F>() as u64);
         let tasks = rayon::current_num_threads() as u64;
         let rows = (PREPARATION_CHECK_ROWS as u64).min(1 << c.shape.sx);
         assert!(phases.preparation_bytes >= tasks * 3 * rows * size_of::<F>() as u64);
@@ -344,7 +351,11 @@ impl<F: Scalar> UniformCircuit<F> {
         let m_plan_bytes = retained - start;
         let start = retained;
         if let Some(t) = self.plan.get() {
-            retained += bytes(&t.pool) + bytes(&t.regs.inputs) + bytes(&t.regs.ops);
+            retained += bytes(&t.pool) + bytes(&t.regs.inputs);
+            retained += match &t.regs.ops {
+                RegisterInstructions::Packed(words) => bytes(words),
+                RegisterInstructions::Wide(instructions) => bytes(instructions),
+            };
         }
         let matrix_program_bytes = retained - start;
 
@@ -557,10 +568,39 @@ impl<F: Scalar> UniformCircuit<F> {
         let eq_tables = (1u128 << block_bits) + (x >> block_bits);
         let half_runs = w.div_ceil(crate::kern::SEGMENT as u128);
         let m_dense = p.m_pages * memory_plan_counts::M_PAGE as u128;
+        let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
+        let inner_low = (2 * w) >> inner_k;
+        let low_runs = inner_low.div_ceil(crate::kern::SEGMENT as u128);
+        let cube = 1u128 << inner_k;
+        let grid = 3u128.pow(inner_k as u32);
+        // An IO array occupies one contiguous row starting at its declared
+        // offset in the public half. The constant occupies its first entry.
+        let tail = self
+            .io_arrays
+            .iter()
+            .map(|&(a, off)| off as u128 + self.arrays[a].r_count as u128)
+            .fold(1, u128::max);
+        // The parallel pass owns one corner cross-product per running worker
+        // and one merged matrix. Finalization extends its columns on the
+        // ternary grid while holding the unit vector, its extension and result.
+        let workers = rayon::current_num_threads() as u128;
+        let parallel_products = (workers + 1) * cube * cube;
+        let projected_grid = cube * cube + grid * cube + cube + 2 * grid;
+        // The projected table keeps its lowest corner. Its atomic run marks
+        // overlap the collected word bitmap and both overlap the support scan.
+        let marks = 2 * half_runs.div_ceil(64) * size_of::<u64>() as u128;
+        let support = low_runs * 17;
+        // Basis::new stores corner indices, up to one triple per extension
+        // and a list of the non-Boolean grid positions. The latter vectors grow.
+        let basis = (cube + 8 * grid) * size_of::<usize>() as u128;
+        let streamed = (inner_low + tail + parallel_products.max(projected_grid)) * field
+            + basis
+            + marks
+            + low_runs * size_of::<u32>() as u128
+            + support;
         let matrix = phase1
             + eq_tables * field
-            + m_dense
-            + half_runs.div_ceil(8)
+            + (m_dense + half_runs.div_ceil(8)).max(streamed)
             + symbolic
             + matrix_plans
             + p.m_plan_group
@@ -568,12 +608,9 @@ impl<F: Scalar> UniformCircuit<F> {
         // Inner: M's written pages while its first fold is allocated, then
         // (M's pages dropped) the folds of M and z (the caller's rows are read
         // in place).
-        let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
-        let inner_low = (2 * w) >> inner_k;
         // Per run: the corner masks of both tables and of z alone (8 bytes),
         // their scan's pairs while they are split (8) and z's live flag
         // carried to the next round (1).
-        let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 17;
         let inner =
             phase1 + symbolic + support + (m_dense + inner_low * field).max(2 * inner_low * field);
         // At opening only the folded tables remain; IPA x/b, generator copy

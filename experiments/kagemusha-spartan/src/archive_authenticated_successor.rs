@@ -54,6 +54,8 @@ impl Verifier {
             expected: [Fp::ZERO; 12],
             send: false,
             subject: Fp::ZERO,
+            statement: send.statement,
+            statement_digest: crate::statement::digest(&send.statement),
         };
         let (circuit, _, _) =
             Case::credited().build_for_receipt(Some([Fp::ZERO; 2]), Some(&shape));
@@ -71,71 +73,25 @@ impl Verifier {
 fn delivered_receipt(
     delivery: &VerifiedSentDelivery<'_>,
 ) -> Result<super::receiver_signature::ReceiverReceipt> {
-    use crate::{credential, deferral, full, receipt, statement};
-    let evidence = delivery.receiver_evidence();
-    let p = &evidence.profile;
-    let s = &evidence.statement;
-    let tag = |kind: KagemushaWalletOperationKindV1| Fp::from(u64::from(kind.tag()));
-    let (send, program) = if s[16] == tag(KagemushaWalletOperationKindV1::Receive) {
-        (false, full::RECEIVE)
-    } else if s[16] == tag(KagemushaWalletOperationKindV1::Send) {
-        (true, full::SEND)
-    } else {
-        return Err(Error::AuthorityMismatch("ArchiveSent receiver head kind"));
-    };
-    // Native and in-circuit acceptance must agree. The decided profile names the same
-    // program, and its head and statement digest are this statement's. The head receipt
-    // signs the operation id of this kind and credit. A Receive names this Payment's credit.
-    let (a, b) = deferral::kind_bits(program);
-    let operation = poseidon::hash_with_domain(
-        u64::from_le_bytes(*b"kgwopid1"),
-        &[
-            p[bc::CONTEXT_IO + bc::WALLET],
-            p[bc::CONTEXT_IO + bc::WALLET + 1],
-            s[16],
-            s[17],
-        ],
-    );
-    if [p[full::KIND_IO], p[full::KIND_IO + 1]] != [Fp::from(a), Fp::from(b)]
-        || p[full::HEAD_IO] != s[15]
-        || p[full::STATEMENT_IO] != statement::digest(s)
-        || evidence.receipt.body[114..146] != operation.to_repr()
-        || (!send && s[17] != delivery.payment().statement()[17])
-    {
-        return Err(Error::AuthorityMismatch(
-            "ArchiveSent receiver head evidence",
-        ));
-    }
-    let expected = [
-        credential::digest(&evidence.credential),
-        p[full::RECEIPT_IO],
-        p[full::HEAD_IO],
-        p[full::STATEMENT_IO],
-        delivery.payment().digest(),
-        receipt::digest(&evidence.receipt),
-        p[bc::CONTEXT_IO + bc::WALLET],
-        p[bc::CONTEXT_IO + bc::WALLET + 1],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 1],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 2],
-        p[bc::CONTEXT_IO + bc::PAYMENT_KEY + 3],
-    ];
-    Ok(super::receiver_signature::ReceiverReceipt {
-        request: Some(delivery.payment().request().clone()),
-        opening: Some(super::credit_opening::StatusOpening {
-            root: p[bc::LINEAGE_IO + bc::CREDIT_ROOT],
-            burned: matches!(delivery.outcome(), native::VerifiedCreditStatus::Burned),
-            next: evidence.next,
-            index: evidence.slot,
-            siblings: evidence.siblings,
-        }),
-        credential: evidence.credential.clone(),
-        receipt: evidence.receipt.clone(),
-        expected,
-        send,
-        subject: s[17],
-    })
+    receiver_receipt(
+        delivery.receiver_evidence(),
+        delivery.payment(),
+        delivery.outcome(),
+    )
 }
+
+// The same derivation over the authenticated evidence. Each check mirrors one in-circuit
+// predicate, so evidence that would derive a false result is refused here with a typed
+// error before proving or Advance.
+fn receiver_receipt(
+    evidence: &crate::native::sent_delivery::ReceiverEvidence,
+    payment: &native::VerifiedIncomingPayment,
+    outcome: native::VerifiedCreditStatus,
+) -> Result<super::receiver_signature::ReceiverReceipt> {
+    receiver_receipt_fields(evidence, payment.statement(), payment.request(), payment.digest(), outcome)
+}
+
+use crate::native::engine::transfers::archive_sent::relation::receiver_receipt_fields;
 
 fn verify_io(verifier: &Verifier, io: Vec<Fp>, proof: &[u8]) -> Result<()> {
     let circuit = &verifier.0;
@@ -154,7 +110,7 @@ impl Inputs<'_> {
     // private candidate domain is separate from the ordinary monetary statement.
     fn binding(&self) -> [Fp; 2] {
         let mut h = blake3::Hasher::new_derive_key(
-            "KAGEMUSHA Spartan ArchiveSent joined receiver evidence component v2",
+            "KAGEMUSHA Spartan ArchiveSent joined receiver evidence component v3",
         );
         let delivery = self.delivery;
         let parts: [&[u8]; 7] = [
@@ -461,10 +417,12 @@ fn successor_archive_authenticated_delivery_proves_at_later_selected_payer_head(
         assert_eq!(io, instance.io, "the verifier recomputes the exact public input");
         later_inputs.verify(&circuit, nonce, &proof).unwrap();
         // Credential digest, folded receipt, head and statement, original Payment, receipt
-        // digest, receiver wallet and key, open and completed Request words, folded credit
-        // root, Burned flag, next key, slot and the last opening sibling are all bound.
+        // digest, receiver wallet and key, form bit, subject, exact statement digest, open and
+        // completed Request words, folded credit root, Burned flag, next key, slot and the
+        // last opening sibling are all bound.
         for offset in [
-            64, 65, 66, 67, 68, 69, 70, 72, 75, 82, 95, 98, 111, 128, 129, 130, 131, 163,
+            64, 65, 66, 67, 68, 69, 70, 72, 75, 76, 77, 78, 82, 95, 98, 111, 128, 129, 130, 131,
+            163,
         ] {
             let mut changed = io.clone();
             changed[offset] += Fp::ONE;
@@ -565,6 +523,18 @@ fn retained_receiver_receipt(
         projection[bc::CONTEXT_IO + bc::PAYMENT_KEY + 2],
         projection[bc::CONTEXT_IO + bc::PAYMENT_KEY + 3],
     ];
+    // The counterparty's own released Receive head and completion receipt independently fix
+    // the head statement's digest, kind, sequence, predecessor and successor. The words
+    // themselves are the ones that the payer's verified CreditStatus carried.
+    let statement = delivery.receiver_evidence().statement;
+    let digest = crate::statement::digest(&statement);
+    assert_eq!(digest, projection[full::STATEMENT_IO]);
+    assert_eq!(cap.kind(), 4);
+    assert_eq!(statement[16], Fp::from(4));
+    assert_eq!(raw.body[98..114], statement[9].to_repr()[..16]);
+    for (at, word) in [(146, statement[14]), (178, statement[15]), (210, digest)] {
+        assert_eq!(raw.body[at..at + 32], word.to_repr());
+    }
     let receipt = ReceiverReceipt {
         request: None,
         opening: None,
@@ -573,6 +543,8 @@ fn retained_receiver_receipt(
         expected,
         send: false,
         subject: delivery.payment().statement()[17],
+        statement,
+        statement_digest: projection[full::STATEMENT_IO],
     };
     assert_eq!(receipt::digest(&receipt.receipt), expected[1]);
     (receipt, projection[bc::LINEAGE_IO + bc::CREDIT_ROOT])
@@ -875,3 +847,8 @@ fn successor_archive_receiver_request_signature_and_payer_specialization() {
 
 #[path = "archive_later_head_successor.rs"]
 mod later_receiver_head;
+#[path = "archive_sent_custody_tests.rs"]
+mod payer_custody;
+
+#[path = "archive_recursion_successor.rs"]
+mod recursion;

@@ -459,6 +459,21 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         let invalid = IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(profile: .kagemushaSpartanPaymentV3, kind: .credited)
         guard (1...10_000).contains(raw.count) else { throw invalid }
         let b = [UInt8](raw)
+        if b[0] & 0xe0 == 0xa0 {
+            // The native later-Send layout contains 16 fixed-width statement words, the
+            // receipt suffix, epoch, pending root, opening's next key and little-endian index.
+            let statementBytes = 6 * 32 + 8 * 16 + 2 * 8
+            var at = 1 + statementBytes + 128 + 8 + 32 + 32 + 4
+            var siblings = 32
+            if b[0] & 0x10 == 0 {
+                guard b.count - at >= 4 else { throw invalid }
+                siblings = b[at..<(at + 4)].reduce(0) { $0 + $1.nonzeroBitCount }
+                guard siblings < 32 else { throw invalid }
+                at += 4
+            }
+            guard b.count > at + siblings * 32 else { throw invalid }
+            return
+        }
         guard b.count >= 9, b.prefix(8).elementsEqual("KGSCST3\0".utf8), b[8] <= 1 else { throw invalid }
         var at = 9
         func field() throws {
@@ -474,6 +489,15 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         let siblings = b[at+4..<at+8].reduce(0) { $0 + $1.nonzeroBitCount }
         at += 8 + siblings*32
         guard at < b.count else { throw invalid }
+    }
+
+    /// Outcome carried by a structurally valid Spartan folded CreditStatus. The wallet
+    /// authenticates the receiver proof against the retained Send before showing delivery.
+    public var spartanCreditOutcome: KagemushaSpartanCreditOutcomeV1? {
+        guard profile == .kagemushaSpartanPaymentV3, kind == .credited,
+              let prefix = canonicalPayload.first else { return nil }
+        let flag = prefix & 0xe0 == 0xa0 ? prefix & 1 : canonicalPayload[canonicalPayload.startIndex + 8]
+        return flag == 0 ? .credited : .burned
     }
 
     private static func validateCanonicalPayload(
