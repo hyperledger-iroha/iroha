@@ -8,6 +8,40 @@ mod archive_remove_successor_tests;
 #[path = "signed_receive_scalar_tests.rs"]
 mod signed_receive_scalar_tests;
 
+/// Exercise the same private-circuit check as Finalize, using the exact
+/// governed fixture generation supplied to a device run.
+#[test]
+#[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS with signed programs"]
+fn mounted_program_digests_bind_each_kind_and_curve() {
+    let dir = std::path::PathBuf::from(
+        std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+    );
+    let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+    let digest: [u8; 32] = read("world-manifest-digest.bin").try_into().unwrap();
+    let mounted = super::super::device_fixture::install_selected(
+        &read("program-bundle.norito"),
+        &read("parameter-manifest.norito"),
+        read("parameter-signature.bin").try_into().unwrap(),
+        Some(&digest),
+    )
+    .unwrap();
+    let installed = &mounted.inner;
+    for (kind, program) in installed.programs.iter().enumerate() {
+        let [primary, secondary] = &installed.program_digests[kind];
+        let other = &installed.programs[(kind + 1) % installed.programs.len()];
+        same_program(&program.primary, &program.primary, primary).unwrap();
+        same_program(&program.secondary, &program.secondary, secondary).unwrap();
+        for wrong in [
+            same_program(&other.primary, &program.primary, primary),
+            same_program(&other.secondary, &program.secondary, secondary),
+            same_program(&program.primary, &program.primary, secondary),
+            same_program(&program.secondary, &program.secondary, primary),
+        ] {
+            assert!(matches!(wrong, Err(Error::AuthorityMismatch("operation compiled program"))));
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires the signed device bundle and two distinct retained Payments"]
 fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
@@ -1053,7 +1087,7 @@ fn native_private_witness_rebuilds_the_authenticated_sumcheck_group_on_both_curv
         let (derived, _, _, _) = build(wiring, &circuit, &entropy, b"selected group test").unwrap();
         assert_eq!(derived.shape.k, GROUP);
         assert_eq!(derived.program_digest(), pin);
-        same_program(&derived, &circuit).unwrap();
+        same_program(&derived, &circuit, &circuit.program_digest()).unwrap();
     }
     check::<Fp, 3>(true, 13, 55);
     check::<Fq, 3>(false, 10, 54);

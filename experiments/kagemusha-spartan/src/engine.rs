@@ -104,6 +104,9 @@ pub(crate) struct Program {
 }
 pub(crate) struct ParameterSet {
     pub programs: Box<[Program]>,
+    // The immutable mounted programs passed the digest comparison with these
+    // manifest pins. Each private operation circuit is still hashed afresh.
+    program_digests: Box<[[[u8; 32]; 2]]>,
     pub generators: full::PairGens,
     pub scheme: [u8; 32],
     pub relation: [u8; 32],
@@ -673,6 +676,7 @@ impl AuthenticatedParameters {
         )?;
         ParameterSet::mount(
             programs,
+            [&producer.primary, &producer.secondary],
             scheme.scheme_id(),
             scheme.relation_id,
             *selected_digest,
@@ -826,13 +830,15 @@ impl ParameterSet {
         // Generators exactly as the signed profile names them, never derived
         // from program geometry alone.
         let (gp, gs) = authenticate_profile(&manifest, [pbits, sbits])?;
-        Self::mount(Vec::from(programs).into_boxed_slice(),manifest.scheme,manifest.relation,manifest_digest,
+        Self::mount(Vec::from(programs).into_boxed_slice(), [&manifest.primary, &manifest.secondary],
+            manifest.scheme,manifest.relation,manifest_digest,
             [manifest.dimensions_p,manifest.dimensions_s],(gp,gs),root,finality)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn mount(
+    fn mount<const KINDS: usize>(
         programs: Box<[Program]>,
+        pins: [&[[u8; 32]; KINDS]; 2],
         scheme: [u8; 32],
         relation: [u8; 32],
         manifest_digest: [u8; 32],
@@ -841,6 +847,12 @@ impl ParameterSet {
         root: p256::Point,
         finality: SumeragiCommitVerifierV1,
     ) -> Result<AuthenticatedParameters> {
+        if programs.len() != KINDS {
+            return Err(Error::Malformed("installed program count"));
+        }
+        let program_digests = pins[0].iter().zip(pins[1])
+            .map(|(&primary, &secondary)| [primary, secondary])
+            .collect();
         let (gp, gs) = gens;
         let keys_p = programs
             .iter()
@@ -889,6 +901,7 @@ impl ParameterSet {
             confirmation: ConfirmationScope::Installed,
             inner: Arc::new(Self {
                 programs,
+                program_digests,
                 generators,
                 scheme,
                 relation,
@@ -1500,8 +1513,9 @@ impl<S: Scalar + zeroize::Zeroize> PrivateCircuit<S> {
 fn same_program<S: Scalar + zeroize::Zeroize>(
     private: &UniformCircuit<S>,
     program: &UniformCircuit<S>,
+    installed_digest: &[u8; 32],
 ) -> Result<()> {
-    if private.program_digest() == program.program_digest() {
+    if private.program_digest() == *installed_digest {
         return Ok(());
     }
     if crate::prof::enabled() {
@@ -2624,7 +2638,7 @@ impl Engine for NativeEngine {
         // The secondary's is small and checked now; the primary's is checked
         // once its proof is made and its witness and prover tables are gone,
         // before anything is verified or released.
-        same_program(&cs, &p.programs[k].secondary)?;
+        same_program(&cs, &p.programs[k].secondary, &p.program_digests[k][1])?;
         stage.mark("digest");
         let rlc = |_: &[u8; 32]| [0; 32];
         self.require_stage_memory(cs.phase_memory_accounting().additional_peak_bytes)?;
@@ -2648,7 +2662,7 @@ impl Engine for NativeEngine {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
         stage.mark("p-proof");
-        same_program(&cp, &p.programs[k].primary)?;
+        same_program(&cp, &p.programs[k].primary, &p.program_digests[k][0])?;
         drop(cp);
         stage.mark("p-digest");
         if crate::prof::enabled() {

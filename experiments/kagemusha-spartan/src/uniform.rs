@@ -5941,20 +5941,25 @@ fn hash_tape<F: Scalar>(
     for value in pool {
         h.update(&value.to_repr());
     }
+    // BLAKE3 can compress complete chunks when the nine-byte instructions
+    // arrive together. The digest retains the original tag and LE32 operands.
+    let mut batch = [[0u8; 9]; 256];
+    let mut buffered = 0;
     let mut n = 0;
     for op in ops {
-        let (tag, a, b) = match op {
-            Op::Add(a, b) => (0, a, b),
-            Op::Sub(a, b) => (1, a, b),
-            Op::Mul(a, b) => (2, a, b),
-            Op::Scale(a, b) => (3, a, b),
-            Op::Const(a) => (4, a, 0),
-        };
-        h.update(&[tag]);
-        h.update(&a.to_le_bytes());
-        h.update(&b.to_le_bytes());
+        let [tag, a, b] = program_artifact::op_words(op);
+        let record = &mut batch[buffered];
+        record[0] = tag as u8;
+        record[1..5].copy_from_slice(&a.to_le_bytes());
+        record[5..9].copy_from_slice(&b.to_le_bytes());
+        buffered += 1;
         n += 1;
+        if buffered == batch.len() {
+            h.update(batch.as_flattened());
+            buffered = 0;
+        }
     }
+    h.update(batch[..buffered].as_flattened());
     assert_eq!(n, ops_len, "every counted instruction hashed");
     for o in out {
         h.update(&o.to_le_bytes());
