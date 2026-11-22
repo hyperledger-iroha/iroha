@@ -21,7 +21,7 @@
     "application_accumulators": 6,
     "classified_domain_literals": 1308,
     "construction_users": 56,
-    "state_hash_functions": 256,
+    "state_hash_functions": 257,
     "protocol_carriers": 11,
     "witness_families": 11,
     "open_defects": 11
@@ -394,6 +394,7 @@
       {"path":"crates/iroha_core/src/sumeragi/finality.rs","function":"current_prefix_source","count":1,"use":"record","reason":"Hashes or returns the exact original native block-wire prefix identity used only to invalidate a local finality-proof cursor; no State root or independent finality authority"},
       {"path":"crates/iroha_core/src/sumeragi/finality.rs","function":"proof","count":1,"use":"result_binding","reason":"Carries the certified block identity and R of a committed height (the execution tip or a finality proof): it binds the listed roots and digests no State content of its own"},
       {"path":"crates/iroha_core/src/sumeragi/finality.rs","function":"proof_from_chain","count":1,"use":"result_binding","reason":"Carries the certified block identity and R of a committed height (the execution tip or a finality proof): it binds the listed roots and digests no State content of its own"},
+      {"path":"crates/iroha_core/src/sumeragi/finality/certified_history.rs","function":"header_digest","count":1,"use":"record","reason":"Reads committed block hashes or the hash of the current block header: authenticated history and block identity, not a digest of State content"},
       {"path":"crates/iroha_core/src/sumeragi/genesis_meta.rs","function":"staged_genesis_execution_policy_hash","count":1,"roots":["execution_policy_digest"]},
       {"path":"crates/iroha_core/src/sumeragi/genesis_meta.rs","function":"staged_genesis_nexus_amx_context_hash","count":1,"roots":["nexus_amx_context_digest"]},
       {"path":"crates/iroha_core/src/sumeragi/test_chain.rs","function":"validate_fixture_genesis_policy","count":1,"use":"test","reason":"Table accessors and fixtures compiled for tests or under a test-only feature"},
