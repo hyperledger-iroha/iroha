@@ -495,9 +495,8 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The frozen baseline has 410 instructions. The 39 additions include both
-        // C10 registrations, the Taira scoped-read schedule and three Spartan instructions.
-        const EXPECTED_TYPED_CODEC_REGISTRARS: usize = 449;
+        // 410 frozen assignments and 43 additions with tolerant decoding.
+        const EXPECTED_TYPED_CODEC_REGISTRARS: usize = 453;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -665,6 +664,7 @@ mod tests {
                 "iroha.runtime.child_admin.authorize.v1",
                 crate::isi::runtime_deferred::ProposeCurrentBindingMultisigV1::WIRE_ID,
                 crate::isi::runtime_deferred::RegisterCurrentBindingTriggerV1::WIRE_ID,
+                "iroha.runtime.generic_carrier.stage_artifact.v1",
                 crate::isi::runtime_obligation::CompleteRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_obligation::RegisterContractRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_obligation::RegisterRuntimeObligationV1::WIRE_ID,
