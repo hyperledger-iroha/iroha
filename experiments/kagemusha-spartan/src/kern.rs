@@ -1187,6 +1187,377 @@ pub fn fold_top<F: Field, T: Table<F> + ?Sized>(
         .collect()
 }
 
+/// Receives the entries a relation computes for the dense half of a public
+/// table (`M(r_x, .)` below `2^sw`), from parallel jobs.
+pub trait Entries<F>: Sync {
+    /// A worker's own state.
+    type Local: Send;
+    fn local(&self) -> Self::Local;
+    /// The jobs run once per sweep, emitting in sweep `s` only the positions
+    /// in `self.sweep(s)`.
+    fn sweeps(&self) -> usize {
+        1
+    }
+    fn sweep(&self, _s: usize) -> std::ops::Range<usize> {
+        0..usize::MAX
+    }
+    fn put(&self, local: &mut Self::Local, pos: usize, value: F);
+    /// A worker's finished state.
+    fn absorb(&self, local: Self::Local);
+}
+
+/// A relation computing `M(r_x, .)`: its dense half into `sink`, and with
+/// `tail` its public half up to the last io entry (`None` without).
+///
+/// # Safety
+///
+/// Every emitted position must be inside its sweep and emitted at most once
+/// for that sweep across all workers. Puts from different sweeps must never
+/// overlap in time. Distinct sweeps can map different positions to the same
+/// mutable output cell when the sink folds a corner.
+pub unsafe trait Generate<F> {
+    fn run<S: Entries<F>>(&self, sink: &S, tail: bool) -> Option<Vec<F>>;
+}
+
+/// The first inner round: its values, its challenges, `M(r_x, .)` folded by
+/// them and the round's support (which the caller's fold of `z` reuses).
+pub struct FirstInner<F> {
+    pub values: Vec<F>,
+    pub r: Vec<F>,
+    pub m: Vec<F>,
+    pub support: Option<Support>,
+}
+
+/// The first inner round over a whole [`Split`] `M(r_x, .)`: `challenge`
+/// commits the round's values and draws its challenges.
+pub fn first_inner_split<F: Field, Z: Table<F> + ?Sized>(
+    basis: &Basis,
+    m: Split<F>,
+    z: &Z,
+    challenge: &mut dyn FnMut(&[F]) -> Vec<F>,
+) -> FirstInner<F> {
+    let k = basis.k;
+    let support = (m.len() >> k >= SEGMENT)
+        .then(|| crate::prof::time("i.support", || crate::kern::support(k, &m, z)));
+    let values = crate::prof::time("i.round", || inner_round(basis, &m, z, support.as_ref()));
+    let r = challenge(&values);
+    let m = crate::prof::time("i.fold", || m.into_folded(&r, support.as_ref()));
+    FirstInner {
+        values,
+        r,
+        m,
+        support,
+    }
+}
+
+/// [`first_inner_split`] without the table: the relation computes the dense
+/// half again for every corner but the lowest. The round's values are
+/// bilinear in the tables, so for `P[h][h'] = sum_j M(h, j) z(h', j)` (linear
+/// in M) each grid value is `sum_{h, h'} B[g][h] B[g][h'] P[h][h']`, where
+/// `B` extends corners to `{0, 1, inf}^k`: the first pass adds every entry
+/// into its worker's `P` in any order, marks the runs holding a nonzero
+/// (public) entry, which are the zero runs [`support`] reads, and keeps the
+/// lowest corner in the folded table's place. After the challenges the
+/// second pass scales that corner by `eq(r, 0)` and adds `eq(r, h) M(h, j)`
+/// of the other corners, which equals the fold under any support (a corner a
+/// run's mask leaves out is zero in M). Field arithmetic is exact: the
+/// values, masks and folded table equal the split table's.
+pub fn first_inner_streamed<F: Field, Z: Table<F> + ?Sized, G: Generate<F>>(
+    basis: &Basis,
+    half: usize,
+    z: &Z,
+    generate: &G,
+    challenge: &mut dyn FnMut(&[F]) -> Vec<F>,
+) -> FirstInner<F> {
+    let k = basis.k;
+    assert!(half.is_power_of_two() && (1..=5).contains(&k) && (2 * half) >> k > 0);
+    assert_eq!(z.len(), 2 * half, "z's two halves");
+    let projection = Projection::new(k, half, z);
+    let tail =
+        crate::prof::time("i.mtable", || generate.run(&projection, true)).expect("the public half");
+    assert!(tail.len() <= half, "the tail lies in the upper half");
+    let (values, nonzero, lowest) =
+        crate::prof::time("i.round", || projection.finish(basis, &tail));
+    let zeros = Projected {
+        half,
+        nonzero: &nonzero,
+        tail: &tail,
+    };
+    let support = ((2 * half) >> k >= SEGMENT)
+        .then(|| crate::prof::time("i.support", || crate::kern::support(k, &zeros, z)));
+    let r = challenge(&values);
+    let folding = Folding::new(half, &r, lowest, &nonzero);
+    if folding.sweeps() > 0 {
+        crate::prof::time("i.mfold", || generate.run(&folding, false));
+    }
+    FirstInner {
+        m: folding.finish(&tail),
+        values,
+        r,
+        support,
+    }
+}
+
+/// Pass one: `P[h][h'] += M(h, j) z(h', j)` per entry, z read at public
+/// positions and never tested; the lowest corner's entries kept.
+struct Projection<'z, F, Z: ?Sized> {
+    z: &'z Z,
+    cube: usize,
+    low_bits: usize,
+    seg_bits: usize,
+    /// Per run of rows `j`: the corners where z may hold anything, by its
+    /// public layout (the support's z masks).
+    z_live: Vec<u32>,
+    /// Per run of [`SEGMENT`] dense entries: whether one is nonzero.
+    nonzero: Vec<std::sync::atomic::AtomicU64>,
+    sums: std::sync::Mutex<Vec<F>>,
+    /// The lowest corner `M(0, .)`, in the folded table's place.
+    lowest: std::sync::Mutex<Vec<F>>,
+    lowest_ptr: Shared<F>,
+}
+
+impl<'z, F: Field, Z: Table<F> + ?Sized> Projection<'z, F, Z> {
+    fn new(k: usize, half: usize, z: &'z Z) -> Self {
+        let (cube, low) = (1usize << k, (2 * half) >> k);
+        let seg = SEGMENT.min(low);
+        let z_live = (0..low / seg)
+            .into_par_iter()
+            .map(|s| {
+                (0..cube).fold(0u32, |mask, h| {
+                    let run = h * low + s * seg..h * low + (s + 1) * seg;
+                    mask | (u32::from(!z.zero_run(run)) << h)
+                })
+            })
+            .collect();
+        let mut lowest = zeroed(low);
+        let lowest_ptr = Shared(lowest.as_mut_ptr());
+        Projection {
+            z,
+            cube,
+            low_bits: low.trailing_zeros() as usize,
+            seg_bits: seg.trailing_zeros() as usize,
+            z_live,
+            lowest: std::sync::Mutex::new(lowest),
+            lowest_ptr,
+            nonzero: (0..half.div_ceil(SEGMENT).div_ceil(64))
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect(),
+            sums: std::sync::Mutex::new(vec![F::ZERO; cube * cube]),
+        }
+    }
+
+    /// Adds `value z(h', j)` into `row` (`P[h]`) for every corner `h'` where
+    /// z may hold anything by layout (a corner it empties adds zero).
+    #[inline]
+    fn add(&self, row: &mut [F], j: usize, value: F) {
+        let mut live = self.z_live[j >> self.seg_bits];
+        while live != 0 {
+            let h = live.trailing_zeros() as usize;
+            live &= live - 1;
+            row[h] += value * self.z.at((h << self.low_bits) + j);
+        }
+    }
+
+    /// The public half's entries joined: the round's grid values, the
+    /// nonzero runs and the lowest corner.
+    fn finish(&self, basis: &Basis, tail: &[F]) -> (Vec<F>, Vec<u64>, Vec<F>) {
+        let (cube, grid) = (basis.cube, basis.grid);
+        assert_eq!(cube, self.cube, "the round's variables");
+        let half = (cube / 2) << self.low_bits;
+        let mut sums = std::mem::take(&mut *self.sums.lock().unwrap());
+        for (t, &value) in tail.iter().enumerate() {
+            if !value.is_zero_vartime() {
+                let (h, j) = ((half + t) >> self.low_bits, (half + t) & ((1 << self.low_bits) - 1));
+                self.add(&mut sums[h * cube..(h + 1) * cube], j, value);
+            }
+        }
+        // B's columns: the corners' unit vectors extended.
+        let mut columns = vec![F::ZERO; grid * cube];
+        let (mut unit, mut ext) = (vec![F::ZERO; cube], vec![F::ZERO; grid]);
+        for h in 0..cube {
+            unit.fill(F::ZERO);
+            unit[h] = F::ONE;
+            basis.extend(&unit, &mut ext);
+            for (g, value) in ext.iter().enumerate() {
+                columns[g * cube + h] = *value;
+            }
+        }
+        let mut acc: Vec<F> = (0..grid)
+            .map(|g| {
+                let b = &columns[g * cube..(g + 1) * cube];
+                (0..cube)
+                    .map(|h| b[h] * (0..cube).map(|h2| b[h2] * sums[h * cube + h2]).sum::<F>())
+                    .sum()
+            })
+            .collect();
+        basis.to_grid(&mut acc);
+        let nonzero = self
+            .nonzero
+            .iter()
+            .map(|w| w.load(std::sync::atomic::Ordering::Relaxed))
+            .collect();
+        let lowest = std::mem::take(&mut *self.lowest.lock().unwrap());
+        (acc, nonzero, lowest)
+    }
+}
+
+impl<F: Field, Z: Table<F> + ?Sized> Entries<F> for Projection<'_, F, Z> {
+    /// The worker's `P` and the run it marked last.
+    type Local = (Vec<F>, usize);
+    fn local(&self) -> Self::Local {
+        (vec![F::ZERO; self.cube * self.cube], usize::MAX)
+    }
+    fn put(&self, (sums, last): &mut Self::Local, pos: usize, value: F) {
+        let h = pos >> self.low_bits;
+        assert!(h < self.cube / 2, "a dense entry");
+        // M is public: a zero entry adds nothing.
+        if value.is_zero_vartime() {
+            return;
+        }
+        let s = pos / SEGMENT;
+        if s != *last {
+            self.nonzero[s / 64].fetch_or(1 << (s % 64), std::sync::atomic::Ordering::Relaxed);
+            *last = s;
+        }
+        let j = pos & ((1 << self.low_bits) - 1);
+        if h == 0 {
+            // SAFETY: `j` is below the lowest corner's `low` entries, which
+            // outlive the pass, and a generator emits a position once.
+            unsafe {
+                self.lowest_ptr.0.add(j).write(value);
+            }
+        }
+        self.add(&mut sums[h * self.cube..(h + 1) * self.cube], j, value);
+    }
+    fn absorb(&self, (sums, _): Self::Local) {
+        let mut total = self.sums.lock().unwrap();
+        total.iter_mut().zip(sums).for_each(|(t, s)| *t += s);
+    }
+}
+
+/// `M(r_x, .)`'s zero runs after pass one: a dense run is zero unless marked
+/// (the [`SEGMENT`] runs [`support`] reads are whole; a part of a run answers
+/// for the whole, which may only be `false`), the public half by value.
+struct Projected<'a, F> {
+    half: usize,
+    nonzero: &'a [u64],
+    tail: &'a [F],
+}
+
+impl<F: Field> Table<F> for Projected<'_, F> {
+    fn len(&self) -> usize {
+        2 * self.half
+    }
+    fn at(&self, _i: usize) -> F {
+        unreachable!("a projected table holds its zero runs only")
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        let dense = range.start.min(self.half)..range.end.min(self.half);
+        if !dense.is_empty()
+            && (dense.start / SEGMENT..=(dense.end - 1) / SEGMENT)
+                .any(|s| self.nonzero[s / 64] >> (s % 64) & 1 == 1)
+        {
+            return false;
+        }
+        let tail_end = self.half + self.tail.len();
+        let high = range.start.clamp(self.half, tail_end)..range.end.clamp(self.half, tail_end);
+        self.tail[high.start - self.half..high.end - self.half]
+            .iter()
+            .all(|x| x.is_zero_vartime())
+    }
+}
+
+/// The folded table's entries, written by one job at a time each.
+struct Shared<F>(*mut F);
+unsafe impl<F: Send> Send for Shared<F> {}
+unsafe impl<F: Sync> Sync for Shared<F> {}
+
+/// Pass two: the lowest corner scaled by `eq(r, 0)`, then
+/// `folded[j] += eq(r, h) M(h, j)` for the other dense corners, one sweep
+/// each: in a sweep distinct positions lie in one corner, so they add into
+/// distinct outputs.
+struct Folding<F> {
+    low_bits: usize,
+    half: usize,
+    weights: Vec<F>,
+    out: Vec<F>,
+    ptr: Shared<F>,
+}
+
+impl<F: Field> Folding<F> {
+    /// `lowest` holds `M(0, .)`; only its runs `nonzero` marks hold anything.
+    fn new(half: usize, r: &[F], mut out: Vec<F>, nonzero: &[u64]) -> Self {
+        let k = r.len();
+        let low = (2 * half) >> k;
+        assert_eq!(out.len(), low, "the lowest corner");
+        // Corner h's weight eq(r, h), the first variable most significant.
+        let weights: Vec<F> = (0..1usize << k)
+            .map(|h| {
+                r.iter()
+                    .enumerate()
+                    .map(|(t, &rt)| if (h >> (k - 1 - t)) & 1 == 1 { rt } else { F::ONE - rt })
+                    .product()
+            })
+            .collect();
+        let w0 = weights[0];
+        out.par_chunks_mut(SEGMENT).enumerate().for_each(|(s, run)| {
+            if nonzero[s / 64] >> (s % 64) & 1 == 1 {
+                run.iter_mut().for_each(|x| *x *= w0);
+            }
+        });
+        let ptr = Shared(out.as_mut_ptr());
+        Folding {
+            low_bits: low.trailing_zeros() as usize,
+            half,
+            weights,
+            out,
+            ptr,
+        }
+    }
+
+    /// The public half's entries added: the folded table.
+    fn finish(self, tail: &[F]) -> Vec<F> {
+        let Folding {
+            low_bits,
+            half,
+            weights,
+            mut out,
+            ..
+        } = self;
+        for (t, &value) in tail.iter().enumerate() {
+            let pos = half + t;
+            out[pos & ((1 << low_bits) - 1)] += weights[pos >> low_bits] * value;
+        }
+        out
+    }
+}
+
+impl<F: Field> Entries<F> for Folding<F> {
+    type Local = ();
+    fn local(&self) {}
+    fn sweeps(&self) -> usize {
+        (self.half >> self.low_bits) - 1
+    }
+    fn sweep(&self, s: usize) -> std::ops::Range<usize> {
+        (s + 1) << self.low_bits..(s + 2) << self.low_bits
+    }
+    fn put(&self, _: &mut (), pos: usize, value: F) {
+        assert!(
+            pos >> self.low_bits >= 1 && pos < self.half,
+            "a dense entry above the lowest corner"
+        );
+        let j = pos & ((1 << self.low_bits) - 1);
+        // SAFETY: `j` is below the table's `low` entries, which outlive the
+        // passes; a generator emits a position once per sweep and a sweep's
+        // positions lie in one corner (`Generate`), so no two jobs add into
+        // the same entry at once.
+        unsafe {
+            *self.ptr.0.add(j) += self.weights[pos >> self.low_bits] * value;
+        }
+    }
+    fn absorb(&self, _: ()) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1544,5 +1915,186 @@ mod tests {
             (m, z) = (m2, z2);
         }
         assert!(reduced, "the carried layout reduces a later round");
+    }
+
+    /// `M(r_x, .)` as a relation computes it: dense entries at distinct
+    /// positions (zero values among them) in any order, emitted in parallel
+    /// jobs of 7, and the public half.
+    struct Listed<F> {
+        dense: Vec<(usize, F)>,
+        tail: Vec<F>,
+    }
+
+    // SAFETY: the positions are distinct and a sweep emits only its own.
+    unsafe impl<F: Field> Generate<F> for Listed<F> {
+        fn run<S: Entries<F>>(&self, sink: &S, tail: bool) -> Option<Vec<F>> {
+            for s in 0..sink.sweeps() {
+                let range = sink.sweep(s);
+                self.dense
+                    .par_chunks(7)
+                    .fold(
+                        || sink.local(),
+                        |mut local, jobs| {
+                            for &(pos, value) in jobs {
+                                if range.contains(&pos) {
+                                    sink.put(&mut local, pos, value);
+                                }
+                            }
+                            local
+                        },
+                    )
+                    .for_each(|local| sink.absorb(local));
+            }
+            tail.then(|| self.tail.clone())
+        }
+    }
+
+    /// The split table holding the listed entries, their runs written.
+    fn listed_split<F: Field>(half: usize, listed: &Listed<F>) -> Split<F> {
+        let mut dense = vec![F::ZERO; half];
+        let mut written = vec![0u64; half.div_ceil(SEGMENT).div_ceil(64)];
+        for &(pos, value) in &listed.dense {
+            dense[pos] = value;
+            written[pos / SEGMENT / 64] |= 1 << (pos / SEGMENT % 64);
+        }
+        Split::with_written(dense, listed.tail.clone(), written)
+    }
+
+    fn below(rng: &mut SpikeRng, n: usize) -> usize {
+        use ff::PrimeField;
+        let x: Fp = rng.scalar();
+        u64::from_le_bytes(x.to_repr()[..8].try_into().unwrap()) as usize % n
+    }
+
+    /// The streamed first round equals the split table's (values, the
+    /// challenges `challenge` draws once from them, the support's union and z
+    /// masks, the folded M) and the dense kernels, for empty, zero, sparse,
+    /// dense, boundary and tail-only matrices, M entries where z is zero by
+    /// layout, io spanning several public corners, with and without support.
+    #[test]
+    fn streamed_first_round_equals_the_split_table_on_both_fields() {
+        fn check<F: crate::fs::Scalar>() {
+            use crate::r1cs::RowFill;
+            let mut rng = SpikeRng::new(b"kern streamed first round");
+            let mut cases = 0;
+            for (rows, cols) in [(8usize, 512usize), (4, 16), (2, 256), (16, 64)] {
+                let half = rows * cols;
+                let fill: Vec<RowFill> = (0..rows)
+                    .map(|r| match r % 4 {
+                        1 => RowFill::Zero,
+                        3 if r + 1 == rows => RowFill::Unit,
+                        _ => RowFill::Values,
+                    })
+                    .collect();
+                let w: Vec<F> = (0..half).map(|_| rng.scalar()).collect();
+                let rows_view = Rows::with_fill(&w, cols, &fill);
+                // Rows a witness never wrote, and padding beyond column 0.
+                let z_zero = |pos: usize| match fill[pos / cols] {
+                    RowFill::Zero => true,
+                    RowFill::Unit => pos % cols != 0,
+                    RowFill::Values => false,
+                };
+                for k in 1..=5usize {
+                    let low = (2 * half) >> k;
+                    if low == 0 {
+                        continue;
+                    }
+                    for pattern in [
+                        "empty", "zero", "sparse", "dense", "boundary", "z-zero", "tail",
+                    ] {
+                        let random = |rng: &mut SpikeRng| -> F {
+                            if below(rng, 5) == 0 { F::ZERO } else { rng.scalar() }
+                        };
+                        let mut positions: Vec<usize> = match pattern {
+                            "empty" | "tail" => Vec::new(),
+                            "zero" | "dense" => (0..half).collect(),
+                            "sparse" => (0..half)
+                                .filter(|p| (p / SEGMENT.min(half) + p / 3) % 5 == 0)
+                                .collect(),
+                            "boundary" => {
+                                let mut b: Vec<usize> = (0..=2 * (half / low))
+                                    .flat_map(|c| [c * low / 2, (c * low / 2).wrapping_sub(1)])
+                                    .chain([0, half - 1, SEGMENT - 1, SEGMENT])
+                                    .filter(|p| *p < half)
+                                    .collect();
+                                b.sort_unstable();
+                                b.dedup();
+                                b
+                            }
+                            _ => (0..half).filter(|p| z_zero(*p)).collect(),
+                        };
+                        // Any emission order.
+                        for i in (1..positions.len()).rev() {
+                            positions.swap(i, below(&mut rng, i + 1));
+                        }
+                        let zero = pattern == "zero";
+                        let dense = positions
+                            .into_iter()
+                            .map(|p| (p, if zero { F::ZERO } else { random(&mut rng) }))
+                            .collect();
+                        let m_tail = [1, 3, low + 2][below(&mut rng, 3)].min(half);
+                        let tail = (0..m_tail)
+                            .map(|_| if pattern == "zero" { F::ZERO } else { random(&mut rng) })
+                            .collect();
+                        let listed = Listed { dense, tail };
+                        let io_len = [0, 2, low + 3, 2 * low + 1][cases % 4].min(half);
+                        let mut io: Vec<F> = (0..io_len).map(|_| random(&mut rng)).collect();
+                        if let Some(last) = io.last_mut() {
+                            *last = F::ONE;
+                        }
+                        let zv = ZView {
+                            rows: &rows_view,
+                            tail: &io,
+                        };
+                        let basis = Basis::new(k);
+                        let challenge_of = |values: &[F]| -> Vec<F> {
+                            let s: F = values
+                                .iter()
+                                .enumerate()
+                                .map(|(g, v)| *v * F::from(g as u64 + 3))
+                                .sum();
+                            (0..k).map(|t| s + F::from(7919 * t as u64 + 1)).collect()
+                        };
+                        let mut seen = Vec::new();
+                        let table = listed_split(half, &listed);
+                        let split = first_inner_split(&basis, table, &zv, &mut |v| {
+                            seen.push(v.to_vec());
+                            challenge_of(v)
+                        });
+                        let streamed = first_inner_streamed(&basis, half, &zv, &listed, &mut |v| {
+                            seen.push(v.to_vec());
+                            challenge_of(v)
+                        });
+                        let label = format!(
+                            "rows {rows} cols {cols} k {k} {pattern} io {io_len} tail {m_tail}"
+                        );
+                        assert_eq!(seen.len(), 2, "{label}: one commitment each");
+                        assert_eq!(seen[0], seen[1], "{label}: committed values");
+                        assert_eq!(streamed.values, split.values, "{label}: values");
+                        assert_eq!(streamed.r, split.r, "{label}: challenges");
+                        assert_eq!(streamed.support, split.support, "{label}: masks");
+                        assert_eq!(streamed.m, split.m, "{label}: folded M");
+                        assert_eq!(split.support.is_some(), low >= SEGMENT, "{label}");
+                        // The dense kernels on the whole tables.
+                        let m_full = listed_split(half, &listed).to_full();
+                        let z_full: Vec<F> = (0..2 * half).map(|i| zv.get(i)).collect();
+                        let dense_round = inner_round(&basis, &m_full, &z_full, None);
+                        assert_eq!(streamed.values, dense_round, "{label}");
+                        assert_eq!(streamed.m, fold_top(&m_full, &streamed.r, None), "{label}");
+                        let live = listed.dense.iter().any(|(_, v)| !v.is_zero_vartime());
+                        if pattern == "z-zero" && live {
+                            assert!(
+                                streamed.m.iter().any(|x| !x.is_zero_vartime()),
+                                "{label}: M kept where z is zero by layout"
+                            );
+                        }
+                        cases += 1;
+                    }
+                }
+            }
+            assert!(cases >= 100, "{cases} cases");
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
     }
 }

@@ -39,7 +39,23 @@ pub trait SpartanWalletMaps {
         key: [u8; 32],
         value: [u8; 32],
     ) -> Result<PublicInsert>;
+    /// Stage ArchiveSent's removal of a present pending-outgoing key (wallet wire v1:
+    /// relink the predecessor, then clear the slot). Like an insertion, the staged root
+    /// gains no authority unless a released successor selects it. A store without
+    /// removal staging refuses, so no ArchiveSent witness can be formed from it.
+    fn remove(
+        &mut self,
+        map: SpartanWalletMap,
+        root: [u8; 32],
+        key: [u8; 32],
+    ) -> Result<iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1> {
+        let _ = (map, root, key);
+        Err(Error::Unavailable("wallet pending-outgoing removal staging"))
+    }
 }
+
+#[path = "native_archive_sent.rs"]
+pub(super) mod archive_sent;
 
 fn leaf(public: PublicLeaf) -> Result<indexed_map::Leaf> {
     Ok(indexed_map::Leaf {
@@ -401,6 +417,22 @@ impl ExactOperationWitness {
             Self::Receive {
                 incoming_payment, ..
             } => wallet_receive_replay_key(incoming_payment).map(Some),
+            Self::ArchiveSent {
+                step,
+                send_capsule,
+                credit_status,
+                ..
+            } => {
+                let wallet: &[u8; 32] = step.credential.body[66..98]
+                    .try_into()
+                    .expect("fixed wallet id");
+                super::super::wallet_archive_sent_replay_key(
+                    &RecoveryCapsule::frame_digest(send_capsule),
+                    wallet,
+                    credit_status,
+                )
+                .map(Some)
+            }
             _ => Ok(None),
         }
     }

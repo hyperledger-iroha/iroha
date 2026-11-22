@@ -122,3 +122,24 @@ Run focused component tests with
 `cargo iroha-fast -- test -p iroha_core_zk --features dev-tools --bin kagemusha_wallet_artifacts`.
 Full integration additionally needs the current four-validator registration,
 issuer and funding flow in [integration_tests](../../../../../integration_tests/README.md).
+
+## Five-kind Spartan compiler output
+
+```sh
+kagemusha_wallet_artifacts --inspect-spartan-v2-bundle "$PROGRAM_BUNDLE" "$PUBLIC_PROFILE"
+```
+
+Supply absolute paths to the V2 program bundle and a separately retained
+compiler profile in the same read-only file custody used by the other inspection
+commands. The profile accepts up to 4,096 bytes of JSON with exactly these fields.
+
+| Field | Value |
+| --- | --- |
+| `schema` | `iroha.kagemusha.spartan.public-program-inspection.v2` |
+| `primary`, `secondary` | Five canonical program digests each, in Receive, Send, Bootstrap, Control, ArchiveSent order. Each digest is 64 lowercase hexadecimal digits. |
+| `primary_dimensions`, `secondary_dimensions` | Objects with integer `x` and `y` accumulator dimensions. Use the compiler's selected dimensions for each curve. |
+
+The command imports all ten tapes, compares their program digests and recursive
+layouts and prints the complete bundle size and geometry on each curve. Its
+output describes the unsigned compiler inputs. The issuer separately selects
+and authenticates the wallet generation.

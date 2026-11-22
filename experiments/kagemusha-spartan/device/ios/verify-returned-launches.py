@@ -7,6 +7,56 @@ import plistlib
 import re
 from pathlib import Path
 
+BUNDLE = "jp.co.soramitsu.kagemusha.spartanfixture"
+# kagemusha_apple_fixture_namespace_preimage_v1 in apple_debit_key.m, used by FixtureCustody.swift.
+NAMESPACE_DOMAIN = b"kagemusha-spartan-fixture-build-namespace-v1"
+ANCHOR_SERVICE = "org.hyperledger.iroha.kagemusha.wallet.v1.marker-anchor"
+
+
+def executable_identity(path):
+    """SHA-256 of the signed executable file, and whether that build scopes its namespace by it."""
+    marker, overlap, scoped = NAMESPACE_DOMAIN + b"\0", b"", False
+    hasher = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            hasher.update(chunk)
+            scoped = scoped or marker in overlap + chunk
+            overlap = (overlap + chunk)[-(len(marker) - 1):]
+    return hasher.hexdigest(), scoped
+
+
+def fixture_namespace(app):
+    """Exact namespace, report fields and data-container paths of a signed fixture app."""
+    with (app / "Info.plist").open("rb") as stream:
+        info = plistlib.load(stream)
+    if info.get("CFBundleIdentifier") != BUNDLE:
+        raise ValueError("expected the isolated iPhone fixture app")
+    name = info.get("CFBundleExecutable")
+    if not isinstance(name, str) or not name or "/" in name or name.startswith("."):
+        raise ValueError("invalid fixture executable name")
+    executable, scoped = executable_identity(app / name)
+    assets = app / "native-device"
+    manifest = digest(assets / "parameter-manifest.norito")
+    if scoped:
+        scope = hashlib.sha256(NAMESPACE_DOMAIN + b"\0" + bytes.fromhex(executable)
+                               + bytes.fromhex(manifest)).hexdigest()
+        report = {"schema": "kagemusha-spartan-device-runtime-v2", "manifest_sha256": manifest,
+                  "build_executable_sha256": executable, "fixture_namespace": scope}
+    else:
+        # Retained handoffs: the signed manifest digest alone selected the namespace.
+        scope = manifest
+        report = {"schema": "kagemusha-spartan-device-runtime-v1", "manifest_sha256": manifest}
+    return {"scheme": "build-and-manifest-v1" if scoped else "retained-manifest-only",
+            "build_executable_sha256": executable, "manifest_sha256": manifest,
+            "program_bundle_sha256": digest(assets / "program-bundle.norito"),
+            "fixture_namespace": scope, "report": report,
+            "report_path": f"Documents/spartan-runtime-result-{scope}.json",
+            "history_path": "Library/Application Support/kagemusha-wallet-v1/"
+                            f"spartan-runtime-fixture-{scope}/device-measurements.jsonl",
+            "payment_key_tag_prefix": f"kgm-ns-w1-{scope}-",
+            "approval_key_tag_prefix": f"kgm-ns-debit1-{scope}-",
+            "anchor_service": f"{ANCHOR_SERVICE}.{scope}"}
+
 
 def digest(path):
     with path.open("rb") as stream:
@@ -87,12 +137,8 @@ def check_retained_funding(history, bundle, retained):
 
 
 def verify(app, launches):
-    with (app / "Info.plist").open("rb") as stream:
-        if plistlib.load(stream).get("CFBundleIdentifier") != "jp.co.soramitsu.kagemusha.spartanfixture":
-            raise ValueError("expected the isolated iPhone fixture app")
-    assets = app / "native-device"
-    manifest = digest(assets / "parameter-manifest.norito")
-    bundle = digest(assets / "program-bundle.norito")
+    namespace = fixture_namespace(app)
+    manifest, bundle = namespace["manifest_sha256"], namespace["program_bundle_sha256"]
     if len(launches) != 3:
         raise ValueError("expected the Send, Receive and restart launches in order")
     prior_history = None
@@ -101,9 +147,8 @@ def verify(app, launches):
     funded = ["Bootstrap", "Load", "Send"]
     for index, folder in enumerate(launches):
         report = json.loads((folder / "result.json").read_bytes())
-        if (report["schema"] != "kagemusha-spartan-device-runtime-v1"
-                or report["manifest_sha256"] != manifest):
-            raise ValueError("report selects a different fixture schema or signed manifest")
+        if any(report.get(key) != value for key, value in namespace["report"].items()):
+            raise ValueError("report selects a different fixture schema, build namespace or signed manifest")
         summary, separator, line = report["result"].partition("\n")
         expected = "PASS: " + ("stage 1 of 2: " if index == 0 else "") + "device hardware keys."
         if not separator or not summary.startswith(expected):
@@ -168,16 +213,21 @@ def verify(app, launches):
     payments = {side: {"bytes": length, "sha256": sha}
                 for side, (length, sha) in zip(("outgoing", "incoming"), originals)}
     return {"manifest_sha256": manifest, "program_bundle_sha256": bundle, "launches": results,
-            "payments": payments, "receive": receive}
+            "payments": payments, "receive": receive,
+            **{key: namespace[key] for key in ("scheme", "build_executable_sha256", "fixture_namespace")}}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", required=True, type=Path)
-    parser.add_argument("launch", nargs=3, type=Path, metavar="DIRECTORY")
+    parser.add_argument("--describe", action="store_true",
+                        help="print the app's namespace and data-container paths instead")
+    parser.add_argument("launch", nargs="*", type=Path, metavar="DIRECTORY")
     args = parser.parse_args()
+    if args.describe != (not args.launch) or (args.launch and len(args.launch) != 3):
+        parser.error("give --describe, or the three launch directories")
     try:
-        print(json.dumps(verify(args.app, args.launch), indent=2))
+        print(json.dumps(fixture_namespace(args.app) if args.describe else verify(args.app, args.launch), indent=2))
     except (KeyError, OSError, TypeError, ValueError) as error:
         parser.exit(1, f"{error}\n")
 

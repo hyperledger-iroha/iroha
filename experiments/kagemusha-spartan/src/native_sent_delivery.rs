@@ -20,6 +20,9 @@ pub(crate) struct ReceiverEvidence {
     pub(crate) statement: [Fp; 26],
     pub(crate) profile: [Fp; 64],
     pub(crate) exact_pair: Vec<u8>,
+    /// The receiver pair decided under the signed program for this exact projected head.
+    #[cfg(test)]
+    pub(crate) pair: crate::full::UniformPair,
     pub(crate) next: Fp,
     pub(crate) slot: u32,
     pub(crate) siblings: [Fp; 32],

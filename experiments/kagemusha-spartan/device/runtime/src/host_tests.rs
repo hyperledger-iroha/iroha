@@ -180,6 +180,45 @@ fn mac_available_memory() -> Option<u64> {
 /// No user on the host: accepts exactly one non-empty Native review per Send.
 struct HostConfirmation(std::sync::Mutex<Vec<Vec<u8>>>);
 
+/// Exercise the public C wallet action on a funded engineering wallet with the signed
+/// four-kind fixture. Its exact outgoing Payment remains available after each refusal.
+pub(super) fn verify_unavailable_archive(
+    root: &Path,
+    runtime: &mut SessionAdapter,
+    slot: &[u8; 32],
+    parameters: &native::AuthenticatedParameters,
+) -> Result<String> {
+    let outgoing = std::fs::read(root.join("complete-payment.bin")).map_err(fail)?;
+    let credited = std::fs::read(root.join("outgoing-credit-status.bin")).map_err(fail)?;
+    let payment = native::NativeEngine::default()
+        .verify_payment(&outgoing, parameters)
+        .map_err(fail)?;
+    let send = payment.receipt().body[114..146]
+        .try_into()
+        .expect("fixed Send operation");
+    if !runtime.verify_credit_status(*slot, send, &[], &credited)? {
+        return Err("retained CreditStatus must verify as credited".into());
+    }
+    let before = runtime.output(slot, &[0; 32], 3)?;
+    if before.status != 101 || before.bytes.len() != 196 || before.bytes[2] != 3 {
+        return Err("ArchiveSent fixture requires a released wallet".into());
+    }
+    let command = wallet_action(5, &[&send, &credited])?;
+    for _ in 0..2 {
+        runtime.require_invalid_prepare(slot, &command, &[])?;
+        let head = runtime.output(slot, &[0; 32], 3)?;
+        let retry = runtime.output(slot, &send, 1)?;
+        if head.status != before.status
+            || head.bytes != before.bytes
+            || retry.status != 1
+            || retry.bytes != outgoing
+        {
+            return Err("ArchiveSent refusal changed the selected head or outgoing Payment".into());
+        }
+    }
+    Ok("The signed four-kind wallet retained the original head and exact Payment after two ArchiveSent refusals.".into())
+}
+
 /// Recheck an already-completed two-wallet run using a new wire encoder.
 /// The current released Receive and its immutable hosted Request must already exist.
 pub(super) fn verify_retained_credit(

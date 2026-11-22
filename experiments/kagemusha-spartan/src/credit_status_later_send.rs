@@ -213,7 +213,9 @@ pub(super) fn verify(
     let pair_digest = *blake3::hash(&pair).as_bytes();
     let decoded =
         carrier::decode_projected_pair(&profile, &pair, &projection).map_err(Error::Rejected)?;
-    verify_pair(&parameters.inner, full::SEND, decoded)?;
+    let decided = verify_pair(&parameters.inner, full::SEND, decoded)?;
+    #[cfg(not(test))]
+    drop(decided);
     // Every evidence word was an input of the decided pair or of the checked receipt.
     let words: [Fp; 64] = projection
         .primary()
@@ -231,6 +233,8 @@ pub(super) fn verify(
             statement: s,
             profile: words,
             exact_pair: pair,
+            #[cfg(test)]
+            pair: decided,
             next: opening.next,
             slot: opening.path.index,
             siblings: opening.path.siblings,

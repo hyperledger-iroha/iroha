@@ -228,7 +228,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         }
         let wallet = self.authorized_wallet_id(slot)?;
         let (root, mut marker) = self.custody_checkpoint(slot, wallet)?;
-        if marker.epoch_tip.unwrap_or(incumbent.initial_commit_epoch()) != expected_epoch {
+        if marker
+            .epoch_tip
+            .unwrap_or_else(|| incumbent.initial_commit_epoch())
+            != expected_epoch
+        {
             return Err(invalid("epoch cursor changed"));
         }
         marker.epochs = self.provider.with_archive(slot, |archive| {
@@ -285,7 +289,7 @@ struct ClaimScope<'a> {
     network: NetworkId,
     scheme: &'a [u8; 32],
     asset: &'a [u8; 32],
-    manifest: &'a [u8; 32],
+    manifest_digest: &'a [u8; 32],
     claim: &'a [u8],
     activation: Option<(&'a [u8; 32], &'a AccountId)>,
 }
@@ -345,7 +349,7 @@ impl ClaimScope<'_> {
                 || activate.scheme != *self.scheme
                 || activate.asset != *self.asset
                 || activate.wallet != *wallet
-                || activate.manifest_digest != *self.manifest
+                || activate.manifest_digest != *self.manifest_digest
                 || activate.activation != self.claim
             {
                 return Err(invalid(
@@ -360,7 +364,7 @@ impl ClaimScope<'_> {
             .ok_or_else(|| invalid("Unload instruction type"))?;
         if unload.scheme != *self.scheme
             || unload.asset != *self.asset
-            || unload.manifest_digest != *self.manifest
+            || unload.manifest_digest != *self.manifest_digest
             || unload.claim != self.claim
         {
             return Err(invalid("Unload instruction differs from retained claim"));
@@ -541,7 +545,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let (origin, checkpoint) = self.custody_checkpoint(slot, wallet)?;
         let root = IndexRoot(checkpoint.settlements);
         let scheme = self.scheme.scheme_id();
-        let manifest = *self.parameters.manifest_digest();
+        let manifest_digest = *self.parameters.manifest_digest();
         let archived = self.provider.with_archive(slot, |archive| {
             archived_claim(&mut Objects(archive), root, operation)
         })?;
@@ -569,7 +573,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             network: self.parameters.genesis_commit_verifier().network(),
             scheme: &scheme,
             asset: &asset,
-            manifest: &manifest,
+            manifest_digest: &manifest_digest,
             claim: &claim,
             activation: None,
         };
@@ -601,7 +605,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let wallet = self.authorized_wallet_id(slot)?;
         let operation = self.bootstrap_operation_id(slot)?;
         let scheme = self.scheme.scheme_id();
-        let manifest = *self.parameters.manifest_digest();
+        let manifest_digest = *self.parameters.manifest_digest();
         let asset = self.admitted_asset_digest(slot)?;
         let claim = self.activation_original(slot)?;
         let checkpoint = self.custody_checkpoint(slot, wallet)?;
@@ -609,7 +613,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             network: self.parameters.genesis_commit_verifier().network(),
             scheme: &scheme,
             asset: &asset,
-            manifest: &manifest,
+            manifest_digest: &manifest_digest,
             claim: &claim,
             activation: Some((&wallet, &account)),
         };

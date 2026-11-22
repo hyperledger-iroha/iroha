@@ -14,6 +14,8 @@ pub(super) struct RequestResults {
     pub(super) signatures: Source,
     pub(super) open: [Source; PACKED],
     pub(super) completed: [Source; PACKED],
+    // The completed Request's payer wallet limbs, which the Receive effect must name.
+    pub(super) payer: [Source; 2],
 }
 
 pub(super) fn append(
@@ -100,6 +102,7 @@ pub(super) fn append(
         signatures: source(local, valid),
         open: open.map(|k| source(local, k)),
         completed: completed.map(|k| source(local, k)),
+        payer: word::PAYER_WALLET.map(word),
     }
 }
 

@@ -244,9 +244,14 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     let slot = admission.slot;
     #[cfg(test)]
     if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
-        && matches!(stage.as_str(), "refresh-prepare" | "refresh-execute" | "refresh-recover")
+        && matches!(
+            stage.as_str(),
+            "refresh-prepare" | "refresh-execute" | "refresh-recover"
+        )
     {
-        let wallet = bootstrap.input.credential.body[66..98].try_into().expect("credential wallet");
+        let wallet = bootstrap.input.credential.body[66..98]
+            .try_into()
+            .expect("credential wallet");
         return host_tests::retained_refresh::check(root, &mut runtime, &slot.0, wallet, &stage);
     }
     #[cfg(test)]
@@ -254,6 +259,12 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         == Some(std::ffi::OsStr::new("retained-credit"))
     {
         return host_tests::verify_retained_credit(root, &mut runtime, &slot.0, &verification);
+    }
+    #[cfg(test)]
+    if std::env::var_os("KAGEMUSHA_SPARTAN_HOST_LAUNCH").as_deref()
+        == Some(std::ffi::OsStr::new("retained-archive-refusal-v4"))
+    {
+        return host_tests::verify_unavailable_archive(root, &mut runtime, &slot.0, &verification);
     }
     #[cfg(test)]
     drop(verification);
@@ -545,7 +556,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             "cold_receiver_source_and_independent_peer",
             || {
                 let status = runtime.credit_status_for_payment(
-                    slot.0, [0x39; 32], receive_operation, &payment_bytes,
+                    slot.0,
+                    [0x39; 32],
+                    receive_operation,
+                    &payment_bytes,
                 )?;
                 let verify =
                     |wire: &[u8], request: &[u8], payer: &native::VerifiedIncomingPayment| {
@@ -928,6 +942,7 @@ fn operation_id(witness: &native::ExactOperationWitness) -> [u8; 32] {
         | native::ExactOperationWitness::Unload { step, .. } => &step.receipt.body,
         native::ExactOperationWitness::Send(step) => &step.receipt.body,
         native::ExactOperationWitness::Receive { step, .. } => &step.receipt.body,
+        native::ExactOperationWitness::ArchiveSent { step, .. } => &step.receipt.body,
     };
     body[114..146].try_into().unwrap()
 }
@@ -1054,7 +1069,7 @@ fn complete(
     }
     #[cfg(test)]
     let prepared = match counterparty {
-        Some(counterparty) => {
+        Some(counterparty) => measurements.measure(name, "blacklist_reprepare_drill", || {
             let initial_version = if kind == 3 { 1 } else { 3 };
             host_tests::local_blacklist::check(
                 runtime,
@@ -1072,8 +1087,8 @@ fn complete(
                 );
             }
             runtime.discard(prepared.token)?;
-            fresh
-        }
+            Ok(fresh)
+        })?,
         None => prepared,
     };
     if kind == 3 {

@@ -118,6 +118,18 @@ fn build<F: Scalar>(
     primary: bool,
     target: Option<Layout>,
 ) -> Built<F> {
+    let columns = if primary { config.p_columns } else { config.s_columns };
+    build_monetary_program(w, columns, primary, target)
+}
+
+/// Compile either curve with the label and transcript namespace accepted by
+/// the compact public monetary-program encoder.
+pub(crate) fn build_monetary_program<F: Scalar>(
+    w: Wiring<F>,
+    columns: usize,
+    primary: bool,
+    target: Option<Layout>,
+) -> Built<F> {
     let (arrays, pi, counts, tables, copies) = w.finish();
     UniformCircuit::build_with_copies_at(
         if primary { "P-uniform" } else { "S-uniform" },
@@ -126,11 +138,7 @@ fn build<F: Scalar>(
         counts,
         tables,
         copies,
-        if primary {
-            config.p_columns
-        } else {
-            config.s_columns
-        },
+        columns,
         64,
         if primary {
             b"full backend P"
@@ -141,7 +149,7 @@ fn build<F: Scalar>(
     )
 }
 
-fn empty_generators(config: &RunConfig) -> PairGens {
+fn empty_generators<const KINDS: usize>(config: &RunConfig) -> PairGens {
     fn empty<F: Scalar>() -> Kind<F> {
         Kind {
             sx: 0,
@@ -155,12 +163,12 @@ fn empty_generators(config: &RunConfig) -> PairGens {
         p: Gens::<Eq>::new(1 << config.p_columns),
         s: Gens::<Ep>::new(1 << config.s_columns),
         defer_p: MatPoly::with_min(
-            std::array::from_fn::<_, 4, _>(|_| empty()),
+            std::array::from_fn::<_, KINDS, _>(|_| empty()),
             DIMENSIONS.0.0,
             DIMENSIONS.0.1,
         ),
         defer_s: MatPoly::with_min(
-            std::array::from_fn::<_, 4, _>(|_| empty()),
+            std::array::from_fn::<_, KINDS, _>(|_| empty()),
             DIMENSIONS.1.0,
             DIMENSIONS.1.1,
         ),
@@ -189,7 +197,7 @@ fn pin_fixture_arrays(w: &mut Wiring<Fp>, start: usize) {
 fn seed_secondary(gens: &PairGens, kind: usize) -> Wiring<Fq> {
     let mut w = Wiring::default();
     let f = w.family(0, 1);
-    let (_, pin) = kind_pin(&mut w, f, kind);
+    let (_, pin) = kind_pin_in(&mut w, f, gens.defer_s.kinds.len(), kind);
     let bits = w.push(Array {
         name: "seed bit table",
         family: f,
@@ -287,7 +295,7 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
         }
         _ => unreachable!(),
     };
-    kind_pin(&mut w, f, step.kind());
+    kind_pin_in(&mut w, f, gens.defer_p.kinds.len(), step.kind());
     let is_control = step.kind() == CONTROL;
     let values = if is_control {
         vec![step.kind() as u128, 0, 0]
@@ -964,6 +972,40 @@ fn compile_wallet_program_bundle() {
     run_recursive_chain(ChainRun::Compile);
 }
 
+
+/// Construct the ordinary monetary seed predecessors with the proposed three-coordinate
+/// selector and both complete folded claims. The recursive compiler consumes these
+/// private sizing witnesses on its first iteration. It cannot publish any seed tape.
+#[test]
+#[ignore = "proves each complete monetary sizing seed at the proposed five-kind dimensions"]
+fn build_five_kind_monetary_seed_predecessors() {
+    use crate::r1cs::Circuit;
+    let config = RunConfig::from_environment();
+    let gens = empty_generators::<{ crate::deferral::MAX_KINDS }>(&config);
+    let chain = crate::native::device_fixture::chain(&gens.p);
+    let seed = generation(&config, &chain, &gens, None, 0);
+    for p in &seed.kinds {
+        let kind = p.kind;
+        let corner = crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind).unwrap();
+        for (i, slot) in [KIND_IO, KIND_IO + 1, KIND_C2_IO].into_iter().enumerate() {
+            assert_eq!(p.ip.io[slot], Fp::from(corner[i]));
+            assert_eq!(p.is.io[slot], Fq::from(corner[i]));
+        }
+        assert_eq!(p.cp.wallet_io(), Some(TABLE_IO));
+        assert_eq!(p.cs.wallet_io(), None);
+        assert!(p.cp.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_p.n()+1).collect::<Vec<_>>()));
+        assert!(p.cs.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_s.n()+1).collect::<Vec<_>>()));
+        let traced = trace_uniform(p.clone(), &gens);
+        assert_eq!(traced.acc_p, gens.defer_p.empty_claim());
+        assert_eq!(traced.acc_s, gens.defer_s.empty_claim());
+        assert_eq!(matrix_checks(p, &gens), (true, true));
+        let pgen = inherited_generator_claim(&traced.tr_p, &gens.p).unwrap();
+        let sgen = inherited_generator_claim(&traced.tr_s, &gens.s).unwrap();
+        assert!(crate::generator_claim::decide(&gens.p, &pgen));
+        assert!(crate::generator_claim::decide(&gens.s, &sgen));
+    }
+}
+
 enum ChainRun {
     Compile,
     Measure,
@@ -973,7 +1015,7 @@ enum ChainRun {
 fn run_recursive_chain(mode: ChainRun) {
     let config = RunConfig::from_environment();
     eprintln!("full backend test config: {config:?}; dimensions={DIMENSIONS:?}");
-    let seed_gens = empty_generators(&config);
+    let seed_gens = empty_generators::<4>(&config);
     let chain = crate::native::device_fixture::chain(&seed_gens.p);
     let mut previous = generation(&config, &chain, &seed_gens, None, 0);
     let mut unchanged_geometry = 0;

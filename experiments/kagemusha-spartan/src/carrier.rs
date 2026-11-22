@@ -247,7 +247,11 @@ impl ProjectedInputs {
         bits: [Fp; 2],
     ) -> Result<Self, String> {
         let mode = crate::control::Mode::for_program(kind, bits)?;
-        if kind > crate::full::CONTROL || crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
+        // Whether `kind` is installed is the parameter owner's decision (its
+        // program count); this reconstruction only names its exact corner.
+        let corner = crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind)
+            .map_err(|_| "invalid projected kind or table commitment")?;
+        if crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
             return Err("invalid projected kind or table commitment".into());
         }
         let mut p = vec![Fp::ZERO; 64];
@@ -262,11 +266,14 @@ impl ProjectedInputs {
         let start = crate::bootstrap_context::LINEAGE_IO;
         p[start..start + lineage.len()].copy_from_slice(&lineage);
         p[crate::full::TABLE_IO..crate::full::TABLE_IO + 4].copy_from_slice(&table);
-        let (a, b) = crate::deferral::kind_bits(kind);
-        p[crate::full::KIND_IO] = Fp::from(a as u64);
-        p[crate::full::KIND_IO + 1] = Fp::from(b as u64);
-        s[crate::full::KIND_IO] = Fq::from(a as u64);
-        s[crate::full::KIND_IO + 1] = Fq::from(b as u64);
+        let [a, b, c2] = corner;
+        p[crate::full::KIND_IO] = Fp::from(a);
+        p[crate::full::KIND_IO + 1] = Fp::from(b);
+        s[crate::full::KIND_IO] = Fq::from(a);
+        s[crate::full::KIND_IO + 1] = Fq::from(b);
+        // Zero for the four signed kinds, exactly as their unused input.
+        p[crate::full::KIND_C2_IO] = Fp::from(c2);
+        s[crate::full::KIND_C2_IO] = Fq::from(c2);
         let offset = crate::control::MODE_IO;
         p[offset..offset + 2].copy_from_slice(&bits);
         s[offset..offset + 2].copy_from_slice(&mode.map_or([0, 0], |m| m.bits()).map(Fq::from));

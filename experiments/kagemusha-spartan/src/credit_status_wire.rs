@@ -18,7 +18,7 @@ pub(super) mod later_send;
 
 const MAGIC: &[u8; 8] = b"KGSCST3\0";
 /// Wire v1 sections 2 and 6 allow 10,034 canonical bytes and 10,084 including IPM1 on NFC.
-const MAX_PAYLOAD: usize = 10_084 - payment_wire::HEADER_BYTES;
+const MAX_PAYLOAD: usize = super::super::MAX_CREDIT_STATUS_ORIGINAL_BYTES - payment_wire::HEADER_BYTES;
 const DYNAMIC: [usize; 9] = [7, 8, 9, 10, 11, 12, 13, 14, 15];
 // Statement and folded lineage bounds from the authenticated Receive relation. Each minimal field
 // also carries its one-byte width. The opening's next key may use all 32 bytes.
@@ -317,7 +317,9 @@ impl NativeEngine {
         let exact = codec.unpack(bytes, &parameters.inner.generators).map_err(Error::Rejected)?;
         let decoded = carrier::decode_projected_pair(&trusted, &exact, &projection)
             .map_err(Error::Rejected)?;
-        verify_pair(&parameters.inner, full::RECEIVE, decoded)?;
+        let pair = verify_pair(&parameters.inner, full::RECEIVE, decoded)?;
+        #[cfg(not(test))]
+        drop(pair);
         // Every word below was an input of the decided pair or of the checked receipt.
         let profile: [Fp; 64] = projection
             .primary()
@@ -333,6 +335,8 @@ impl NativeEngine {
                 statement: s,
                 profile,
                 exact_pair: exact,
+                #[cfg(test)]
+                pair,
                 next: opening.next,
                 slot: opening.path.index,
                 siblings: opening.path.siblings,

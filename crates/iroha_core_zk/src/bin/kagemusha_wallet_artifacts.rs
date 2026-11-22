@@ -42,6 +42,8 @@ use reuse::{Candidates, CarrierSource, CompilerSources};
 
 #[path = "kagemusha_wallet_artifacts/inspect.rs"]
 mod inspect;
+#[path = "kagemusha_wallet_artifacts/inspect_spartan_bundle.rs"]
+mod inspect_spartan_bundle;
 
 #[path = "kagemusha_wallet_artifacts/builtin.rs"]
 mod builtin;
@@ -780,6 +782,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [help] if help == "--help" => {
+            println!("--inspect-spartan-v2-bundle ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON");
             println!(
                 "--encode-spartan-carrier ABSOLUTE_WORLD_INSTALL ABSOLUTE_SCHEME ABSOLUTE_PRIVATE_OUTPUT"
             );
@@ -823,6 +826,9 @@ fn main() {
                 manifest,
                 inspect::Encoding::from_flag(flag).expect("matched inspection command"),
             )
+        }
+        [flag, bundle, profile] if flag == "--inspect-spartan-v2-bundle" => {
+            inspect_spartan_bundle::run(bundle, profile)
         }
         [flag, carrier, scheme, scheme_id, asset, manifest, compiled] if flag == "--verify-spartan-sources" => {
             verify_spartan_sources(carrier, scheme, scheme_id, asset, manifest, compiled)

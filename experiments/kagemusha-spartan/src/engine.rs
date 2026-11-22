@@ -15,7 +15,7 @@ use crate::{
     full,
     ipa::Gens,
     payment_wire,
-    r1cs::{Circuit, Instance, Witness},
+    r1cs::{Circuit, Instance, Witness, WrittenWitness},
     spartan::{self, Link},
     uniform::UniformCircuit,
 };
@@ -29,6 +29,9 @@ use iroha_pasta::{Ep, Eq, Fq};
 #[cfg(test)]
 #[path = "engine_adversarial_tests.rs"]
 mod adversarial_tests;
+#[cfg(test)]
+#[path = "archive_selector_signed_tests.rs"]
+mod archive_selector_signed_tests;
 
 #[path = "native_credential.rs"]
 mod issued_credential;
@@ -1079,7 +1082,13 @@ fn decode_head(
     full::UniformPair,
 )> {
     let f: HeadFrame = super::decode(bytes)?;
-    if f.version != 1 || f.kind > 3 || f.profile.len() != 64 || super::encode(&f)? != bytes {
+    // A head's kind must be one of the installed programs: the signed v4
+    // generation's four, a five-program generation's ArchiveSent as well.
+    if f.version != 1
+        || usize::from(f.kind) >= parameters.inner.programs.len()
+        || f.profile.len() != 64
+        || super::encode(&f)? != bytes
+    {
         return Err(Error::Malformed("canonical head"));
     }
     scope(parameters, &f.parameters)?;
@@ -1140,6 +1149,11 @@ pub(super) fn retained_output_part(bytes: &[u8], part: u32) -> Result<Vec<u8>> {
         _ => Err(Error::Malformed("retained output selector")),
     }
 }
+/// The signed eight-program generation (Receive, Send, Bootstrap, Control on both curves)
+/// has no ArchiveSent selector. Only a newly signed generation carrying an ArchiveSent
+/// program may admit that kind; until then every path that needs its program refuses here.
+pub(crate) const ARCHIVE_SENT_UNSIGNED: &str = "signed generation has no ArchiveSent program";
+
 fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
     match w {
         ExactOperationWitness::Bootstrap(x) => &mut x.input.receipt,
@@ -1148,6 +1162,7 @@ fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
         | ExactOperationWitness::Unload { step: x, .. } => &mut x.receipt,
         ExactOperationWitness::Send(x) => &mut x.receipt,
         ExactOperationWitness::Receive { step, .. } => &mut step.receipt,
+        ExactOperationWitness::ArchiveSent { step, .. } => &mut step.receipt,
     }
 }
 fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Receipt, u8) {
@@ -1166,17 +1181,25 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
         ExactOperationWitness::Receive { step, .. } => {
             (&step.credential, &step.statement, &step.receipt, 4)
         }
+        ExactOperationWitness::ArchiveSent { step, .. } => {
+            (&step.credential, &step.statement, &step.receipt, 5)
+        }
     }
 }
-fn kind(w: &ExactOperationWitness) -> usize {
-    match w {
+/// The installed program that proves this witness. Memory admission, the preparation
+/// relation check, proving and completion verification all select it here.
+fn kind(w: &ExactOperationWitness) -> Result<usize> {
+    Ok(match w {
         ExactOperationWitness::Bootstrap(_) => full::BOOTSTRAP,
         ExactOperationWitness::Load { .. }
         | ExactOperationWitness::RefreshTimeAnchor(_)
         | ExactOperationWitness::Unload { .. } => full::CONTROL,
         ExactOperationWitness::Send(_) => full::SEND,
         ExactOperationWitness::Receive { .. } => full::RECEIVE,
-    }
+        ExactOperationWitness::ArchiveSent { .. } => {
+            return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+        }
+    })
 }
 /// The kind's name in measurement lines.
 fn kind_name(k: usize) -> &'static str {
@@ -1246,36 +1269,6 @@ impl<S: Scalar + zeroize::Zeroize> PrivateCircuit<S> {
     fn new(mut c: UniformCircuit<S>) -> Self {
         c.release_private_values();
         PrivateCircuit(c)
-    }
-}
-/// A witness exactly as its build wrote it, never changed, with the build's
-/// account of its rows ([`crate::r1cs::RowFill`]): the provers and the
-/// relation check never read the rows the build never wrote (zero rows,
-/// public padding rows), and only rows holding values are zeroized on drop,
-/// so those pages are never allocated.
-struct WrittenWitness<S: Scalar + zeroize::Zeroize> {
-    w: Witness<S>,
-    rows: Vec<crate::r1cs::RowFill>,
-}
-impl<S: Scalar + zeroize::Zeroize> WrittenWitness<S> {
-    fn new(w: Witness<S>, rows: Vec<crate::r1cs::RowFill>) -> Self {
-        WrittenWitness { w, rows }
-    }
-}
-impl<S: Scalar + zeroize::Zeroize> std::ops::Deref for WrittenWitness<S> {
-    type Target = Witness<S>;
-    fn deref(&self) -> &Witness<S> {
-        &self.w
-    }
-}
-impl<S: Scalar + zeroize::Zeroize> Drop for WrittenWitness<S> {
-    fn drop(&mut self) {
-        let cols = self.w.w.len() / self.rows.len().max(1);
-        for (row, fill) in self.w.w.chunks_mut(cols.max(1)).zip(&self.rows) {
-            if *fill == crate::r1cs::RowFill::Values {
-                row.iter_mut().for_each(zeroize::Zeroize::zeroize);
-            }
-        }
     }
 }
 /// Whether a private circuit compiles to its authenticated program (the
@@ -1351,7 +1344,7 @@ fn check_constraints(
     let ch = [rng.scalar(), rng.scalar()];
     // The second phase writes its own copies of the rows it fills; the
     // caller's rows are read in place, and rows it never wrote not at all.
-    let mut rows = crate::kern::Rows::with_fill(&wit.w.w, c.shape.cols(), &wit.rows);
+    let mut rows = crate::kern::Rows::with_fill(&wit.w, c.shape.cols(), wit.rows());
     let rel = c.instantiate_rows(&c.shape, &ch, &mut rows);
     stage.mark("instantiate");
     // A * B = C chunk by chunk of constraint rows: no z copy and no whole
@@ -1886,10 +1879,15 @@ impl NativeEngine {
                     can_credit,
                 }));
             }
+            // No installed relation exists to check; `prepare` has already rechecked the
+            // native evidence and refused, so this frozen path is never reached.
+            ExactOperationWitness::ArchiveSent { .. } => {
+                return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+            }
         }
         check_constraints(
             w,
-            p.programs[kind(witness)].primary.shape.col_bits,
+            p.programs[kind(witness)?].primary.shape.col_bits,
             self.time.as_deref(),
         )?;
         Ok(receive)
@@ -1947,7 +1945,7 @@ impl NativeEngine {
         stage.mark("head");
         let receive = self.check_preparation(&frozen, head, parameters)?;
         stage.mark("preparation");
-        stage.finish(&format!("prepare {}", kind_name(kind(&frozen))));
+        stage.finish(&format!("prepare {}", kind_name(kind(&frozen)?)));
         let body = receipt_mut(&mut frozen).body;
         Ok(PreparedOperation {
             resumed_under: None,
@@ -2008,6 +2006,7 @@ impl Engine for NativeEngine {
             2 | 6 | 7 => full::CONTROL,
             3 => full::SEND,
             4 => full::RECEIVE,
+            5 => return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED)),
             _ => return Err(Error::Malformed("capsule kind")),
         };
         self.require_minimum_memory(parameters, kind)?;
@@ -2024,7 +2023,7 @@ impl Engine for NativeEngine {
         if !self.resumed_here(prepared, parameters) {
             return Err(Error::AuthorityMismatch("resumed selection authority"));
         }
-        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
+        self.require_minimum_memory(parameters, kind(&prepared.witness)?)?;
         prepared.require_receive_admission()?;
         // A resumed preparation must bind its frozen interval to the operation's actual
         // capture before fresh policy checking and selection. Selected recovery bypasses both.
@@ -2114,7 +2113,13 @@ impl Engine for NativeEngine {
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
-        self.require_minimum_memory(parameters, kind(witness))?;
+        if matches!(witness, ExactOperationWitness::ArchiveSent { .. }) {
+            // Recheck the complete native evidence and successor first, so an invalid or
+            // changed ArchiveSent keeps its own refusal. The selector below then refuses a
+            // valid one: nothing is frozen into a capsule, selected or signed.
+            self.check_archive_sent(witness, head, parameters)?;
+        }
+        self.require_minimum_memory(parameters, kind(witness)?)?;
         self.check_send_time(witness, false)?;
         self.authenticate_send_request(witness, parameters)?;
         let prepared = self.prepare_retained(witness, head, parameters)?;
@@ -2184,7 +2189,7 @@ impl Engine for NativeEngine {
         }
         // A selected capsule can resume in a colder, smaller process than the
         // one that prepared it. Check again before cloning its private witness.
-        self.require_minimum_memory(parameters, kind(&prepared.witness))?;
+        self.require_minimum_memory(parameters, kind(&prepared.witness)?)?;
         self.authorize_debit(DebitBoundary::AfterSelection, &prepared, parameters)?;
         let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
@@ -2200,7 +2205,7 @@ impl Engine for NativeEngine {
         let mut witness = prepared.witness.as_ref().clone();
         *receipt_mut(&mut witness) = receipt.receipt.clone();
         let p = &parameters.inner;
-        let k = kind(&witness);
+        let k = kind(&witness)?;
         let mut pairs = Vec::new();
         if k != full::BOOTSTRAP {
             let (_, _, _, _, u) = decode_head(&prepared.predecessor.pair, parameters)?;
@@ -2281,6 +2286,9 @@ impl Engine for NativeEngine {
                 .0,
                 None,
             ),
+            ExactOperationWitness::ArchiveSent { .. } => {
+                return Err(Error::AuthorityMismatch(ARCHIVE_SENT_UNSIGNED));
+            }
         };
         stage.mark("primary wiring");
         let (cp, ip, wp, rows_p) = build(
@@ -2303,12 +2311,11 @@ impl Engine for NativeEngine {
         // proof below, which regenerates the masks and blinds from the same
         // stream and does not commit those rows again.
         self.require_stage_memory(cp.first_phase_memory_bytes())?;
-        let primary = spartan::prepare_linked_phase1_retained(
+        let primary = spartan::retain_linked_witness(
             &cp.shape,
             &p.generators.p,
             &ip,
-            &wp,
-            &wp.rows,
+            spartan::ProverWitness::Owned(wp),
             &mut entropy.stream(b"primary"),
             &*cp,
         );
@@ -2337,12 +2344,11 @@ impl Engine for NativeEngine {
         stage.mark("digest");
         let rlc = |_: &[u8; 32]| [0; 32];
         self.require_stage_memory(cs.phase_memory_accounting().additional_peak_bytes)?;
-        let (ps, rho, r) = spartan::prove_linked_built(
+        let (ps, rho, r) = spartan::prove_linked_witness(
             &cs.shape,
             &p.generators.s,
             &is,
-            &ws,
-            &ws.rows,
+            spartan::ProverWitness::Owned(ws),
             &mut entropy.stream(b"secondary"),
             &Link::Second { d, rlc: &rlc },
             &*cs,
@@ -2350,7 +2356,6 @@ impl Engine for NativeEngine {
         // Verification uses the independently authenticated public programs.
         // Retaining the secondary's private arrays/plans through the primary
         // proof only increased memory; the completion needs its proof and IO.
-        drop(ws);
         drop(cs);
         stage.mark("s-proof");
         self.require_stage_memory(cp.phase_memory_accounting().additional_peak_bytes)?;
@@ -2358,7 +2363,6 @@ impl Engine for NativeEngine {
         if d != d2 {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
-        drop(wp);
         stage.mark("p-proof");
         same_program(&cp, &p.programs[k].primary)?;
         drop(cp);
@@ -2554,7 +2558,7 @@ impl NativeEngine {
         stage.mark("resume");
         let completed = self.verify_staged_completion(&prepared, record, parameters)?;
         stage.mark("output");
-        stage.finish(&format!("completion {}", kind_name(kind(&prepared.witness))));
+        stage.finish(&format!("completion {}", kind_name(kind(&prepared.witness)?)));
         Ok((prepared, completed))
     }
 }

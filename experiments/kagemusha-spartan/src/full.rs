@@ -32,6 +32,9 @@ use crate::nonnative::{
 use crate::p256;
 use crate::sha::{self, Sha};
 #[cfg(test)]
+#[path = "archive_receiver_projection.rs"]
+pub(crate) mod archive_receiver_projection;
+#[cfg(test)]
 #[path = "backend_chain_tests.rs"]
 pub(crate) mod backend_chain_tests;
 #[cfg(test)]
@@ -1796,6 +1799,57 @@ mod tests {
     use iroha_pasta::Eq as Vesta;
 
     #[test]
+    fn archive_receiver_accepts_only_receive_and_send_on_both_curves() {
+        fn holds<S: Scalar>(set: KindSet, installed: usize, bits: [u64; 3]) -> bool {
+            let stride = kind_stride(installed);
+            let words: Vec<_> = (0..stride).map(|b| own(b, 1)).collect();
+            let mut rows: Vec<_> = words.iter().map(|word| {
+                [word.clone(), plus(&constant(vec![S::ONE]), &scaled(word, -S::ONE)), Vec::new()]
+            }).collect();
+            set.append_domain_rows(&mut rows, installed, &words);
+            let mut w = Wiring::default();
+            let family = w.family(0, 1);
+            w.push(Array {
+                name: "receiver kind subset",
+                family,
+                rho: 0,
+                r_count: 1,
+                fixed: false,
+                lookups: Vec::new(),
+                widths: vec![1; stride],
+                rows,
+                values: bits[..stride].iter().map(|b| vec![S::from(*b)]).collect(),
+            });
+            let (arrays, pi, counts, tables, copies) = w.finish();
+            let (circuit, instance, witness) = UniformCircuit::build_with_copies(
+                "receiver kind subset", arrays, pi, counts, tables, copies, 10, 16,
+                b"archive receiver kind subset",
+            );
+            let mut values = witness.w;
+            let relation = circuit.instantiate(
+                &circuit.shape, &[S::from(31), S::from(47)], Some(&mut values),
+            );
+            let z = crate::r1cs::z_vector(&circuit.shape, &instance, &Witness { w: values });
+            let (a, b, c) = relation.abc(&circuit.shape, &z);
+            a.into_iter().zip(b).zip(c).all(|((a, b), c)| a * b == c)
+        }
+        for installed in [4, crate::deferral::MAX_KINDS] {
+            for corner in 0..(1 << kind_stride(installed)) {
+                let bits = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+                for set in [KindSet::Any, KindSet::ReceiveOrSend] {
+                    let admitted = match set {
+                        KindSet::Any => corner < installed as u64,
+                        KindSet::ReceiveOrSend => corner < 2,
+                        KindSet::Fixed => unreachable!(),
+                    };
+                    assert_eq!(holds::<Fp>(set, installed, bits), admitted, "{set:?} {bits:?}");
+                    assert_eq!(holds::<Fq>(set, installed, bits), admitted, "{set:?} {bits:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn semantic_mode_io_is_bound_to_the_pair_and_zero_outside_control() {
         use crate::{control::Mode, operation_auth::tests as harness};
         let build = |mode: Option<Mode>, shared_bits: [u64; 2], public: [u64; 2]| {
@@ -3098,7 +3152,8 @@ pub struct TracedPair {
     /// The proofs' accumulated matrix claims (their last io values).
     pub acc_p: crate::deferral::Claim<Fp>,
     pub acc_s: crate::deferral::Claim<crate::verifier::Fq>,
-    /// The pair's circuit kind: 0 Receive, 1 Send, 2 Bootstrap.
+    /// The pair's circuit kind: 0 Receive, 1 Send, 2 Bootstrap, 3 Control,
+    /// 4 ArchiveSent (five-kind generations only).
     pub kind: usize,
 }
 
@@ -3119,6 +3174,18 @@ pub const SEND: usize = 1;
 pub const BOOTSTRAP: usize = 2;
 /// One program for Load, RefreshTimeAnchor and Unload, selected by ordinary IO.
 pub const CONTROL: usize = 3;
+/// A later generation's fifth program, ArchiveSent, at selector corner
+/// `(c0, c1, c2) = (0, 0, 1)`. The signed four-kind v4 generation has no
+/// such program, and no ordinary mode word selects it.
+pub const ARCHIVE_SENT: usize = crate::deferral::ARCHIVE_SENT_KIND;
+/// The public io index of the third selector bit `c2` in a five-kind
+/// generation: an ordinary input every four-kind profile leaves zero
+/// (outside the head, context, lineage, table, kind and mode blocks).
+pub const KIND_C2_IO: usize = 55;
+const _: () = assert!(
+    KIND_C2_IO >= crate::bootstrap_context::LINEAGE_IO + 8 && KIND_C2_IO < TABLE_IO,
+    "c2 sits in the unused ordinary inputs between the lineage and table blocks"
+);
 
 /// Generators of the two proof shapes (P: Vesta 2^14, S: Pallas 2^13).
 pub struct PairGens {
@@ -3129,37 +3196,162 @@ pub struct PairGens {
     /// claims on.
     pub defer_p: crate::deferral::MatPoly<Fp>,
     pub defer_s: crate::deferral::MatPoly<crate::verifier::Fq>,
-    /// The three kinds' keys (their circuits' fixed-row commitments: Receive,
-    /// Send, Bootstrap), per side, when all three are uniform circuits of one
-    /// layout: then the predecessor slot takes a proof of any kind, its kind
-    /// bits read from the proof's io (`KIND_IO`).
+    /// The kinds' keys (their circuits' fixed-row commitments: Receive,
+    /// Send, Bootstrap, then Control and ArchiveSent when installed), per
+    /// side, when all are uniform circuits of one layout: then the
+    /// predecessor slot takes a proof of any kind, its kind bits read from
+    /// the proof's io (`KIND_IO`, and `KIND_C2_IO` with five kinds).
     pub keys_p: Option<Vec<Vec<crate::ipa::Aff<iroha_pasta::Eq>>>>,
     pub keys_s: Option<Vec<Vec<crate::ipa::Aff<iroha_pasta::Ep>>>>,
 }
 
-/// How a verifier slot takes its proof's kind: (the proof's kind, whether
-/// the slot reads it from the proof's io and selects the key by it).
-type SlotKind = (usize, bool);
+/// Which kinds a verifier slot admits, and so where its kind bits come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KindSet {
+    /// One kind, a program constant: the bits are constants and the key is
+    /// the slot's own circuit's.
+    Fixed,
+    /// Every installed kind: the bits are the verified proof's io values and
+    /// select among all installed keys.
+    Any,
+    /// Exactly the signed Receive and Send programs (Λ_archive's receiver
+    /// head): the bits are the verified proof's io values, all bits above c0 are zero,
+    /// and c0 selects between those two programs' keys, on both curves.
+    ReceiveOrSend,
+}
+
+impl KindSet {
+    /// Whether the slot reads its kind bits from the verified proof's io.
+    fn from_io(self) -> bool {
+        self != Self::Fixed
+    }
+
+    fn append_domain_rows<S: Scalar>(
+        self,
+        rows: &mut Vec<[Lin<S>; 3]>,
+        installed: usize,
+        words: &[Lin<S>],
+    ) {
+        rows.extend(crate::deferral::reserved_corner_rows(installed, words));
+        if self == Self::ReceiveOrSend {
+            for higher_bit in &words[1..] {
+                rows.push([higher_bit.clone(), constant(vec![S::ONE]), Vec::new()]);
+            }
+        }
+    }
+}
+
+/// How a verifier slot takes its proof's kind: (the proof's kind, the kinds
+/// it admits).
+type SlotKind = (usize, KindSet);
 
 /// The slots of a circuit over `pairs`: the predecessor (slot 0) takes any
-/// kind when `gens` has the three kinds' keys; Receive's second slot is the
-/// payer's Send.
-fn slot_kinds(gens: &PairGens, pairs: &[TracedPair]) -> Vec<SlotKind> {
+/// kind when `gens` has the installed kinds' keys; Receive's second slot is
+/// the payer's Send, a program constant. Λ_archive's (`archive`) second slot
+/// is the receiver's authenticated folded head, a Receive or a later Send:
+/// its kind is read from its verified io, never a program constant, so one
+/// program verifies both receiver forms.
+fn slot_kinds(gens: &PairGens, pairs: &[TracedPair], archive: bool) -> Vec<SlotKind> {
     let any = gens.keys_p.is_some() && gens.keys_s.is_some();
+    assert!(
+        !archive || any,
+        "Λ_archive's receiver slot selects the signed Receive or Send keys"
+    );
     pairs
         .iter()
         .enumerate()
-        .map(|(i, pr)| {
-            if i > 0 {
-                assert_eq!(pr.kind, SEND, "the payer's proof is a Send");
+        .map(|(i, pr)| match i {
+            0 if any => (pr.kind, KindSet::Any),
+            0 => (pr.kind, KindSet::Fixed),
+            _ if archive => {
+                assert!(
+                    pr.kind == RECEIVE || pr.kind == SEND,
+                    "the receiver head is a signed Receive or Send"
+                );
+                (pr.kind, KindSet::ReceiveOrSend)
             }
-            (pr.kind, i == 0 && any)
+            _ => {
+                assert_eq!(pr.kind, SEND, "the payer's proof is a Send");
+                (pr.kind, KindSet::Fixed)
+            }
         })
         .collect()
 }
 
-/// The pairs' kind bits as shared values: c0, then c1, per pair.
-fn kind_values(kinds: &[SlotKind]) -> Vec<u128> {
+/// The installed keys a slot of `set` selects among, in kind order (so the
+/// selector bits index them as `KeySelect` reads them): none for a fixed
+/// slot, every kind's for `Any`, and only Receive's then Send's for
+/// `ReceiveOrSend`. The scalar verifier also pins every higher coordinate to zero.
+fn slot_keys<C: iroha_pasta::PastaCurve>(
+    keys: Option<&Vec<Vec<crate::ipa::Aff<C>>>>,
+    set: KindSet,
+    kind_at: usize,
+) -> Option<crate::points::KeySelect<'_, C>> {
+    let keys = keys?;
+    let fixed: Vec<&[crate::ipa::Aff<C>]> = match set {
+        KindSet::Fixed => return None,
+        KindSet::Any => keys.iter().map(Vec::as_slice).collect(),
+        KindSet::ReceiveOrSend => vec![keys[RECEIVE].as_slice(), keys[SEND].as_slice()],
+    };
+    Some(crate::points::KeySelect { fixed, kind_at })
+}
+
+/// Λ_archive's receiver slot: its S io is the exact projection of its kind
+/// (`carrier::ProjectedInputs::from_authenticated_fields`, as the native verifier
+/// reconstructs it): one at 0, the kind bits at `KIND_IO` (the deferred fold's io
+/// rows already make them the shared bits) and zero everywhere else, including
+/// Control's mode bits, which a Receive or Send head never carries. With the P io
+/// bound to the public profile digest and the raw pair to the public pair digest, a
+/// private substitution of the receiver's secondary io cannot change its verdict.
+fn pin_receiver_secondary_projection(
+    w: &mut Wiring<crate::verifier::Fq>,
+    gfam: usize,
+    inst: &crate::r1cs::Instance<crate::verifier::Fq>,
+    io: usize,
+) {
+    use crate::verifier::Fq;
+    assert_eq!(inst.io.len(), 64, "the projected secondary io");
+    let leaves = (1usize << w.arrays[io].rho) / 2;
+    let rows = (0..inst.io.len())
+        .filter(|&j| j != KIND_IO && j != KIND_IO + 1)
+        .map(|j| {
+            let value = if j == 0 { Fq::ONE } else { Fq::ZERO };
+            [
+                plus(
+                    &link(io, 0, vec![Some(leaves + j)], Fq::ONE),
+                    &constant(vec![-value]),
+                ),
+                constant(vec![Fq::ONE]),
+                Vec::new(),
+            ]
+        })
+        .collect();
+    w.push(Array {
+        name: "Lambda_archive receiver secondary io projection",
+        family: gfam,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![1],
+        values: vec![vec![Fq::ZERO]],
+        rows,
+    });
+}
+
+/// The pairs' kind bits as shared values: c0, then c1, per pair, then c2
+/// when `installed` is five (`kind_stride` words per pair).
+fn kind_values(kinds: &[SlotKind], installed: usize) -> Vec<u128> {
+    if installed == crate::deferral::MAX_KINDS {
+        return kinds
+            .iter()
+            .flat_map(|k| {
+                crate::deferral::kind_corner(installed, k.0)
+                    .expect("an installed kind")
+                    .map(u128::from)
+            })
+            .collect();
+    }
     kinds
         .iter()
         .flat_map(|k| {
@@ -3169,12 +3361,39 @@ fn kind_values(kinds: &[SlotKind]) -> Vec<u128> {
         .collect()
 }
 
+/// Shared kind words per pair: c0 and c1, and c2 with five installed kinds.
+pub(crate) fn kind_stride(installed: usize) -> usize {
+    if installed == crate::deferral::MAX_KINDS { 3 } else { 2 }
+}
+
 /// The circuit's own kind as public io, its two selector bits at `KIND_IO`
 /// and `KIND_IO + 1`, pinned to `kind`'s: a verifier reads them from the
 /// proof's io and takes the matching key and matrices. Returns (the io
 /// array, the pinned array).
+#[cfg_attr(not(test), allow(dead_code))]
 fn kind_pin<S: Scalar>(w: &mut Wiring<S>, gfam: usize, kind: usize) -> (usize, usize) {
-    let (b0, b1) = crate::deferral::kind_bits(kind);
+    kind_pin_in(w, gfam, 4, kind)
+}
+
+/// `kind_pin` in a generation of `installed` kinds. Every program of a
+/// five-kind generation also exposes and pins its third selector bit at
+/// `KIND_C2_IO` (zero except for ArchiveSent), so no proof of it leaves the
+/// word free. Fewer kinds build exactly `kind_pin`'s two arrays.
+pub(crate) fn kind_pin_in<S: Scalar>(
+    w: &mut Wiring<S>,
+    gfam: usize,
+    installed: usize,
+    kind: usize,
+) -> (usize, usize) {
+    let five = installed == crate::deferral::MAX_KINDS;
+    let (b0, b1, b2) = if five {
+        let [b0, b1, b2] =
+            crate::deferral::kind_corner(installed, kind).expect("an installed kind");
+        (b0, b1, b2)
+    } else {
+        let (b0, b1) = crate::deferral::kind_bits(kind);
+        (b0, b1, 0)
+    };
     let bits = vec![S::from(b0), S::from(b1)];
     let io = w.push(Array {
         name: "kind io",
@@ -3210,6 +3429,43 @@ fn kind_pin<S: Scalar>(w: &mut Wiring<S>, gfam: usize, kind: usize) -> (usize, u
         ],
         values: vec![bits],
     });
+    if five {
+        let c2 = S::from(b2);
+        let io2 = w.push(Array {
+            name: "kind c2 io",
+            family: gfam,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![1],
+            rows: Vec::new(),
+            values: vec![vec![c2]],
+        });
+        w.io_arrays.push((io2, KIND_C2_IO));
+        w.push(Array {
+            name: "kind c2 pin",
+            family: gfam,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![1],
+            rows: vec![
+                [
+                    plus(&own(0, 1), &constant(vec![-c2])),
+                    constant(vec![S::ONE]),
+                    Vec::new(),
+                ],
+                [
+                    plus(&own(0, 1), &link(io2, 0, vec![Some(0)], -S::ONE)),
+                    constant(vec![S::ONE]),
+                    Vec::new(),
+                ],
+            ],
+            values: vec![vec![c2]],
+        });
+    }
     (io, pin)
 }
 
@@ -3602,6 +3858,54 @@ pub fn next_gens_with_control_at(
     }
 }
 
+/// A later generation's five programs: the four of
+/// `next_gens_with_control_at` and ArchiveSent's at corner (0, 0, 1). No
+/// ordinary mode word selects ArchiveSent; its own key and matrices are the
+/// fifth kind's, so an ordinary step's predecessor slot can take it. Every
+/// program must share the common layout and io length (the any-kind slot's
+/// verifier structure); a program that does not is refused, never admitted
+/// as a constant-kind slot.
+pub fn next_gens_with_archive_at(
+    recv: &UniformPair,
+    send: &UniformPair,
+    boot: &UniformPair,
+    control: &UniformPair,
+    archive: &UniformPair,
+    dimensions: ((usize, usize), (usize, usize)),
+) -> PairGens {
+    assert_eq!(archive.kind, ARCHIVE_SENT, "pair of kind ArchiveSent");
+    for t in [send, boot, control, archive] {
+        assert!(
+            t.cp.layout() == recv.cp.layout()
+                && t.cs.layout() == recv.cs.layout()
+                && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len)
+                && (t.cp.shape.cols(), t.cs.shape.cols())
+                    == (recv.cp.shape.cols(), recv.cs.shape.cols()),
+            "kind {} shares the common layout, io length and generators",
+            t.kind
+        );
+    }
+    let mut gens =
+        next_gens_with_control_at(recv, Some(send), Some(boot), Some(control), dimensions);
+    let (dp, ds) = dimensions;
+    let mut p_kinds = std::mem::take(&mut gens.defer_p.kinds);
+    let mut s_kinds = std::mem::take(&mut gens.defer_s.kinds);
+    p_kinds.push(uniform_kind(archive.cp.clone()));
+    s_kinds.push(uniform_kind(archive.cs.clone()));
+    gens.defer_p = crate::deferral::MatPoly::with_min_vec(p_kinds, dp.0, dp.1);
+    gens.defer_s = crate::deferral::MatPoly::with_min_vec(s_kinds, ds.0, ds.1);
+    assert_eq!(
+        (gens.defer_p.x, gens.defer_p.y, gens.defer_s.x, gens.defer_s.y),
+        (dp.0, dp.1, ds.0, ds.1),
+        "ArchiveSent has the accumulators' dimensions"
+    );
+    let key_p = crate::spartan::fixed_commitments(&archive.cp.shape, &gens.p, archive.cp.as_ref());
+    let key_s = crate::spartan::fixed_commitments(&archive.cs.shape, &gens.s, archive.cs.as_ref());
+    gens.keys_p.as_mut().expect("the four kinds' keys").push(key_p);
+    gens.keys_s.as_mut().expect("the four kinds' keys").push(key_s);
+    gens
+}
+
 /// A proved uniform pair traced as circuit proofs on `gens`' generators (its
 /// accumulators are its late io).
 pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
@@ -3678,8 +3982,7 @@ pub struct PRecvIdx {
     pub scalars: Vec<ScalarIdx<Fp>>,
     pub shared: usize,
     pub values: usize,
-    /// The shared index of pair 0's kind bits (pair i's c0 at
-    /// `kind_at + 2 i`, its c1 next).
+    /// Pair i's kind coordinates begin at `kind_at + kind_stride(installed) * i`.
     pub kind_at: usize,
     /// Per pair, the shared index of its P proof's table commitment's four
     /// limbs (when its circuit has a wallet row).
@@ -3697,6 +4000,41 @@ pub enum OperationWitness<'a> {
         witness: &'a crate::control::Witness,
     },
     Receive(&'a crate::receive::Witness),
+    /// Λ_archive's primary relation, built through [`p_archive_operation`].
+    /// A five-kind matrix polynomial pins the ArchiveSent selector.
+    #[cfg(test)]
+    ArchiveSent(&'a dyn ArchiveRelation),
+}
+
+/// The ArchiveSent successor relation inside Λ_archive's primary circuit. It reads the
+/// payer only through the hard verified predecessor slot, the receiver only through the
+/// total verifier's [`ArchiveIncoming`], and the absence of a required correction only
+/// through the verifier-owned conjunction of the four deferred accumulator decisions
+/// (`correction_conjunction`). It owns its own public outputs.
+#[cfg(test)]
+pub(crate) trait ArchiveRelation {
+    fn append(
+        &self,
+        w: &mut Wiring<Fp>,
+        family: usize,
+        predecessor: &VerifiedPredecessor,
+        incoming: &ArchiveIncoming<'_>,
+    ) -> Result<(), &'static str>;
+}
+
+/// Λ_archive's total receiver slot as its relation reads it, every port owned by this
+/// circuit's verifier: the derived facts of the verified head (its io leaves, including
+/// the kind bits that select its signed program's keys and matrices, its derived verdict
+/// and the digest of its exact raw pair), the digest of its P io (the exact profile its
+/// transcript absorbed, `fs::io_digest`) and the conjunction of its four deferred
+/// accumulator decisions.
+#[cfg(test)]
+pub(crate) struct ArchiveIncoming<'a> {
+    pub(crate) facts: &'a IncomingProofFacts,
+    /// Original verifier input, before the total decoder selects its fallback.
+    pub(crate) exact_pair_bytes: &'a crate::proof_bytes::SharedBytes,
+    pub(crate) io_digest: crate::send_arithmetic::Source,
+    pub(crate) corrections: crate::send_arithmetic::Source,
 }
 
 pub enum CompleteOperation {
@@ -3711,7 +4049,18 @@ impl OperationWitness<'_> {
             Self::Send(_) => SEND,
             Self::Control { .. } => CONTROL,
             Self::Receive(_) => RECEIVE,
+            #[cfg(test)]
+            Self::ArchiveSent(_) => ARCHIVE_SENT,
         }
+    }
+
+    /// Λ_archive: a hard wallet predecessor and a total incoming receiver head.
+    fn is_archive(&self) -> bool {
+        #[cfg(test)]
+        if let Self::ArchiveSent(_) = self {
+            return true;
+        }
+        false
     }
 }
 
@@ -3815,6 +4164,96 @@ pub fn p_operation(
         Some(generators),
         OPERATION_IDENTITY,
     )
+}
+
+/// Λ_archive's primary circuit: the payer's own head, of whatever kind it is, as the
+/// hard predecessor (`pairs[0]`) and the receiver's folded head from the Credited
+/// evidence, a signed Receive or later Send, as the total incoming slot (`pairs[1]`),
+/// with the same verifier owners, verdict bits, corrected matrix claim and generator
+/// folds as Receive. The receiver slot's kind bits are its verified io values; they
+/// select its program's keys and matrices on both curves. The relation's receiver
+/// verdict and correction inputs are derived here, never supplied by the host.
+#[cfg(test)]
+pub(crate) fn p_archive_operation(
+    relation: &dyn ArchiveRelation,
+    gens: &PairGens,
+    pairs: &[TracedPair],
+    generators: &GeneratorFolds,
+) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
+    p_circuit_impl(
+        &Op::RECEIVE,
+        gens,
+        pairs,
+        None,
+        pairs[0].inst_p.io[HEAD_IO],
+        Some(OperationWitness::ArchiveSent(relation)),
+        Some(generators),
+        OPERATION_IDENTITY,
+    )
+}
+
+/// Λ_archive's secondary circuit: S-recv's total incoming construction over the
+/// same two slots. A five-kind program pins the ArchiveSent selector. The
+/// receiver slot's P proof key is selected by the same shared kind bits, and its S
+/// io is held to the exact projection of that kind.
+#[cfg(test)]
+pub(crate) fn s_archive_operation(
+    gens: &PairGens,
+    pairs: &[TracedPair],
+    generators: &GeneratorFolds,
+) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    assert_eq!(pairs.len(), 2, "payer predecessor and receiver head");
+    s_circuit_impl(
+        None,
+        None,
+        gens,
+        pairs,
+        true,
+        Some(generators),
+        OPERATION_IDENTITY,
+    )
+}
+
+/// The verifier-owned conjunction of the total slot's four deferred accumulator
+/// decisions, in native `decide_accumulators` order: the P and S matrix accumulators
+/// (corrected-claim iff bits) and the P and S inherited generator accumulators.
+/// Each bit is a shared value bound by `bind_verdict` to its verifier cell in the
+/// P (2, 5) or S (3, 7) circuit; the pair link makes both circuits read one vector.
+#[cfg(test)]
+fn correction_conjunction(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    shared: usize,
+    verdict_at: usize,
+) -> crate::send_arithmetic::Source {
+    let mut c = crate::certificate::Cells::new(family);
+    c.a.name = "total incoming deferred accumulator correction conjunction";
+    let mut product = None;
+    let mut v = Fp::ONE;
+    for i in [2, 3, 5, 7] {
+        let bit = c.cell(w.arrays[shared].values[0][verdict_at + i], 1);
+        c.eq(
+            own(bit, 1),
+            link(shared, 0, vec![Some(verdict_at + i)], Fp::ONE),
+        );
+        c.a.rows.push([own(bit, 1), own(bit, 1), own(bit, 1)]);
+        v *= c.a.values[bit][0];
+        let next = c.cell(v, 1);
+        c.a.rows.push([
+            product
+                .map(|k| own(k, 1))
+                .unwrap_or_else(|| constant(vec![Fp::ONE])),
+            own(bit, 1),
+            own(next, 1),
+        ]);
+        product = Some(next);
+    }
+    let array = w.push(c.a);
+    crate::send_arithmetic::Source {
+        array,
+        cell: product.unwrap(),
+        instance: 0,
+    }
 }
 
 /// The monetary backend's identity rule, for its total slot (Receive's
@@ -3954,9 +4393,12 @@ fn p_circuit_impl(
     generators: Option<&GeneratorFolds>,
     identity: crate::points::IdentityPoints,
 ) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
-    use crate::points::{KeySelect, PointsBuilder, SharedMap};
+    use crate::points::{PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
-    let total_incoming = matches!(&operation, Some(OperationWitness::Receive(_)));
+    let archive = operation
+        .as_ref()
+        .is_some_and(OperationWitness::is_archive);
+    let total_incoming = archive || matches!(&operation, Some(OperationWitness::Receive(_)));
     let mode = match &operation {
         Some(OperationWitness::Control { witness, .. }) => Some(witness.mode),
         _ => None,
@@ -3964,14 +4406,18 @@ fn p_circuit_impl(
     if total_incoming && pairs.len() != 2 {
         return Err("Receive needs predecessor and incoming Send");
     }
-    let kinds = slot_kinds(gens, pairs);
+    let kinds = slot_kinds(gens, pairs, archive);
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-    let _ = kind_pin(&mut w, gfam, op.kind);
+    let installed = gens.defer_p.kinds.len();
+    if !archive || installed == crate::deferral::MAX_KINDS {
+        let own_kind = if archive { ARCHIVE_SENT } else { op.kind };
+        kind_pin_in(&mut w, gfam, installed, own_kind);
+    }
     let (own_idx, own_table) = if let Some(key) = key {
         let own = own_relation_with_head(
             &mut w,
@@ -3995,7 +4441,7 @@ fn p_circuit_impl(
     // the binding makes them one); then the P proofs' table commitments.
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
-    values.extend(kind_values(&kinds));
+    values.extend(kind_values(&kinds, gens.defer_p.kinds.len()));
     let mode_at = values.len();
     if let Some(mode) = mode {
         values.extend(mode.bits().map(u128::from));
@@ -4011,8 +4457,8 @@ fn p_circuit_impl(
     if total_incoming {
         values.extend(incoming_verdict_values(gens, &pairs[1]));
     }
-    // The S proofs' points sides; a slot taking any kind pins the S proof's
-    // fixed rows to the key its kind bits select.
+    // The S proofs' points sides; a slot whose kind bits come from its io
+    // pins the S proof's fixed rows to the admitted key those bits select.
     let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero, identity);
     let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
@@ -4022,13 +4468,11 @@ fn p_circuit_impl(
             other: Some([w, w + 1]),
             r: Some([off_p + len_p - 2, off_p + len_p - 1]),
         };
-        let keys = match (&gens.keys_s, kinds[i].1) {
-            (Some(k), true) => Some(KeySelect {
-                fixed: k.iter().map(Vec::as_slice).collect(),
-                kind_at: kind_at + 2 * i,
-            }),
-            _ => None,
-        };
+        let keys = slot_keys(
+            gens.keys_s.as_ref(),
+            kinds[i].1,
+            kind_at + kind_stride(installed) * i,
+        );
         if total_incoming && i == 1 {
             proof_points.push(pb.verify_keyed_total(
                 &mut pool,
@@ -4140,6 +4584,25 @@ fn p_circuit_impl(
         assert_io_bound(&pr.inst_p, &pr.tr_p, &items, sc.io, true);
     }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
+    // Λ_archive's receiver slot: the digest cell of its P io, the exact profile its
+    // transcript absorbed (the shared io-digest limbs it replays equal this cell).
+    #[cfg(test)]
+    let incoming_io_digest = archive.then(|| {
+        let at = items
+            .iter()
+            .position(|it| std::ptr::eq(it.io, pairs[1].inst_p.io.as_slice()))
+            .expect("the receiver slot's io digest item");
+        assert_eq!(
+            w.arrays[io_digest].values[0][at],
+            crate::fs::io_digest(&pairs[1].inst_p.io),
+            "the receiver profile digest"
+        );
+        crate::send_arithmetic::Source {
+            array: io_digest,
+            cell: 0,
+            instance: at,
+        }
+    });
     // The verified P proofs' matrix claims, deferred: folded into the
     // circuit's accumulator (no in-circuit matrix evaluation).
     let proofs: Vec<_> = pairs
@@ -4272,7 +4735,7 @@ fn p_circuit_impl(
             shared,
             offsets[1].0,
         );
-        Some(incoming_facts(
+        let facts = incoming_facts(
             &mut w,
             gfam,
             scalars[1].io,
@@ -4282,36 +4745,61 @@ fn p_circuit_impl(
             shared,
             verdict_at,
             offsets[1].0 + offsets[1].2 - 2,
-        ))
+        );
+        Some((facts, bytes))
     } else {
         None
     };
     let monetary = if let Some(operation) = operation {
         let predecessor = VerifiedPredecessor::from_verified_slot(&w, scalars[0].io);
         let complete = match operation {
-            OperationWitness::Send(witness) => {
-                CompleteOperation::Send(crate::send::append(&mut w, gfam, witness, &predecessor)?)
-            }
-            OperationWitness::Control { root, witness } => CompleteOperation::Control(
+            OperationWitness::Send(witness) => Some(CompleteOperation::Send(crate::send::append(
+                &mut w,
+                gfam,
+                witness,
+                &predecessor,
+            )?)),
+            OperationWitness::Control { root, witness } => Some(CompleteOperation::Control(
                 crate::control::append(&mut w, gfam, root, witness, &predecessor)?,
-            ),
+            )),
             OperationWitness::Receive(witness) => {
-                CompleteOperation::Receive(crate::receive::append(
+                Some(CompleteOperation::Receive(crate::receive::append(
                     &mut w,
                     gfam,
                     witness,
                     &predecessor,
-                    incoming.as_ref().expect("total incoming owner"),
-                )?)
+                    &incoming.as_ref().expect("total incoming owner").0,
+                )?))
+            }
+            // The receiver verdict, kind, profile digest and corrections come only from
+            // this circuit's total verifier; the relation exposes its own successor profile.
+            #[cfg(test)]
+            OperationWitness::ArchiveSent(relation) => {
+                let (facts, exact_pair_bytes) = incoming.as_ref().expect("total incoming owner");
+                let corrections = correction_conjunction(&mut w, gfam, shared, verdict_at);
+                relation.append(
+                    &mut w,
+                    gfam,
+                    &predecessor,
+                    &ArchiveIncoming {
+                        facts,
+                        exact_pair_bytes,
+                        io_digest: incoming_io_digest.expect("receiver profile digest"),
+                        corrections,
+                    },
+                )?;
+                None
             }
         };
-        expose_operation(
-            &mut w,
-            gfam,
-            &complete,
-            modes.expect("monetary mode profile"),
-        );
-        Some(complete)
+        if let Some(complete) = &complete {
+            expose_operation(
+                &mut w,
+                gfam,
+                complete,
+                modes.expect("monetary mode profile"),
+            );
+        }
+        complete
     } else {
         None
     };
@@ -4809,15 +5297,12 @@ fn incoming_facts(
 /// it only spends the second slot's fold work.
 ///
 /// Kinds: four, at selector corners Receive (0, 0), Send (1, 0), Bootstrap
-/// (0, 1) and Load (1, 1). A slot of `(kind, false)` takes kind `kind` (the
-/// fresh claim's selector bits c0, c1 are its constants). A slot of
-/// `(kind, true)` takes any kind: c0 and c1 are the verified proof's io values
-/// at `KIND_IO` and `KIND_IO + 1`, each held boolean, and the proof's kind bits
-/// in the shared values (`kind_shared` = the shared array and the pairs' first
-/// kind-bit index) equal them, so the other circuit of the pair sees the same
-/// kind (and selects the same key). Only a polynomial of fewer than four kinds
-/// also forbids (1, 1), which then selects no kind. A constant slot's kind
-/// bits equal its constants.
+/// (0, 1) and Control (1, 1). A five-kind generation adds ArchiveSent at
+/// (0, 0, 1). A fixed slot uses the circuit's constant kind coordinates.
+/// A variable slot takes each coordinate from the verified proof's io and
+/// binds it to the same coordinate on the other curve. Reserved corners
+/// are excluded. A receiver slot restricts all coordinates above c0 to zero.
+/// A fixed slot's bits equal its constant coordinates.
 ///
 /// No flag replaces an incoming accumulator: a chain starts at a Bootstrap
 /// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`). That
@@ -4914,6 +5399,8 @@ where
     let slot_proof = |s: usize| s % proofs.len();
     let one = S::<C>::ONE;
     let n = poly.n();
+    let installed = poly.kinds.len();
+    let stride = kind_stride(installed);
     let mut claims: Vec<Claim<S<C>>> = Vec::new();
     for s in 0..2 {
         let i = slot_proof(s);
@@ -4979,7 +5466,8 @@ where
     let mut incoming_validity = None;
     for s in 0..2 {
         let i = slot_proof(s);
-        let (kind, from_io) = kinds[i];
+        let (kind, set) = kinds[i];
+        let from_io = set.from_io();
         let (shape, inst, tr, sc, _) = proofs[i];
         // The accumulator: io leaves (a circuit proof's late io).
         let n_io = 1usize << w.arrays[sc.io].rho;
@@ -4995,11 +5483,15 @@ where
         // and KIND_IO + 1 for a slot of any kind (each held boolean, not both
         // one), else the slot's constants; the pair's shared kind bits equal
         // them.
-        let bit_io = |b: usize| link(sc.io, 0, vec![Some(leaves + KIND_IO + b)], one);
+        let bit_io = |b: usize| {
+            let at = if b == 2 { KIND_C2_IO } else { KIND_IO + b };
+            link(sc.io, 0, vec![Some(leaves + at)], one)
+        };
         if s == i {
-            let (b0, b1) = deferral::kind_bits(kind);
-            for (b, kb) in [b0, b1].into_iter().enumerate() {
-                let shared_bit = link(kind_shared.0, 0, vec![Some(kind_shared.1 + 2 * i + b)], one);
+            let corner = deferral::kind_corner(installed, kind).expect("an installed kind");
+            for (b, kb) in corner[..stride].iter().copied().enumerate() {
+                let shared_bit =
+                    link(kind_shared.0, 0, vec![Some(kind_shared.1 + stride * i + b)], one);
                 let bit = if from_io {
                     bit_io(b)
                 } else {
@@ -5018,10 +5510,12 @@ where
                     ]);
                 }
             }
-            if from_io && poly.kinds.len() < 4 {
-                // c0 c1 = 0: the corner (1, 1) is the empty claim's, no
-                // kind's.
-                vrows.push([bit_io(0), bit_io(1), Vec::new()]);
+            if from_io {
+                // Only installed corners: fewer than four kinds forbid
+                // (1, 1), the empty claim's corner; five forbid the reserved
+                // corners c0 c2 and c1 c2.
+                let words: Vec<_> = (0..stride).map(bit_io).collect();
+                set.append_domain_rows(&mut vrows, installed, &words);
             }
         }
         // The incoming accumulator, as the verified proof's late io says:
@@ -5074,8 +5568,8 @@ where
             place(false, g, 4 + poly.x + g);
         }
         let mut fixed = poly.fixed_coords(kind);
-        let c1 = poly.c1_at();
-        let selector = |j: usize| j == 0 || Some(j) == c1;
+        let (c1, c2) = (poly.c1_at(), poly.c2_at());
+        let selector = |j: usize| j == 0 || Some(j) == c1 || Some(j) == c2;
         if from_io {
             // c0 and c1 are the proof's kind bits, not constants: the kinds
             // share a layout, so every other fixed coordinate is the same for
@@ -5104,7 +5598,8 @@ where
             &constant(consts),
         );
         if from_io {
-            // c0 from io KIND_IO, c1 (the last coordinate) from KIND_IO + 1.
+            // c0 from io KIND_IO, c1 from KIND_IO + 1, c2 (five kinds, the
+            // last coordinate) from KIND_C2_IO.
             row = plus(
                 &row,
                 &link(
@@ -5116,6 +5611,8 @@ where
                                 Some(leaves + KIND_IO)
                             } else if Some(j) == c1 {
                                 Some(leaves + KIND_IO + 1)
+                            } else if Some(j) == c2 {
+                                Some(leaves + KIND_C2_IO)
                             } else {
                                 None
                             }
@@ -5584,8 +6081,7 @@ pub struct SRecvIdx {
     pub io_digest: usize,
     pub perms: usize,
     pub values: usize,
-    /// The shared index of pair 0's kind bits (pair i's c0 at
-    /// `kind_at + 2 i`, its c1 next).
+    /// Pair i's kind coordinates begin at `kind_at + kind_stride(installed) * i`.
     pub kind_at: usize,
     /// Per pair, the shared index of its P proof's table commitment's limbs.
     pub tables: Vec<Option<usize>>,
@@ -5612,7 +6108,15 @@ pub fn s_circuit(
     gens: &PairGens,
     pairs: &[TracedPair],
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, None, gens, pairs, false, None, BENCHMARK_IDENTITY)
+    s_circuit_impl(
+        Some(own_kind),
+        None,
+        gens,
+        pairs,
+        false,
+        None,
+        BENCHMARK_IDENTITY,
+    )
 }
 
 /// Secondary half of the complete monetary backend. Receive's incoming slot
@@ -5630,7 +6134,7 @@ pub fn s_operation(
         "one mode for the Control program"
     );
     s_circuit_impl(
-        own_kind,
+        Some(own_kind),
         mode,
         gens,
         pairs,
@@ -5641,7 +6145,7 @@ pub fn s_operation(
 }
 
 fn s_circuit_impl(
-    own_kind: usize,
+    own_kind: Option<usize>,
     mode: Option<crate::control::Mode>,
     gens: &PairGens,
     pairs: &[TracedPair],
@@ -5649,20 +6153,26 @@ fn s_circuit_impl(
     generators: Option<&GeneratorFolds>,
     identity: crate::points::IdentityPoints,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    use crate::points::{KeySelect, PointsBuilder, SharedMap};
+    use crate::points::{PointsBuilder, SharedMap};
     use crate::verifier::Fq;
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
-    let kinds = slot_kinds(gens, pairs);
+    // The absent ordinary kind selects Λ_archive, whose incoming slot is the signed
+    // Receive or later Send head, selected by its verified kind bits.
+    let archive = own_kind.is_none();
+    let kinds = slot_kinds(gens, pairs, archive);
     let mut w = Wiring::<Fq>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fq::ZERO]]);
     let mut pool = Pool::new(Fq::from(NODE_DOMAIN));
-    let _ = kind_pin(&mut w, gfam, own_kind);
+    let installed = gens.defer_s.kinds.len();
+    if let Some(kind) = own_kind.or((installed == crate::deferral::MAX_KINDS).then_some(ARCHIVE_SENT)) {
+        kind_pin_in(&mut w, gfam, installed, kind);
+    }
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
-    values.extend(kind_values(&kinds));
+    values.extend(kind_values(&kinds, gens.defer_p.kinds.len()));
     let mode_at = values.len();
     if let Some(mode) = mode {
         values.extend(mode.bits().map(u128::from));
@@ -5689,13 +6199,11 @@ fn s_circuit_impl(
             other: Some([w, w + 1]),
             r: Some([off_p + len_p - 2, off_p + len_p - 1]),
         };
-        let keys = match (&gens.keys_p, kinds[i].1) {
-            (Some(k), true) => Some(KeySelect {
-                fixed: k.iter().map(Vec::as_slice).collect(),
-                kind_at: kind_at + 2 * i,
-            }),
-            _ => None,
-        };
+        let keys = slot_keys(
+            gens.keys_p.as_ref(),
+            kinds[i].1,
+            kind_at + kind_stride(installed) * i,
+        );
         if total_incoming && i == 1 {
             proof_points.push(pb.verify_keyed_total(
                 &mut pool,
@@ -5750,7 +6258,7 @@ fn s_circuit_impl(
         |g| *g.mu,
     );
     let shared = native_binding(&mut w, gfam, mu, &values);
-    if generators.is_some() {
+    if generators.is_some() || (archive && installed == crate::deferral::MAX_KINDS) {
         bind_mode_io(&mut w, gfam, mode.map(|m| (m, shared, mode_at)));
     }
     let n_sh = 1usize << w.arrays[shared].rho;
@@ -5809,6 +6317,9 @@ fn s_circuit_impl(
         assert_io_bound(&pr.inst_s, &pr.tr_s, &items, sc.io, false);
     }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
+    if archive {
+        pin_receiver_secondary_projection(&mut w, gfam, &pairs[1].inst_s, scalars[1].io);
+    }
     let proofs: Vec<_> = pairs
         .iter()
         .zip(&scalars)
@@ -5967,7 +6478,7 @@ pub fn p_boot_from_inputs(
 ) -> Result<(Wiring<Fp>, BootIdx), &'static str> {
     let prepared = crate::bootstrap::prepare(context, input)?;
     let (mut w, gfam) = (prepared.wiring, prepared.gfam);
-    let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    let (_, pin) = kind_pin_in(&mut w, gfam, gens.defer_p.kinds.len(), BOOTSTRAP);
     bind_mode_io(&mut w, gfam, None);
     let values = boot_values();
     // Bootstrap's pair mask is deterministic: binding_mu([BOOTSTRAP]), one
@@ -6002,7 +6513,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     use crate::verifier::Fq;
     let mut w = Wiring::<Fq>::default();
     let gfam = w.family(0, 1);
-    let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    let (_, pin) = kind_pin_in(&mut w, gfam, gens.defer_p.kinds.len(), BOOTSTRAP);
     bind_mode_io(&mut w, gfam, None);
     let bits = w.push(Array {
         name: "bit table",

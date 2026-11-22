@@ -1438,7 +1438,7 @@ pub fn receive_from(
             (state.core, state.rest, state.statement) =
                 (step.after_core, step.after_rest, step.statement);
         }
-        ExactOperationWitness::Receive { .. } => {
+        ExactOperationWitness::Receive { .. } | ExactOperationWitness::ArchiveSent { .. } => {
             return Err(Error::Malformed(
                 "fixture Receive builds only a first Receive",
             ));

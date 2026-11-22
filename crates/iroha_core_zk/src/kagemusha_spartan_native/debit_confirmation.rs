@@ -260,7 +260,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             let (_, checkpoint) = self.custody_checkpoint(slot, _scope.wallet)?;
             let (tag, key) = checkpoint
                 .apple_key
-                .ok_or(invalid("missing protected Apple debit key"))?;
+                .ok_or_else(|| invalid("missing protected Apple debit key"))?;
             let found = self
                 .platform
                 .apple_debit_confirmation_key(slot, &tag, false)
@@ -321,7 +321,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let (_, checkpoint) = self.custody_checkpoint(slot, *capsule.wallet())?;
         let pin = checkpoint
             .apple_key
-            .ok_or(invalid("missing protected Apple debit key"))?;
+            .ok_or_else(|| invalid("missing protected Apple debit key"))?;
         if !self
             .pending_debit_confirmation
             .as_ref()
@@ -382,7 +382,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                     && pending.scope.capsule == digest
                     && pending.signing_message() == *message
             })
-            .ok_or(invalid("future debit confirmation is no longer pending"))?;
+            .ok_or_else(|| invalid("future debit confirmation is no longer pending"))?;
         self.require_account_wallet(&pending.scope.wallet)
     }
 
@@ -406,7 +406,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             .pending_debit_confirmation
             .as_ref()
             .filter(|challenge| &challenge.signing_message() == message && challenge.scope == scope)
-            .ok_or(invalid("future debit confirmation is no longer pending"))?;
+            .ok_or_else(|| invalid("future debit confirmation is no longer pending"))?;
         #[cfg(target_os = "android")]
         self.platform
             .debit_confirmation_origin(slot, message, signature_der)

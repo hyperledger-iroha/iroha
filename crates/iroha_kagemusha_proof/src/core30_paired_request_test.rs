@@ -191,7 +191,7 @@ pub(super) fn check_matching_steps(
             .is_err()
     );
 
-    prove_incoming_q(
+    let (incoming, _, _) = prove_incoming_q(
         SigmaRelation::SEND,
         payer_verifier,
         payer_proof,
@@ -199,6 +199,10 @@ pub(super) fn check_matching_steps(
         2,
         Instant::now(),
     );
+    incoming
+        .part
+        .decide(&crate::common::vesta_params(16), iroha_pasta::msm::MemoryBudget::DEFAULT)
+        .unwrap();
     println!(
         "CORE30_PAIRED_REQUEST amount={amount} fee={fee} signed_request_bytes={} credit={:?} inline_receive_strict_ms={:.3} sender_omega=false advance=false",
         signed_request.bytes.len(),

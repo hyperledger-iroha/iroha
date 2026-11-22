@@ -219,9 +219,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             return Err(invalid("CreditStatus released head scope"));
         }
         if capsule.kind() == 3 {
-            let original = payment.ok_or(invalid(
-                "later Send CreditStatus requires exact original Payment",
-            ))?;
+            let original = payment.ok_or_else(|| {
+                invalid("later Send CreditStatus requires exact original Payment")
+            })?;
             let original = self.verify_payment(original).map_err(provider_error)?;
             let (_, released) = self.verify_retained_release(slot, &capsule, &retained)?;
             let bytes = released

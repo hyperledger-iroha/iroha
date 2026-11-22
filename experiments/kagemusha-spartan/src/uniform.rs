@@ -918,10 +918,18 @@ fn chunk_arrays<F: Scalar>(
             dropped.extend(members.iter().map(|(li, _)| *li));
             arrays.push(chunk);
         }
-        dropped.sort_unstable();
-        for li in dropped.into_iter().rev() {
-            arrays[a].lookups.remove(li);
+        // One order-preserving pass. Removing each grouped lookup separately
+        // shifted every later lookup once per removal.
+        let mut removed = vec![false; arrays[a].lookups.len()];
+        for li in dropped {
+            removed[li] = true;
         }
+        let mut index = 0;
+        arrays[a].lookups.retain(|_| {
+            let keep = !removed[index];
+            index += 1;
+            keep
+        });
     }
     // References to moved cells become links into their chunk arrays.
     let rhos: Vec<usize> = arrays.iter().map(|a| a.rho).collect();
@@ -5435,30 +5443,34 @@ impl<F> OutPtr<F> {
     }
 }
 
-/// Writes of a [`crate::kern::Split`] table under construction: indices
-/// below `half` into its dense half, the rest into its tail.
-struct SplitOut<F> {
+/// The dense half of a [`crate::kern::Split`] table under construction, with
+/// the runs written marked.
+struct SplitDense<'a, F> {
     dense: OutPtr<F>,
-    tail: OutPtr<F>,
     half: usize,
-    tail_len: usize,
+    written: &'a [std::sync::atomic::AtomicU64],
 }
-impl<F> SplitOut<F> {
-    /// Caller guarantees no concurrent access to the same element; the index
-    /// lies below `half + tail_len` (checked).
-    unsafe fn write(&self, index: usize, value: F) {
+
+impl<F: Scalar> crate::kern::Entries<F> for SplitDense<'_, F> {
+    /// The run marked last.
+    type Local = usize;
+    fn local(&self) -> usize {
+        usize::MAX
+    }
+    fn put(&self, last: &mut usize, pos: usize, value: F) {
+        assert!(pos < self.half, "a dense M entry");
+        let s = pos / crate::kern::SEGMENT;
+        if s != *last {
+            self.written[s / 64].fetch_or(1 << (s % 64), std::sync::atomic::Ordering::Relaxed);
+            *last = s;
+        }
+        // SAFETY: in the half's bounds; each plan owns a distinct placed
+        // cell block and jobs partition that block's instances.
         unsafe {
-            if index < self.half {
-                self.dense.write(index, value);
-            } else {
-                assert!(
-                    index - self.half < self.tail_len,
-                    "public M entry past its tail"
-                );
-                self.tail.write(index - self.half, value);
-            }
+            self.dense.write(pos, value);
         }
     }
+    fn absorb(&self, _: usize) {}
 }
 
 // Four independent Montgomery inversions per full batch. This bound
@@ -6344,28 +6356,33 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
         rb: F,
         rc: F,
     ) -> crate::kern::Split<F> {
-        // eq(r_x, row) = eq(top, row's high bits) eq(rest, row's low bits):
-        // every reader's rows lie in one aligned block of 2^m rows, so with
-        // `low` at least the largest m a reader's weight takes the high
-        // factor and its entries read the low table alone (2^low entries,
-        // not 2^sx).
-        let low = self
-            .c
-            .arrays
-            .iter()
-            .enumerate()
-            .filter(|(_, arr)| !arr.rows.is_empty())
-            .map(|(a, _)| self.c.m(a))
-            .max()
-            .unwrap_or(0)
-            .min(shape.sx);
-        let (high, rest) = rx.split_at(shape.sx - low);
-        let eq = crate::prof::time("i.eq", || SplitEq {
-            high: crate::grid::eq_table(high),
-            low: crate::grid::eq_table(rest),
-            bits: low,
-        });
-        self.m_table_with(shape, &eq, ra, rb, rc)
+        self.m_table_with(shape, &self.split_eq(shape, rx), ra, rb, rc)
+    }
+
+    /// The first round projects `M(r_x, .)` as the plans compute it and,
+    /// after the challenges, computes it again folded: the dense half is
+    /// never held ([`crate::kern::first_inner_streamed`]). Both passes share
+    /// the equality tables, readers and block list; each builds the flat
+    /// plans a group at a time.
+    fn m_first_inner(
+        self: Box<Self>,
+        shape: &Shape,
+        rx: &[F],
+        rabc: [F; 3],
+        basis: &crate::kern::Basis,
+        z: &crate::kern::ZView<'_, '_, F>,
+        challenge: &mut dyn FnMut(&[F]) -> Vec<F>,
+    ) -> crate::kern::FirstInner<F> {
+        let readers = self.c.build_readers();
+        let entries = MEntries {
+            eq: self.split_eq(shape, rx),
+            blocks: self.c.build_m_blocks(&readers),
+            readers,
+            rel: &*self,
+            shape,
+            rm: rabc,
+        };
+        crate::kern::first_inner_streamed(basis, 1 << shape.sw(), z, &entries, challenge)
     }
 
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F) {
@@ -6453,6 +6470,30 @@ impl<F: Scalar> EqRows<F> for SplitEq<F> {
 }
 
 impl<F: Scalar> UniformRel<'_, F> {
+    /// `eq(r_x, .)` as a high and a low table: eq(r_x, row) = eq(top, row's
+    /// high bits) eq(rest, row's low bits), and every reader's rows lie in one
+    /// aligned block of 2^m rows, so with `low` at least the largest m a
+    /// reader's weight takes the high factor and its entries read the low
+    /// table alone (2^low entries, not 2^sx).
+    fn split_eq(&self, shape: &Shape, rx: &[F]) -> SplitEq<F> {
+        let low = self
+            .c
+            .arrays
+            .iter()
+            .enumerate()
+            .filter(|(_, arr)| !arr.rows.is_empty())
+            .map(|(a, _)| self.c.m(a))
+            .max()
+            .unwrap_or(0)
+            .min(shape.sx);
+        let (high, rest) = rx.split_at(shape.sx - low);
+        crate::prof::time("i.eq", || SplitEq {
+            high: crate::grid::eq_table(high),
+            low: crate::grid::eq_table(rest),
+            bits: low,
+        })
+    }
+
     /// `M(r_x, .)` split, from `eq(r_x, .)` as `ex` gives it.
     fn m_table_with<E: EqRows<F>>(
         &self,
@@ -6462,13 +6503,47 @@ impl<F: Scalar> UniformRel<'_, F> {
         rb: F,
         rc: F,
     ) -> crate::kern::Split<F> {
+        // The readers and block plans live for this table only.
+        let rd = self.c.build_readers();
+        let blocks = self.c.build_m_blocks(&rd);
+        let half = 1usize << shape.sw();
+        let mut dense = crate::kern::zeroed::<F>(half);
+        // The dense runs written: the inner round reads no other (their
+        // pages stay unallocated).
+        let written: Vec<std::sync::atomic::AtomicU64> = (0..half
+            .div_ceil(crate::kern::SEGMENT)
+            .div_ceil(64))
+            .map(|_| std::sync::atomic::AtomicU64::new(0))
+            .collect();
+        let sink = SplitDense {
+            dense: OutPtr(dense.as_mut_ptr()),
+            half,
+            written: &written,
+        };
+        let tail = self.m_entries_with(shape, ex, [ra, rb, rc], &rd, &blocks, &sink, true);
+        crate::kern::Split::with_written(
+            dense,
+            tail.expect("the public half"),
+            written.into_iter().map(|w| w.into_inner()).collect(),
+        )
+    }
+
+    /// `M(r_x, .)`'s dense half into `sink`, a sweep at a time, and with
+    /// `with_tail` its public half.
+    #[allow(clippy::too_many_arguments)]
+    fn m_entries_with<E: EqRows<F>, S: crate::kern::Entries<F>>(
+        &self,
+        shape: &Shape,
+        ex: &E,
+        rm: [F; 3],
+        rd: &Readers,
+        blocks: &[MBlock],
+        sink: &S,
+        with_tail: bool,
+    ) -> Option<Vec<F>> {
         let c = self.c;
-        let rm = [ra, rb, rc];
         // The rows' terms with each term's factor value: no row is
         // instantiated per proof.
-        // The readers and block plans live for this table only.
-        let rd = c.build_readers();
-        let rd = &rd;
         let weight = |a: usize, j: usize, mat: usize, t: usize| -> F {
             UniformCircuit::<F>::factor_value(&self.ch, c.sym_term(a, j, mat, t).1)
                 .map_or(rm[mat], |f| rm[mat] * f)
@@ -6476,44 +6551,24 @@ impl<F: Scalar> UniformRel<'_, F> {
         // One job per placed block, large blocks in ranges of instances; the
         // rows that read each instance come from the block's flat plan.
         const SPAN: usize = 2048;
-        let blocks = c.build_m_blocks(rd);
-        let blocks = &blocks;
         // The witness half is dense. The public half holds only the io
         // arrays' blocks and the constant slot (its first entry), so it ends
         // at their last index.
         let half = 1usize << shape.sw();
-        let tail_len = blocks
-            .iter()
-            .filter(|b| c.is_io(b.a2))
-            .flat_map(|b| {
-                let block = &c.blocks[b.a2][b.k2];
-                (0..1usize << c.m(b.a2))
-                    .filter(move |i2| c.present(b.a2, *i2))
-                    .map(move |i2| block.index(i2) + 1)
-            })
-            .fold(half + 1, usize::max)
-            - half;
-        let mut dense = crate::kern::zeroed::<F>(half);
-        let mut tail = vec![F::ZERO; tail_len];
-        let output = SplitOut {
-            dense: OutPtr(dense.as_mut_ptr()),
-            tail: OutPtr(tail.as_mut_ptr()),
-            half,
-            tail_len,
-        };
-        // The dense runs written: the inner round reads no other (their
-        // pages stay unallocated).
-        let seg = crate::kern::SEGMENT;
-        let written: Vec<std::sync::atomic::AtomicU64> = (0..half.div_ceil(seg).div_ceil(64))
-            .map(|_| std::sync::atomic::AtomicU64::new(0))
-            .collect();
-        let mark = |pos: usize, last: &mut usize| {
-            let s = pos / seg;
-            if pos < half && s != *last {
-                written[s / 64].fetch_or(1 << (s % 64), std::sync::atomic::Ordering::Relaxed);
-                *last = s;
-            }
-        };
+        let mut tail = with_tail.then(|| {
+            let tail_len = blocks
+                .iter()
+                .filter(|b| c.is_io(b.a2))
+                .flat_map(|b| {
+                    let block = &c.blocks[b.a2][b.k2];
+                    (0..1usize << c.m(b.a2))
+                        .filter(move |i2| c.present(b.a2, *i2))
+                        .map(move |i2| block.index(i2) + 1)
+                })
+                .fold(half + 1, usize::max)
+                - half;
+            vec![F::ZERO; tail_len]
+        });
         // Consecutive blocks in groups of about M_PLAN_GROUP plan bytes: each
         // group's plans are built, written out and dropped before the next.
         let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
@@ -6567,15 +6622,27 @@ impl<F: Scalar> UniformRel<'_, F> {
                     (0..(1usize << c.m(plan.a2)).div_ceil(SPAN)).map(move |s| (b, s * SPAN))
                 })
                 .collect();
-            let write_job = |&(b, start): &(usize, usize)| {
+            // A job's present instances at positions in `range`.
+            let write_job = |&(b, start): &(usize, usize),
+                             range: &std::ops::Range<usize>,
+                             put: &mut dyn FnMut(usize, F)| {
                 let (plan, weights) = (&plans[b], &weights[b]);
                 let (a2, k2) = (plan.a2, plan.k2);
                 let rho2 = c.arrays[a2].rho;
                 let block = &c.blocks[a2][k2];
-                let mut last = usize::MAX;
-                for i2 in
-                    (start..(start + SPAN).min(1usize << c.m(a2))).filter(|i2| c.present(a2, *i2))
+                let end = (start + SPAN).min(1usize << c.m(a2));
+                // An aligned block's index grows with its instance (lo <= hi):
+                // a job wholly outside `range` is skipped.
+                if block.lo <= block.hi
+                    && (block.index(end - 1) < range.start || block.index(start) >= range.end)
                 {
+                    return;
+                }
+                for i2 in start..end {
+                    let pos = block.index(i2);
+                    if !range.contains(&pos) || !c.present(a2, i2) {
+                        continue;
+                    }
                     let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
                     let mut acc = alls[b];
                     let entries =
@@ -6604,25 +6671,40 @@ impl<F: Scalar> UniformRel<'_, F> {
                         }
                         acc += weights[ri as usize] * sum;
                     }
-                    // SAFETY: each plan owns a distinct placed cell
-                    // block, and jobs partition that block's instances.
-                    // Public-IO jobs run serially below because separate
-                    // arrays can name the same IO slots. The constant slot
-                    // is updated only after all jobs have finished.
-                    let pos = block.index(i2);
-                    mark(pos, &mut last);
-                    unsafe {
-                        output.write(pos, acc);
-                    }
+                    put(pos, acc);
                 }
             };
-            jobs.par_iter()
-                .filter(|(b, _)| !c.is_io(plans[*b].a2))
-                .for_each(&write_job);
-            for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
-                write_job(job);
+            // Each plan owns a distinct placed cell block and jobs partition
+            // that block's instances: a sweep's positions are distinct.
+            for s in 0..sink.sweeps() {
+                let range = sink.sweep(s);
+                jobs.par_iter()
+                    .filter(|(b, _)| !c.is_io(plans[*b].a2))
+                    .fold(
+                        || sink.local(),
+                        |mut local, job| {
+                            write_job(job, &range, &mut |pos, acc| sink.put(&mut local, pos, acc));
+                            local
+                        },
+                    )
+                    .for_each(|local| sink.absorb(local));
+            }
+            // Public-IO jobs run serially because separate arrays can name
+            // the same IO slots. The constant slot is updated only after all
+            // jobs have finished.
+            if let Some(tail) = tail.as_mut() {
+                for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
+                    write_job(job, &(0..usize::MAX), &mut |pos, acc| {
+                        assert!(
+                            pos >= half && pos - half < tail.len(),
+                            "public M entry past its tail"
+                        );
+                        tail[pos - half] = acc;
+                    });
+                }
             }
         }
+        let mut tail = tail?;
         let one: F = rd
             .one_readers
             .par_iter()
@@ -6640,10 +6722,33 @@ impl<F: Scalar> UniformRel<'_, F> {
             .sum();
         // The constant slot opens the public half.
         tail[0] += one;
-        crate::kern::Split::with_written(
-            dense,
+        Some(tail)
+    }
+}
+
+/// `M(r_x, .)` as the uniform relation's streamed first round computes it.
+struct MEntries<'r, 'c, F: Scalar> {
+    rel: &'r UniformRel<'c, F>,
+    shape: &'r Shape,
+    eq: SplitEq<F>,
+    rm: [F; 3],
+    readers: Readers,
+    blocks: Vec<MBlock>,
+}
+
+// SAFETY: `m_entries_with` emits each dense position once per sweep (each
+// plan owns a distinct placed cell block, jobs partition its instances) and
+// only the positions in the sweep's range.
+unsafe impl<F: Scalar> crate::kern::Generate<F> for MEntries<'_, '_, F> {
+    fn run<S: crate::kern::Entries<F>>(&self, sink: &S, tail: bool) -> Option<Vec<F>> {
+        self.rel.m_entries_with(
+            self.shape,
+            &self.eq,
+            self.rm,
+            &self.readers,
+            &self.blocks,
+            sink,
             tail,
-            written.into_iter().map(|w| w.into_inner()).collect(),
         )
     }
 }
@@ -7225,6 +7330,61 @@ pub(crate) mod tests {
     use iroha_pasta::Eq as Vesta;
 
     type Fv = <Vesta as iroha_pasta::PastaCurve>::ScalarExt;
+
+    /// The builder's real pattern: each cell's unit range lookup is followed by
+    /// a shifted lookup of the same cell, which stays with its array. Grouping
+    /// drops every other lookup; the kept ones keep their order and read their
+    /// moved cells through the chunk array.
+    #[test]
+    fn chunk_arrays_keeps_interleaved_ungrouped_lookups_in_order() {
+        let (n, cells) = (2usize, 6usize);
+        let mut lookups = Vec::new();
+        for c in 0..cells {
+            lookups.push((7u32, vec![own::<Fv>(c, n)]));
+            lookups.push((
+                7u32,
+                vec![vec![Term {
+                    src: Src::Own(c),
+                    coef: vec![Fv::from(2u64); n],
+                }]],
+            ));
+        }
+        let mut arrays = vec![Array {
+            name: "interleaved range lookups",
+            family: 0,
+            rho: 1,
+            r_count: n,
+            fixed: false,
+            lookups,
+            widths: vec![16; cells],
+            rows: vec![],
+            values: vec![vec![Fv::from(0u64); n]; cells],
+        }];
+        let mut rfield = vec![(1, n, 1)];
+        let mut moved = vec![vec![None; cells]];
+        let mut challenge = ChallengeRows::default();
+        chunk_arrays(&mut arrays, &mut rfield, &mut moved, &mut challenge);
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[1].r_count, cells);
+        assert_eq!(arrays[1].lookups.len(), 1);
+        assert_eq!(arrays[0].lookups.len(), cells);
+        for (j, (tid, tuple)) in arrays[0].lookups.iter().enumerate() {
+            assert_eq!(*tid, 7);
+            let [term] = tuple[0].as_slice() else {
+                panic!("kept lookup {j} has one term")
+            };
+            assert!(term.coef.iter().all(|c| *c == Fv::from(2u64)));
+            assert_eq!(
+                term.src,
+                Src::Link {
+                    array: 1,
+                    cell: 0,
+                    map: (0..n).map(|r| Some((j << 1) | r)).collect(),
+                },
+                "kept lookup {j} reads its own moved cell"
+            );
+        }
+    }
 
     #[test]
     fn sparse_reader_csr_preserves_cross_family_and_repeated_maps() {

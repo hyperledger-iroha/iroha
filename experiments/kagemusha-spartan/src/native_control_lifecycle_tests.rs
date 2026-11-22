@@ -69,7 +69,9 @@ impl Wallet {
             ExactOperationWitness::Receive { step: w, .. } => {
                 (w.after_core, w.after_rest, w.statement)
             }
-            ExactOperationWitness::Bootstrap(_) => unreachable!(),
+            ExactOperationWitness::Bootstrap(_) | ExactOperationWitness::ArchiveSent { .. } => {
+                unreachable!()
+            }
         };
         self.set_head(completed.head(), core, rest, statement);
         completed.completion().output_part(1).unwrap()

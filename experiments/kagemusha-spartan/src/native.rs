@@ -6,6 +6,7 @@
 //! implement a second journal or expose a caller-supplied acceptance Boolean.
 
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 use ff::PrimeField;
 use iroha_pasta::Fp;
@@ -124,75 +125,9 @@ pub struct ProgramBundle {
     pub primary: [Vec<u8>; 4],
     pub secondary: [Vec<u8>; 4],
 }
-impl ProgramBundle {
-    fn validate(&self) -> Result<()> {
-        if self.version != 1
-            || self
-                .primary
-                .iter()
-                .chain(&self.secondary)
-                .any(Vec::is_empty)
-        {
-            return Err(Error::Malformed("program bundle"));
-        }
-        let total = self
-            .primary
-            .iter()
-            .chain(&self.secondary)
-            .try_fold(0usize, |n, p| n.checked_add(p.len()))
-            .ok_or(Error::ResourceLimit)?;
-        if total > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        Ok(())
-    }
-
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        self.validate()?;
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-        let bytes = norito::to_bytes(self).map_err(|e| Error::Rejected(e.to_string()))?;
-        if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        Ok(bytes)
-    }
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
-            return Err(Error::ResourceLimit);
-        }
-        let limits = norito::DecodeLimits::new(
-            MAX_PROGRAM_BUNDLE_BYTES,
-            MAX_PROGRAM_BUNDLE_BYTES,
-            2 * MAX_PROGRAM_BUNDLE_BYTES,
-            4 * MAX_PROGRAM_BUNDLE_BYTES,
-            16,
-        );
-        // Use the object-specific archive bound without changing Norito's
-        // process default; the payload still inherits stricter caller budgets.
-        let bundle: Self = norito::core::with_decode_limits(limits, || {
-            let payload = norito::canonical_frame_payload_with_archive_limit::<Self>(
-                bytes,
-                norito::core::V1_LAYOUT_FLAGS,
-                MAX_PROGRAM_BUNDLE_BYTES as u64,
-            )?;
-            let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
-            let (value, used) = norito::core::decode_field_canonical(payload)?;
-            if used != payload.len() {
-                return Err(norito::Error::LengthMismatch);
-            }
-            Ok(value)
-        })
-        .map_err(|_| Error::Malformed("bounded program bundle"))?;
-        bundle.validate()?;
-        norito::verify_exact_canonical_frame_with_layout(
-            &bundle,
-            bytes,
-            norito::core::WireLayout::Fixed,
-        )
-        .map_err(|_| Error::Malformed("canonical program bundle"))?;
-        Ok(bundle)
-    }
-}
+#[path = "program_bundle.rs"]
+mod program_bundle;
+pub use program_bundle::{ProgramBundleGeometry, ProgramBundleV2};
 
 #[derive(Debug)]
 pub enum Error {
@@ -320,6 +255,25 @@ pub struct BootstrapWitness {
     pub relation: [u8; 32],
     pub input: bootstrap::Inputs,
 }
+/// Private payer state of one ArchiveSent step (wallet wire §3.3, tag 5). Every field other
+/// than the successor nonce `after_core[29]` is recomputed by Native from the selected
+/// predecessor, the exact retained originals and the two removal openings; a witness that
+/// differs in any derived word is refused.
+#[derive(Clone)]
+pub struct ArchiveSentWitness {
+    pub before_core: [Fp; 30],
+    pub before_rest: [Fp; 6],
+    pub after_core: [Fp; 30],
+    pub after_rest: [Fp; 6],
+    pub credential: Credential,
+    pub statement: [Fp; 26],
+    /// Unsigned receipt template: zero signature, proof and capsule digests.
+    pub receipt: bootstrap::Receipt,
+    /// Removal of the Payment's pending-outgoing leaf under the committed core root.
+    pub core_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+    /// The same removal under the predecessor head's lineage-adjusted pending root.
+    pub adjusted_removal: iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1,
+}
 #[derive(Clone)]
 pub enum ExactOperationWitness {
     Bootstrap(Box<BootstrapWitness>),
@@ -342,6 +296,19 @@ pub enum ExactOperationWitness {
         /// verification verdict; the Receive relation constrains valid credit or
         /// Burn, retaining malformed cryptographic words without rewriting them.
         incoming_payment: Arc<[u8]>,
+    },
+    /// Payer ArchiveSent of one delivered Send. The four exact originals are its fold
+    /// witnesses: the released Send capsule and completion (historical payer credential,
+    /// certificate and the exact Payment), the hosted open Request and the Credited
+    /// CreditStatus. No program of the signed generation proves this kind, so Native
+    /// rechecks it completely and then refuses to freeze, select or finalize it.
+    ArchiveSent {
+        step: Box<ArchiveSentWitness>,
+        /// Contains the original private Send witness. Erase it when the last owner drops.
+        send_capsule: Arc<Zeroizing<Vec<u8>>>,
+        send_completion: Arc<[u8]>,
+        open_request: Arc<[u8]>,
+        credit_status: Arc<[u8]>,
     },
 }
 impl ExactOperationWitness {
@@ -377,6 +344,7 @@ impl ExactOperationWitness {
             Self::RefreshTimeAnchor(w) | Self::Unload { step: w, .. } => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
+            Self::ArchiveSent { step, .. } => &step.credential,
         }
     }
     /// Decode bounded canonical private witness data, without granting authority.
@@ -554,6 +522,7 @@ impl PreparedOperation {
             | ExactOperationWitness::RefreshTimeAnchor(step) => {
                 (&step.after_core, &step.after_rest)
             }
+            ExactOperationWitness::ArchiveSent { step, .. } => (&step.after_core, &step.after_rest),
         }
     }
 
@@ -950,7 +919,7 @@ impl RecoveryCapsule {
         if capsule.scheme() != scheme {
             return Err(Error::AuthorityMismatch("capsule scheme"));
         }
-        if capsule.encode()? != bytes {
+        if Zeroizing::new(capsule.encode()?).as_slice() != bytes {
             return Err(Error::Malformed("capsule canonical frame"));
         }
         Ok(capsule)
@@ -1097,6 +1066,25 @@ impl CompletionRecord {
         custody_digest(b"spartan-future-completion-v1", bytes)
     }
 }
+/// Maximum complete IPM1 CreditStatus original, including its transport header.
+pub const MAX_CREDIT_STATUS_ORIGINAL_BYTES: usize = 10_084;
+
+/// Stable private reservation for one exact Credited original from a released Send.
+pub fn wallet_archive_sent_replay_key(
+    send_capsule_digest: &[u8; 32],
+    wallet: &[u8; 32],
+    credited: &[u8],
+) -> Result<[u8; 32]> {
+    if credited.is_empty() || credited.len() > MAX_CREDIT_STATUS_ORIGINAL_BYTES {
+        return Err(Error::Malformed("ArchiveSent CreditStatus length"));
+    }
+    let mut identity = Vec::with_capacity(64 + credited.len());
+    identity.extend_from_slice(send_capsule_digest);
+    identity.extend_from_slice(wallet);
+    identity.extend_from_slice(credited);
+    Ok(custody_digest(b"spartan-archive-sent-action-v1", &identity))
+}
+
 fn custody_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(domain);

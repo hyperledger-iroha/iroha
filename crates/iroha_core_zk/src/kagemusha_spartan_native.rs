@@ -190,6 +190,9 @@ fn provider_error(error: native::Error) -> ProviderError {
         native::Error::Unavailable(_) | native::Error::ResourceLimit => {
             ProviderError::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
         }
+        native::Error::AuthorityMismatch(
+            field @ "signed generation has no ArchiveSent program",
+        ) => ProviderError::Invalid { field },
         _ => ProviderError::Invalid {
             field: "future wallet proof authority",
         },
@@ -497,7 +500,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
     ) -> Result<native::PreparedOperation, ProviderError> {
         if let Some(action) = witness_original.strip_prefix(b"KSO1") {
             if !exact_head.is_empty() {
-                return Err(ProviderError::Invalid { field: "wallet-owned action with supplied head" });
+                return Err(ProviderError::Invalid {
+                    field: "wallet-owned action with supplied head",
+                });
             }
             return self.prepare_wallet_action(slot, action);
         }
@@ -505,13 +510,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             native::ExactOperationWitness::decode(witness_original).map_err(provider_error)?;
         let prepared = self.prepare_private_witness(slot, &witness, exact_head)?;
         if let Some(key) = witness.transfer_replay_key().map_err(provider_error)? {
-            if let Some(recovered) = self.recover_transfer_action(slot, prepared.capsule().kind(), &key, None, Some(witness_original))? {
+            let peer = match &witness {
+                native::ExactOperationWitness::ArchiveSent { credit_status, .. } => {
+                    Some(credit_status.as_ref())
+                }
+                _ => None,
+            };
+            if let Some(recovered) = self.recover_transfer_action(
+                slot,
+                prepared.capsule().kind(),
+                &key,
+                peer,
+                Some(witness_original),
+            )? {
                 if recovered.capsule_digest() != prepared.capsule_digest() {
-                    return Err(ProviderError::Invalid { field: "transfer action already bound to another source" });
+                    return Err(ProviderError::Invalid {
+                        field: "transfer action already bound to another source",
+                    });
                 }
                 return Ok(recovered);
             }
-            self.retain_transfer_action(slot, key, &prepared, None, witness_original)?;
+            self.retain_transfer_action(slot, key, &prepared, peer, witness_original)?;
         }
         Ok(prepared)
     }

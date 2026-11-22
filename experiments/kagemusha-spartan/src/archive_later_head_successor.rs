@@ -1,4 +1,7 @@
 //! Native later receiver-head delivery coverage against retained signed originals.
+#[path = "archive_wire_binding_successor.rs"]
+pub(super) mod wire_binding;
+
 use super::{credit_opening::StatusOpening, *};
 use crate::native::engine::credit_status_wire::later_send::{WORDS, packed_fixture};
 use iroha_data_model::kagemusha::{
@@ -6,7 +9,7 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletIndexedOpeningV1 as PublicPath,
 };
 const MAX: usize = 10_084 - crate::payment_wire::HEADER_BYTES;
-struct FixtureRoute {
+pub(super) struct FixtureRoute {
     root: [u8; 32],
     leaf: PublicLeaf,
     path: PublicPath,
@@ -44,7 +47,7 @@ fn reference(
 
 // The actual later receiver Send, encoded by the native producer as CreditStatus for the
 // original Payment from the receiver's credit route at that later head.
-fn later_send_status(
+pub(super) fn later_send_status(
     payer: &Inputs<'_>,
     root: Fp,
     engine: &NativeEngine,
@@ -123,6 +126,18 @@ fn folded_status_digest_reconstructs_wire_objects_for_both_heads() {
             (payer.delivery, prior.pair.as_slice(), recv.head().profile(), record.exact_receipt()),
             (&headed, later.exact_pair(), later.profile(), &[later.receipt().body.as_slice(), &later.receipt().signature].concat()[..]),
         ] {
+            let input = delivery.receiver_evidence();
+            let kind = if std::ptr::eq(delivery, payer.delivery) { crate::full::RECEIVE } else { crate::full::SEND };
+            let selected = &parameters.inner.programs[kind];
+            assert_eq!(input.pair.kind, kind);
+            assert_eq!(input.pair.ip.io.as_slice(), profile.as_slice());
+            assert_eq!(input.exact_pair.as_slice(), raw_pair);
+            assert_eq!(input.pair.cp.program_digest(), selected.primary.program_digest());
+            assert_eq!(input.pair.cs.program_digest(), selected.secondary.program_digest());
+            let other = &parameters.inner.programs[if kind == crate::full::RECEIVE { crate::full::SEND } else { crate::full::RECEIVE }];
+            assert_ne!(input.pair.cp.program_digest(), other.primary.program_digest());
+            assert_ne!(input.pair.cs.program_digest(), other.secondary.program_digest());
+            eprintln!("retained decided receiver kind={kind} primary={} secondary={} original={} B", blake3::Hash::from(input.pair.cp.program_digest()).to_hex(), blake3::Hash::from(input.pair.cs.program_digest()).to_hex(), raw_pair.len());
             let status = delivery.wire_status().unwrap();
             let digest = delivery.status_digest().unwrap();
             assert_eq!(status.lineage.proof, raw_pair);
@@ -256,11 +271,12 @@ fn successor_archive_status_at_a_later_receiver_send() {
         at_later_send.verify(&verifier, nonce, &proof).unwrap();
         // At the same payer head and nonce the Receive form differs only in the transcript
         // binding of the exact CreditStatus bytes, the head receipt, head and statement
-        // words, the form bit and the operation subject. Custody, pending removal,
+        // words, the form bit, the operation subject and the exact statement digest.
+        // Custody, pending removal,
         // descriptor, Payment, Request and opening words are identical.
         let received_io = payer.public_io(nonce, verifier.0.io_len).unwrap();
         let differing: Vec<_> = (0..io.len()).filter(|&i| io[i] != received_io[i]).collect();
-        assert_eq!(differing, [59, 60, 65, 66, 67, 69, 76, 77]);
+        assert_eq!(differing, [59, 60, 65, 66, 67, 69, 76, 77, 78]);
         assert!(
             payer.verify(&verifier, nonce, &proof).is_err(),
             "a later Send proof is not Receive evidence"
@@ -279,8 +295,8 @@ fn successor_archive_status_at_a_later_receiver_send() {
         as_receive[76] = Fp::ZERO;
         assert!(verify_io(&verifier, as_receive, &proof).is_err());
         // Later receipt, head, statement and raw receipt digest, form bit, operation
-        // subject, credit root and Burned flag are all bound.
-        for offset in [65, 66, 67, 69, 76, 77, 128, 129] {
+        // subject, exact statement digest, credit root and Burned flag are all bound.
+        for offset in [65, 66, 67, 69, 76, 77, 78, 128, 129] {
             let mut changed = io.clone();
             changed[offset] += Fp::ONE;
             assert!(
@@ -425,7 +441,7 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         let positive = build(&accepted, &headed);
         let program = positive.0.program_digest();
         assert_eq!(&positive.1.io[55..59], &[Fp::ONE; 4]);
-        assert_eq!(&positive.1.io[64..78], &headed.public_words());
+        assert_eq!(&positive.1.io[64..79], &headed.public_words());
         assert!(holds(&positive), "the exact later Send head selects removal");
         drop(positive);
         assert!(
@@ -481,7 +497,7 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
             let refused = build(&noop, bad);
             assert_eq!(refused.0.program_digest(), program, "{label}");
             assert_eq!(&refused.1.io[55..59], bits, "{label}");
-            assert_eq!(&refused.1.io[64..78], &bad.public_words(), "{label}");
+            assert_eq!(&refused.1.io[64..79], &bad.public_words(), "{label}");
             assert!(holds(&refused), "{label}: the derived false result forces the no-op");
             drop(refused);
             assert!(
@@ -496,3 +512,6 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         );
     });
 }
+
+#[path = "archive_receiver_statement_successor.rs"]
+mod receiver_statement;

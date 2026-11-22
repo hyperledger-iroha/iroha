@@ -28,6 +28,32 @@ fn selected_child_key(predecessor: &[u8; 32]) -> [u8; 32] {
     digest(&[b"future-actual-selected-child-v1".as_slice(), predecessor].concat())
 }
 
+fn selected_operation_key(operation: &[u8; 32]) -> [u8; 32] {
+    digest(
+        &[
+            b"future-selected-operation-capsule-v1".as_slice(),
+            operation,
+        ]
+        .concat(),
+    )
+}
+
+fn remember_selection(
+    store: &mut impl ObjectStore,
+    index: IndexRoot,
+    key: [u8; 32],
+    capsule: &[u8; 32],
+) -> Result<IndexRoot, ProviderError> {
+    if let Some(selected) = index.get(store, &key).map_err(storage_error)? {
+        return if selected == *capsule {
+            Ok(index)
+        } else {
+            Err(lost("conflicting selected transfer history"))
+        };
+    }
+    index.set(store, key, capsule).map_err(storage_error)
+}
+
 /// Receive's financial operation identity includes the credit id. Two distinct Payment
 /// originals can name the same credit, but only the actually selected capsule owns it.
 fn check_receive_selection(
@@ -45,6 +71,25 @@ fn check_receive_selection(
         return Err(bad("credit already selected a different Payment"));
     }
     Ok(())
+}
+
+/// The protected index survives loss of historical completion files. A mismatching
+/// entry, or an indexed operation whose completion is now unknown, blocks replanning.
+fn check_archive_selection(
+    lookup: &Lookup<native::CompletionRecord>,
+    candidate: &[u8; 32],
+    indexed: Option<&[u8]>,
+) -> Result<(), ProviderError> {
+    if indexed.is_some_and(|digest| digest != candidate || matches!(lookup, Lookup::Unknown)) {
+        return Err(lost("ArchiveSent operation selection history"));
+    }
+    match lookup {
+        Lookup::Unknown => Ok(()),
+        Lookup::Retained(row) if row.capsule_digest == *candidate => Ok(()),
+        Lookup::SelectedUnsigned { capsule_digest } if capsule_digest == candidate => Ok(()),
+        Lookup::Archived(_) | Lookup::DeliveryDataLoss => Err(lost("ArchiveSent completion")),
+        _ => Err(bad("ArchiveSent already selected another capsule")),
+    }
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRuntime<F, P, S> {
@@ -90,6 +135,26 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         })
     }
 
+    fn check_transfer_selection(
+        &mut self,
+        slot: &Slot,
+        index: IndexRoot,
+        prepared: &native::PreparedOperation,
+        lookup: &Lookup<native::CompletionRecord>,
+    ) -> Result<(), ProviderError> {
+        match prepared.capsule().kind() {
+            4 => check_receive_selection(lookup, prepared.capsule_digest()),
+            5 => self.provider.with_archive(slot, |archive| {
+                let key = selected_operation_key(prepared.capsule().operation_id());
+                let selected = index
+                    .get(&mut Objects(archive), &key)
+                    .map_err(storage_error)?;
+                check_archive_selection(lookup, prepared.capsule_digest(), selected.as_deref())
+            }),
+            _ => Ok(()),
+        }
+    }
+
     pub(super) fn recover_transfer_action(
         &mut self,
         slot: &Slot,
@@ -98,7 +163,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         peer: Option<&[u8]>,
         raw: Option<&[u8]>,
     ) -> Result<Option<native::PreparedOperation>, ProviderError> {
-        if !matches!(expected_kind, 1..=4 | 6 | 7) {
+        if !(1..=7).contains(&expected_kind) {
             return Err(bad("wallet action kind"));
         }
         let wallet = self.authorized_wallet_id(slot)?;
@@ -131,7 +196,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 .read_object(&address, native::MAX_CUSTODY_FRAME_BYTES)
                 .map_err(storage_error)?;
             let frozen: [u8; 32] = record[33..65].try_into().expect("fixed action");
-            Ok(Some((capsule, frozen)))
+            Ok(Some((zeroize::Zeroizing::new(capsule), frozen)))
         })?;
         let Some((bytes, frozen)) = old else {
             return Ok(None);
@@ -148,9 +213,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             .map_err(provider_error)?;
         self.require_account(slot, Some(recovered.credential()))?;
         let lookup = self.provider.lookup(slot, capsule.operation_id())?;
-        if expected_kind == 4 {
-            check_receive_selection(&lookup, recovered.capsule_digest())?;
-        }
+        self.check_transfer_selection(
+            slot,
+            IndexRoot(checkpoint.transfer_actions),
+            &recovered,
+            &lookup,
+        )?;
         match lookup {
             Lookup::Retained(released)
                 if released.capsule_digest == *recovered.capsule_digest() => {}
@@ -175,16 +243,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 if !same_source {
                     // A lookup miss is insufficient. Prove a different child actually won at
                     // the reservation's predecessor, using its protected marker lineage.
-                    let selected = if sequence == capsule.sequence() {
-                        match &marker.marker().state {
+                    let selected = match sequence.cmp(&capsule.sequence()) {
+                        std::cmp::Ordering::Equal => match &marker.marker().state {
                             KagemushaWalletMarkerStateV1::Head {
                                 predecessor_capsule_digest,
                                 ..
                             } if *predecessor_capsule_digest == predecessor => Some(current),
                             _ => None,
-                        }
-                    } else if sequence > capsule.sequence() {
-                        self.provider.with_archive(slot, |archive| {
+                        },
+                        std::cmp::Ordering::Greater => self.provider.with_archive(slot, |archive| {
                             IndexRoot(checkpoint.transfer_actions)
                                 .get(&mut Objects(archive), &selected_child_key(&predecessor))
                                 .map_err(storage_error)?
@@ -194,9 +261,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                                         .map_err(|_| lost("transfer selected child record"))
                                 })
                                 .transpose()
-                        })?
-                    } else {
-                        None
+                        })?,
+                        std::cmp::Ordering::Less => None,
                     };
                     match selected {
                         Some(child) if child != *recovered.capsule_digest() => return Ok(None),
@@ -236,13 +302,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         raw: &[u8],
     ) -> Result<(), ProviderError> {
         let wallet = self.authorized_wallet_id(slot)?;
-        if prepared.capsule().kind() == 4 {
+        let (_, current) = self.custody_checkpoint(slot, wallet)?;
+        if matches!(prepared.capsule().kind(), 4 | 5) {
             let lookup = self
                 .provider
                 .lookup(slot, prepared.capsule().operation_id())?;
-            check_receive_selection(&lookup, prepared.capsule_digest())?;
+            self.check_transfer_selection(
+                slot,
+                IndexRoot(current.transfer_actions),
+                prepared,
+                &lookup,
+            )?;
         }
-        let (_, current) = self.custody_checkpoint(slot, wallet)?;
         let previous = self.provider.with_archive(slot, |archive| {
             IndexRoot(current.transfer_actions)
                 .get(&mut Objects(archive), &action)
@@ -317,13 +388,32 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         slot: &Slot,
         prepared: &native::PreparedOperation,
     ) -> Result<(), ProviderError> {
-        let Status::Released(marker) = self.provider.status(slot)? else {
-            return Ok(());
+        let capsule = prepared.capsule();
+        let marker = match self.provider.status(slot)? {
+            Status::Released(marker) => marker,
+            Status::Pending(marker)
+                if marker.head().is_some_and(|(seq, _, current)| {
+                    seq.checked_add(1) == Some(capsule.sequence())
+                        && current == *capsule.predecessor_capsule_digest()
+                }) =>
+            {
+                // The provider can finish this incumbent during Advance. Seal its actual
+                // release before allowing the supplied child to replace its head.
+                let _window = self.debit_window(slot, None)?;
+                let engine = self.current_reconciliation_engine(slot)?;
+                let owner = TransitionOwner::new(&engine, &self.parameters);
+                let Status::Released(released) = self.provider.reconcile(slot, &owner)? else {
+                    return Err(ProviderError::Unavailable(
+                        KagemushaWalletUnavailableV1::Busy,
+                    ));
+                };
+                released
+            }
+            _ => return Ok(()),
         };
-        let Some((sequence, _, current)) = marker.head() else {
+        let Some((sequence, operation, current)) = marker.head() else {
             return Err(lost("wallet transfer lineage marker"));
         };
-        let capsule = prepared.capsule();
         if sequence.checked_add(1) != Some(capsule.sequence())
             || &current != capsule.predecessor_capsule_digest()
         {
@@ -331,6 +421,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         }
         let wallet = self.authorized_wallet_id(slot)?;
         let (expected, mut checkpoint) = self.custody_checkpoint(slot, wallet)?;
+        if capsule.kind() == 5 {
+            let lookup = self.provider.lookup(slot, capsule.operation_id())?;
+            self.check_transfer_selection(
+                slot,
+                IndexRoot(checkpoint.transfer_actions),
+                prepared,
+                &lookup,
+            )?;
+        }
         let known = prepared.transfer_replay_key().map_err(provider_error)?;
         let reverse = capsule_action_key(prepared.capsule_digest());
         let bound: Option<[u8; 32]> = self.provider.with_archive(slot, |archive| {
@@ -355,7 +454,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                         .map_err(storage_error)
                 })?
                 .ok_or_else(|| bad("missing fresh transfer action reservation"))?;
-            let stored = digest(&capsule.encode().map_err(provider_error)?);
+            let encoded = zeroize::Zeroizing::new(capsule.encode().map_err(provider_error)?);
+            let stored = digest(&encoded);
             if actual.len() != RECORD || actual[1..33] != stored {
                 return Err(bad("superseded transfer review"));
             }
@@ -370,20 +470,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         if *predecessor_capsule_digest == [0; 32] {
             return Ok(());
         }
-        let key = selected_child_key(predecessor_capsule_digest);
         let existing = IndexRoot(checkpoint.transfer_actions);
         let next = self.provider.with_archive(slot, |archive| {
             let mut store = Objects(archive);
-            if let Some(value) = existing.get(&mut store, &key).map_err(storage_error)? {
-                if value != current {
-                    return Err(lost("conflicting selected child"));
-                }
-                return Ok(existing.0);
-            }
-            Ok(existing
-                .set(&mut store, key, &current)
-                .map_err(storage_error)?
-                .0)
+            let children = remember_selection(
+                &mut store,
+                existing,
+                selected_child_key(predecessor_capsule_digest),
+                &current,
+            )?;
+            Ok(remember_selection(
+                &mut store,
+                children,
+                selected_operation_key(&operation),
+                &current,
+            )?
+            .0)
         })?;
         if next != checkpoint.transfer_actions {
             checkpoint.transfer_actions = next;
@@ -508,6 +610,30 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
 mod tests {
     use super::*;
     use crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1;
+
+    #[test]
+    fn archive_replanning_requires_absence_in_custody_and_the_operation_index() {
+        let capsule = [3; 32];
+        let other = [4; 32];
+        let pending = Lookup::SelectedUnsigned {
+            capsule_digest: capsule,
+        };
+        let tombstone = Lookup::Archived(Box::new(KagemushaWalletTombstoneV1 {
+            version: 1,
+            operation_id: [7; 32],
+            kind: 5,
+            selected_generation: 2,
+            capsule_digest: capsule,
+            completion_digest: [8; 32],
+        }));
+        assert!(check_archive_selection(&Lookup::Unknown, &capsule, None).is_ok());
+        assert!(check_archive_selection(&Lookup::Unknown, &capsule, Some(&capsule)).is_err());
+        assert!(check_archive_selection(&pending, &capsule, Some(&capsule)).is_ok());
+        assert!(check_archive_selection(&pending, &other, None).is_err());
+        assert!(check_archive_selection(&pending, &capsule, Some(&other)).is_err());
+        assert!(check_archive_selection(&tombstone, &capsule, Some(&capsule)).is_err());
+        assert!(check_archive_selection(&Lookup::DeliveryDataLoss, &capsule, None).is_err());
+    }
 
     #[test]
     fn another_payment_with_same_credit_is_a_permanent_refusal_even_after_archival() {

@@ -1343,36 +1343,44 @@ fn linked_phase1_rows<C: PastaCurve>(
     (rows, d)
 }
 
-/// The first linked proof's first phase, committed once and owned until its
-/// proof is made ([`prepare_linked_phase1_retained`]).
+/// A caller can lend a witness for repeated proofs or hand over its wiping
+/// guard when the opening is the last consumer of the private rows.
+pub(crate) enum ProverWitness<'a, S: Scalar + zeroize::Zeroize> {
+    Borrowed(&'a Witness<S>, &'a [r1cs::RowFill]),
+    Owned(r1cs::WrittenWitness<S>),
+}
+
+impl<S: Scalar + zeroize::Zeroize> ProverWitness<'_, S> {
+    fn parts(&self) -> (&Witness<S>, &[r1cs::RowFill]) {
+        match self {
+            Self::Borrowed(witness, rows) => (witness, rows),
+            Self::Owned(witness) => (witness, witness.rows()),
+        }
+    }
+
+    fn owned_bytes(&self) -> usize {
+        match self {
+            Self::Borrowed(..) => 0,
+            Self::Owned(witness) => witness.allocation_bytes(),
+        }
+    }
+}
+
+/// Commitments and transcript state for a single first linked proof. The
+/// generators, instance, and circuit remain borrowed. The witness and its
+/// public row layout stay coupled to the commitments, either borrowed or
+/// owned. [`LinkedPhase1::prove_first`] consumes the preparation.
 ///
-/// It borrows the generators, instance, witness, row account and circuit it
-/// was prepared over, and keeps its own copy of the entropy stream as the
-/// caller's stood before the preparation drew from it.
-/// [`LinkedPhase1::prove_first`] consumes it and proves over exactly those
-/// borrows and that stream. No argument of either call can pair the retained
-/// commitments with other masks, blinds, rows or generators, and they serve
-/// at most one proof. Only the preparation constructs this value.
-///
-/// Held between the two calls: the first-phase row commitments and the digest
-/// d, which are public, and the stream's reader, which is private and wiped
-/// when this value is consumed, dropped or unwound. The prover's copies of the
-/// mask rows and the row blinds are not held: the preparation wipes them as
-/// [`prepare_linked_phase1_built`] does, and the proof regenerates them from
-/// the stream, in the same order and before any later draw.
-///
-/// Memory: [`LinkedPhase1::retained_bytes`] is one point per first-phase row
-/// and the reader, never a witness row. A caller allocates it before its next
-/// stage's availability query, which therefore already charges it, as it does
-/// the caller's witness and retained circuit. The proof's own workspace is
-/// unchanged, less the first phase's commitment scratch.
+/// The saved entropy reader replays the same masks and row blinds as the
+/// original preparation and is wiped on drop or unwind. The preparation wipes
+/// its temporary masked rows and blinds before returning. An owned witness
+/// retains its original wiping guard until the opening has consumed its rows.
 #[must_use = "a retained first phase is only useful to the proof it prepares"]
 pub struct LinkedPhase1<'a, C: PastaCurve> {
     shape: Shape,
     gens: &'a Gens<C>,
     inst: &'a Instance<F<C>>,
-    wit: &'a Witness<F<C>>,
-    fill: &'a [r1cs::RowFill],
+    witness: ProverWitness<'a, F<C>>,
     circuit: &'a dyn Circuit<F<C>>,
     /// The entropy stream at the position the preparation started from. Boxed:
     /// it stays at one address from the preparation to its wipe, and moving
@@ -1397,15 +1405,28 @@ pub fn prepare_linked_phase1_retained<'a, C: PastaCurve>(
     rng: &mut SpikeRng,
     circuit: &'a dyn Circuit<F<C>>,
 ) -> LinkedPhase1<'a, C> {
-    // The stream as the proof replays it, taken before anything is drawn.
+    retain_linked_witness(
+        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, circuit,
+    )
+}
+
+pub(crate) fn retain_linked_witness<'a, C: PastaCurve>(
+    shape: &Shape,
+    gens: &'a Gens<C>,
+    inst: &'a Instance<F<C>>,
+    witness: ProverWitness<'a, F<C>>,
+    rng: &mut SpikeRng,
+    circuit: &'a dyn Circuit<F<C>>,
+) -> LinkedPhase1<'a, C> {
+    // The proof replays the stream from its position before the commitments.
     let replay = Box::new(rng.clone());
+    let (wit, fill) = witness.parts();
     let (rows, d) = linked_phase1_rows(shape, gens, inst, wit, fill, rng, circuit);
     LinkedPhase1 {
         shape: *shape,
         gens,
         inst,
-        wit,
-        fill,
+        witness,
         circuit,
         replay,
         rows,
@@ -1421,11 +1442,12 @@ impl<C: PastaCurve> LinkedPhase1<'_, C> {
     }
 
     /// Bytes held from the preparation to the proof: this value, its stream
-    /// reader and its row commitments' storage.
+    /// reader, its commitments, and any witness storage the caller handed over.
     pub fn retained_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + std::mem::size_of::<SpikeRng>()
             + self.rows.capacity() * std::mem::size_of::<Aff<C>>()
+            + self.witness.owned_bytes()
     }
 
     /// The first linked proof, given the second proof's `rho` and `R`: byte
@@ -1447,8 +1469,7 @@ impl<C: PastaCurve> LinkedPhase1<'_, C> {
             &self.shape,
             self.gens,
             self.inst,
-            self.wit,
-            Some(self.fill),
+            self.witness,
             &mut self.replay,
             Cheat::Honest,
             true,
@@ -1477,14 +1498,15 @@ fn prove_inner<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
+    let rows = vec![r1cs::RowFill::Values; shape.rows()];
     prove_rows(
-        shape, gens, inst, wit, None, rng, cheat, separated, claims, link, circuit, fixed, None,
+        shape, gens, inst, ProverWitness::Borrowed(wit, &rows), rng, cheat, separated, claims,
+        link, circuit, fixed, None,
     )
 }
 
-/// [`prove_inner`] of a witness in which `fill` (when given) names the rows
-/// its build never wrote: the prover never reads those rows. Without it every
-/// row is read, so a witness changed after its build is proved as it is.
+/// Prove over the supplied witness and row layout. A caller with an
+/// unrestricted witness supplies [`r1cs::RowFill::Values`] for each row.
 ///
 /// `phase1` (only [`LinkedPhase1::prove_first`] gives it) holds this proof's
 /// own first-phase row commitments, made by its preparation over this
@@ -1496,8 +1518,7 @@ fn prove_rows<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     inst: &Instance<F<C>>,
-    wit: &Witness<F<C>>,
-    fill: Option<&[r1cs::RowFill]>,
+    witness: ProverWitness<'_, F<C>>,
     rng: &mut SpikeRng,
     cheat: Cheat,
     separated: bool,
@@ -1508,10 +1529,7 @@ fn prove_rows<C: PastaCurve>(
     phase1: Option<Vec<Aff<C>>>,
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     shape.check();
-    let fill: Vec<r1cs::RowFill> = match fill {
-        Some(fill) => fill.to_vec(),
-        None => vec![r1cs::RowFill::Values; shape.rows()],
-    };
+    let (wit, fill) = witness.parts();
     if crate::prof::memory_enabled() {
         // The witness rows by the build's public account only; no private
         // value is read or counted.
@@ -1553,7 +1571,7 @@ fn prove_rows<C: PastaCurve>(
             .all(|(r, f)| *f != r1cs::RowFill::Unit || r >= rows_c),
         "only fixed rows are padding rows"
     );
-    let mut zw = crate::kern::Rows::with_fill(&wit.w, cols, &fill);
+    let mut zw = crate::kern::Rows::with_fill(&wit.w, cols, fill);
     crate::prof::time("c.masks", || circuit.randomize_masks_rows(&mut zw, rng));
     mark("z");
 
@@ -1772,19 +1790,17 @@ fn prove_rows<C: PastaCurve>(
 
     // Inner sumcheck over z, committed rounds.
     let clock = Instant::now();
-    // M(r_x, .) and z enter the first round split: dense witness halves and
-    // public halves kept only up to their last nonzero entry. z's dense half
-    // is the masked witness the opening reads.
-    let mut m_first = Some(crate::prof::time("i.mtable", || {
-        rel.m_table_split_at(shape, &rx.concat(), rabc[0], rabc[1], rabc[2])
-    }));
-    // The opening uses the folded matrix value from here on.
-    drop(rel);
-    mark("mtable");
+    let rx_all = rx.concat();
+    let mut rel = Some(rel);
     let (mut m, mut z): (Vec<F<C>>, Vec<F<C>>) = (Vec::new(), Vec::new());
     if old_kernels {
-        m = m_first.take().expect("first M table").to_full();
+        let rel = rel.take().expect("the relation");
+        m = crate::prof::time("i.mtable", || {
+            rel.m_table_split_at(shape, &rx_all, rabc[0], rabc[1], rabc[2])
+        })
+        .to_full();
         z = (0..2 * half).map(|i| zv.get(i)).collect();
+        mark("mtable");
     }
     // After a fold: which runs of the folded z may hold anything, by its
     // public layout (rows the build never wrote, the public half beyond the
@@ -1796,50 +1812,63 @@ fn prove_rows<C: PastaCurve>(
     for (i, &k) in shape.inner_blocks().iter().enumerate() {
         let extender = Extender::new(k);
         let basis = crate::kern::Basis::new(k);
-        let (values, support) = if old_kernels {
+        // Commits a round's values and draws its challenges.
+        let mut round = |values: &[F<C>]| -> Vec<F<C>> {
+            let blind: F<C> = rng.scalar();
+            let commitment = crate::prof::time("i.commit", || {
+                commit_values(gens, inner_off[i], values, blind).to_affine()
+            });
+            t.point(b"inner", &commitment);
+            let r: Vec<F<C>> = inner_challenges(&mut t, shape, start, k);
+            inner.push(commitment);
+            tail_values.push(values.to_vec());
+            round_blinds.push(blind);
+            ry.push(r.clone());
+            r
+        };
+        let support = if old_kernels {
             let values =
                 crate::prof::time("i.round", || round_values(&extender, &m, &z, None, None));
-            (values, None)
-        } else if let Some(m_split) = &m_first {
-            inner_values(&basis, k, m_split, &zv)
+            let r = round(&values);
+            let fold_clock = Instant::now();
+            m = fold_top(&m, &r);
+            z = fold_top(&z, &r);
+            crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
+            None
+        } else if let Some(rel) = rel.take() {
+            // The first round: the relation gives its values over z's dense
+            // (masked witness) and public halves and M(r_x, .) folded by the
+            // round's challenges; the uniform relation never holds M whole.
+            // The opening uses the folded matrix value from here on.
+            let first = rel.m_first_inner(shape, &rx_all, rabc, &basis, &zv, &mut round);
+            mark("mtable");
+            m = first.m;
+            let fold_clock = Instant::now();
+            z = crate::kern::fold_top(&zv, &first.r, first.support.as_ref());
+            crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
+            first.support
         } else {
             let live = z_live.as_ref().expect("the folded witness's live runs");
-            inner_values(
+            let (values, support) = inner_values(
                 &basis,
                 k,
                 &crate::kern::Public(&m),
                 &crate::kern::Masked::new(&z, live),
-            )
-        };
-        let blind: F<C> = rng.scalar();
-        let commitment = crate::prof::time("i.commit", || {
-            commit_values(gens, inner_off[i], &values, blind).to_affine()
-        });
-        t.point(b"inner", &commitment);
-        let r: Vec<F<C>> = inner_challenges(&mut t, shape, start, k);
-        start += k;
-        let fold_clock = Instant::now();
-        if old_kernels {
-            m = fold_top(&m, &r);
-            z = fold_top(&z, &r);
-        } else if let Some(m_split) = m_first.take() {
-            m = m_split.into_folded(&r, support.as_ref());
-            z = crate::kern::fold_top(&zv, &r, support.as_ref());
-        } else {
+            );
+            let r = round(&values);
+            let fold_clock = Instant::now();
             m = crate::kern::fold_top(&m, &r, support.as_ref());
             z = crate::kern::fold_top(&z, &r, support.as_ref());
-        }
+            crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
+            support
+        };
         if !old_kernels {
             z_live = Some(support.as_ref().map_or_else(
                 || crate::kern::Live::dense(z.len()),
                 crate::kern::Support::folded_live,
             ));
         }
-        crate::prof::add("i.fold", fold_clock.elapsed().as_secs_f64());
-        inner.push(commitment);
-        tail_values.push(values);
-        round_blinds.push(blind);
-        ry.push(r);
+        start += k;
     }
     let alpha: F<C> = t.challenge(b"alpha");
     let gamma: F<C> = gamma_challenge(&mut t, separated);
@@ -1886,6 +1915,9 @@ fn prove_rows<C: PastaCurve>(
     let owned_rows = zw.owned();
     zw.zeroize_owned();
     drop(zw);
+    // x now contains the last contribution of the private witness.
+    // Consuming the guard wipes its written rows before IPA creates its scratch.
+    drop(witness);
     x[0] += unit;
     crate::prof::add("p.xrow", x_clock.elapsed().as_secs_f64());
     for ((offset, values), power) in outer_off
@@ -2049,13 +2081,26 @@ pub fn prove_linked_built<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, [u8; 32], [u8; 32]) {
+    prove_linked_witness(
+        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, link, circuit,
+    )
+}
+
+pub(crate) fn prove_linked_witness<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    witness: ProverWitness<'_, F<C>>,
+    rng: &mut SpikeRng,
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+) -> (Proof<C>, [u8; 32], [u8; 32]) {
     let fixed = fixed_for(shape, gens, circuit, &inst.io);
     let (proof, _, out) = prove_rows(
         shape,
         gens,
         inst,
-        wit,
-        Some(fill),
+        witness,
         rng,
         Cheat::Honest,
         true,
@@ -2747,7 +2792,11 @@ mod retained_phase1_tests {
     /// A witness's rows as their content shows them: all zero, or (in the
     /// fixed tail) a padding row's single 1 in column 0. A prover told so
     /// never reads those rows.
-    fn content_fill<S: Scalar>(shape: &Shape, fixed_rows: usize, w: &[S]) -> Vec<r1cs::RowFill> {
+    pub(super) fn content_fill<S: Scalar>(
+        shape: &Shape,
+        fixed_rows: usize,
+        w: &[S],
+    ) -> Vec<r1cs::RowFill> {
         let first_fixed = shape.rows() - fixed_rows;
         w.chunks(shape.cols())
             .enumerate()
@@ -2803,7 +2852,7 @@ mod retained_phase1_tests {
 
         // The second proof's rho and R, as the first proof is given them.
         let fallback = |_: &[u8; 32]| panic!("the actual link circuit supplies R");
-        let (_, rho, r) = prove_linked_circuit(
+        let (secondary, rho, r) = prove_linked_circuit(
             &shape,
             &gens,
             &inst,
@@ -2812,6 +2861,19 @@ mod retained_phase1_tests {
             &Link::Second { d, rlc: &fallback },
             &c,
         );
+        let owned = || {
+            ProverWitness::Owned(r1cs::WrittenWitness::new(
+                Witness { w: original.clone() },
+                fill.clone(),
+            ))
+        };
+        let (owned_secondary, owned_rho, owned_r) = prove_linked_witness(
+            &shape, &gens, &inst, owned(),
+            &mut SpikeRng::new(b"retained first phase, secondary"),
+            &Link::Second { d, rlc: &fallback }, &c,
+        );
+        assert_eq!(owned_secondary.to_bytes(), secondary.to_bytes());
+        assert_eq!((owned_rho, owned_r), (rho, r));
         let link = Link::First { rho, r };
 
         // Two passes over the first-phase rows, then one.
@@ -2828,6 +2890,14 @@ mod retained_phase1_tests {
         let (proof, actual_d, actual_r) = retained.prove_first(rho, r);
         let bytes = proof.to_bytes();
         assert_eq!(bytes, reference.to_bytes(), "byte-identical proof");
+        let first = retain_linked_witness(
+            &shape, &gens, &inst, owned(), &mut SpikeRng::new(seed), &c,
+        );
+        assert_eq!(first.digest(), d);
+        assert!(first.retained_bytes() >= original.len() * std::mem::size_of::<F<C>>());
+        let (owned_first, owned_d, owned_r) = first.prove_first(rho, r);
+        assert_eq!(owned_first.to_bytes(), bytes, "consuming the witness preserves the opening");
+        assert_eq!((owned_d, owned_r), (actual_d, actual_r));
         assert_eq!((actual_d, actual_r), (reference_d, reference_r));
         assert_eq!((actual_d, actual_r), (d, r), "the prepared digest and R");
         assert_eq!(wit.w, original, "the proof leaves the witness");
@@ -2857,5 +2927,233 @@ mod retained_phase1_tests {
             check::<iroha_pasta::Ep>(account);
             check::<iroha_pasta::Eq>(account);
         }
+    }
+}
+
+#[cfg(test)]
+mod streamed_first_inner_tests {
+    use super::*;
+    use crate::uniform::{UniformCircuit, rp57};
+
+    /// A relation taking the default first inner round (the whole split
+    /// table), everything else its own.
+    struct DenseFirst<'a, S: Scalar>(Box<dyn Rel<S> + 'a>);
+
+    impl<S: Scalar> Rel<S> for DenseFirst<'_, S> {
+        fn abc(&self, shape: &Shape, z: &[S]) -> (Vec<S>, Vec<S>, Vec<S>) {
+            self.0.abc(shape, z)
+        }
+        fn outer_done(&mut self) {
+            self.0.outer_done()
+        }
+        fn m_table(&self, shape: &Shape, ex: &[S], ra: S, rb: S, rc: S) -> Vec<S> {
+            self.0.m_table(shape, ex, ra, rb, rc)
+        }
+        fn m_table_split(
+            &self,
+            shape: &Shape,
+            ex: &[S],
+            ra: S,
+            rb: S,
+            rc: S,
+        ) -> crate::kern::Split<S> {
+            self.0.m_table_split(shape, ex, ra, rb, rc)
+        }
+        fn m_table_split_at(
+            &self,
+            shape: &Shape,
+            rx: &[S],
+            ra: S,
+            rb: S,
+            rc: S,
+        ) -> crate::kern::Split<S> {
+            self.0.m_table_split_at(shape, rx, ra, rb, rc)
+        }
+        fn matrix_evals(&self, shape: &Shape, rx: &[S], ry: &[S]) -> (S, S, S) {
+            self.0.matrix_evals(shape, rx, ry)
+        }
+        fn nnz(&self) -> [usize; 3] {
+            self.0.nnz()
+        }
+        fn abc_ranges(
+            &self,
+            shape: &Shape,
+            z: &crate::kern::ZView<'_, '_, S>,
+            ranges: &[std::ops::Range<usize>],
+            mats: [bool; 3],
+            out: &mut [Vec<S>; 3],
+        ) -> bool {
+            self.0.abc_ranges(shape, z, ranges, mats, out)
+        }
+        fn abc_rows(
+            &self,
+            shape: &Shape,
+            z: &crate::kern::ZView<'_, '_, S>,
+        ) -> (Vec<S>, Vec<S>, Vec<S>) {
+            self.0.abc_rows(shape, z)
+        }
+    }
+
+    /// A circuit whose relations take the default first inner round.
+    struct Dense<'c, S: Scalar>(&'c dyn Circuit<S>);
+
+    impl<S: Scalar> Circuit<S> for Dense<'_, S> {
+        fn randomize_masks(&self, w: &mut [S], rng: &mut SpikeRng) {
+            self.0.randomize_masks(w, rng)
+        }
+        fn phase1_rows(&self, shape: &Shape) -> usize {
+            self.0.phase1_rows(shape)
+        }
+        fn phase2_challenges(&self) -> usize {
+            self.0.phase2_challenges()
+        }
+        fn instantiate<'a>(
+            &'a self,
+            shape: &Shape,
+            ch: &[S],
+            w: Option<&mut [S]>,
+        ) -> Box<dyn Rel<S> + 'a> {
+            Box::new(DenseFirst(self.0.instantiate(shape, ch, w)))
+        }
+        fn row_bounds(&self, shape: &Shape) -> Option<Vec<usize>> {
+            self.0.row_bounds(shape)
+        }
+        fn fixed_rows(&self, shape: &Shape) -> usize {
+            self.0.fixed_rows(shape)
+        }
+        fn fixed_values(&self, shape: &Shape) -> Vec<S> {
+            self.0.fixed_values(shape)
+        }
+        fn fixed_row(&self, shape: &Shape, k: usize) -> Vec<S> {
+            self.0.fixed_row(shape, k)
+        }
+        fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<S> {
+            self.0.fixed_commitment_prefix(shape, k)
+        }
+        fn wallet_rows(&self) -> usize {
+            self.0.wallet_rows()
+        }
+        fn wallet_io(&self) -> Option<usize> {
+            self.0.wallet_io()
+        }
+        fn late_slots(&self) -> Vec<usize> {
+            self.0.late_slots()
+        }
+        fn late_values(&self, w: &[S]) -> Vec<S> {
+            self.0.late_values(w)
+        }
+        fn link_rows(&self, shape: &Shape) -> usize {
+            self.0.link_rows(shape)
+        }
+        fn link_io(&self, rho: &[u8; 32], r: &[u8; 32]) -> Vec<(usize, S)> {
+            self.0.link_io(rho, r)
+        }
+        fn fill_link(&self, rho: &[u8; 32], w: &mut [S]) {
+            self.0.fill_link(rho, w)
+        }
+        fn binding_r(&self, w: &[S]) -> Option<[u8; 32]> {
+            self.0.binding_r(w)
+        }
+        fn memory_note(&self) -> String {
+            self.0.memory_note()
+        }
+        fn randomize_masks_rows(&self, w: &mut crate::kern::Rows<'_, S>, rng: &mut SpikeRng) {
+            self.0.randomize_masks_rows(w, rng)
+        }
+        fn fill_link_rows(&self, rho: &[u8; 32], w: &mut crate::kern::Rows<'_, S>) {
+            self.0.fill_link_rows(rho, w)
+        }
+        fn instantiate_rows<'a>(
+            &'a self,
+            shape: &Shape,
+            ch: &[S],
+            w: &mut crate::kern::Rows<'_, S>,
+        ) -> Box<dyn Rel<S> + 'a> {
+            Box::new(DenseFirst(self.0.instantiate_rows(shape, ch, w)))
+        }
+        fn late_values_rows(&self, w: &crate::kern::Rows<'_, S>) -> Vec<S> {
+            self.0.late_values_rows(w)
+        }
+        fn binding_r_rows(&self, w: &crate::kern::Rows<'_, S>) -> Option<[u8; 32]> {
+            self.0.binding_r_rows(w)
+        }
+    }
+
+    /// Ordinary calls of the signed uniform prover: the streamed first inner
+    /// round (two passes over the matrix plans) against the whole split table
+    /// on the same circuit, witness, link and entropy. Every later draw and
+    /// challenge enters the bytes, so equal bytes show the same transcript.
+    /// The phased fixture (product masks, link phase, lookups, fixed tail;
+    /// its first round below a support) is proved with and without the
+    /// witness's row account (never-written and padding rows); the rp57
+    /// circuit's first round has a support over 2^11-column rows.
+    fn check<C: PastaCurve>() {
+        let (c, inst, wit) = phase1_tests::phased_fixture::<F<C>>(15);
+        let shape = c.shape;
+        let gens = Gens::<C>::new(shape.cols());
+        let dense = Dense(&c);
+        let fallback = |_: &[u8; 32]| panic!("the actual link circuit supplies R");
+        for account in [false, true] {
+            let fill = if account {
+                super::retained_phase1_tests::content_fill(&shape, c.fixed_rows(&shape), &wit.w)
+            } else {
+                vec![r1cs::RowFill::Values; shape.rows()]
+            };
+            let seed: &[u8] = b"streamed first inner";
+            let mut rng = SpikeRng::new(seed);
+            let d = prepare_linked_phase1_built(&shape, &gens, &inst, &wit, &fill, &mut rng, &c);
+            let (_, rho, r) = prove_linked_circuit(
+                &shape,
+                &gens,
+                &inst,
+                &wit,
+                &mut SpikeRng::new(b"streamed first inner, secondary"),
+                &Link::Second { d, rlc: &fallback },
+                &c,
+            );
+            let link = Link::First { rho, r };
+            let prove = |circuit: &dyn Circuit<F<C>>| {
+                let mut rng = SpikeRng::new(seed);
+                prove_linked_built(&shape, &gens, &inst, &wit, &fill, &mut rng, &link, circuit)
+            };
+            let (streamed, sd, sr) = prove(&c);
+            let (split, dd, dr) = prove(&dense);
+            let bytes = streamed.to_bytes();
+            assert_eq!(bytes, split.to_bytes(), "byte-identical linked proof (account {account})");
+            assert_eq!((sd, sr), (dd, dr));
+            assert_eq!(verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(), d);
+        }
+
+        let (arrays, pi, _) = rp57::<F<C>>(2, b"streamed first inner circuit");
+        let counts = pi.iter().map(|p| 1 << p).collect();
+        let (c, inst, wit) = UniformCircuit::build(
+            "streamed first inner",
+            arrays,
+            pi,
+            counts,
+            Vec::new(),
+            11,
+            4,
+            b"streamed first inner witness",
+        );
+        let shape = c.shape;
+        assert!(
+            (2usize << shape.sw()) >> shape.inner_blocks()[0] >= crate::kern::SEGMENT,
+            "a first round with a support"
+        );
+        let gens = Gens::<C>::new(shape.cols());
+        let prove = |circuit: &dyn Circuit<F<C>>| {
+            let mut rng = SpikeRng::new(b"streamed rp57");
+            prove_circuit(&shape, &gens, &inst, &wit, &mut rng, circuit).0
+        };
+        let bytes = prove(&c).to_bytes();
+        assert_eq!(bytes, prove(&Dense(&c)).to_bytes(), "byte-identical proof with a support");
+        verify_circuit(&shape, &gens, &inst, &bytes, &c).unwrap();
+    }
+
+    #[test]
+    fn streamed_first_inner_round_proves_the_split_table_bytes_on_both_curves() {
+        check::<iroha_pasta::Ep>();
+        check::<iroha_pasta::Eq>();
     }
 }
