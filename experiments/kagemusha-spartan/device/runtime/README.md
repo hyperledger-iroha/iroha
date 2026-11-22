@@ -137,3 +137,14 @@ Select `--resource measurements` or `--resource events` to retain the
 Native measurement JSON or event stream after each launch. The reader checks
 the reported manifest and paths against the APK and the retained report
 against its `spartanReportSha256` from that launch. Measurement retrieval also checks the SHA-256 printed by that launch.
+
+
+### ArchiveSent on the governed five-family fixture
+
+Preserve the first three launch reports for Send, Receive and cold recovery.
+Launch the same build against the same private installation a fourth time.
+It verifies the genuine CreditStatus, refuses a changed status, and archives
+the delivered Send through the public wallet API. A fifth cold launch retries
+the same operation. Its completion bytes, balance and sequence must match the
+fourth launch. The reports name the ArchiveSent phases `execute` and
+`exact_retry`. Both operations use the holder’s existing hardware wallet.

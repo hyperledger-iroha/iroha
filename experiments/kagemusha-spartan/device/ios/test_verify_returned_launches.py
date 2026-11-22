@@ -88,6 +88,21 @@ class ReturnedLaunchTests(unittest.TestCase):
         self.assertEqual((result["scheme"], result["fixture_namespace"], result["build_executable_sha256"]),
                          ("retained-manifest-only", manifest, self.build))
 
+    def test_verified_archive_and_exact_retry_must_follow_payment_history(self):
+        for index, phase in enumerate(("execute", "exact_retry"), start=3):
+            directory = self.launches[0].parent / str(index)
+            directory.mkdir()
+            self.launches.append(directory)
+            self.reports.append(dict(self.reports[-1], result=f"PASS: Verified ArchiveSent {phase}, 30147 exact completion bytes, sequence 4."))
+            self.metrics.append(dict(self.metrics[-1], events=[{"operation": "ArchiveSent", "phase": p, "returned_ok": True}
+                                                               for p in ("prepare", phase)]))
+        self.write_copies()
+        self.assertEqual([entry["phase"] for entry in verify(self.app, self.launches)["archive"]], ["execute", "exact_retry"])
+        self.metrics[-1]["events"][1]["phase"] = "execute"
+        self.write_copies()
+        with self.assertRaisesRegex(ValueError, "execution on cold retry"):
+            verify(self.app, self.launches)
+
     def test_retained_app_refuses_build_scoped_reports(self):
         self.build_scoped()
         executable(self.app / "Fixture", marker=False)

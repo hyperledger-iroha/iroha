@@ -136,9 +136,43 @@ def check_retained_funding(history, bundle, retained):
         raise ValueError("missing evidence for retained first-stage operations")
 
 
+def archive_launches(namespace, folders, previous_history):
+    accepted = []
+    for folder, phase in zip(folders, ("execute", "exact_retry"), strict=True):
+        report = json.loads((folder / "result.json").read_bytes())
+        if any(report.get(key) != value for key, value in namespace["report"].items()):
+            raise ValueError("ArchiveSent report differs from the selected build")
+        summary, _, line = report["result"].partition("\n")
+        match = re.fullmatch(rf"PASS: Verified ArchiveSent {phase}, ([1-9][0-9]*) exact completion bytes, sequence 4\.", summary)
+        if match is None:
+            raise ValueError("missing successful ArchiveSent result for the expected phase")
+        metrics = json.loads(line)
+        prior, history = history_digests(folder / "device-measurements.jsonl", line)
+        if prior != previous_history:
+            raise ValueError("ArchiveSent history does not continue the preceding launch")
+        previous_history = history
+        if (metrics["schema"] != "kagemusha.experimental.device-observations.v2"
+                or metrics["succeeded"] is not True
+                or metrics["program_bundle_sha256"] != namespace["program_bundle_sha256"]):
+            raise ValueError("ArchiveSent measurement differs from the signed fixture")
+        events = metrics["events"]
+        if ([(e["operation"], e["phase"]) for e in events] != [("ArchiveSent", "prepare"), ("ArchiveSent", phase)]
+                or any(e["returned_ok"] is not True for e in events)):
+            raise ValueError("unexpected ArchiveSent action or execution on cold retry")
+        accepted.append({"phase": phase, "completion_bytes": int(match[1]), "sequence": 4,
+                         "history_sha256": history, "measurement_sha256": hashlib.sha256(line.encode()).hexdigest()})
+    if accepted[0]["completion_bytes"] != accepted[1]["completion_bytes"]:
+        raise ValueError("ArchiveSent completion size changed on cold retry")
+    return accepted
+
+
 def verify(app, launches):
     namespace = fixture_namespace(app)
     manifest, bundle = namespace["manifest_sha256"], namespace["program_bundle_sha256"]
+    if len(launches) == 5:
+        result = verify(app, launches[:3])
+        result["archive"] = archive_launches(namespace, launches[3:], result["launches"][-1]["history_sha256"])
+        return result
     if len(launches) != 3:
         raise ValueError("expected the Send, Receive and restart launches in order")
     prior_history = None
@@ -224,8 +258,8 @@ def main():
                         help="print the app's namespace and data-container paths instead")
     parser.add_argument("launch", nargs="*", type=Path, metavar="DIRECTORY")
     args = parser.parse_args()
-    if args.describe != (not args.launch) or (args.launch and len(args.launch) != 3):
-        parser.error("give --describe, or the three launch directories")
+    if args.describe != (not args.launch) or (args.launch and len(args.launch) not in (3, 5)):
+        parser.error("give --describe, or three payment launches optionally followed by both ArchiveSent launches")
     try:
         print(json.dumps(fixture_namespace(args.app) if args.describe else verify(args.app, args.launch), indent=2))
     except (KeyError, OSError, TypeError, ValueError) as error:
