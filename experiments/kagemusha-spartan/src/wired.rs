@@ -654,7 +654,7 @@ pub fn scalar_wired(
             .collect();
         let mut row: Lin<Fp> = vec![Term {
             src: Src::Own(cell),
-            coef: mask,
+            coef: mask.into(),
         }];
         for kind in 0..3 {
             let mut src = None;

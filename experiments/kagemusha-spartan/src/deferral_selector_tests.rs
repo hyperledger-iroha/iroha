@@ -277,7 +277,7 @@ fn slot_fold(
     let row = plus(
         &vec![crate::uniform::Term {
             src: crate::uniform::Src::Own(C_P[1]),
-            coef: on,
+            coef: on.into(),
         }],
         &link(
             io,

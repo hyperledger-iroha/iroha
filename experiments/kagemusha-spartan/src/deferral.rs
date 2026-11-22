@@ -673,7 +673,7 @@ pub fn fold_arrays<F: Scalar>(
                         array: qa,
                         cell: Q_C,
                     },
-                    coef: vec![-one],
+                    coef: vec![-one].into(),
                 }],
             ),
             1,
@@ -698,7 +698,7 @@ pub fn fold_arrays<F: Scalar>(
     let l = lagrange4::<F>();
     let term = |src: Src, c: F, len: usize| Term {
         src,
-        coef: vec![c; len],
+        coef: vec![c; len].into(),
     };
     let mut g_a: Vec<(Term<F>, Factor)> = Vec::new();
     for (i, li) in l.iter().enumerate() {
@@ -729,7 +729,7 @@ pub fn fold_arrays<F: Scalar>(
                         cell: Q_HT,
                         map: up,
                     },
-                    coef: vec![one; nq],
+                    coef: vec![one; nq].into(),
                 },
                 Factor::NegBeta(1),
             ),
@@ -792,11 +792,11 @@ pub fn fix_coords<F: Scalar>(
     let lin = plus(
         &vec![Term {
             src: Src::Own(C_P[node]),
-            coef: on,
+            coef: on.into(),
         }],
         &vec![Term {
             src: Src::One,
-            coef: val,
+            coef: val.into(),
         }],
     );
     w.arrays[fold.coords].rows.push(row_zero(lin, nc));
@@ -829,7 +829,7 @@ pub fn expose<F: Scalar>(w: &mut Wiring<F>, fam: usize, fold: &FoldArrays, offse
     let row = plus(
         &vec![Term {
             src: Src::Own(C_G),
-            coef: on,
+            coef: on.into(),
         }],
         &link(late, 0, to_late, -one),
     );
@@ -883,7 +883,7 @@ pub fn expose_constant<F: Scalar>(
         .collect();
     let own_on = vec![Term {
         src: Src::Own(0),
-        coef: on,
+        coef: on.into(),
     }];
     let pin = plus(&own_on, &constant(vals.iter().map(|v| -*v).collect()));
     let tie = plus(

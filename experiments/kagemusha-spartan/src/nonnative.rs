@@ -179,7 +179,7 @@ impl Port {
                     cell: first + k,
                     map: map.clone(),
                 },
-                coef: coef.clone(),
+                coef: coef.clone().into(),
             });
         }
         if self.consts[k]
@@ -188,7 +188,7 @@ impl Port {
         {
             out.push(Term {
                 src: USrc::One,
-                coef: self.consts[k].clone(),
+                coef: self.consts[k].clone().into(),
             });
         }
         compact(out)
@@ -1513,7 +1513,7 @@ pub fn comb_with_key_table(
                     cell: k,
                     map,
                 },
-                coef: vec![Fp::from(1u64 << (k % 8)); ns],
+                coef: vec![Fp::from(1u64 << (k % 8)); ns].into(),
             });
         }
         let mut t = vec![plus(
@@ -1544,7 +1544,7 @@ pub fn comb_with_key_table(
                         cell: 16 + l,
                         map: prev.clone(),
                     },
-                    coef: vec![-Fp::from(2u64); nd],
+                    coef: vec![-Fp::from(2u64); nd].into(),
                 }],
             );
             for k in (0..16).filter(|k| acc_limb(*k) == l) {
@@ -1573,7 +1573,7 @@ pub fn comb_with_key_table(
                     cell: k,
                     map,
                 },
-                coef: vec![one; na],
+                coef: vec![one; na].into(),
             }]
         };
         let (nl, pl) = (limbs(&(&nn - 1u32)), limbs(&(&p - 1u32)));
@@ -1589,7 +1589,7 @@ pub fn comb_with_key_table(
                         Fp::from(0u64),
                         Fp::from(0u64),
                         fp_u(&nlimbs[k]),
-                    ],
+                    ].into(),
                 }],
             );
             let c = plus(
@@ -2170,7 +2170,7 @@ pub fn binding_chain_linked(
             plus(
                 &vec![Term {
                     src: USrc::Own(k),
-                    coef: at0.clone(),
+                    coef: at0.clone().into(),
                 }],
                 &link(
                     mu_a,

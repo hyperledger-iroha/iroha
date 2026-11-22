@@ -189,7 +189,7 @@ mod tests {
                         cell: 0,
                         map: vec![Some(4), Some(4), None, Some(31)],
                     },
-                    coef: vec![F::ZERO, -F::ONE, F::from(7), F::from(9)],
+                    coef: vec![F::ZERO, -F::ONE, F::from(7), F::from(9)].into(),
                 }],
                 own(0, 4),
                 constant(vec![F::ZERO; 4]),
@@ -240,18 +240,18 @@ fn bytes<T>(v: &Vec<T>) -> u128 {
 fn nested<T>(v: &Vec<Vec<T>>) -> u128 {
     bytes(v) + v.iter().map(bytes).sum::<u128>()
 }
-fn term_heap<F>(t: &Term<F>) -> u128 {
-    bytes(&t.coef)
+fn term_heap<F>(t: &Term<F>, coefficients: &mut HashSet<*const F>) -> u128 {
+    t.coef.heap_bytes(coefficients)
         + match &t.src {
             Src::Link { map, .. } => bytes(map),
             _ => 0,
         }
 }
-fn lin_heap<F>(v: &Lin<F>) -> u128 {
-    bytes(v) + v.iter().map(term_heap).sum::<u128>()
+fn lin_heap<F>(v: &Lin<F>, coefficients: &mut HashSet<*const F>) -> u128 {
+    bytes(v) + v.iter().map(|t| term_heap(t, coefficients)).sum::<u128>()
 }
-fn tuple_heap<F>(v: &Vec<Lin<F>>) -> u128 {
-    bytes(v) + v.iter().map(lin_heap).sum::<u128>()
+fn tuple_heap<F>(v: &Vec<Lin<F>>, coefficients: &mut HashSet<*const F>) -> u128 {
+    bytes(v) + v.iter().map(|lin| lin_heap(lin, coefficients)).sum::<u128>()
 }
 fn symbolic_heap(rows: &SymbolicRows) -> u128 {
     nested(rows)
@@ -262,16 +262,17 @@ fn cap(x: u128) -> u64 {
 
 impl<F: Scalar> UniformCircuit<F> {
     pub fn proving_memory_accounting(&self) -> ProvingMemoryAccounting {
+        let mut coefficients = HashSet::new();
         let mut retained = size_of::<Self>() as u128 + bytes(&self.arrays);
         for a in &self.arrays {
             retained += bytes(&a.widths) + nested(&a.values) + bytes(&a.rows) + bytes(&a.lookups);
             for r in &a.rows {
                 for lin in r {
-                    retained += lin_heap(lin);
+                    retained += lin_heap(lin, &mut coefficients);
                 }
             }
             for (_, tuple) in &a.lookups {
-                retained += tuple_heap(tuple);
+                retained += tuple_heap(tuple, &mut coefficients);
             }
         }
         retained += bytes(&self.pi)
@@ -300,18 +301,18 @@ impl<F: Scalar> UniformCircuit<F> {
             for lin in row {
                 retained += bytes(lin);
                 for (t, _) in lin {
-                    retained += term_heap(t);
+                    retained += term_heap(t, &mut coefficients);
                 }
             }
         }
         for (_, _, _, tuple) in &self.exports {
-            retained += tuple_heap(tuple);
+            retained += tuple_heap(tuple, &mut coefficients);
         }
         for (_, tuple) in &self.copy_exports {
-            retained += tuple_heap(tuple);
+            retained += tuple_heap(tuple, &mut coefficients);
         }
         for (_, tuple, from) in &self.copy_imports {
-            retained += tuple_heap(tuple) + bytes(from);
+            retained += tuple_heap(tuple, &mut coefficients) + bytes(from);
         }
         if let Some((v, _)) = &self.link_binding {
             retained += bytes(v);
@@ -377,6 +378,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// values, fixed array values, template rows and lookups, and the dense
     /// fixed tail.
     pub fn construction_breakdown(&self) -> [u64; 4] {
+        let mut coefficients = HashSet::new();
         let (mut private, mut fixed, mut templates) = (0u128, 0u128, 0u128);
         for a in &self.arrays {
             let v = nested(&a.values);
@@ -388,11 +390,11 @@ impl<F: Scalar> UniformCircuit<F> {
             templates += bytes(&a.rows) + bytes(&a.lookups);
             for r in &a.rows {
                 for lin in r {
-                    templates += lin_heap(lin);
+                    templates += lin_heap(lin, &mut coefficients);
                 }
             }
             for (_, tuple) in &a.lookups {
-                templates += tuple_heap(tuple);
+                templates += tuple_heap(tuple, &mut coefficients);
             }
         }
         [
@@ -406,6 +408,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Template storage by part (measurement lines): terms, coefficient and
     /// link-map bytes by capacity and by length, and the term vectors'.
     pub fn template_census(&self) -> String {
+        let mut coefficients = HashSet::new();
         let (mut terms, mut coef_cap, mut coef_len, mut map_cap, mut map_len) =
             (0u128, 0u128, 0u128, 0u128, 0u128);
         let (mut lin_cap, mut lin_len, mut ones) = (0u128, 0u128, 0u128);
@@ -415,7 +418,7 @@ impl<F: Scalar> UniformCircuit<F> {
             lin_len += (lin.len() * size_of::<Term<F>>()) as u128;
             for t in lin {
                 terms += 1;
-                coef_cap += bytes(&t.coef);
+                coef_cap += t.coef.heap_bytes(&mut coefficients);
                 coef_len += (t.coef.len() * size_of::<F>()) as u128;
                 if t.coef.iter().all(|c| *c == F::ONE) {
                     ones += 1;

@@ -2573,12 +2573,13 @@ impl Engine for NativeEngine {
             ),
         };
         stage.mark("primary wiring");
-        let (cp, ip, wp, rows_p) = build(
+        let (mut cp, ip, wp, rows_p) = build(
             wp,
             p.programs[k].primary.as_ref(),
             &entropy,
             b"primary witness",
         )?;
+        cp.share_template_coefficients();
         if crate::prof::enabled() {
             println!(
                 "native circuits {} P: {}",

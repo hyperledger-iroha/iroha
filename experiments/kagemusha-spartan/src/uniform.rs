@@ -215,8 +215,12 @@ pub enum Src {
 pub struct Term<F> {
     pub src: Src,
     /// Coefficient per `r` (length `2^rho` of the reading array).
-    pub coef: Vec<F>,
+    pub coef: Coefficients<F>,
 }
+
+#[path = "coefficients.rs"]
+mod coefficients;
+pub use coefficients::Coefficients;
 
 pub type Lin<F> = Vec<Term<F>>;
 
@@ -1083,7 +1087,7 @@ fn copy_layout<F: Scalar>(
                 cell,
                 map: ident(n),
             },
-            coef: vec![F::ONE; n],
+            coef: vec![F::ONE; n].into(),
         }]
     };
     // Addresses of the entries.
@@ -1822,7 +1826,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 assert_eq!(mask.widths[k], 255);
                 let lin = &mask.rows[0][k];
                 assert!(
-                    lin.len() == 1 && lin[0].src == Src::Own(k) && lin[0].coef == vec![F::ONE; n],
+                    lin.len() == 1 && lin[0].src == Src::Own(k) && lin[0].coef[..] == vec![F::ONE; n],
                     "exact private product gate"
                 );
             }
@@ -2061,20 +2065,20 @@ impl<F: Scalar> UniformCircuit<F> {
                             array: a,
                             cell: first + k,
                         },
-                        coef: vec![F::ONE],
+                        coef: vec![F::ONE].into(),
                     });
                 }
             }
             for &(_, _, wa) in &tables {
                 sum.push(Term {
                     src: Src::All { array: wa, cell: 1 },
-                    coef: vec![-F::ONE],
+                    coef: vec![-F::ONE].into(),
                 });
             }
             for wa in export_helpers.drain(..) {
                 sum.push(Term {
                     src: Src::All { array: wa, cell: 1 },
-                    coef: vec![-F::ONE],
+                    coef: vec![-F::ONE].into(),
                 });
             }
             pi.push(0);
@@ -3374,7 +3378,7 @@ impl<F: Scalar> UniformCircuit<F> {
         };
         let ones = |n: usize| Term {
             src: Src::One,
-            coef: vec![F::ONE; n],
+            coef: vec![F::ONE; n].into(),
         };
         let mut rows: Vec<Vec<[Vec<(Term<F>, Factor)>; 3]>> = self
             .arrays
@@ -3406,11 +3410,11 @@ impl<F: Scalar> UniformCircuit<F> {
                             cell: k,
                             map: (0..n).map(Some).collect(),
                         },
-                        coef: vec![F::ONE; n],
+                        coef: vec![F::ONE; n].into(),
                     },
                     (Some(on), None) => Term {
                         src: Src::One,
-                        coef: on.clone(),
+                        coef: on.clone().into(),
                     },
                     (None, None) => ones(n),
                 };
@@ -3430,7 +3434,7 @@ impl<F: Scalar> UniformCircuit<F> {
                             cell: k,
                             map: ident.clone(),
                         },
-                        coef: vec![F::ONE; n],
+                        coef: vec![F::ONE; n].into(),
                     },
                     Factor::NegBeta(k + 1),
                 ));
@@ -3460,7 +3464,7 @@ impl<F: Scalar> UniformCircuit<F> {
         };
         let ones = |n: usize| Term {
             src: Src::One,
-            coef: vec![F::ONE; n],
+            coef: vec![F::ONE; n].into(),
         };
         let tuple_row = |n: usize, tid: u32, tuple: &[Lin<F>]| {
             let mut b = vec![(ones(n), Factor::AlphaMinus(tid as u64 + 1))];
@@ -3487,11 +3491,11 @@ impl<F: Scalar> UniformCircuit<F> {
                             cell: k,
                             map: (0..n).map(Some).collect(),
                         },
-                        coef: vec![F::ONE; n],
+                        coef: vec![F::ONE; n].into(),
                     },
                     (Some(on), None) => Term {
                         src: Src::One,
-                        coef: on.clone(),
+                        coef: on.clone().into(),
                     },
                     (None, None) => ones(n),
                 };
@@ -3514,7 +3518,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                 cell: k,
                                 map: ident.clone(),
                             },
-                            coef: vec![F::ONE; n],
+                            coef: vec![F::ONE; n].into(),
                         },
                         Factor::NegBeta(k + 1),
                     ));
@@ -7091,7 +7095,7 @@ pub(crate) fn compact<F: Field>(mut lin: Lin<F>) -> Lin<F> {
             index.get(&t.src).copied()
         };
         if let Some(k) = prior {
-            for (a, b) in out[k].coef.iter_mut().zip(&t.coef) {
+            for (a, b) in out[k].coef.iter_mut().zip(t.coef.iter()) {
                 *a += b;
             }
         } else {
@@ -7123,14 +7127,14 @@ pub(crate) fn scaled<F: Field>(a: &Lin<F>, s: F) -> Lin<F> {
 pub(crate) fn own<F: Field>(k: usize, n: usize) -> Lin<F> {
     vec![Term {
         src: Src::Own(k),
-        coef: vec![F::ONE; n],
+        coef: vec![F::ONE; n].into(),
     }]
 }
 
 pub(crate) fn constant<F: Field>(values: Vec<F>) -> Lin<F> {
     vec![Term {
         src: Src::One,
-        coef: values,
+        coef: values.into(),
     }]
 }
 
@@ -7143,7 +7147,7 @@ pub(crate) fn link<F: Field>(
     let n = map.len();
     vec![Term {
         src: Src::Link { array, cell, map },
-        coef: vec![coef; n],
+        coef: vec![coef; n].into(),
     }]
 }
 
@@ -7460,7 +7464,7 @@ pub(crate) mod tests {
                 7u32,
                 vec![vec![Term {
                     src: Src::Own(c),
-                    coef: vec![Fv::from(2u64); n],
+                    coef: vec![Fv::from(2u64); n].into(),
                 }]],
             ));
         }
@@ -8954,6 +8958,30 @@ pub(crate) mod tests {
             never_read[0] > 0 && never_read[1] > 0,
             "the fixtures have zero rows and padding rows"
         );
+    }
+
+    #[test]
+    fn shared_template_coefficients_preserve_the_matrix_and_proof() {
+        for build in [small, lookup_circuit, copy_circuit] {
+            let (ordinary, instance, witness) = build();
+            let (mut shared, _, _) = build();
+            let template_bytes = shared.construction_breakdown()[2];
+            shared.share_template_coefficients();
+            assert!(shared.construction_breakdown()[2] < template_bytes, "{}", shared.label);
+            assert_eq!(ordinary.program_digest(), shared.program_digest());
+            let generators = crate::ipa::Gens::<Vesta>::new(shared.shape.cols());
+            let prove = |c: &UniformCircuit<Fv>| {
+                crate::spartan::prove_circuit(
+                    &c.shape, &generators, &instance, &witness,
+                    &mut SpikeRng::new(b"shared coefficient parity"), c,
+                ).0.to_bytes()
+            };
+            let proof = prove(&ordinary);
+            assert_eq!(prove(&shared), proof);
+            assert!(crate::spartan::verify_circuit(
+                &shared.shape, &generators, &instance, &proof, &shared,
+            ).is_ok());
+        }
     }
 
     /// A program not compiled yet is digested from its builder without

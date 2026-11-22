@@ -3061,7 +3061,7 @@ where
             .collect();
         let mut row: Lin<S<C>> = vec![crate::uniform::Term {
             src: crate::uniform::Src::Own(cell),
-            coef: mask,
+            coef: mask.into(),
         }];
         for kind in 0..3 {
             let mut src = None;
@@ -5596,7 +5596,7 @@ where
         let mut row = plus(
             &vec![crate::uniform::Term {
                 src: crate::uniform::Src::Own(C_P[2 * s + 1]),
-                coef: on.clone(),
+                coef: on.clone().into(),
             }],
             &constant(consts),
         );
@@ -6019,7 +6019,7 @@ fn native_binding(
         plus(
             &vec![crate::uniform::Term {
                 src: crate::uniform::Src::Own(0),
-                coef: at(&|r| r < n),
+                coef: at(&|r| r < n).into(),
             }],
             &link(
                 shared,
@@ -6033,7 +6033,7 @@ fn native_binding(
         plus(
             &vec![crate::uniform::Term {
                 src: crate::uniform::Src::Own(0),
-                coef: at(&|r| r == n - 1),
+                coef: at(&|r| r == n - 1).into(),
             }],
             &link(
                 r_a,

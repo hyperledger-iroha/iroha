@@ -160,7 +160,7 @@ fn digit(group: usize, slot: &Slot, d: usize) -> Digit {
 }
 
 fn lin<S: Field>(src: Src, coef: Vec<S>) -> Lin<S> {
-    vec![Term { src, coef }]
+    vec![Term { src, coef: coef.into() }]
 }
 
 fn lk<S: Field>(array: usize, cell: usize, map: Vec<Option<usize>>, coef: Vec<S>) -> Lin<S> {
@@ -1047,11 +1047,11 @@ pub fn scalar_side_with<C: PastaCurve>(
         vec![
             Term {
                 src: Src::Own(KAPPA2),
-                coef: vec![one],
+                coef: vec![one].into(),
             },
             Term {
                 src: Src::Own(KAPPA),
-                coef: vec![-one],
+                coef: vec![-one].into(),
             },
             Term {
                 src: Src::Link {
@@ -1059,14 +1059,14 @@ pub fn scalar_side_with<C: PastaCurve>(
                     cell: OVAL,
                     map: vec![Some(0)],
                 },
-                coef: vec![one],
+                coef: vec![one].into(),
             },
             Term {
                 src: Src::All {
                     array: a(S_OPEN),
                     cell: OXV,
                 },
-                coef: vec![-one],
+                coef: vec![-one].into(),
             },
         ],
     );

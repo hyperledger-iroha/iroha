@@ -1254,7 +1254,7 @@ where
                 let mut row = plus(
                     &vec![Term {
                         src: Src::Own(cell),
-                        coef: mask,
+                        coef: mask.into(),
                     }],
                     &constant(val),
                 );
@@ -1262,7 +1262,7 @@ where
                     &row,
                     &vec![Term {
                         src: Src::Own(4),
-                        coef: product_coef,
+                        coef: product_coef.into(),
                     }],
                 );
                 for (map, coef) in kind_map.into_iter().zip(kind_coef) {
@@ -1275,7 +1275,7 @@ where
                                     cell: 0,
                                     map,
                                 },
-                                coef,
+                                coef: coef.into(),
                             }],
                         );
                     }
@@ -1335,7 +1335,7 @@ where
                     &plus(
                         &vec![Term {
                             src: Src::Own(cell),
-                            coef: mask,
+                            coef: mask.into(),
                         }],
                         &shared_link(lo, -one),
                     ),
@@ -1445,7 +1445,7 @@ where
                     plus(
                         &vec![Term {
                             src: Src::Own(cell),
-                            coef: mask,
+                            coef: mask.into(),
                         }],
                         &link(adds_a, cell, map, -one),
                     ),

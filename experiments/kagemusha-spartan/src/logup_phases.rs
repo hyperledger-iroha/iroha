@@ -345,7 +345,7 @@ mod tests {
                         1,
                         vec![vec![Term {
                             src: Src::All { array: 1, cell: 0 },
-                            coef: vec![Fp::ONE; 2],
+                            coef: vec![Fp::ONE; 2].into(),
                         }]],
                     ));
                     c.link.io.push((1, 20));
