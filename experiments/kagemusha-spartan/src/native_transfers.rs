@@ -438,7 +438,53 @@ impl ExactOperationWitness {
     }
 }
 
+/// The signed fields consumed by the wallet's Receive witness constructor.
+struct ReceiveWitnessPayment {
+    request: CompletedRequest,
+    payer: Credential,
+    statement: [Fp; 26],
+    receipt: bootstrap::Receipt,
+    digest: Fp,
+    valid: bool,
+}
+
 impl NativeEngine {
+    fn wallet_receive_originals(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<ReceiveWitnessPayment> {
+        if let Some(payment) = self.accepted_payment(bytes, parameters) {
+            return Ok(ReceiveWitnessPayment {
+                request: payment.request,
+                payer: payment.payer,
+                statement: payment.statement,
+                receipt: payment.receipt,
+                digest: payment.digest,
+                valid: true,
+            });
+        }
+        // The wallet needs the signed originals. The recursive relation builds
+        // its own projected pair later. A failed proof keeps the same bounded
+        // envelope available for the hosted Request checks and noncredit refusal.
+        let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
+        let valid = match self.verify_payment_candidate(bytes, parameters, &trusted, &candidate) {
+            Ok(_) => true,
+            Err(
+                e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_)),
+            ) => return Err(e),
+            Err(_) => false,
+        };
+        Ok(ReceiveWitnessPayment {
+            request: candidate.originals.request,
+            payer: candidate.originals.payer,
+            statement: candidate.originals.statement,
+            receipt: candidate.originals.receipt,
+            digest: candidate.digests.payment,
+            valid,
+        })
+    }
+
     /// Construct a new Receive from the exact incoming carrier and the
     /// original Request retained under this wallet's protected request ID.
     pub fn wallet_receive_witness(
@@ -460,8 +506,8 @@ impl NativeEngine {
                 "protected prior receiver credential opening",
             ));
         }
-        let incoming = self.incoming_candidate(payment_wire, parameters)?;
-        let r = &incoming.originals.request;
+        let incoming = self.wallet_receive_originals(payment_wire, parameters)?;
+        let r = &incoming.request;
         if hosted.request[..66] != r.body[..66]
             || hosted.request[130..194] != r.body[130..194]
             || hosted.request[210..418] != r.body[210..]
@@ -500,7 +546,7 @@ impl NativeEngine {
         let (consumed_insert, consumed_root) = insert(maps, SpartanWalletMap::Consumed, before[17], rq.credit, value)?;
         after[17] = consumed_root;
         let value = poseidon::hash_with_domain(crate::receive_lineage::CREDIT_DOMAIN,
-            &[rq.credit, incoming.payment_digest, Fp::ZERO]);
+            &[rq.credit, incoming.digest, Fp::ZERO]);
         let (credit_insert, _) = insert(maps, SpartanWalletMap::Credit, credit_root, rq.credit, value)?;
         let mut s = *terms(&prepared.witness).1;
         s[7] = credential::digest(c);
@@ -532,16 +578,16 @@ impl NativeEngine {
                 after_rest: *rest,
                 credential: c.clone(),
                 request: r.clone(),
-                payer: incoming.originals.payer,
+                payer: incoming.payer,
                 quoted_receiver: quoted,
-                incoming_statement: incoming.originals.statement,
-                incoming_receipt: incoming.originals.receipt,
+                incoming_statement: incoming.statement,
+                incoming_receipt: incoming.receipt,
                 prior_credential: crate::receive_lineage::PriorCredentialOpening {
                     digest: Fp::ZERO,
                     siblings,
                 },
                 statement: s,
-                receipt: receipt(c, &s, 4, incoming.payment_digest)?,
+                receipt: receipt(c, &s, 4, incoming.digest)?,
                 maps: crate::receive_lineage::ReceiveMapWitness {
                     consumed_search: consumed,
                     consumed_insert,
@@ -683,6 +729,51 @@ mod tests {
                 .map_err(|e| Error::Rejected(e.to_string()))
         }
     }
+    #[test]
+    #[ignore = "requires an installed five-family fixture and retained real Payment"]
+    fn wallet_receive_originals_match_recursive_candidate() {
+        use std::{path::PathBuf, time::Instant};
+        let artifacts = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+        let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
+        let read = |name: &str| std::fs::read(artifacts.join(name)).unwrap();
+        let world: [u8; 32] = read("world-manifest-digest.bin").try_into().unwrap();
+        let params = crate::native::device_fixture::install_selected(
+            &read("program-bundle.norito"), &read("parameter-manifest.norito"),
+            read("parameter-signature.bin").try_into().unwrap(), Some(&world),
+        ).unwrap();
+        let bytes = std::fs::read(wallet.join("incoming-payment.bin")).unwrap();
+        let engine = NativeEngine::default();
+        let trusted = params.inner.profile(full::SEND).unwrap();
+        let profile = payment_wire::Profile {
+            pair: &trusted, scheme: params.inner.scheme, relation: params.inner.relation,
+        };
+        let accepted = NativeEngine::default().verify_payment(&bytes, &params).unwrap();
+        let mut malformed = accepted.exact_pair().to_vec();
+        malformed[42..74].fill(255);
+        let malformed = payment_wire::test_replace_pair(&profile, &bytes, malformed).unwrap();
+        for (wire, can_credit) in [(&bytes, true), (&bytes, true), (&malformed, false)] {
+            let start = Instant::now();
+            let input = engine.wallet_receive_originals(wire, &params).unwrap();
+            let valid = input.valid;
+            let originals_time = start.elapsed();
+            let start = Instant::now();
+            let recursive = engine.incoming_candidate(wire, &params).unwrap();
+            eprintln!("wallet Receive originals {originals_time:?}, recursive pair {:?}, valid {valid}", start.elapsed());
+            assert_eq!((valid, recursive.valid), (can_credit, can_credit));
+            assert_eq!(input.digest, recursive.payment_digest);
+            assert_eq!(input.request, recursive.originals.request);
+            assert!(exact_credential(&input.payer, &recursive.originals.payer));
+            assert_eq!(input.statement, recursive.originals.statement);
+            assert_eq!(input.receipt.body, recursive.originals.receipt.body);
+            assert_eq!(input.receipt.signature, recursive.originals.receipt.signature);
+        }
+        let truncated = &bytes[..bytes.len() - 1];
+        let a = engine.wallet_receive_originals(truncated, &params).err().unwrap();
+        let b = engine.incoming_candidate(truncated, &params).err().unwrap();
+        assert!(matches!((&a, &b), (Error::Rejected(_), Error::Rejected(_))));
+        assert_eq!(a.to_string(), b.to_string());
+    }
+
     #[test]
     fn wallet_owned_map_staging_uses_genuine_intermediate_paths_beyond_empty() {
         let mut store = OneMap(KagemushaWalletIndexedTreeV1::new());

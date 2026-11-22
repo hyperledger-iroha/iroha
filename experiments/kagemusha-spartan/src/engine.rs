@@ -1707,6 +1707,77 @@ impl NativeEngine {
         }
         Ok(())
     }
+    fn accepted_payment(
+        &self, bytes: &[u8], parameters: &AuthenticatedParameters,
+    ) -> Option<VerifiedIncomingPayment> {
+        if let Ok(held) = self.verified_payment.lock()
+            && let Some(accepted) = held.as_ref()
+            && Arc::ptr_eq(&accepted.installation, &parameters.installation)
+            && accepted.payment.require_parameters(parameters).is_ok()
+            && accepted.payment.exact_bytes() == bytes
+        {
+            return Some(accepted.payment.clone());
+        }
+        None
+    }
+
+    fn payment_candidate(
+        bytes: &[u8], parameters: &AuthenticatedParameters,
+    ) -> Result<(carrier::TrustedProfile, payment_wire::Candidate)> {
+        let trusted = parameters.inner.profile(full::SEND)?;
+        let profile = payment_wire::Profile {
+            pair: &trusted,
+            scheme: parameters.inner.scheme,
+            relation: parameters.inner.relation,
+        };
+        let candidate = payment_wire::decode_candidate(&profile, bytes).map_err(Error::Rejected)?;
+        Ok((trusted, candidate))
+    }
+
+    fn verify_payment_candidate(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+        trusted: &carrier::TrustedProfile,
+        d: &payment_wire::Candidate,
+    ) -> Result<VerifiedIncomingPayment> {
+        let pair = carrier::decode_projected_pair(trusted, &d.pair_bytes, &d.projection)
+            .map_err(Error::Rejected)?;
+        authenticate_credential(
+            &parameters.inner,
+            &d.originals.payer,
+            &d.originals.certificate,
+        )?;
+        let profile: [Fp; 64] = d
+            .projection
+            .primary()
+            .io
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Malformed("Payment profile"))?;
+        profile_matches(&parameters.inner, &profile, &d.originals.payer)?;
+        verify_pair(&parameters.inner, full::SEND, pair)?;
+        let payment = VerifiedIncomingPayment {
+            parameters_id: parameters.id,
+            manifest_digest: parameters.manifest_digest,
+            bytes: bytes.into(),
+            profile,
+            digest: d.digests.payment,
+            request: d.originals.request.clone(),
+            payer: d.originals.payer.clone(),
+            statement: d.originals.statement,
+            receipt: d.originals.receipt.clone(),
+            pair: d.pair_bytes.as_slice().into(),
+        };
+        if let Ok(mut held) = self.verified_payment.lock() {
+            *held = Some(AcceptedPayment {
+                installation: Arc::clone(&parameters.installation),
+                payment: payment.clone(),
+            });
+        }
+        Ok(payment)
+    }
+
     fn incoming_candidate(
         &self,
         bytes: &[u8],
@@ -2298,54 +2369,11 @@ impl Engine for NativeEngine {
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedIncomingPayment> {
-        if let Ok(held) = self.verified_payment.lock()
-            && let Some(accepted) = held.as_ref()
-            && Arc::ptr_eq(&accepted.installation, &parameters.installation)
-            && accepted.payment.require_parameters(parameters).is_ok()
-            && accepted.payment.exact_bytes() == bytes
-        {
-            return Ok(accepted.payment.clone());
+        if let Some(payment) = self.accepted_payment(bytes, parameters) {
+            return Ok(payment);
         }
-        let trusted = parameters.inner.profile(full::SEND)?;
-        let profile = payment_wire::Profile {
-            pair: &trusted,
-            scheme: parameters.inner.scheme,
-            relation: parameters.inner.relation,
-        };
-        let d = payment_wire::decode(&profile, bytes).map_err(Error::Rejected)?;
-        authenticate_credential(
-            &parameters.inner,
-            &d.originals.payer,
-            &d.originals.certificate,
-        )?;
-        let profile: [Fp; 64] = d
-            .projection
-            .primary()
-            .io
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::Malformed("Payment profile"))?;
-        profile_matches(&parameters.inner, &profile, &d.originals.payer)?;
-        verify_pair(&parameters.inner, full::SEND, d.pair)?;
-        let payment = VerifiedIncomingPayment {
-            parameters_id: parameters.id,
-            manifest_digest: parameters.manifest_digest,
-            bytes: bytes.into(),
-            profile,
-            digest: d.digests.payment,
-            request: d.originals.request,
-            payer: d.originals.payer,
-            statement: d.originals.statement,
-            receipt: d.originals.receipt,
-            pair: d.pair_bytes.into(),
-        };
-        if let Ok(mut held) = self.verified_payment.lock() {
-            *held = Some(AcceptedPayment {
-                installation: Arc::clone(&parameters.installation),
-                payment: payment.clone(),
-            });
-        }
-        Ok(payment)
+        let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
+        self.verify_payment_candidate(bytes, parameters, &trusted, &candidate)
     }
     fn prepare(
         &self,

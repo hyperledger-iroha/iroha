@@ -4329,15 +4329,14 @@ impl<F: Scalar> UniformCircuit<F> {
                                         (_, None) => Target::Own(&ys),
                                         (_, Some(mp)) => Target::Link(mp, &ys),
                                     };
-                                    let unit: Vec<F> = (0..n)
-                                        .map(|r| {
-                                            if active.contains(&r) {
-                                                q.pow_vartime([r as u64])
-                                            } else {
-                                                F::ZERO
-                                            }
-                                        })
-                                        .collect();
+                                    let mut unit = vec![F::ZERO; n];
+                                    for &r in &active {
+                                        unit[r] = if q == F::ONE {
+                                            F::ONE
+                                        } else {
+                                            q.pow_vartime([r as u64])
+                                        };
+                                    }
                                     r_closed(rho, n, &unit, &target, &xs, one)
                                 });
                                 found.map(|f| (c0, f))
