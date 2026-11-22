@@ -71,9 +71,9 @@ fn expected_funding(manifest: &StreamTokenAuthorityManifest) -> BTreeMap<Account
                 expected.insert(
                     provider.authority(role).unwrap().account.clone(),
                     if role == StreamTokenAuthorityRole::IssuerOperator {
-                        // Independent fixed stock plan: 12 XOR monthly rent × 2 underwriting,
-                        // exceeding launch/admitted collateral 0.75, plus original 10 XOR fee headroom.
-                        Quantity::from(34_u64)
+                        // Independent fixed stock plan: 24 XOR monthly rent × 2 underwriting,
+                        // exceeding launch/admitted collateral 1.5, plus original 10 XOR fee headroom.
+                        Quantity::from(58_u64)
                     } else {
                         Quantity::from(10_u64)
                     },
@@ -180,11 +180,11 @@ fn original_issuer_funding_reproduces_principal_and_fee_headroom_across_generati
                 .unwrap();
             assert_eq!(
                 quote.reserve_requirement.as_quantity(),
-                &Quantity::from(24_u64)
+                &Quantity::from(48_u64)
             );
             assert_eq!(
                 plan.declaration().stake.stake_amount.as_quantity(),
-                &"0.75".parse::<Quantity>().unwrap(),
+                &"1.5".parse::<Quantity>().unwrap(),
             );
             assert_eq!(
                 expected[&terms.provider_account],
@@ -199,7 +199,7 @@ fn original_issuer_funding_reproduces_principal_and_fee_headroom_across_generati
                 assert_eq!(
                     expected[&inventory.authority(role).unwrap().account],
                     Quantity::from(if role == StreamTokenAuthorityRole::IssuerOperator {
-                        34_u64
+                        58_u64
                     } else {
                         10_u64
                     }),

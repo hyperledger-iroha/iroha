@@ -24,6 +24,214 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+fn discovery_fixture() -> (
+    tempfile::TempDir,
+    PreparedLocalnet,
+    ServiceAuthority,
+    NativeFixture,
+) {
+    let temporary = tempfile::tempdir().unwrap();
+    let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+    let prepared = crate::localnet::prepare_localnet_at(
+        "discovery-order",
+        &temporary.path().join("generation"),
+        &ports,
+        LocalnetServiceProfile::StreamTokenAuthorities,
+        None,
+    )
+    .unwrap();
+    let owner =
+        ServiceAuthority::open_network(&prepared, NetworkPurpose::ServiceObservation).unwrap();
+    let mut native = NativeFixture::from_generated(&prepared, &owner);
+    native.retain_http_listeners(&prepared, &ports);
+    (temporary, prepared, owner, native)
+}
+
+fn commit_discovery_cut(
+    native: &mut NativeFixture,
+    owner: &ServiceAuthority,
+    message: &str,
+) -> VerifiedSumeragiBlock {
+    let log = quote_instructions(
+        native,
+        &owner.config,
+        [InstructionBox::from(Log::new(
+            iroha_data_model::Level::INFO,
+            message.into(),
+        ))],
+    );
+    assert_eq!(native.chain.commit(vec![log]), vec![true]);
+    native.observe(owner).verified_tip().unwrap()
+}
+
+#[test]
+fn provider_discovery_starts_at_its_original_validator_and_visits_each_fallback_once() {
+    let _resources = crate::managed::native_test_guard();
+    let (_tmp, prepared, owner, mut native) = discovery_fixture();
+    let block = commit_discovery_cut(&mut native, &owner, "peer order");
+    let mut peers = native.unavailable_peers(&prepared);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let plans = owner.provider_plans().unwrap();
+    for plan in plans {
+        assert!(read_discovery_at(&owner, plan.provider_id(), &block, deadline).is_err());
+    }
+    peers.finish();
+    let requests = peers.requests.lock().unwrap();
+    for (slot, plan) in plans.iter().enumerate() {
+        let path = format!(
+            "/v1/sorafs/providers/{}/discovery/{}",
+            hex::encode(plan.provider_id().as_bytes()),
+            block.height()
+        );
+        let visited: Vec<_> = requests
+            .iter()
+            .filter(|r| r.method == "GET" && r.path == path)
+            .map(|r| r.peer)
+            .collect();
+        let expected = (0..4).cycle().skip(slot).take(4).collect::<Vec<_>>();
+        assert_eq!(visited, expected);
+    }
+}
+
+#[test]
+fn discovery_and_custody_join_the_same_cut_before_a_row_can_be_used() {
+    use std::sync::mpsc;
+
+    let (started, custody_started) = mpsc::sync_channel(0);
+    let (read, discovery_read) = mpsc::sync_channel(0);
+    let current = read_service_proofs(
+        || {
+            custody_started
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            read.send(()).unwrap();
+            Ok(Some(7))
+        },
+        move || {
+            started.send(()).unwrap();
+            discovery_read.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(Some(()))
+        },
+    )
+    .unwrap();
+    assert_eq!(current, Some(7));
+    assert_eq!(
+        read_service_proofs(|| Ok(Some(7)), || Ok(None)).unwrap(),
+        None
+    );
+    assert_eq!(
+        read_service_proofs::<u8>(|| Ok(None), || Ok(None)).unwrap(),
+        None
+    );
+    assert!(read_service_proofs::<u8>(|| Err(invalid("invalid discovery")), || Ok(None)).is_err());
+    assert!(read_service_proofs(|| Ok(Some(7)), || Err(invalid("custody refused"))).is_err());
+    assert!(
+        read_service_proofs::<u8>(|| Err(invalid("discovery refused")), || Ok(Some(()))).is_err()
+    );
+    assert_eq!(
+        read_service_proofs::<u8>(|| Ok(None), || Ok(Some(()))).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn unavailable_discovery_and_refused_custody_do_not_request_another_cut() {
+    let _resources = crate::managed::native_test_guard();
+    let (_tmp, _prepared, mut owner, mut native) = discovery_fixture();
+    let first = commit_discovery_cut(&mut native, &owner, "mixed refusal");
+    let mut cuts = 0;
+    let result = read_current_service_rows(
+        &mut owner,
+        |_| {
+            cuts += 1;
+            Ok(first.clone())
+        },
+        |_, cut| {
+            let mixed = read_service_proofs(|| Ok(None), || Err(invalid("custody refused")))?;
+            Ok([Some(cut.height()), mixed, Some(cut.height())])
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(crate::managed::Error::Invalid(message)) if message == "custody refused"
+    ));
+    assert_eq!(cuts, 1);
+}
+
+#[test]
+fn active_decoder_keeps_discovery_and_custody_on_its_original_thread() {
+    let caller = std::thread::current().id();
+    let limits = norito::DecodeLimits::new(1024, 1024, 1024, 0, 8);
+    norito::core::DecodeBudgetContext::new(limits).with(|| {
+        let current = read_service_proofs(
+            || {
+                assert_eq!(std::thread::current().id(), caller);
+                Ok(Some(3))
+            },
+            || {
+                assert!(norito::core::decode_limits_active());
+                assert_eq!(std::thread::current().id(), caller);
+                Ok(Some(()))
+            },
+        )
+        .unwrap();
+        assert_eq!(current, Some(3));
+        assert_eq!(
+            read_service_proofs::<u8>(|| Ok(None), || panic!("no serial custody read")).unwrap(),
+            None,
+        );
+    });
+}
+
+#[test]
+fn provider_discovery_retries_all_rows_once_only_on_a_newer_certified_cut() {
+    let _resources = crate::managed::native_test_guard();
+    let (_tmp, _prepared, mut owner, mut native) = discovery_fixture();
+    let first = commit_discovery_cut(&mut native, &owner, "first cut");
+    let next = commit_discovery_cut(&mut native, &owner, "next cut");
+    let mut cuts = [first.clone(), next.clone()].into_iter();
+    let mut heights = Vec::new();
+    let rows = read_current_service_rows(
+        &mut owner,
+        |_| Ok(cuts.next().unwrap()),
+        |_, cut| {
+            heights.push(cut.height());
+            if cut.height() == first.height() {
+                Ok([Some(cut.height()), None, Some(cut.height())])
+            } else {
+                Ok([Some(cut.height()); 3])
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(heights, [first.height(), next.height()]);
+    assert_eq!(rows, [next.height(); 3]);
+
+    // An unchanged head does not cause another read; a partial second round stays failed.
+    for (second, expected_reads) in [(&first, 1), (&next, 2)] {
+        let mut cuts = [&first, second].into_iter();
+        let mut reads = 0;
+        let result = read_current_service_rows(
+            &mut owner,
+            |_| Ok(cuts.next().unwrap().clone()),
+            |_, cut| {
+                reads += 1;
+                Ok([None, Some(cut.height()), None])
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(reads, expected_reads);
+    }
+    // A local policy, invalid proof, or deadline refusal is terminal for this turn.
+    let mut cuts = [first].into_iter();
+    let result = read_current_service_rows::<u64>(
+        &mut owner,
+        |_| Ok(cuts.next().unwrap()),
+        |_, _| Err(invalid("original scope differs")),
+    );
+    assert!(result.is_err());
+}
+
 #[test]
 fn cold_origin_joins_genuine_native_account_proof_before_any_provider_data_request() {
     let _resources = crate::managed::native_test_guard();

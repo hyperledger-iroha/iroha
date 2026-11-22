@@ -178,6 +178,42 @@ async fn exact_inventory_retention_reopens_and_conflicting_signed_evidence_is_re
         .unwrap();
     assert_eq!(inventory.items(), &[item]);
 }
+#[tokio::test]
+async fn admitted_blocking_inventory_read_charges_actual_work_to_the_original_decoder() {
+    let (_root, custody) = initialize();
+    let item =
+        MusubiProviderAttestationInventoryItemV1::new(native_inventory_test_attestation(9, 3))
+            .unwrap();
+    custody.inventory.put(item.clone()).await.unwrap();
+    let handle = tokio::runtime::Handle::current();
+    let reader = custody.inventory();
+    tokio::task::spawn_blocking(move || {
+        let read = || reader.get_on_blocking_worker(&handle, item.scope(), item.key());
+        let limits = |bytes| norito::DecodeLimits::new(1 << 20, 1 << 20, 1 << 20, bytes, 64);
+        assert!(reader.shared.limits().max_total_allocated_bytes() > 48_000_000);
+        let (first, usage) =
+            norito::core::with_decode_limits_measured(limits(48_000_000 - 1_048_576), read);
+        let first = first.unwrap().unwrap();
+        assert_eq!(first.item(), &item);
+        assert_eq!(first.inventory_revision(), 1);
+        let bytes = usage.total_allocated_bytes();
+        assert!(bytes > 0 && bytes < 48_000_000 - 1_048_576);
+        norito::with_decode_limits_scope(limits(bytes), || {
+            assert_eq!(read().unwrap().unwrap(), first);
+            assert!(read().is_err());
+        });
+        assert!(norito::with_decode_limits_scope(limits(0), read).is_err());
+        let permits = reader.shared.jobs.clone().try_acquire_owned().unwrap();
+        assert_eq!(
+            read().unwrap_err(),
+            MusubiProviderAttestationInventoryErrorV1::Unavailable
+        );
+        drop(permits);
+        assert_eq!(read().unwrap().unwrap(), first);
+    })
+    .await
+    .unwrap();
+}
 #[test]
 fn missing_history_and_foreign_scope_do_not_initialize_replacements() {
     let (root, custody) = initialize();

@@ -54,6 +54,12 @@ impl AdmissionRegistry {
             native_state: Some(state),
         }
     }
+    pub(super) fn uses_state(&self, state: &Arc<iroha_core::state::State>) -> bool {
+        self.native_state
+            .as_ref()
+            .is_some_and(|original| Arc::ptr_eq(original, state))
+    }
+
     /// Construct an empty registry (used when admission is optional).
     #[must_use]
     pub fn empty(network_id: [u8; 32]) -> Self {

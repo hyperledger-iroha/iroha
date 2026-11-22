@@ -9,7 +9,7 @@ use super::{
 use crate::{
     localnet::LocalnetServiceProfile,
     managed::{
-        ManagedProviderAdvertisement, build_registry,
+        build_registry,
         gateway_compliance::{
             LiveGatewayProcess, ManagedGatewayCompliance, PromotedGeneratedCatalog,
         },
@@ -20,6 +20,7 @@ use crate::{
         service_bootstrap::{
             GeneratedBootstrapAuthorization, ManagedServiceBootstrap, ServiceBootstrapProgress,
         },
+        stream_token_custody::RetainedCustodyEnrollment,
     },
 };
 use iroha_data_model::sorafs::capacity::ProviderId;
@@ -379,17 +380,11 @@ impl Recheck {
         )?;
         budget.check()?;
         confirm_carriers(prepared, &self.required, budget)?;
-        let observations = observe_published_gateways(
+        let observation = observe_published_gateways(
             &mut live,
             |index, gateway| self.publish_provider(prepared, index, gateway, budget),
             |gateways, floors| self.observe_providers(prepared, gateways, floors, budget),
         )?;
-        let observation = budget.call(|_| {
-            let plans = live[0]
-                .original_provider_plans(prepared)?
-                .ok_or_else(|| invalid("original provider plans absent"))?;
-            maintenance::Observation::new(&plans, observations)
-        })?;
         validate_gateways(prepared, &mut live, budget)?;
         budget.check()?;
         Ok(Outcome::Complete(Some(Box::new(observation))))
@@ -401,18 +396,10 @@ impl Recheck {
         gateway: &mut OwnedGateway,
         budget: &Budget,
     ) -> std::result::Result<ManagedTransactionFinality, Failure> {
-        let provider = gateway.provider();
-        let floor = budget.call(|_| {
-            if gateway.required_transactions()? != self.required.as_slice() {
-                return Err(invalid(
-                    "restarted launch changed exact required transactions",
-                ));
-            }
-            gateway.observation_floor()
-        })?;
+        let floor = budget.call(|_| gateway.publication_floor(&self.required))?;
         budget.progress.enter(Phase::PromotedCatalog);
         budget.call(|deadline| {
-            ManagedGatewayCompliance::open(prepared, provider)?.observe_promoted(
+            gateway.open_catalog_writer(prepared)?.observe_promoted(
                 gateway,
                 self.catalogs[index],
                 deadline,
@@ -420,9 +407,7 @@ impl Recheck {
         })?;
         budget.progress.enter(Phase::ProviderAdvertisement);
         validate_live(prepared, gateway, budget)?;
-        budget.call(|deadline| {
-            ManagedProviderAdvertisement::open(prepared, provider)?.publish(deadline)
-        })?;
+        budget.call(|deadline| gateway.open_provider_advert(prepared)?.publish(deadline))?;
         validate_live(prepared, gateway, budget)?;
         Ok(floor)
     }
@@ -433,50 +418,68 @@ impl Recheck {
         live: &mut [OwnedGateway; 3],
         floors: [ManagedTransactionFinality; 3],
         budget: &Budget,
-    ) -> std::result::Result<[maintenance::ProviderObservation; 3], Failure> {
-        let (currents, observed_at, observed_utc) =
-            observe_native_set(prepared, live, floors, budget)?;
-        let mut finish = |index: usize| -> std::result::Result<_, Failure> {
-            let gateway = &mut live[index];
-            let provider = gateway.provider();
-            let floor = floors[index];
-            let current = currents[index];
-            let continuation = budget.call(|_| {
-                let enrollment = gateway.selected_enrollment(floor)?;
+    ) -> std::result::Result<maintenance::Observation, Failure> {
+        let started = Instant::now();
+        // Verify the original process/plan bindings before starting the discovery interval.
+        // The complete live set is fenced again in finish after the observation returns.
+        let plans = budget.call(|_| {
+            live[0]
+                .original_provider_plans(prepared)?
+                .ok_or_else(|| invalid("original provider plans absent"))
+        })?;
+        for (gateway, plan) in live.iter_mut().zip(&plans) {
+            if gateway.provider() != plan.provider_id() {
+                return Err(budget.progress.unconfirmed());
+            }
+            validate_live(prepared, gateway, budget)?;
+        }
+        let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+        // Each enrollment has its own signed expiry. Sample before preparing the continuations;
+        // these clocks never replace the later clock that bounds the native discovery itself.
+        let enrollment_mono = Instant::now();
+        let enrollment_utc = budget.call(|_| now_ms())?;
+        let continuation = |index: usize| {
+            budget.call(|_| {
+                let provider = live[index].provider();
+                let enrollment = enrollments[index];
                 match &self.retained {
                     Some(retained) if provider != retained.renewed => {
                         let original = &retained.originals[index];
                         original.revalidate(provider, enrollment, &self.receipt)?;
                         Ok(original.clone())
                     }
-                    _ => {
-                        let plan = gateway
-                            .original_provider_plan(prepared)?
-                            .ok_or_else(|| invalid("renewal requires original provider plan"))?;
-                        renewal::Continuation::new(
-                            &plan,
-                            Arc::clone(&self.receipt),
-                            enrollment,
-                            observed_at,
-                            observed_utc,
-                        )
-                    }
+                    _ => renewal::Continuation::new(
+                        &plans[index],
+                        Arc::clone(&self.receipt),
+                        enrollment,
+                        enrollment_mono,
+                        enrollment_utc,
+                    ),
                 }
-            })?;
-            let observation = budget.call(|_| {
+            })
+        };
+        let continuations = [continuation(0)?, continuation(1)?, continuation(2)?];
+        // Authenticate these very same enrollment records on one certified Global cut.
+        let (currents, observed_at, observed_utc) =
+            observe_enrolled_set(prepared, live, floors, enrollments, budget)?;
+        budget.call(|_| {
+            let bind = |index: usize, continuation| {
                 maintenance::ProviderObservation::new(
                     continuation,
-                    floor,
+                    floors[index],
                     self.catalogs[index],
-                    current,
+                    currents[index],
                     observed_at,
                     observed_utc,
+                    started.elapsed(),
                 )
-            })?;
-            validate_live(prepared, gateway, budget)?;
-            Ok(observation)
-        };
-        Ok([finish(0)?, finish(1)?, finish(2)?])
+            };
+            let [first, second, third] = continuations;
+            maintenance::Observation::new(
+                &plans,
+                [bind(0, first)?, bind(1, second)?, bind(2, third)?],
+            )
+        })
     }
 }
 
@@ -494,11 +497,28 @@ pub(super) fn observe_native_set(
     ),
     Failure,
 > {
+    let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+    observe_enrolled_set(prepared, live, floors, enrollments, budget)
+}
+
+fn observe_enrolled_set(
+    prepared: &PreparedLocalnet,
+    live: &[OwnedGateway; 3],
+    floors: [ManagedTransactionFinality; 3],
+    enrollments: [&RetainedCustodyEnrollment; 3],
+    budget: &Budget,
+) -> std::result::Result<
+    (
+        [build_registry::GeneratedServiceObservation; 3],
+        Instant,
+        u64,
+    ),
+    Failure,
+> {
     budget.progress.enter(Phase::Discovery);
     let observed_at = Instant::now();
     let observed_utc = budget.call(|_| now_ms())?;
     let currents = budget.call(|deadline| {
-        let enrollments = OwnedGateway::read_enrollments(live, floors)?;
         let reads = std::array::from_fn(|index| build_registry::ServiceRead {
             provider: live[index].provider(),
             enrollment: enrollments[index],
@@ -519,8 +539,8 @@ pub(super) fn observe_native_set(
 fn observe_published_gateways<G, P, O>(
     gateways: &mut [G; 3],
     mut publish: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
-    observe: impl FnOnce(&mut [G; 3], [P; 3]) -> std::result::Result<[O; 3], Failure>,
-) -> std::result::Result<[O; 3], Failure> {
+    observe: impl FnOnce(&mut [G; 3], [P; 3]) -> std::result::Result<O, Failure>,
+) -> std::result::Result<O, Failure> {
     let [first, second, third] = gateways;
     let first_floor = publish(0, first)?;
     let second_floor = publish(1, second)?;

@@ -547,6 +547,18 @@ fn actual_paid_check_queue_original_and_initial_advance_preserve_exact_custody_o
             .unwrap(),
         NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::Initialize)
     ));
+    // The successful Check admitted only one initialization. Fresh observations before
+    // its commit must retain the exact exposed transaction without a second Check.
+    for _ in 0..2 {
+        let original = f.coordinator.store.operation(f.original.id).unwrap();
+        assert!(matches!(
+            f.coordinator
+                .begin_round(original, now(), deadline)
+                .unwrap(),
+            RoundStart::AwaitingControl(NativeMusubiPinPhaseV1::Initialize)
+        ));
+        assert!(f.coordinator.round.is_none());
+    }
     let wire = f.commit_only_queued();
     let view = f.chain.state().view();
     let row = view
@@ -1135,4 +1147,76 @@ fn caller_context_inspection_preserves_the_actual_held_native_check_round() {
     assert!(f.coordinator.observe_operation(f.original.id).is_err());
     assert_eq!(f.context.queue().queued_len(), 0);
     assert_eq!(f.coordinator.round.as_ref().unwrap().deadline, before);
+}
+
+#[test]
+fn observing_a_retained_pin_charges_one_full_inventory_audit_and_current_recovery() {
+    let f = Fixture::new();
+    let id = f.original.id;
+    let limits = norito::DecodeLimits::new(16 << 20, 16 << 20, 16 << 20, 256 << 20, 64);
+    let (expected, one_audit) = norito::core::with_decode_limits_measured(limits, || {
+        let operation = f
+            .coordinator
+            .store
+            .find_operation_with_held(id, None)?
+            .unwrap();
+        f.coordinator.recover_operation(&operation)
+    });
+    let (observed, actual) =
+        norito::core::with_decode_limits_measured(limits, || f.coordinator.observe_operation(id));
+    for status in [expected.unwrap(), observed.unwrap()] {
+        assert!(matches!(
+            status,
+            NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::RetainedPin)
+        ));
+    }
+    assert!(one_audit.total_allocated_bytes() > 0);
+    assert_eq!(
+        actual.total_allocated_bytes(),
+        one_audit.total_allocated_bytes()
+    );
+    assert_eq!(f.context.queue().queued_len(), 0);
+}
+
+#[test]
+fn native_check_receipt_poll_retains_uncommitted_signed_original() {
+    let mut f = Fixture::new();
+    let original = f.coordinator.store.operation(f.original.id).unwrap();
+    f.coordinator
+        .begin_round(original, now(), Instant::now() + Duration::from_secs(60))
+        .unwrap();
+    assert!(!f.coordinator.awaiting_check_receipt().unwrap());
+    for _ in 0..2 {
+        let mut round = f.coordinator.round.take().unwrap();
+        let deadline = round.deadline;
+        assert!(
+            f.coordinator
+                .drive_round(&mut round, &mut Clock, deadline)
+                .unwrap()
+                .is_none()
+        );
+        f.coordinator.round = Some(round);
+        assert!(f.coordinator.awaiting_check_receipt().unwrap());
+    }
+    let original = f
+        .coordinator
+        .round
+        .as_ref()
+        .unwrap()
+        .read_failure
+        .as_ref()
+        .unwrap()
+        .signed_transaction()
+        .encode_wire_v1()
+        .unwrap();
+    assert_eq!(f.commit_only_queued(), original);
+    assert!(!f.coordinator.awaiting_check_receipt().unwrap());
+    let mut round = f.coordinator.round.take().unwrap();
+    let deadline = round.deadline;
+    assert!(
+        f.coordinator
+            .drive_round(&mut round, &mut Clock, deadline)
+            .unwrap()
+            .is_some()
+    );
 }

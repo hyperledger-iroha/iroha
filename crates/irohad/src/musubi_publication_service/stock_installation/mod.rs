@@ -164,17 +164,19 @@ pub fn select_factory(
         },
     )
     .map_err(|_| Error::Unqualified)?;
-    Ok(Some(Box::new(MusubiPublicationPrivateLocalFactoryV1::new(
-        settings,
-        Box::new(signer),
-        Box::new(storage),
-        readback,
-        cache,
-        Box::new(Ingress {
-            settings: MusubiPublicationPrivateTlsSettingsV1::from_config(config),
-            tls,
-        }),
-    ))))
+    Ok(Some(Box::new(
+        MusubiPublicationPrivateLocalFactoryV1::with_storage(
+            settings,
+            Box::new(signer),
+            super::local_factory::StorageBuilder::Native(Box::new(storage)),
+            readback,
+            cache,
+            Box::new(Ingress {
+                settings: MusubiPublicationPrivateTlsSettingsV1::from_config(config),
+                tls,
+            }),
+        ),
+    )))
 }
 
 // Bind only after the local factory has successfully opened every original durable owner.

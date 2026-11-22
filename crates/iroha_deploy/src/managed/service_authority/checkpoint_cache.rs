@@ -270,6 +270,7 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
                 self.authority.config.network_id,
                 self.authority.config.chain.as_str(),
                 self.validation.as_deref_mut(),
+                None,
             )
     }
 
@@ -284,9 +285,25 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
     }
 }
 
+impl ServiceAuthority {
+    pub(in crate::managed) fn decode_observation_checkpoint(
+        &self,
+        bytes: &[u8],
+        start: &mut crate::verify::finality::ObservationStart,
+    ) -> Result<FinalityVerifier> {
+        self.effective_checkpoint_cache().decode_for_scope(
+            bytes,
+            self.config.network_id,
+            self.config.chain.as_str(),
+            None,
+            Some(start),
+        )
+    }
+}
+
 impl CheckpointCache {
     fn decode(&self, bytes: &[u8], network: NetworkId, chain: &str) -> Result<FinalityVerifier> {
-        self.decode_for_scope(bytes, network, chain, None)
+        self.decode_for_scope(bytes, network, chain, None, None)
     }
 
     // Select only the existing canonical producer's borrowed pure workspace. Scoped contention
@@ -300,25 +317,26 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
         let Some(shared) = &self.epoch_validation else {
-            return self.decode_with_validation(bytes, network, chain, validation);
+            return self.decode_with_validation(bytes, network, chain, validation, start);
         };
         match shared.try_lock() {
             Ok(mut selected) => {
                 if norito::core::decode_limits_active() {
                     *selected = EpochValidationScope::new();
-                    self.decode_with_validation(bytes, network, chain, None)
+                    self.decode_with_validation(bytes, network, chain, None, start)
                 } else {
-                    self.decode_with_validation(bytes, network, chain, Some(&mut selected))
+                    self.decode_with_validation(bytes, network, chain, Some(&mut selected), start)
                 }
             }
             Err(TryLockError::Poisoned(mut poisoned)) => {
                 **poisoned.get_mut() = EpochValidationScope::new();
-                self.decode_with_validation(bytes, network, chain, None)
+                self.decode_with_validation(bytes, network, chain, None, start)
             }
             Err(TryLockError::WouldBlock) => {
-                self.decode_with_validation(bytes, network, chain, None)
+                self.decode_with_validation(bytes, network, chain, None, start)
             }
         }
     }
@@ -329,7 +347,9 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         mut validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
+        let mut start = start;
         // A scope entered after warming still receives its original physical admission.
         let active_owner = norito::core::decode_limits_active();
         let weight = retained_import_envelope(bytes.len());
@@ -371,6 +391,7 @@ impl CheckpointCache {
             } else {
                 validation.as_deref_mut()
             },
+            start.as_deref_mut(),
         );
         let verifier = match offered {
             Ok(verifier) => verifier,
@@ -406,6 +427,7 @@ impl CheckpointCache {
                     network,
                     chain,
                     validation,
+                    start,
                 ) {
                     Ok(verifier) => verifier,
                     Err(error) => {
@@ -468,6 +490,7 @@ impl CheckpointCache {
         network: NetworkId,
         chain: &str,
         validation: Option<&mut EpochValidationScope>,
+        start: Option<&mut crate::verify::finality::ObservationStart>,
     ) -> Result<FinalityVerifier> {
         #[cfg(test)]
         graph_import_counts::record();
@@ -482,7 +505,7 @@ impl CheckpointCache {
                 decode_attempts.load(std::sync::atomic::Ordering::Relaxed),
             );
         }
-        decode_checkpoint_with_validation(bytes, network, chain, validation)
+        decode_checkpoint_with_validation(bytes, network, chain, validation, start)
     }
 }
 

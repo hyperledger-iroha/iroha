@@ -442,3 +442,59 @@ fn publisher_bounds_a_stalled_response_by_the_original_deadline() {
         ),
     }
 }
+
+#[test]
+fn renderer_advert_rechecks_original_material_and_keeps_the_exclusive_publisher() {
+    use crate::managed::service_bootstrap::ManagedServiceBootstrap;
+    use iroha_fs::{PrivateDirectory, PublishMode};
+
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, prepared) = fixture();
+    let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+    let renderer = ManagedServiceBootstrap::open(&prepared)
+        .unwrap()
+        .into_generated_runtime()
+        .unwrap();
+    let publisher = renderer.open_provider_advert(&prepared, provider).unwrap();
+    assert!(ManagedProviderAdvertisement::open(&prepared, provider).is_err());
+    let expected = prepared
+        .provider_advert(provider, now_ms().unwrap() / 1_000)
+        .unwrap();
+    let exact = norito::encode_canonical(&expected).unwrap();
+    let mut peers = Peers::start(&prepared, [200; 4]);
+    let report = publisher
+        .publish(Instant::now() + Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(
+        (
+            report.issued_at,
+            report.expires_at,
+            report.acknowledged_peers
+        ),
+        (expected.issued_at, expected.expires_at, 4)
+    );
+    {
+        let posts = peers.requests.lock().unwrap();
+        assert_eq!(posts.len(), 4);
+        assert!(posts.iter().all(|post| post.request.body == exact));
+    }
+    let generation =
+        PrivateDirectory::open_exact(prepared.context.client_config.parent().unwrap()).unwrap();
+    let original = generation.read("peer0.toml", 1024 * 1024).unwrap();
+    generation
+        .write_atomic("peer0.toml", b"changed configuration", PublishMode::Replace)
+        .unwrap();
+    assert!(
+        publisher
+            .publish(Instant::now() + Duration::from_secs(30))
+            .is_err()
+    );
+    assert_eq!(peers.requests.lock().unwrap().len(), 4);
+    generation
+        .write_atomic("peer0.toml", &original, PublishMode::Replace)
+        .unwrap();
+    publisher.authority.validate_profile().unwrap();
+    drop(publisher);
+    drop(ManagedProviderAdvertisement::open(&prepared, provider).unwrap());
+    peers.finish();
+}

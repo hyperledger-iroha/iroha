@@ -485,16 +485,40 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> Result<CarBuildPlan, MusubiArchiveRuntimeErrorV1> {
+        self.storage_plan_with_origin_check(
+            pin_manifest,
+            provider,
+            commitment,
+            |_| Ok(()),
+            std::convert::identity,
+        )
+    }
+    /// Fetch the exact manifest and plan only after the caller accepts the selected transport's origin.
+    /// The callback runs after ordinary provider discovery and before either provider request.
+    /// An origin refusal leaves the prepared-plan inventory untouched.
+    ///
+    /// # Errors
+    /// Returns the caller's origin refusal or a fetch error classified by `source_error`.
+    pub fn storage_plan_with_origin_check<E>(
+        &mut self,
+        pin_manifest: &ManifestDigest,
+        provider: ProviderId,
+        commitment: &MusubiArchiveCommitmentV1,
+        check_origin: impl FnOnce(&str) -> Result<(), E>,
+        source_error: impl Fn(MusubiArchiveRuntimeErrorV1) -> E,
+    ) -> Result<CarBuildPlan, E> {
         commitment
             .validate()
-            .map_err(|_| integrity("MUSUBI_ARCHIVE_COMMITMENT_INVALID"))?;
-        self.discover_account_provider(provider)?;
+            .map_err(|_| source_error(integrity("MUSUBI_ARCHIVE_COMMITMENT_INVALID")))?;
+        self.select_plan_provider(provider, check_origin, &source_error)?;
         let runtime = self
             .providers
             .get(&provider)
-            .ok_or_else(|| unavailable("MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED"))?;
-        let manifest = fetch_and_validate_manifest(runtime, pin_manifest, commitment)?;
-        let plan = fetch_and_validate_plan(runtime, pin_manifest, commitment, &manifest)?;
+            .ok_or_else(|| source_error(unavailable("MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED")))?;
+        let manifest = fetch_and_validate_manifest(runtime, pin_manifest, commitment)
+            .map_err(&source_error)?;
+        let plan = fetch_and_validate_plan(runtime, pin_manifest, commitment, &manifest)
+            .map_err(&source_error)?;
         let prepared_key = (*pin_manifest, provider, commitment.archive_id());
         if self.prepared.len() >= MAX_PREPARED_PLANS && !self.prepared.contains_key(&prepared_key) {
             self.prepared.pop_first();
@@ -502,7 +526,7 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         self.prepared.insert(
             prepared_key,
             PreparedPlanV1 {
-                plan_binding: exact_plan_binding(&plan)?,
+                plan_binding: exact_plan_binding(&plan).map_err(source_error)?,
                 root_cid_hex: hex::encode(&manifest.manifest.root_cid),
                 chunker_handle: manifest.chunker_handle,
             },

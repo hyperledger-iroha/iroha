@@ -1230,19 +1230,28 @@ pub enum MusubiPublicationRuntimeTransportFailureClassV1 {
 pub struct MusubiPublicationRuntimeTransportErrorV1 {
     class: MusubiPublicationRuntimeTransportFailureClassV1,
     code: &'static str,
+    operation_busy: bool,
 }
 impl MusubiPublicationRuntimeTransportErrorV1 {
     const fn retryable(code: &'static str) -> Self {
         Self {
             class: MusubiPublicationRuntimeTransportFailureClassV1::Retryable,
             code,
+            operation_busy: false,
         }
     }
     const fn permanent(code: &'static str) -> Self {
         Self {
             class: MusubiPublicationRuntimeTransportFailureClassV1::Permanent,
             code,
+            operation_busy: false,
         }
+    }
+    /// Whether the authenticated service returned HTTP 425 and the exact retryable
+    /// version-one Norito response for an already active identical operation.
+    #[must_use]
+    pub const fn is_operation_busy(&self) -> bool {
+        self.operation_busy
     }
     /// Return whether an identical idempotent call may be retried.
     #[must_use]
@@ -1609,6 +1618,8 @@ fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
 /// Backend failure class deliberately carrying no provider diagnostics or secrets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationServiceBackendErrorV1 {
+    /// An admitted storage operation awaits an independently observed native receipt.
+    StoragePending,
     /// A newly authorized identical request may succeed later.
     Retryable,
     /// Deployment configuration or immutable backend state must change.
@@ -1617,6 +1628,7 @@ pub enum MusubiPublicationServiceBackendErrorV1 {
 impl fmt::Display for MusubiPublicationServiceBackendErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::StoragePending => "Musubi storage operation is awaiting a native receipt",
             Self::Retryable => "Musubi publication backend is temporarily unavailable",
             Self::Permanent => "Musubi publication backend requires configuration or state changes",
         })
@@ -1680,6 +1692,19 @@ pub trait MusubiStorageCoordinationBackendV1: Send {
         &self,
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
+    /// Check the original registration and local operation selection before starting or
+    /// resuming storage work. Backends using the same gate for dispatch and replay inherit
+    /// their existing check. A backend may accept unfinished work here while requiring
+    /// completed, current replication in [`Self::verify_current_registration`] for replay.
+    ///
+    /// # Errors
+    /// Refuses invalid or unavailable registration, source or local custody.
+    fn verify_coordination_source(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        self.verify_current_registration(request)
+    }
     /// Coordinate or idempotently return evidence for one exact immutable request.
     ///
     /// The backend must independently retrieve the exact transaction, prove that its sole
@@ -3522,7 +3547,15 @@ fn service_backend_error(
     error: MusubiPublicationServiceBackendErrorV1,
 ) -> MusubiPublicationServiceErrorV1 {
     match error {
-        MusubiPublicationServiceBackendErrorV1::Retryable => {
+        MusubiPublicationServiceBackendErrorV1::StoragePending
+            if code == MusubiPublicationServiceErrorCodeV1::StorageCoordinationUnavailable =>
+        {
+            MusubiPublicationServiceErrorV1::retryable(
+                MusubiPublicationServiceErrorCodeV1::OperationBusy,
+            )
+        }
+        MusubiPublicationServiceBackendErrorV1::StoragePending
+        | MusubiPublicationServiceBackendErrorV1::Retryable => {
             MusubiPublicationServiceErrorV1::retryable(code)
         }
         MusubiPublicationServiceBackendErrorV1::Permanent => {
@@ -4199,6 +4232,15 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         current_time_ms: u64,
     ) -> Result<MusubiPublicationRuntimeAuthorizationV1, MusubiPublicationRuntimeTransportErrorV1>
     {
+        // The generated paid pin journals its first signed ceiling across several finalized
+        // Check and Advance transactions. Select its complete bounded window before signing.
+        let lifetime_ms = match (&self.http, operation) {
+            (
+                PublicationHttpTransport::Generated(_),
+                MusubiPublicationRuntimeOperationV1::StorageCoordination,
+            ) => MAX_AUTHORIZATION_LIFETIME_MS,
+            _ => DEFAULT_AUTHORIZATION_LIFETIME_MS,
+        };
         let payload = MusubiPublicationRuntimeAuthorizationPayloadV1 {
             domain: AUTH_DOMAIN_V1,
             version: 1,
@@ -4208,13 +4250,9 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             publisher: self.publisher.clone(),
             request_digest: digest,
             issued_at_ms: current_time_ms,
-            expires_at_ms: current_time_ms
-                .checked_add(DEFAULT_AUTHORIZATION_LIFETIME_MS)
-                .ok_or_else(|| {
-                    MusubiPublicationRuntimeTransportErrorV1::permanent(
-                        "MUSUBI_RUNTIME_CLOCK_INVALID",
-                    )
-                })?,
+            expires_at_ms: current_time_ms.checked_add(lifetime_ms).ok_or_else(|| {
+                MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_CLOCK_INVALID")
+            })?,
         };
         payload.validate()?;
         let approvals = self
@@ -4568,7 +4606,11 @@ fn remote_transport_error(
         && error.version == 1
     {
         return if error.retryable {
-            MusubiPublicationRuntimeTransportErrorV1::retryable(error.code.as_str())
+            MusubiPublicationRuntimeTransportErrorV1 {
+                operation_busy: status == StatusCode::TOO_EARLY
+                    && error.code == MusubiPublicationServiceErrorCodeV1::OperationBusy,
+                ..MusubiPublicationRuntimeTransportErrorV1::retryable(error.code.as_str())
+            }
         } else {
             MusubiPublicationRuntimeTransportErrorV1::permanent(error.code.as_str())
         };

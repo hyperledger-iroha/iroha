@@ -776,7 +776,13 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         let response = self
             .http
             .coordinate_storage(&self.storage_coordinator_url, &coordination_request)
-            .map_err(map_transport_error)?;
+            .map_err(|error| {
+                if error.is_operation_busy() {
+                    PublicationBackendError::pending_storage()
+                } else {
+                    map_transport_error(error)
+                }
+            })?;
         if response.archive.registration_projection()
             != registered.archive.registration_projection()
         {

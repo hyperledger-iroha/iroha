@@ -231,18 +231,37 @@ impl AccountRegistryV1 {
 }
 
 impl AuthenticatedMusubiArchiveFetchClientV1 {
+    #[cfg(test)]
     pub(super) fn discover_account_provider(
         &mut self,
         provider: ProviderId,
     ) -> Result<(), MusubiArchiveRuntimeErrorV1> {
-        let Some(registry) = &self.account_registry else {
+        if self.account_registry.is_none() {
             return Ok(());
+        }
+        self.select_plan_provider(provider, |_| Ok(()), &std::convert::identity)
+    }
+    pub(super) fn select_plan_provider<E>(
+        &mut self,
+        provider: ProviderId,
+        check_origin: impl FnOnce(&str) -> Result<(), E>,
+        source_error: &impl Fn(MusubiArchiveRuntimeErrorV1) -> E,
+    ) -> Result<(), E> {
+        let Some(registry) = &self.account_registry else {
+            let runtime = self.providers.get(&provider).ok_or_else(|| {
+                source_error(unavailable("MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED"))
+            })?;
+            return check_origin(runtime.base_url.as_str());
         };
-        let selected = registry.resolve_provider(self.network_id, provider)?;
+        let selected = registry
+            .resolve_provider(self.network_id, provider)
+            .map_err(source_error)?;
+        check_origin(selected.base_url.as_str())?;
         let http = match &selected.local_transport {
-            Some(local) => pinned_generated_local_http_client(local, self.request_timeout)?,
-            None => pinned_http_client(&selected.base_url, self.request_timeout)?,
-        };
+            Some(local) => pinned_generated_local_http_client(local, self.request_timeout),
+            None => pinned_http_client(&selected.base_url, self.request_timeout),
+        }
+        .map_err(source_error)?;
         if self.providers.len() >= MAX_CONFIGURED_PROVIDERS
             && !self.providers.contains_key(&provider)
         {

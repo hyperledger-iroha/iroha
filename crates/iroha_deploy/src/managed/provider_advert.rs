@@ -43,6 +43,19 @@ impl ManagedProviderAdvertisement {
         })
     }
 
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::ProviderAdvertisement,
+            )?,
+        })
+    }
+
     /// Sign the deterministic current refresh slot and publish it once per original peer.
     ///
     /// The four validators can acknowledge independently within the same caller deadline.
@@ -55,10 +68,7 @@ impl ManagedProviderAdvertisement {
     pub fn publish(&self, deadline: Instant) -> Result<ManagedProviderAdvertisementReport> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let advert = self
-            .authority
-            .prepared
-            .provider_advert(self.authority.provider_id()?, now_ms()? / 1_000)?;
+        let advert = self.authority.sign_provider_advert(now_ms()? / 1_000)?;
         self.publish_original(&advert, deadline)
     }
 

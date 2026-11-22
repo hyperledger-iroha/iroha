@@ -11,7 +11,7 @@ use super::{
 };
 use crate::localnet::service_authorities::RetainedProviderServicePlan;
 use crate::managed::{
-    ManagedProviderAdvertisement, PreparedLocalnet, Result,
+    PreparedLocalnet, Result,
     build_registry::{DISCOVERY_FRESHNESS, GeneratedServiceObservation},
     gateway_compliance::{ManagedGatewayCompliance, PromotedGeneratedCatalog},
     native_operation::{ManagedTransactionFinality, invalid, now_ms},
@@ -79,8 +79,9 @@ impl Timing {
             .ok_or_else(|| invalid("discovery freshness interval overflow"))?;
         let expiry =
             ReadinessExpiry::select(valid_until.min(freshness_end), observed_at, observed_utc)?;
+        let valid_ms = expiry.utc_ceiling().saturating_sub(observed_utc);
         let next_utc = observed_utc
-            .checked_add(freshness_ms / 2)
+            .checked_add(valid_ms / 2)
             .ok_or_else(|| invalid("discovery refresh interval overflow"))?
             .min(advert.midpoint())
             .min(catalog.midpoint());
@@ -93,6 +94,25 @@ impl Timing {
         // by one retry delay to avoid a busy loop if a server keeps returning the same bytes.
         timing.schedule(next_utc, observed_at, observed_utc)?;
         Ok(timing)
+    }
+    // Within the original observation, allow one turn of the measured duration and a full
+    // bounded retry. A previously fast read can race a newly advancing certified tip.
+    fn reserve_refresh(
+        &mut self,
+        elapsed: Duration,
+        observed_at: Instant,
+        observed_utc: u64,
+    ) -> Result<()> {
+        let lead = elapsed
+            .min(TURN_MAXIMUM)
+            .saturating_add(RETRY_DELAY)
+            .saturating_add(TURN_MAXIMUM);
+        let lead = u64::try_from(lead.as_millis()).unwrap_or(u64::MAX);
+        let latest_start = self.expiry.utc_ceiling().saturating_sub(lead);
+        if latest_start < self.next_utc {
+            self.schedule(latest_start, observed_at, observed_utc)?;
+        }
+        Ok(())
     }
     fn schedule(&mut self, requested: u64, now: Instant, utc: u64) -> Result<()> {
         let minimum = utc
@@ -167,6 +187,7 @@ impl ProviderObservation {
         current: GeneratedServiceObservation,
         observed_at: Instant,
         observed_utc: u64,
+        elapsed: Duration,
     ) -> Result<Self> {
         let (issued, expires) = current.advert_interval();
         let advert_interval = Interval::new(issued, expires)?;
@@ -180,13 +201,14 @@ impl ProviderObservation {
                 .checked_mul(1_000)
                 .ok_or_else(|| invalid("catalog interval overflow"))?,
         )?;
-        let timing = Timing::select(
+        let mut timing = Timing::select(
             current.valid_until_unix_ms().min(catalog_interval.expires),
             advert_interval,
             catalog_interval,
             observed_at,
             observed_utc,
         )?;
+        timing.reserve_refresh(elapsed, observed_at, observed_utc)?;
         Ok(Self {
             selection: Selection {
                 continuation,
@@ -227,9 +249,7 @@ fn update_selected(
     if now >= selected.advert_interval.midpoint() {
         budget.progress.enter(Phase::ProviderAdvertisement);
         validate_live(prepared, live, budget)?;
-        budget.call(|deadline| {
-            ManagedProviderAdvertisement::open(prepared, live.provider())?.publish(deadline)
-        })?;
+        budget.call(|deadline| live.open_provider_advert(prepared)?.publish(deadline))?;
         validate_live(prepared, live, budget)?;
     }
     if now >= selected.catalog_interval.midpoint() {
@@ -405,6 +425,7 @@ pub(super) fn refresh(
                 currents[index],
                 observed_at,
                 observed_utc,
+                budget.started.elapsed(),
             )?;
             if index != slot {
                 let midpoint = next

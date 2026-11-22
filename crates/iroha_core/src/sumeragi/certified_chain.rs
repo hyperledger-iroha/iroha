@@ -3539,14 +3539,30 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let same_chain = |cursor: &CertifiedPrefixCursor| {
             cursor.instance == self.instance && cursor.root_scope == self.root_scope
         };
-        if shared.iter().any(|cursor| {
-            same_chain(cursor)
-                && cursor.tip_height() == height
-                && cursor.tip_block_hash() == prefix.tip.block_hash()
-        }) {
-            return;
+        // Order the bounded slots by last verified use. A recurring historical target must
+        // be able to retain its verified predecessor even while the live tip is advancing.
+        if let Some(index) = shared
+            .iter()
+            .position(|cursor| same_chain(cursor) && cursor.tip_height() == height)
+        {
+            if shared[index].tip_block_hash() == prefix.tip.block_hash() {
+                shared[index..].rotate_left(1);
+                return;
+            }
+            shared.remove(index);
+        } else if let Some(oldest) = shared
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, cursor)| same_chain(cursor))
+            .nth(SHARED_PREFIXES_PER_CHAIN - 1)
+            .map(|(index, _)| index)
+        {
+            shared.remove(oldest);
         }
-        shared.retain(|cursor| !(same_chain(cursor) && cursor.tip_height() == height));
+        if shared.len() == SHARED_PREFIXES_TOTAL {
+            shared.remove(0);
+        }
         shared.push(CertifiedPrefixCursor {
             instance: self.instance,
             root_scope: self.root_scope,
@@ -3558,20 +3574,6 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                 proof_source: None,
             },
         });
-        shared.sort_by_key(|cursor| core::cmp::Reverse(cursor.tip_height()));
-        let mut kept: Vec<CertifiedPrefixCursor> = Vec::with_capacity(shared.len());
-        for cursor in shared.drain(..) {
-            let per_chain = kept
-                .iter()
-                .filter(|other| {
-                    other.instance == cursor.instance && other.root_scope == cursor.root_scope
-                })
-                .count();
-            if per_chain < SHARED_PREFIXES_PER_CHAIN && kept.len() < SHARED_PREFIXES_TOTAL {
-                kept.push(cursor);
-            }
-        }
-        *shared = kept;
     }
 
     // Genesis decoding has returned before these complete target and gap receipts exist.

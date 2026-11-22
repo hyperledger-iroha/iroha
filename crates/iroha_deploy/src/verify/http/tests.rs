@@ -68,6 +68,31 @@ fn endpoint_policy_only_allows_https_or_numeric_loopback() {
 }
 
 #[test]
+fn generated_discovery_preserves_the_height_selector_under_caller_decode_limits() {
+    let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
+    let network = native.network_id();
+    let hint = NonZeroU64::new(7).unwrap();
+    let new = || {
+        HttpFinalitySource::new(
+            network,
+            hint,
+            vec![client(network, "https://parent.example/")],
+            vec![],
+            Instant::now() + Duration::from_secs(10),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        )
+        .unwrap()
+    };
+    let ordinary = new();
+    let metered = new();
+    assert_eq!(ordinary.at_durable_tip().initial_height, None);
+    let limits = norito::canonical_decode_limits(1024);
+    norito::with_decode_limits_scope(limits, || {
+        assert_eq!(metered.at_durable_tip().initial_height, Some(hint));
+    });
+}
+
+#[test]
 fn constructor_binds_network_and_distinct_bls_peers_without_dispatch() {
     let native = iroha_data_model::testing::native_finality::NativeFinalityFixture::start(
         "http-scope-fixture",

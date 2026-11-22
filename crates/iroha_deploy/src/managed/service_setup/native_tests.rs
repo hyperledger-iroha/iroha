@@ -584,6 +584,35 @@ fn exact_managed_setup_replays_policy_restores_missing_grants_and_recovers_origi
             )
             .is_err()
     );
+    // A selection already admitted with its original fees must still observe an intervening
+    // replacement before reporting its retained carrier, even on the fully offline path.
+    gateway_dir
+        .write_atomic("original.nrt", &recorder_bytes, PublishMode::Replace)
+        .unwrap();
+    let recovered = gateway.inner.advance_selection(
+        &gateway_original,
+        Instant::now() + Duration::from_secs(15),
+        Mode::ObserveLocal,
+    );
+    assert!(
+        matches!(recovered, Err(crate::managed::Error::Invalid(message))
+        if message == "dispatch semantic original was changed")
+    );
+    gateway_dir
+        .write_atomic("original.nrt", &gateway_bytes, PublishMode::Replace)
+        .unwrap();
+    assert_eq!(
+        gateway
+            .inner
+            .advance_selection(
+                &gateway_original,
+                Instant::now() + Duration::from_secs(15),
+                Mode::ObserveLocal,
+            )
+            .unwrap()
+            .finalized,
+        Some(gateway_finality)
+    );
     drop(gateway);
     drop(recorder);
     let mut peers = UnavailablePeers::start(&prepared);

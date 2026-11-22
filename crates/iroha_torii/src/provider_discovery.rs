@@ -5,7 +5,7 @@
 
 use super::*;
 use iroha_allocation::AllocationBudget;
-use iroha_core::sumeragi::certified_chain::{CertifiedChain, QcVerification};
+use iroha_core::sumeragi::certified_chain::QcVerification;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     provider_admission::discovery::{
@@ -56,6 +56,13 @@ fn unavailable() -> Error {
         message: "Current certified provider discovery is unavailable.".into(),
     }
 }
+fn wall_seconds() -> Result<u64, Error> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|_| unavailable())
+}
+
 fn capacity() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -69,6 +76,9 @@ pub async fn handler(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let (provider, height) = selectors(&provider, &height)?;
+    let snapshot_deadline = std::time::Instant::now()
+        .checked_add(query_admission_remaining(&app))
+        .ok_or_else(capacity)?;
     let principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     global(app.state.view().world())?;
     let format = match negotiate_heavy_query_response_format(&headers) {
@@ -91,34 +101,57 @@ pub async fn handler(
     let state = app.state.clone();
     let response =
         routing::run_admitted_blocking(admission, "provider discovery worker failed", move || {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| unavailable())?
-                .as_secs();
-            let view = state.view();
-            global(view.world())?;
-            if u64::try_from(view.height()).ok() != Some(height) {
-                return Err(unavailable());
-            }
-            let admitted =
-                iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
-                    &view, provider, now,
+            let now = wall_seconds()?;
+            let retained = if norito::core::decode_limits_active() {
+                None
+            } else {
+                global(state.view().world())?;
+                let cut = crate::resource_names_state::snapshot_after_busy(
+                    &budget,
+                    snapshot_deadline,
+                    || state.capture_native_provider_snapshot_v1(height, provider, &budget),
                 )
-                .map_err(|_| unavailable())?
-                .ok_or_else(unavailable)?;
-            let chain = CertifiedChain::new(&view).map_err(|_| unavailable())?;
-            let certified = chain.certified(height).map_err(|_| unavailable())?;
-            if certified.verification() != QcVerification::Verified {
+                .map_err(|_| unavailable())?;
+                Some(cut)
+            };
+            let (admitted, tip) = {
+                let live;
+                let view = match &retained {
+                    Some(cut) => cut.view(),
+                    None => {
+                        live = state.view();
+                        &live
+                    }
+                };
+                global(view.world())?;
+                if u64::try_from(view.height()).ok() != Some(height) {
+                    return Err(unavailable());
+                }
+                let (admitted, certified) =
+                    iroha_core::query::provider_admission::read_finalized_provider_admission_with_block_v1(
+                        view, provider, now,
+                    )
+                    .map_err(|_| unavailable())?
+                    .ok_or_else(unavailable)?;
+                if certified.verification() != QcVerification::Verified {
+                    return Err(unavailable());
+                }
+                (admitted, certified.into_committed())
+            };
+            let guard = cache.blocking_read();
+            // The native registry and handler share the same certified admission only when
+            // they use this exact State. The snapshot below rechecks the tip and generation.
+            let observed = wall_seconds()?;
+            if observed < admitted.envelope().issued_at
+                || observed >= admitted.envelope().retention_epoch
+            {
                 return Err(unavailable());
             }
-            let tip = certified.into_committed();
-            drop(chain);
-            drop(view);
-            let guard = cache.blocking_read();
-            let advert = guard
-                .admitted_record_by_provider(provider.as_bytes(), now)
-                .ok_or_else(unavailable)?
-                .advert();
+            let record = guard
+                .signed_candidate_for_discovery_snapshot(&state, provider.as_bytes(), now)
+                .ok_or_else(unavailable)?;
+            let fingerprint = *record.fingerprint();
+            let advert = record.advert();
             sorafs_manifest::provider_admission::verify_advert_against_record(advert, &admitted)
                 .map_err(|_| unavailable())?;
             let length = norito::canonical_frame_len(advert).map_err(|_| unavailable())?;
@@ -128,20 +161,50 @@ pub async fn handler(
             let _advert_charge = budget.try_reserve_bytes(length).map_err(|_| capacity())?;
             let advert = norito::encode_canonical(advert).map_err(|_| unavailable())?;
             drop(guard);
-            let mut body = state
-                .with_native_provider_admission_snapshot_v1(&tip, provider, &budget, |originals| {
-                    let payload = ProviderDiscoveryProofRefV1::new(
-                        originals.world,
-                        (originals.council_head, originals.council_predecessor),
-                        (originals.provider_head, originals.provider_predecessor),
-                        originals.owner,
-                        &advert,
-                        originals.stream_token,
-                    );
-                    crate::native_projection_response::encode(&payload, format, maximum, &budget)
-                        .map_err(|_| "provider discovery encoding refused".to_owned())
-                })
-                .map_err(|_| unavailable())?;
+            let encode = |originals: iroha_core::state::ProviderAdmissionSnapshotOriginalsV1<'_>| {
+                let payload = ProviderDiscoveryProofRefV1::new(
+                    originals.world,
+                    (originals.council_head, originals.council_predecessor),
+                    (originals.provider_head, originals.provider_predecessor),
+                    originals.owner,
+                    &advert,
+                    originals.stream_token,
+                );
+                crate::native_projection_response::encode(&payload, format, maximum, &budget)
+                    .map_err(|_| "provider discovery encoding refused".to_owned())
+            };
+            let mut body = match &retained {
+                Some(cut) => {
+                    let expiry = admitted.envelope().retention_epoch;
+                    let body = crate::resource_names_state::snapshot_after_busy(
+                        &budget,
+                        snapshot_deadline,
+                        || cut.with_admission(&tip, expiry, &encode),
+                    )
+                    .map_err(|_| unavailable())?;
+                    // Reopen the actual registry after proof work. Each record's fingerprint
+                    // covers the complete signed advert originally admitted into this cache.
+                    let guard = cache.blocking_read();
+                    let current = wall_seconds()?;
+                    let selected = guard
+                        .signed_candidate_for_discovery_snapshot(&state, provider.as_bytes(), current)
+                        .ok_or_else(unavailable)?;
+                    if selected.fingerprint() != &fingerprint {
+                        return Err(unavailable());
+                    }
+                    let current = wall_seconds()?;
+                    if current < admitted.envelope().issued_at
+                        || current >= expiry
+                        || selected.advert().validate(current).is_err()
+                    {
+                        return Err(unavailable());
+                    }
+                    body
+                }
+                None => state
+                    .with_native_provider_admission_snapshot_v1(&tip, provider, &budget, encode)
+                    .map_err(|_| unavailable())?,
+            };
             body.memory = Some(memory);
             let mut response = AxResponse::new(Body::from(Bytes::from_owner(body)));
             response.headers_mut().insert(
