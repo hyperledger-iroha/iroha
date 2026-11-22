@@ -146,6 +146,15 @@ the wallet serializer. It also checks both maximum-depth CreditStatus messages,
 from a Receive head and from a later Send head, with all 32 siblings present. The signing and verification commands apply the
 same transport ceilings to the selected tapes.
 
+### Select the mobile source compiler
+
+For mobile builds, `--spartan-source-compiler CARRIER SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST`
+authenticates the pack and compares its program digests with the local producer
+registry. Its `SPARTAN_SOURCE_COMPILER kinds=4` or `kinds=5` result selects the
+compiler for that installation. Pass the same five arguments and the independently
+regenerated bundle to `--verify-spartan-sources` to check all carrier originals
+and the compiled bytes before packaging.
+
 ### Prepare and verify a five-kind parameter manifest
 
 Use the same program bundle and independent compiler profile as the inspection
