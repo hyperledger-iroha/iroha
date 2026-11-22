@@ -1,11 +1,12 @@
 # KAGEMUSHA Spartan experimental backend
 
-This crate contains the experimental four-pair proof engine, complete Payment
-codec and native custody integration for Bootstrap, Send, Receive and Control.
-Control covers Load, RefreshTimeAnchor and Unload. The engine
-uses the canonical Iroha Pasta implementation and the existing wallet provider,
-hardware adapters, account identity and journal. It does not switch the installed
-wallet generation, change Taira state or migrate funded wallets.
+This crate implements the KAGEMUSHA proof engine, Payment codec and native
+custody integration used by the Iroha Swift and Kotlin wallets. The registered
+five-family profile covers Bootstrap, Control, Send, Receive and ArchiveSent.
+Control covers Load, RefreshTimeAnchor and Unload. ArchiveSent removes a
+confirmed outgoing Payment from the payer’s pending set and preserves its
+balance. The app opens the generation selected by its signed installation.
+Existing funded wallets retain the generation and custody already bound to them.
 
 The profile uses the future 532-byte credential body (596 bytes with its signature)
 and 30-field monetary Core. The installed credential generation remains separate.
@@ -32,14 +33,15 @@ signed genesis and exact ordinary Load receipt.
 
 Acceptance checks both scalar/point proofs, both accumulated matrix claims, and
 both own and inherited generator claims. A linked proof alone is insufficient.
-The fixed-program compiler first stabilizes eight public programs and then starts
-a fresh genuine Bootstrap → Load → Send → Receive chain. Intermediate sizing
-proofs cannot substitute for that final chain.
+The five-family compiler stabilizes ten public programs, one per family on
+each curve. It then proves a fresh monetary history and reimports the published
+programs against their registered digests. The four-family profile has eight
+programs. Both profiles bind proof verification to the installed manifest.
 
 Native proof masks and pair-binding masks use fresh OS entropy. Explicit test
 replay can supply deterministic entropy. The public program format contains
 verification instructions and constants, excluding private witness arrays and
-witness-producing closures. The installer authenticates the eight program digests
+witness-producing closures. The installer authenticates the selected program digests
 against a manifest signed by the root-certified Artifact key. Manifest v4 selects
 two full-width LogUp challenges and the bounded program encoding. Its source and
 conditional security budget are described in the [Control soundness review](research/CONTROL-SOUNDNESS.md).
@@ -74,6 +76,14 @@ actual hardware key attestation. Hardware-only probes are distinct from a comple
 native payment and restart test.
 
 ## Validation
+
+The five-family compiler reproduced the registered 9,263,339-byte bundle with
+SHA-256 `844b031c4b19448f46f52080e00ca4b3c846b4d8e58d83be20e3a9b3ece084a3`.
+The complete host wallet credited the 10,615-byte Payment and recovered both
+original Payments after a cold restart. Physical qualification, the full
+soundness bound and issuer authorization for retail use remain open.
+[Five-family compiler procedure](#bootstrap-the-five-kind-monetary-compiler) ·
+[Security assumptions](research/CONTROL-SOUNDNESS.md)
 
 The manifest-v4 compiler produced identical canonical bytes for all eight public
 programs on passes four and five. A fresh Bootstrap → Load → Send → Receive
@@ -173,7 +183,7 @@ layout must pass complete validation. The separately named
 `measure_recursive_layout_candidate` test records candidate costs and runs the
 actual monetary chain, but does not run the fifteen-case native containment gate.
 
-The retail build uses `full::backend_chain_tests::compile_wallet_program_bundle`
+The four-family build uses `full::backend_chain_tests::compile_wallet_program_bundle`
 with the same layout and a fresh output directory. Once two successive compiler
 passes agree on all eight canonical programs, it writes `program-bundle.norito`.
 The artifact tool's `--verify-spartan-sources` command checks that bundle against
