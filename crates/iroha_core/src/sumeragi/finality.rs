@@ -1,5 +1,7 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
+mod certified_history;
+pub use certified_history::CertifiedHistorySource;
 mod compact_source;
 mod cursor;
 pub(crate) use cursor::NativeGenesisExecutionV1;

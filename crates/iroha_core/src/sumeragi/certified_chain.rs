@@ -3357,6 +3357,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         self.proof_source_genesis = self.genesis.canonical_wire_identity().ok();
     }
 
+    pub(super) fn proof_source_view(&self) -> Option<&V> {
+        match self.source {
+            ChainSource::State(view) => Some(view),
+            _ => None,
+        }
+    }
+
     /// Borrow the constant-size source fence from the genuine native prefix.
     /// This alone conveys no portable admission or continued source availability.
     pub(crate) fn proof_source_cut(&self) -> Option<(u64, Hash)> {
