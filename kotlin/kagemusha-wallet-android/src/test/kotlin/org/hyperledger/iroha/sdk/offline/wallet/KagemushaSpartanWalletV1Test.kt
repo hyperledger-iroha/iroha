@@ -178,6 +178,31 @@ class KagemushaSpartanWalletV1Test {
         assertFails { reply(106, bytes + 0.toByte()).nextLoadOrdinal() }
     }
 
+    @Test fun `deferred ArchiveSent frames the exact Send and Credited and refuses debit fields`() {
+        val send = ByteArray(32) { (it + 1).toByte() }
+        val payload = ByteArray(10_000)
+        "KGSCST3".toByteArray().copyInto(payload)
+        for (flag in 0..1) {
+            payload[8] = flag.toByte()
+            val status = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
+                IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3, IrohaPeerPayloadKind.CREDITED, 3, payload))
+            val original = status.encode()
+            assertEquals(10_084, original.size)
+            val expected = byteArrayOf(75, 83, 79, 49, 5, 32, 0, 0, 0) + send + byteArrayOf(100, 39, 0, 0) + original
+            assertContentEquals(expected, KagemushaSpartanWalletV1.archiveSentCommand(send, status))
+            for (bad in listOf(ByteArray(32), send.copyOf(31), send.copyOf(33))) {
+                assertFailsWith<IllegalArgumentException> { KagemushaSpartanWalletV1.archiveSentCommand(bad, status) }
+            }
+        }
+        val original = projection().also { it[2] = 5; it.fill(0, 131, 227) }
+        val review = KagemushaSpartanReviewProjectionV1(original)
+        assertEquals(KagemushaSpartanOperationV1.ARCHIVE_SENT, review.operation)
+        assertContentEquals(original, review.bytes())
+        for (offset in 131 until 227) {
+            assertFails { KagemushaSpartanReviewProjectionV1(original.copyOf().also { it[offset] = 1 }) }
+        }
+    }
+
     @Test fun `CreditStatus transport checks canonical fields and preserves the opaque proof`() {
         fun wrap(bytes: ByteArray) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
             IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3, IrohaPeerPayloadKind.CREDITED, 3, bytes))
@@ -269,6 +294,31 @@ class KagemushaSpartanWalletV1Test {
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanReceiverCreditStatusV1(reply(105, issued.encode())) }
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanReceiverCreditStatusV1(reply(104, payment.encode())) }
         }
+    }
+
+    @Test fun `later Send CreditStatus retains its opening and checks Native's exact outcome`() {
+        fun message(bytes: ByteArray) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3, IrohaPeerPayloadKind.CREDITED, 3, bytes))
+        fun reply(status: Int, bytes: ByteArray) = KagemushaSpartanReplyV1(status, -1, 0, 0, 0, 0, bytes)
+        for (dense in listOf(false, true)) for (burned in 0..1) {
+            val end = if (dense) 541 + 32 * 32 else 545 + 2 * 32
+            val original = ByteArray(end + 1).also {
+                it[0] = (0xa0 or (if (dense) 0x10 else 0) or burned).toByte()
+                it[8] = (1 - burned).toByte()
+                if (!dense) { it[541] = 1; it[544] = 0x80.toByte() }
+                it[end] = 7
+            }
+            val status = message(original)
+            val issued = KagemushaSpartanReceiverCreditStatusV1(reply(104, status.encode()))
+            val expected = if (burned == 1) KagemushaSpartanCreditOutcomeV1.BURNED else KagemushaSpartanCreditOutcomeV1.CREDITED
+            assertContentEquals(original, issued.message.canonicalPayload.bytes)
+            assertEquals(expected, issued.outcome)
+            assertEquals(expected, reply(105, byteArrayOf((1 - burned).toByte())).verifiedCreditOutcome(status))
+            assertFails { reply(105, byteArrayOf(burned.toByte())).verifiedCreditOutcome(status) }
+            assertFails { message(original.copyOf(end)) }
+            assertFails { message(original.copyOf(540)) }
+        }
+        assertFails { message(ByteArray(2000).also { it[0] = 0xa0.toByte(); it.fill(-1, 541, 545) }) }
     }
 
     @Test fun `Spartan QR carries the exact uncompressed Payment without running the installed decoder`() {
