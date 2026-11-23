@@ -7027,6 +7027,10 @@
         "type": "u64"
       },
       {
+        "name": "retention_policy",
+        "type": "RetentionPolicy"
+      },
+      {
         "name": "rent_quote",
         "type": "DaRentQuote"
       },
@@ -7165,6 +7169,10 @@
       {
         "name": "manifest_hash",
         "type": "ManifestDigest"
+      },
+      {
+        "name": "commitment_digest",
+        "type": "BlobDigest"
       },
       {
         "name": "alias",
@@ -9088,6 +9096,26 @@
       }
     ]
   },
+  "ExecutionOutputC10V1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "ExecutionSourceC10V1"
+      },
+      {
+        "name": "result",
+        "type": "TransactionResultC10V1"
+      },
+      {
+        "name": "completions",
+        "type": "Vec<InvocationCompletionV1>"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "Option<TriggerLifecycleEffectsV1>"
+      }
+    ]
+  },
   "ExecutionOutputPolicyV1": {
     "Struct": [
       {
@@ -9156,6 +9184,11 @@
         "discriminant": 6,
         "tag": "governance_block_start",
         "type": "GovernanceBlockStartOutputV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "c10",
+        "type": "ExecutionOutputC10V1"
       }
     ]
   },
@@ -9176,6 +9209,49 @@
       {
         "name": "verified_at_height",
         "type": "u64"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "network",
+        "type": "u32"
+      },
+      {
+        "discriminant": 1,
+        "tag": "pipeline",
+        "type": "ExecutionSourceC10V1::Pipeline"
+      },
+      {
+        "discriminant": 2,
+        "tag": "time",
+        "type": "ExecutionSourceC10V1::Time"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1::Pipeline": {
+    "Struct": [
+      {
+        "name": "invocation",
+        "type": "PipelineInvocationV1"
+      },
+      {
+        "name": "failure_root",
+        "type": "Option<TriggerFailureRootV1>"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1::Time": {
+    "Struct": [
+      {
+        "name": "invocation",
+        "type": "TimeInvocationV1"
+      },
+      {
+        "name": "failure_root",
+        "type": "Option<TriggerFailureRootV1>"
       }
     ]
   },
@@ -14759,7 +14835,222 @@
       }
     ]
   },
+  "IvmAdmissionErrorC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "MissingMaxCycles"
+      },
+      {
+        "discriminant": 1,
+        "tag": "UnsupportedVersion",
+        "type": "UnsupportedVersionInfo"
+      },
+      {
+        "discriminant": 2,
+        "tag": "UnsupportedFeatureBits",
+        "type": "u8"
+      },
+      {
+        "discriminant": 3,
+        "tag": "UnsupportedAbiVersion",
+        "type": "u8"
+      },
+      {
+        "discriminant": 4,
+        "tag": "AbiVersionNotActive",
+        "type": "u8"
+      },
+      {
+        "discriminant": 5,
+        "tag": "MaxCyclesExceedsUpperBound",
+        "type": "MaxCyclesExceedsUpperBoundInfo"
+      },
+      {
+        "discriminant": 6,
+        "tag": "MaxCyclesWithoutZk",
+        "type": "u64"
+      },
+      {
+        "discriminant": 7,
+        "tag": "DecodedInstructionCountExceeded",
+        "type": "DecodedInstructionLimitInfo"
+      },
+      {
+        "discriminant": 8,
+        "tag": "DecodedCodeSizeExceeded",
+        "type": "DecodedCodeSizeLimitInfo"
+      },
+      {
+        "discriminant": 9,
+        "tag": "BytecodeDecodingFailed",
+        "type": "String"
+      },
+      {
+        "discriminant": 10,
+        "tag": "ManifestCodeHashMismatch",
+        "type": "ManifestCodeHashMismatchInfo"
+      },
+      {
+        "discriminant": 11,
+        "tag": "ManifestAbiHashMismatch",
+        "type": "ManifestAbiHashMismatchInfo"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ManifestCodeHashMissing"
+      },
+      {
+        "discriminant": 13,
+        "tag": "ManifestAbiHashMissing"
+      },
+      {
+        "discriminant": 14,
+        "tag": "ManifestMalformed"
+      },
+      {
+        "discriminant": 15,
+        "tag": "ArtifactAbiHashMismatch",
+        "type": "ArtifactAbiHashMismatchInfo"
+      },
+      {
+        "discriminant": 16,
+        "tag": "GenericSyscallNotAllowed",
+        "type": "u32"
+      }
+    ]
+  },
   "IvmBytecode": "Vec<u8>",
+  "IvmFaultC10V1": {
+    "Struct": [
+      {
+        "name": "kind",
+        "type": "IvmFaultKindC10V1"
+      },
+      {
+        "name": "site",
+        "type": "IvmFaultSiteV1"
+      }
+    ]
+  },
+  "IvmFaultKindC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "OutOfGas"
+      },
+      {
+        "discriminant": 1,
+        "tag": "MemoryLimitExceeded"
+      },
+      {
+        "discriminant": 2,
+        "tag": "MemoryAccessViolation"
+      },
+      {
+        "discriminant": 3,
+        "tag": "MisalignedAccess"
+      },
+      {
+        "discriminant": 4,
+        "tag": "MemoryOutOfBounds"
+      },
+      {
+        "discriminant": 5,
+        "tag": "DecodeError"
+      },
+      {
+        "discriminant": 6,
+        "tag": "InvalidOpcode"
+      },
+      {
+        "discriminant": 7,
+        "tag": "UnknownSyscall"
+      },
+      {
+        "discriminant": 8,
+        "tag": "UnsupportedSyscall"
+      },
+      {
+        "discriminant": 9,
+        "tag": "GasCostOverflow"
+      },
+      {
+        "discriminant": 10,
+        "tag": "Numeric",
+        "type": "NumericFaultC10V1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "PointerAbi",
+        "type": "PointerAbiFaultV1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "AssertionFailed"
+      },
+      {
+        "discriminant": 13,
+        "tag": "ExceededMaxCycles"
+      },
+      {
+        "discriminant": 14,
+        "tag": "InvalidMetadata"
+      },
+      {
+        "discriminant": 15,
+        "tag": "MissingHalt"
+      },
+      {
+        "discriminant": 16,
+        "tag": "NullifierAlreadyUsed"
+      },
+      {
+        "discriminant": 17,
+        "tag": "PermissionDenied"
+      },
+      {
+        "discriminant": 18,
+        "tag": "PrivacyViolation"
+      },
+      {
+        "discriminant": 19,
+        "tag": "RegisterOutOfBounds"
+      },
+      {
+        "discriminant": 20,
+        "tag": "NoritoInvalid"
+      },
+      {
+        "discriminant": 21,
+        "tag": "AbiTypeNotAllowed"
+      },
+      {
+        "discriminant": 22,
+        "tag": "HostOutputItemsExceeded"
+      },
+      {
+        "discriminant": 23,
+        "tag": "HostOutputBytesExceeded"
+      },
+      {
+        "discriminant": 24,
+        "tag": "AmxBudgetExceeded"
+      },
+      {
+        "discriminant": 25,
+        "tag": "ReentrantCall"
+      },
+      {
+        "discriminant": 26,
+        "tag": "CallDepthExceeded"
+      },
+      {
+        "discriminant": 27,
+        "tag": "ControlFlowViolation"
+      }
+    ]
+  },
   "IvmFaultKindV1": {
     "Enum": [
       {
@@ -20446,6 +20737,66 @@
       }
     ]
   },
+  "NumericFaultC10V1": {
+    "Enum": [
+      {
+        "discriminant": 1,
+        "tag": "MantissaOverflow"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ScaleOverflow"
+      },
+      {
+        "discriminant": 3,
+        "tag": "DivisionByZero"
+      },
+      {
+        "discriminant": 4,
+        "tag": "RepeatingDecimal"
+      },
+      {
+        "discriminant": 5,
+        "tag": "ExactDivisionScaleOverflow"
+      },
+      {
+        "discriminant": 6,
+        "tag": "InvalidScale"
+      },
+      {
+        "discriminant": 7,
+        "tag": "InexactConversion"
+      },
+      {
+        "discriminant": 8,
+        "tag": "NegativeQuantity"
+      },
+      {
+        "discriminant": 9,
+        "tag": "QuantityUnderflow"
+      },
+      {
+        "discriminant": 10,
+        "tag": "InvalidRoundingMode"
+      },
+      {
+        "discriminant": 11,
+        "tag": "InvalidFailureMode"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ReservedRegisterNonZero"
+      },
+      {
+        "discriminant": 13,
+        "tag": "NegativeSquareRoot"
+      },
+      {
+        "discriminant": 14,
+        "tag": "RegisterIntegerOverflow"
+      }
+    ]
+  },
   "NumericFaultV1": {
     "Enum": [
       {
@@ -21109,6 +21460,9 @@
   },
   "Option<TriggerId>": {
     "Option": "TriggerId"
+  },
+  "Option<TriggerLifecycleEffectsV1>": {
+    "Option": "TriggerLifecycleEffectsV1"
   },
   "Option<TriggerLifecycleRetryStateV1>": {
     "Option": "TriggerLifecycleRetryStateV1"
@@ -28503,6 +28857,12 @@
   "Result<Vec<DataTriggerStep>, TransactionRejectionReason>": {
     "Result": {
       "err": "TransactionRejectionReason",
+      "ok": "Vec<DataTriggerStep>"
+    }
+  },
+  "Result<Vec<DataTriggerStep>, TransactionRejectionReasonC10V1>": {
+    "Result": {
+      "err": "TransactionRejectionReasonC10V1",
       "ok": "Vec<DataTriggerStep>"
     }
   },
@@ -37868,9 +38228,51 @@
       }
     ]
   },
+  "TransactionRejectionReasonC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "AccountDoesNotExist",
+        "type": "FindError"
+      },
+      {
+        "discriminant": 1,
+        "tag": "LimitCheck",
+        "type": "TransactionLimitError"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Validation",
+        "type": "ValidationFailC10V1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "InstructionExecution",
+        "type": "InstructionExecutionFail"
+      },
+      {
+        "discriminant": 4,
+        "tag": "TriggerExecution",
+        "type": "TriggerExecutionFail"
+      },
+      {
+        "discriminant": 5,
+        "tag": "AnonymousBallot",
+        "type": "AnonymousBallotRejectionV1"
+      }
+    ]
+  },
   "TransactionResult": {
     "Tuple": [
       "Result<Vec<DataTriggerStep>, TransactionRejectionReason>",
+      "Vec<AssetBatchTransferOutcome>",
+      "Option<NexusFeeReceipt>",
+      "ContractEmissionsV1"
+    ]
+  },
+  "TransactionResultC10V1": {
+    "Tuple": [
+      "Result<Vec<DataTriggerStep>, TransactionRejectionReasonC10V1>",
       "Vec<AssetBatchTransferOutcome>",
       "Option<NexusFeeReceipt>",
       "ContractEmissionsV1"
@@ -38823,6 +39225,59 @@
       {
         "discriminant": 9,
         "tag": "InternalError"
+      }
+    ]
+  },
+  "ValidationFailC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "NotPermitted",
+        "type": "String"
+      },
+      {
+        "discriminant": 1,
+        "tag": "IvmAdmission",
+        "type": "IvmAdmissionErrorC10V1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "InstructionFailed",
+        "type": "InstructionExecutionError"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ContractRejected",
+        "type": "ContractRejection"
+      },
+      {
+        "discriminant": 4,
+        "tag": "IvmFault",
+        "type": "IvmFaultC10V1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "QueryFailed",
+        "type": "QueryExecutionFail"
+      },
+      {
+        "discriminant": 6,
+        "tag": "AxtReject",
+        "type": "AxtRejectContext"
+      },
+      {
+        "discriminant": 7,
+        "tag": "SettlementReplay",
+        "type": "SettlementReplayV1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "TooComplex"
+      },
+      {
+        "discriminant": 9,
+        "tag": "InternalError",
+        "type": "String"
       }
     ]
   },
