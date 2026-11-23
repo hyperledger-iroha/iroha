@@ -152,7 +152,14 @@ node tools/openapi/scripts/sync-openapi.mjs \
   --version=current --latest \
   --allowed-signers=<absolute-operator-allowlist-path> \
   --output-dir="${OPENAPI_STAGE}"
+```
 
+Copy the five reviewed release outputs listed in `generated-files.toml` from
+staging into `artifacts/openapi/` and make a signed output-only commit on the
+candidate branch. Run the production gate at that clean commit. The manifests
+must still identify the source commit from which the operator signed the payload.
+
+```bash
 OPENAPI_REQUIRE_SIGNED=1 \
 OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> \
   bash ci/check_openapi_spec.sh
