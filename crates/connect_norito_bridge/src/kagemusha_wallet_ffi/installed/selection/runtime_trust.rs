@@ -1,4 +1,4 @@
-//! Immutable application trust shared by runtime admission and Android packaging.
+//! Immutable application trust shared by runtime admission and mobile packaging.
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -18,7 +18,7 @@ pub(super) enum RuntimeAuthority {
     ApplicationReleaseV1 = 4,
 }
 
-/// Android packagers read the authority tag and Ed25519 key from the same immutable
+/// Mobile packagers read the authority tag and Ed25519 key from the same immutable
 /// value that authenticates the application manifest. Tag zero denotes no installed trust.
 #[repr(C)]
 struct EncodedRuntimeTrust {
@@ -30,8 +30,9 @@ const _: () = assert!(size_of::<EncodedRuntimeTrust>() == 33);
 
 #[used]
 #[cfg_attr(target_os = "android", unsafe(link_section = ".iroha.wallet_trust.v1"))]
+#[cfg_attr(target_os = "ios", unsafe(link_section = "__TEXT,__iroha_wtrust"))]
 #[cfg_attr(
-    target_os = "android",
+    any(target_os = "android", target_os = "ios"),
     unsafe(export_name = "iroha_wallet_runtime_trust_v1")
 )]
 static ENCODED_RUNTIME_TRUST: EncodedRuntimeTrust = match INSTALLED_RUNTIME_TRUST {
