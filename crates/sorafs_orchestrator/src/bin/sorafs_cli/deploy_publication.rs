@@ -28,7 +28,12 @@ use sorafs_manifest::capacity::ReplicationOrderV1;
 use std::io::Seek as _;
 use std::time::Instant;
 
-const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
+/// Default client deadline for one deployment, from registration through the challenged
+/// completion proof. Multi-gigabyte packages raise it with `--client-deadline-secs`.
+pub(super) const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
+/// Seconds an explicit client deadline may span: at most the automatic order's 24 h ingest
+/// window, which a pending order's own deadline also caps.
+const CLIENT_DEADLINE_SECS: std::ops::RangeInclusive<u64> = 60..=86_400;
 const PREPARATION_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// Spacing of a provider's completion reads while it ingests or replicates.
@@ -114,9 +119,25 @@ fn decode<
     .map_err(|_| "publication response is not canonical bounded Norito".to_owned())
 }
 
-fn ensure_live(started: Instant) -> Result<(), String> {
-    if started.elapsed() >= PUBLICATION_TIMEOUT {
-        Err("publication did not finalize before its ten-minute deadline".to_owned())
+/// Parse `--client-deadline-secs`, which deploy refuses before it registers anything.
+pub(super) fn parse_client_deadline(value: &str) -> Result<Duration, String> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| CLIENT_DEADLINE_SECS.contains(secs))
+        .map(Duration::from_secs)
+        .ok_or_else(|| {
+            format!(
+                "--client-deadline-secs must be an integer from {} to {}",
+                CLIENT_DEADLINE_SECS.start(),
+                CLIENT_DEADLINE_SECS.end()
+            )
+        })
+}
+
+fn ensure_live(expires: Instant) -> Result<(), String> {
+    if Instant::now() >= expires {
+        Err("publication did not finalize before its client deadline".to_owned())
     } else {
         Ok(())
     }
@@ -383,12 +404,12 @@ fn registration_observed(
     client: &HttpClient,
     base: &Url,
     expected: iroha_crypto::HashOf<SignedTransaction>,
-    started: Instant,
+    expires: Instant,
 ) -> Result<bool, String> {
-    ensure_live(started)?;
-    let remaining = PUBLICATION_TIMEOUT.saturating_sub(started.elapsed());
+    ensure_live(expires)?;
+    let remaining = expires.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err("publication did not finalize before its ten-minute deadline".to_owned());
+        return Err("publication did not finalize before its client deadline".to_owned());
     }
     let mut status_url = endpoint(base, "v1/pipeline/transactions/status")?;
     status_url
@@ -403,7 +424,7 @@ fn registration_observed(
         .send()
         .map_err(|_| "pin registration status transport unavailable".to_owned())?;
     let result = check_registration_response(response, expected);
-    ensure_live(started)?;
+    ensure_live(expires)?;
     result
 }
 
@@ -444,11 +465,11 @@ fn observe_preparation(
         client,
         base,
         config,
-        started,
+        expires,
     } = session;
     let mut transport_failures = 0;
     loop {
-        ensure_live(started)?;
+        ensure_live(expires)?;
         let sent = signed_request(
             client,
             config,
@@ -483,9 +504,7 @@ fn observe_preparation(
                 // Read the deadline after the reply, so no backoff sleeps past it.
                 let backoff =
                     PREPARATION_TRANSPORT_BACKOFF.saturating_mul(1 << (transport_failures - 1));
-                std::thread::sleep(
-                    backoff.min(PUBLICATION_TIMEOUT.saturating_sub(started.elapsed())),
-                );
+                std::thread::sleep(backoff.min(expires.saturating_duration_since(Instant::now())));
                 continue;
             }
         };
@@ -494,7 +513,7 @@ fn observe_preparation(
         if let Some(wait) = publication_read_backoff(
             status,
             response.headers(),
-            PUBLICATION_TIMEOUT.saturating_sub(started.elapsed()),
+            expires.saturating_duration_since(Instant::now()),
         ) {
             drop(response);
             std::thread::sleep(wait);
@@ -555,7 +574,7 @@ fn preparation(
             }
             Preparation::Absent | Preparation::AwaitingOrder => {
                 if let Some(hash) = registration_hash {
-                    registration_observed(session.client, session.base, hash, session.started)?;
+                    registration_observed(session.client, session.base, hash, session.expires)?;
                 }
             }
         }
@@ -653,7 +672,7 @@ pub(super) fn register_if_absent(
         }
     };
     let tx = retained_registration(&prior, request, manifest)?;
-    if registration_observed(session.client, session.base, tx.hash(), session.started)? {
+    if registration_observed(session.client, session.base, tx.hash(), session.expires)? {
         return Ok(Registration::Observed(tx.hash()));
     }
     send_pin_registration(request, &tx).map(Registration::Submitted)
@@ -665,21 +684,51 @@ pub(super) struct PublicationSession<'a> {
     client: &'a HttpClient,
     base: &'a Url,
     config: &'a DeployClientConfig,
-    started: Instant,
+    expires: Instant,
 }
 
 impl<'a> PublicationSession<'a> {
-    /// Start the ten-minute publication deadline over the deployment's transport and signer.
+    /// Start the publication client deadline over the deployment's transport and signer.
     pub(super) fn begin(
         client: &'a HttpClient,
         base: &'a Url,
         config: &'a DeployClientConfig,
+        deadline: Duration,
     ) -> Self {
         Self {
             client,
             base,
             config,
-            started: Instant::now(),
+            expires: Instant::now() + deadline,
+        }
+    }
+
+    /// Bound waiting on `order`. A pending order cannot complete after its on-chain ingest
+    /// deadline, so that deadline caps the client deadline, and an order already past it fails at
+    /// once. A completed order keeps the client deadline for its assertion and proof read.
+    fn within_ingest_deadline(
+        mut self,
+        order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
+    ) -> Result<Self, String> {
+        if !matches!(order.status, ReplicationOrderStatus::Pending) {
+            return Ok(self);
+        }
+        let Some(deadline) = UNIX_EPOCH.checked_add(Duration::from_secs(order.deadline_epoch))
+        else {
+            return Ok(self);
+        };
+        match deadline.duration_since(SystemTime::now()) {
+            Ok(remaining) if !remaining.is_zero() => {
+                if let Some(order_deadline) = Instant::now().checked_add(remaining) {
+                    self.expires = self.expires.min(order_deadline);
+                }
+                Ok(self)
+            }
+            _ => Err(format!(
+                "replication order {} passed its on-chain ingest deadline (Unix second {}) before completing",
+                hex_encode(order.order_id.as_bytes()),
+                order.deadline_epoch
+            )),
         }
     }
 }
@@ -707,9 +756,9 @@ fn assert_and_verify(
         client,
         base,
         config,
-        started,
+        expires,
     } = session;
-    ensure_live(started)?;
+    ensure_live(expires)?;
     let mut challenge = [0; 32];
     rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut challenge)
         .map_err(|_| "publication challenge entropy unavailable".to_owned())?;
@@ -756,7 +805,7 @@ fn assert_and_verify(
     let request_bytes = norito::to_bytes(&request)
         .map_err(|_| "publication proof selector encoding failed".to_owned())?;
     loop {
-        ensure_live(started)?;
+        ensure_live(expires)?;
         let response = post(
             client,
             config,
@@ -766,7 +815,7 @@ fn assert_and_verify(
         if let Some(wait) = publication_read_backoff(
             response.status(),
             response.headers(),
-            PUBLICATION_TIMEOUT.saturating_sub(started.elapsed()),
+            expires.saturating_duration_since(Instant::now()),
         ) {
             drop(response);
             std::thread::sleep(wait);
@@ -789,7 +838,7 @@ fn assert_and_verify(
                 "publication assertion did not have matching successful native finalized execution"
                     .to_owned()
             })?;
-        ensure_live(started)?;
+        ensure_live(expires)?;
         if verified.completed() != completed {
             return Err("publication phase proof substituted".to_owned());
         }
@@ -886,7 +935,7 @@ impl ProviderProgress<'_> {
             if self.completed(&self.read()?, provider)? {
                 return Ok(());
             }
-            ensure_live(self.session.started)?;
+            ensure_live(self.session.expires)?;
             std::thread::sleep(COMPLETION_POLL_INTERVAL);
         }
     }
@@ -911,7 +960,7 @@ impl ProviderProgress<'_> {
             if read == reads || refused.elapsed() >= REFUSAL_PROGRESS_WAIT {
                 break;
             }
-            ensure_live(self.session.started)?;
+            ensure_live(self.session.expires)?;
             std::thread::sleep(REFUSAL_PROGRESS_INTERVAL);
         }
         Ok(false)
@@ -941,7 +990,7 @@ fn supply_sources(
         client,
         base: _,
         config,
-        started,
+        expires,
     } = session;
     let progress = ProviderProgress {
         session,
@@ -971,7 +1020,7 @@ fn supply_sources(
         let mut selected = None;
         let mut refused_by_assignment = false;
         for candidate in provider_urls {
-            ensure_live(started)?;
+            ensure_live(expires)?;
             let candidate =
                 Url::parse(candidate).map_err(|_| "invalid provider source URL".to_owned())?;
             let url = endpoint(&candidate, "v1/sorafs/publish/source")?;
@@ -994,7 +1043,7 @@ fn supply_sources(
             ));
         };
         for (index, chunk) in artifacts.plan.chunks.iter().enumerate() {
-            ensure_live(started)?;
+            ensure_live(expires)?;
             artifacts
                 .payload
                 .seek(std::io::SeekFrom::Start(chunk.offset))
@@ -1068,6 +1117,8 @@ pub(super) fn qualify(
             .as_bytes(),
     );
     let assigned = preparation(session, digest, registration_hash, false)?;
+    // Waiting on a pending order ends at its on-chain ingest deadline.
+    let waiting = session.within_ingest_deadline(&assigned.order)?;
     let order: ReplicationOrderV1 = decode(&assigned.order.canonical_order, 256 * 1024)?;
     order
         .validate()
@@ -1075,9 +1126,9 @@ pub(super) fn qualify(
     // Both assertions bind the same independently selected checkpoint: the compact proof
     // authenticates execution under it and never replaces it.
     let (_, assignment_evidence) =
-        assert_and_verify(session, &assigned, &checkpoint, false, out_dir)?;
+        assert_and_verify(waiting, &assigned, &checkpoint, false, out_dir)?;
     supply_sources(
-        session,
+        waiting,
         artifacts,
         &assigned,
         &order,
@@ -1085,14 +1136,21 @@ pub(super) fn qualify(
         provider_urls,
         out_dir,
     )?;
-    let complete = preparation(session, digest, registration_hash, true)?;
+    let complete = preparation(waiting, digest, registration_hash, true)?;
     if complete.order.assignment_revision != assigned.order.assignment_revision
         || complete.order.canonical_order != assigned.order.canonical_order
     {
         return Err("publication assignment changed while supplying source bytes".to_owned());
     }
-    let (finalized_height, completion_evidence) =
-        assert_and_verify(session, &complete, &checkpoint, true, out_dir)?;
+    // The order is now Completed, so its ingest deadline no longer bounds the final assertion
+    // and proof read: they keep the client deadline.
+    let (finalized_height, completion_evidence) = assert_and_verify(
+        session.within_ingest_deadline(&complete.order)?,
+        &complete,
+        &checkpoint,
+        true,
+        out_dir,
+    )?;
     Ok(Value::Object(Map::from_iter([
         ("state".into(), Value::from("completed")),
         ("assignment_finalized".into(), Value::from(true)),
@@ -1372,7 +1430,13 @@ mod tests {
         let (client, base, server) = status_server(replies);
         for observed in [false, true, true] {
             assert_eq!(
-                registration_observed(&client, &base, expected, Instant::now()).unwrap(),
+                registration_observed(
+                    &client,
+                    &base,
+                    expected,
+                    Instant::now() + PUBLICATION_TIMEOUT
+                )
+                .unwrap(),
                 observed
             );
         }
@@ -1410,8 +1474,13 @@ mod tests {
         ] {
             let (client, base, server) =
                 status_server(vec![(status, "Content-Type: application/json\r\n", body)]);
-            let error =
-                registration_observed(&client, &base, expected, Instant::now()).unwrap_err();
+            let error = registration_observed(
+                &client,
+                &base,
+                expected,
+                Instant::now() + PUBLICATION_TIMEOUT,
+            )
+            .unwrap_err();
             assert!(!error.contains("private upstream"));
             assert_eq!(server.join().unwrap().len(), 1);
         }
@@ -1445,8 +1514,13 @@ mod tests {
         ] {
             let (client, base, server) = status_server(vec![(status, headers, body)]);
             assert!(
-                registration_observed(&client, &base, registration_hash(1), Instant::now())
-                    .is_err()
+                registration_observed(
+                    &client,
+                    &base,
+                    registration_hash(1),
+                    Instant::now() + PUBLICATION_TIMEOUT,
+                )
+                .is_err()
             );
             assert_eq!(server.join().unwrap().len(), 1);
         }
@@ -1560,7 +1634,7 @@ mod tests {
                 "Content-Type: application/x-norito\r\n",
                 bytes,
             )]);
-            let session = PublicationSession::begin(&client, &base, &config);
+            let session = PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT);
             let request = registration_request(&client, &base, &config, &owner);
             assert_eq!(
                 matches!(
@@ -1622,7 +1696,7 @@ mod tests {
             let (client, base, server) = status_server(replies);
             let request = registration_request(&client, &base, &config, &owner);
             let result = register_if_absent(
-                PublicationSession::begin(&client, &base, &config),
+                PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
                 &request,
                 &manifest,
                 dir.path(),
@@ -1662,12 +1736,15 @@ mod tests {
         let client = HttpClient::builder().no_proxy().build().unwrap();
         let base = Url::parse("http://127.0.0.1:1/").unwrap();
         let before = Instant::now();
-        let session = PublicationSession::begin(&client, &base, &config);
+        let session = PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT);
         assert!(std::ptr::eq(session.client, &raw const client));
         assert!(std::ptr::eq(session.base, &raw const base));
         assert!(std::ptr::eq(session.config, &raw const config));
-        assert!(before <= session.started && session.started <= Instant::now());
-        assert!(ensure_live(session.started).is_ok());
+        assert!(
+            before + PUBLICATION_TIMEOUT <= session.expires
+                && session.expires <= Instant::now() + PUBLICATION_TIMEOUT
+        );
+        assert!(ensure_live(session.expires).is_ok());
     }
 
     #[test]
@@ -1688,7 +1765,7 @@ mod tests {
                     ),
                 ]);
                 let error = preparation(
-                    PublicationSession::begin(&client, &base, &config),
+                    PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
                     ManifestDigest::new([1; 32]),
                     Some(registration_hash(1)),
                     false,
@@ -1725,7 +1802,7 @@ mod tests {
                 ),
             ]);
             let error = preparation(
-                PublicationSession::begin(&client, &base, &config),
+                PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
                 ManifestDigest::new([1; 32]),
                 Some(registration_hash(1)),
                 false,
@@ -1772,16 +1849,12 @@ mod tests {
     fn registration_status_deadline_refuses_before_starting_http() {
         let client = HttpClient::builder().no_proxy().build().unwrap();
         let base = Url::parse("http://127.0.0.1:1/").unwrap();
-        let error = registration_observed(
-            &client,
-            &base,
-            registration_hash(1),
-            Instant::now() - PUBLICATION_TIMEOUT,
-        )
-        .unwrap_err();
+        // An expired deadline is any instant not in the future; nothing subtracts from `now`.
+        let error = registration_observed(&client, &base, registration_hash(1), Instant::now())
+            .unwrap_err();
         assert_eq!(
             error,
-            "publication did not finalize before its ten-minute deadline"
+            "publication did not finalize before its client deadline"
         );
     }
 
@@ -1826,8 +1899,8 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(ensure_live(Instant::now()).is_ok());
-        assert!(ensure_live(Instant::now() - PUBLICATION_TIMEOUT).is_err());
+        assert!(ensure_live(Instant::now() + PUBLICATION_TIMEOUT).is_ok());
+        assert!(ensure_live(Instant::now()).is_err());
         let temporary = tempfile::NamedTempFile::new().unwrap();
         fs::write(temporary.path(), b"HTTP 200 is not native finality").unwrap();
         assert!(
@@ -1985,7 +2058,7 @@ mod tests {
         let out_temp = tempfile::tempdir().unwrap();
         let out = fs::canonicalize(out_temp.path()).unwrap();
         let progress = ProviderProgress {
-            session: PublicationSession::begin(&client, &base, &config),
+            session: PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
             expected: &expected,
             registration_hash: Some(registration_hash(1)),
             out_dir: &out,
@@ -2057,7 +2130,7 @@ mod tests {
         let read = |replies| {
             let (client, base, server) = status_server(replies);
             let result = observe_preparation(
-                PublicationSession::begin(&client, &base, &config),
+                PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
                 row.pin.digest,
             );
             (result, server.join().unwrap().len())
@@ -2169,7 +2242,7 @@ mod tests {
         let config = publication_test_config();
         let (client, base, server) = status_server(replies);
         let result = supply_sources(
-            PublicationSession::begin(&client, &base, &config),
+            PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT),
             artifacts,
             row,
             order,
@@ -2312,29 +2385,118 @@ mod tests {
     fn preparation_backoff_never_sleeps_past_the_deadline_after_a_slow_reply() {
         // One second of the deadline is left; the reply arrives two seconds later and asks for a
         // thirty-second retry. Only the deadline left after the reply may be slept.
-        let left = Duration::from_secs(1);
-        let Some(started) = Instant::now().checked_sub(PUBLICATION_TIMEOUT - left) else {
-            return; // A monotonic clock younger than the deadline cannot express this state.
-        };
         let config = publication_test_config();
         let (client, base, server) = slow_status_server(
             vec![(503, "Retry-After: 30\r\n", Vec::new())],
             Duration::from_secs(2),
         );
-        let session = PublicationSession {
-            client: &client,
-            base: &base,
-            config: &config,
-            started,
-        };
+        let session = PublicationSession::begin(&client, &base, &config, Duration::from_secs(1));
         let before = Instant::now();
         let result = observe_preparation(session, progress_row().pin.digest);
         let elapsed = before.elapsed();
         assert_eq!(
             result.err().unwrap(),
-            "publication did not finalize before its ten-minute deadline"
+            "publication did not finalize before its client deadline"
         );
         assert!(elapsed < Duration::from_millis(2_700), "{elapsed:?}");
         assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn client_deadline_flag_is_bounded_and_refused_before_any_input() {
+        let refusal = "--client-deadline-secs must be an integer from 60 to 86400";
+        for value in ["59", "86401", "0", "-1", "600s", ""] {
+            assert_eq!(
+                parse_client_deadline(value).unwrap_err(),
+                refusal,
+                "{value:?}"
+            );
+            assert_eq!(
+                deploy(vec![format!("--client-deadline-secs={value}")]).unwrap_err(),
+                refusal
+            );
+        }
+        assert_eq!(
+            parse_client_deadline("60").unwrap(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            parse_client_deadline("86400").unwrap(),
+            Duration::from_secs(86_400)
+        );
+        let error = deploy(vec!["--client-deadline-secs=14400".to_owned()]).unwrap_err();
+        assert!(error.contains("--client-config"), "{error}");
+        // Default deploys keep 600 s; the longest explicit deadline fits the ingest window.
+        assert_eq!(PUBLICATION_TIMEOUT, Duration::from_secs(600));
+        assert!(
+            *CLIENT_DEADLINE_SECS.end()
+                <= u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)
+        );
+        // Three sequential copies of the 24,259-chunk Taira package at about 15 chunks/s.
+        let staged = 3 * 24_259 / 15;
+        assert!(Duration::from_secs(staged) > PUBLICATION_TIMEOUT);
+        assert!(CLIENT_DEADLINE_SECS.contains(&staged));
+    }
+
+    #[test]
+    fn client_deadline_never_outlives_a_pending_orders_ingest_deadline() {
+        let config = publication_test_config();
+        let client = HttpClient::builder().no_proxy().build().unwrap();
+        let base = Url::parse("http://127.0.0.1:1/").unwrap();
+        let session = PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut order = progress_row().order;
+        assert!(matches!(order.status, ReplicationOrderStatus::Pending));
+        // A pending order already past its ingest deadline fails at once, naming that deadline.
+        order.deadline_epoch = now - 1;
+        let error = session.within_ingest_deadline(&order).err().unwrap();
+        assert_eq!(
+            error,
+            format!(
+                "replication order {} passed its on-chain ingest deadline (Unix second {}) before completing",
+                hex_encode(order.order_id.as_bytes()),
+                now - 1
+            )
+        );
+        // An earlier order deadline caps the client deadline; a later or unrepresentable one
+        // never extends it.
+        order.deadline_epoch = now + 60;
+        assert!(session.within_ingest_deadline(&order).unwrap().expires < session.expires);
+        for deadline in [now + 3_600, u64::MAX] {
+            order.deadline_epoch = deadline;
+            assert_eq!(
+                session.within_ingest_deadline(&order).unwrap().expires,
+                session.expires
+            );
+        }
+    }
+
+    #[test]
+    fn completed_orders_keep_the_client_deadline_for_their_assertion() {
+        let config = publication_test_config();
+        let client = HttpClient::builder().no_proxy().build().unwrap();
+        let base = Url::parse("http://127.0.0.1:1/").unwrap();
+        let session = PublicationSession::begin(&client, &base, &config, PUBLICATION_TIMEOUT);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // The wait on the pending order was capped at its ingest deadline...
+        let mut order = progress_row().order;
+        order.deadline_epoch = now + 60;
+        assert!(session.within_ingest_deadline(&order).unwrap().expires < session.expires);
+        // ...but once it is Completed the assertion and proof read get the whole client deadline,
+        // also after that ingest deadline has passed.
+        order.status = ReplicationOrderStatus::Completed(3);
+        for deadline in [now + 60, now - 1, 1] {
+            order.deadline_epoch = deadline;
+            assert_eq!(
+                session.within_ingest_deadline(&order).unwrap().expires,
+                session.expires
+            );
+        }
     }
 }

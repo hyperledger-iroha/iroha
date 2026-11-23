@@ -599,6 +599,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut prepared_digest: Option<String> = None;
     let mut finality_checkpoint: Option<PathBuf> = None;
     let mut provider_urls = Vec::new();
+    let mut client_deadline = deploy_publication::PUBLICATION_TIMEOUT;
     let mut payload_path: Option<PathBuf> = None;
     let mut client_config_path: Option<PathBuf> = None;
     let mut torii_url_override: Option<String> = None;
@@ -621,6 +622,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             "--prepared-package-blake3-hex" => prepared_digest = Some(value.to_owned()),
             "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
             "--provider-url" => provider_urls.push(value.to_owned()),
+            "--client-deadline-secs" => {
+                client_deadline = deploy_publication::parse_client_deadline(value)?;
+            }
             "--payload" => payload_path = Some(PathBuf::from(value)),
             "--client-config" => client_config_path = Some(PathBuf::from(value)),
             "--torii-url" => torii_url_override = Some(value.to_string()),
@@ -789,8 +793,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
-    let session =
-        deploy_publication::PublicationSession::begin(&client, &torii_base_url, &client_config);
+    let session = deploy_publication::PublicationSession::begin(
+        &client,
+        &torii_base_url,
+        &client_config,
+        client_deadline,
+    );
     let registration = deploy_publication::register_if_absent(
         session,
         &submit_request,
@@ -3079,7 +3087,7 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli da-recover --gateway=URL [--gateway=URL...] --cid=BASE32 --manifest-hash=HEX --output=PATH
-  sorafs_cli deploy (--payload=PATH | --da-source=TICKET_DIRECTORY | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy (--payload=PATH | --da-source=TICKET_DIRECTORY | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--client-deadline-secs=N] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]

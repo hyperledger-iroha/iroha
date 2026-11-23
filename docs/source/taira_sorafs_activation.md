@@ -36,3 +36,9 @@ Torii's own refusals stay final. These reads are scheduling signals; the final
 challenged native proof still must authenticate completion of all replicas. The
 publisher needs only the providers' public source endpoints, never access to their
 storage.
+
+The client deadline, from registration through the challenged completion proof,
+defaults to 600 s. Raise it with `--client-deadline-secs=N` (60 to 86400) for
+multi-gigabyte packages: staging a 3 GB, 24,259-chunk package to three providers in
+turn at about 15 chunks/s takes well over an hour, so allow several hours. A pending
+order's on-chain ingest deadline still ends the wait.
