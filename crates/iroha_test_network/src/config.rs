@@ -3306,9 +3306,12 @@ mod tests {
             };
             assert_eq!(rejection.output_index, expected_rejection_index);
             assert!(
-                matches!(rejection.reason.as_ref(), TransactionRejectionReason::Validation(
-                ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(cause)))
-                if cause.as_ref() == expected_cause),
+                matches!(
+                    rejection.reason.as_borrowed().baseline(),
+                    Some(TransactionRejectionReason::Validation(
+                        ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(cause))
+                    )) if cause.as_ref() == expected_cause
+                ),
                 "unexpected staking rejection: {report:#}"
             );
             assert!(

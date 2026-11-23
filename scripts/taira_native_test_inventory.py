@@ -325,6 +325,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_initializer_invariant_keeps_original_across_validation_and_producer_recovery',
         'original_evidence_decode_owner_survives_worker_deferral_until_its_last_reader',
         'a_local_ballot_refusal_stays_deferred_through_publication',
+        'runtime_support_codec_refusal_remains_original_publication_deferral',
+        'missing_g3_result_profile_requires_recovery_with_the_original_diagnostic',
+        'g3_codec_and_storage_refusals_keep_their_original_publication_owners',
     )),
     ('native publication refusal identity', 'sumeragi/executor/publication.rs', 'sumeragi/executor/publication/tests.rs', 'tests', 'sumeragi::executor::publication::tests', (
         'state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',

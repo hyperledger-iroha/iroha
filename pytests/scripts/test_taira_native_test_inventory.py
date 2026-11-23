@@ -169,7 +169,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 645)
+        self.assertEqual(len(names), 648)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS
@@ -465,7 +465,10 @@ class NativeInventoryTests(unittest.TestCase):
                 ('sumeragi/executor/preparation.rs', 'sumeragi/executor/preparation/tests.rs', 'tests', 'sumeragi::executor::preparation::tests'),
                 ('immutable_result_foreign_budget_requires_recovery_with_original_diagnostic', 'immutable_result_excessive_preimage_requires_recovery_with_original_extent', 'immutable_result_encoding_failure_requires_recovery_with_original_cause', 'immutable_certificate_foreign_budget_requires_recovery_with_original_diagnostic', 'immutable_preparation_capacity_preserves_the_exact_original_release', 'immutable_preparation_allocator_refusal_never_invents_a_release', 'immutable_preparation_short_prepaid_parent_requires_recovery_without_losing_custody', 'producer_payload_errors_keep_original_release_and_terminal_classification',
                  'cold_prepare_keeps_original_recovery_refusal_after_execution_latches_recovery',
-                 'native_initializer_invariant_keeps_original_across_validation_and_producer_recovery')),
+                 'native_initializer_invariant_keeps_original_across_validation_and_producer_recovery',
+                 'runtime_support_codec_refusal_remains_original_publication_deferral',
+                 'missing_g3_result_profile_requires_recovery_with_the_original_diagnostic',
+                 'g3_codec_and_storage_refusals_keep_their_original_publication_owners')),
             'native original execution and undo': (
                 ('state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests'),
                 ('native_tip_snapshot_scope_is_mandatory_and_objects_are_closed',)),

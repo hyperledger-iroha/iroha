@@ -998,6 +998,8 @@ else:
             "connect_norito_kagemusha_wallet_revision_v1",
             *("connect_norito_kagemusha_spartan_" + suffix + "_v1" for suffix in (
                 "install", "begin_account", "authorize_account", "prepare",
+                "credit_status", "epoch", "activation_settlement", "unload_settlement",
+                "issue_open_request", "install_blacklist", "confirm", "time",
                 "execute", "output", "verify_payment", "discard",
             )),
         ] + [

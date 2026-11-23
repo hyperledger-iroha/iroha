@@ -373,12 +373,12 @@ fn strict_genesis_rejection_preserves_actual_output_index_and_cause() {
     };
     assert_eq!(rejection.output_index, expected_index);
     assert!(matches!(
-        rejection.reason.as_ref(),
-        TransactionRejectionReason::Validation(
+        rejection.reason.as_borrowed().baseline(),
+        Some(TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::InstructionFailed(
                 InstructionExecutionError::Repetition(_)
             )
-        )
+        ))
     ));
     assert!(
         report
