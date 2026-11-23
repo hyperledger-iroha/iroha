@@ -28,7 +28,7 @@ impl Fixture {
             pool.geometry,
         )
         .unwrap();
-        // Only fixed health records are written here. The existing seven-byte
+        // Only fixed control records are written here. The existing seven-byte
         // duplex test separately exercises cancellation and partial I/O.
         let (wire, socket) = tokio::io::duplex(4096);
         let (read, write) = tokio::io::split(socket);
@@ -95,6 +95,10 @@ impl Fixture {
         })
         .await
         .expect("one fixed health writer must flush");
+        self.read_control_record().await
+    }
+
+    async fn read_control_record(&mut self) -> Header {
         let length = usize::try_from(self.remote.read_u32().await.unwrap()).unwrap();
         assert!(length <= record::HEADER_CAP);
         let mut encoded = vec![0; length];
@@ -145,7 +149,10 @@ async fn delayed_pong_keeps_one_outstanding_local_probe() {
     for _ in 0..4 {
         tokio::time::advance(IDLE / 2).await;
         fixture.stream.request_ping().unwrap();
-        fixture.stream.schedule().unwrap();
+        fixture
+            .stream
+            .schedule(fixture.stream.ledger.has_ungranted_request())
+            .unwrap();
         assert_eq!(fixture.stream.ping, Some((ping, true)));
         assert!(fixture.stream.writing.is_none(), "no second probe writer");
         assert_eq!(fixture.stream.next_ping, 1);
@@ -155,6 +162,58 @@ async fn delayed_pong_keeps_one_outstanding_local_probe() {
     assert_eq!(fixture.stream.next_ping, 2);
     let next = fixture.local_probe().await;
     assert_eq!(next.sequence, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_grants_try_each_class_once_before_a_heartbeat_and_resume_on_release() {
+    use futures::FutureExt as _;
+
+    let mut fixture = Fixture::new();
+    let mut held = Vec::new();
+    for class in Class::ALL {
+        let ledger = &mut fixture.stream.ledger;
+        for _ in 0..ledger.source.pool.counts[class.index()] {
+            held.push(ledger.source.reserve(class, 200).unwrap());
+        }
+        let request = Header::request(fixture.stream.binding.incoming, class, 1, 200).unwrap();
+        ledger.request(request).unwrap();
+    }
+
+    fixture.local_probe().await;
+    assert_eq!(fixture.stream.ledger.reservation_attempts, [1; CLASS_COUNT]);
+    assert!(fixture.stream.ledger.requests.iter().all(Option::is_some));
+
+    {
+        let step = fixture.stream.step();
+        tokio::pin!(step);
+        assert!(step.as_mut().now_or_never().is_none());
+        drop(held);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), step)
+                .await
+                .expect("released capacity must wake the waiting stream")
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(fixture.stream.ledger.reservation_attempts, [2; CLASS_COUNT]);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        for class in Class::ALL {
+            loop {
+                assert!(fixture.stream.step().await.unwrap().is_none());
+                if fixture.stream.writing.is_none() {
+                    break;
+                }
+            }
+            let expected = Header::request(fixture.stream.binding.incoming, class, 1, 200)
+                .unwrap()
+                .with_kind(Kind::Grant);
+            assert_eq!(fixture.read_control_record().await, expected);
+        }
+    })
+    .await
+    .expect("all six pending grants must reach the peer after release");
+    assert!(!fixture.stream.ledger.has_ungranted_request());
 }
 
 #[tokio::test(start_paused = true)]

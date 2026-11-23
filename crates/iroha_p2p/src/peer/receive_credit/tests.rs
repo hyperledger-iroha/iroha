@@ -169,6 +169,71 @@ fn issued_grant_already_owns_scratch_dispatch_and_exact_count() {
 }
 
 #[test]
+fn continuously_ready_requests_retain_the_weighted_grant_order() {
+    let p = pool(3);
+    let mut ledger = Ledger::new(p.bind(peer(20).id()).unwrap());
+    for class in Class::ALL {
+        ledger.request(request([1; 32], class, 1)).unwrap();
+    }
+    for _ in 0..2 {
+        for expected in Class::SCHEDULE {
+            let grant = ledger.next_grant().unwrap().unwrap();
+            assert_eq!(grant.class().unwrap(), expected);
+            drop(ledger.consume(&grant.with_kind(Kind::Data)).unwrap());
+            ledger
+                .request(request([1; 32], expected, grant.sequence + 1))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn blocked_high_classes_yield_to_both_low_classes_and_resume_in_order() {
+    use Class::{BlockSync, Low};
+
+    let p = pool(3);
+    let sender = peer(20);
+    // The cursor may start before both high-class cycles, partway through
+    // either one, or directly at the final low rank before wraparound.
+    for (cursor, first, attempts) in [
+        (0, BlockSync, [1, 1, 1, 1, 1, 0]),
+        (2, BlockSync, [1, 1, 1, 1, 1, 0]),
+        (5, BlockSync, [0, 1, 1, 1, 1, 0]),
+        (7, BlockSync, [0, 0, 0, 1, 1, 0]),
+        (9, Low, [0, 0, 0, 0, 0, 1]),
+    ] {
+        let mut ledger = Ledger::new(p.bind(sender.id()).unwrap());
+        ledger.cursor = cursor;
+        let mut held = Vec::new();
+        for class in Class::HIGH {
+            for _ in 0..p.counts[class.index()] {
+                held.push(ledger.source.reserve(class, 200).unwrap());
+            }
+        }
+        for class in Class::ALL {
+            ledger.request(request([1; 32], class, 1)).unwrap();
+        }
+
+        let grant = ledger.next_grant().unwrap().unwrap();
+        assert_eq!(grant.class().unwrap(), first, "cursor {cursor}");
+        assert_eq!(ledger.reservation_attempts, attempts, "cursor {cursor}");
+        let second = if first == Low { BlockSync } else { Low };
+        assert_eq!(
+            ledger.next_grant().unwrap().unwrap().class().unwrap(),
+            second
+        );
+        assert!(ledger.next_grant().unwrap().is_none());
+
+        drop(held);
+        for expected in Class::HIGH {
+            let grant = ledger.next_grant().unwrap().unwrap();
+            assert_eq!(grant.class().unwrap(), expected, "cursor {cursor}");
+        }
+        assert!(!ledger.has_ungranted_request());
+    }
+}
+
+#[test]
 fn failed_multiresource_reservation_releases_every_partial_owner() {
     let p = pool(3);
     let sender = peer(2);

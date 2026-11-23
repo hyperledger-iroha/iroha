@@ -48,6 +48,7 @@ const TEST_ONLY_SOURCES: &[&str] = &[
     "src/peer/receive_credit/tests.rs",
     "src/peer/receive_credit/arbitration_tests.rs",
     "src/peer/receive_credit/stream/health_tests.rs",
+    "src/peer/receive_credit/stream/reading_tests.rs",
     "src/peer/run/admission_class_tests.rs",
     "src/peer/run/payload_codec_tests.rs",
     "src/peer_consensus_mode_test.rs",

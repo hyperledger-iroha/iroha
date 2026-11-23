@@ -23,8 +23,10 @@ use record::{Header, Kind};
 /// Maximum fixed native parser, request, grant and writer cells per tenure.
 /// This is charged once against the existing per-PeerId progress reserve.
 const CONTROL_BYTES: usize = 64 * 1024;
+/// Largest nonce and tag pair funded for any authenticated record.
+const MAX_CRYPTO_OVERHEAD: usize = 64;
 /// Conservative per-message envelope allowance, including the bounded header.
-pub(super) const ENVELOPE_BYTES: usize = record::HEADER_CAP + 4 + 64;
+pub(super) const ENVELOPE_BYTES: usize = record::HEADER_CAP + 4 + MAX_CRYPTO_OVERHEAD;
 const CLASS_COUNT: usize = Class::ALL.len();
 
 /// The per-source partitions are shared by current and draining tenures.
@@ -463,6 +465,8 @@ struct Ledger {
     grants: [Option<PendingGrant>; CLASS_COUNT],
     next: [u64; CLASS_COUNT],
     cursor: usize,
+    #[cfg(test)]
+    reservation_attempts: [usize; CLASS_COUNT],
     source: BoundSource,
 }
 impl Ledger {
@@ -473,6 +477,8 @@ impl Ledger {
             grants: std::array::from_fn(|_| None),
             next: [1; CLASS_COUNT],
             cursor: 0,
+            #[cfg(test)]
+            reservation_attempts: [0; CLASS_COUNT],
         }
     }
     /// Whether a received request still waits for its grant.
@@ -497,17 +503,25 @@ impl Ledger {
         Ok(())
     }
     fn next_grant(&mut self) -> Result<Option<Header>, Error> {
-        // Every class has one bounded pending request and one round-robin rank.
-        // A blocked request of one class does not block another, and a continuous
-        // source of one class cannot skip a ready request of another indefinitely.
+        // Each class has one pending request. Repeated ranks determine its
+        // service weight, but a blocked class needs only one attempt per pass.
+        let mut blocked = [false; CLASS_COUNT];
         for offset in 0..Class::SCHEDULE.len() {
             let rank = (self.cursor + offset) % Class::SCHEDULE.len();
             let i = Class::SCHEDULE[rank].index();
             let Some(request) = self.requests[i] else {
                 continue;
             };
+            if blocked[i] {
+                continue;
+            }
             let size = usize::try_from(request.plaintext).map_err(|_| Error::Format)?;
+            #[cfg(test)]
+            {
+                self.reservation_attempts[i] += 1;
+            }
             let Some(reservation) = self.source.reserve(request.class()?, size) else {
+                blocked[i] = true;
                 continue;
             };
             let grant = request.with_kind(Kind::Grant);

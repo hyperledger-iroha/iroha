@@ -64,13 +64,20 @@ application delivery. Failed tags fence the reader; they cannot release an
 unspent grant early. Every transferred guard remains with subscriber and final
 consumer work, including retained gossip and supervised proxy work.
 
+The reader reserves space for the sealed body and its alignment padding only
+after matching the Data header to its grant. Each read appends the bytes received
+and stops at the current record boundary. A buffered record can complete in one
+scheduling turn. The parser retains at most 16 KiB of body storage between records.
+
 Request/Grant/Ping/Pong use fixed, independently precharged transport cells,
 not application Control or Low grants. Remote Ping requests retain a two-token
 burst and one-token refill per half idle interval. An exact authenticated Pong
 retires the sole outstanding local probe without spending remote Ping credit.
 Unknown, duplicate and substituted Pongs fail. Grant/control progress never waits
 on a data credit it must release. One bounded record scheduler gives each high
-class two ranks and each low class one rank. FIFO remains within each semantic
+class two ranks and each low class one rank. Each scheduling pass tries a blocked
+class at most once. The stream registers before that pass so a concurrently
+released grant or delivered-message guard wakes it for another attempt. FIFO remains within each semantic
 source/class; ordinary work is serviced after its retained predecessor releases.
 This removes application-backpressure blockage on an honest ordered stream. It
 cannot bypass earlier bytes that the sender/network never delivers.

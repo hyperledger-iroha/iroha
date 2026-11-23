@@ -1,6 +1,7 @@
 //! One-record sender/reader service over the authenticated ordered connection.
 //! Control records use the tenure's precharged cells, never data grants.
 use super::*;
+use bytes::BufMut;
 use record::Binding;
 use tokio::time::Instant;
 
@@ -91,25 +92,24 @@ impl Writing {
 }
 
 /// Largest receive buffer kept between records. It is part of the fixed
-/// per-tenure parser cells charged by `CONTROL_BYTES`; larger records use a
-/// fresh buffer that is released after decoding.
+/// per-tenure parser cells charged by `CONTROL_BYTES`. A larger allocation is
+/// released after decoding.
 const RETAINED_RECEIVE_BYTES: usize = 16 * 1024;
 
 /// Incremental reader of one record. Every completed offset is committed
 /// before another await, so a cancelled read resumes exactly.
 struct Reading {
+    payload_align: usize,
     prefix: [u8; 4],
     prefix_read: usize,
     header: [u8; record::HEADER_CAP],
     header_len: usize,
     header_read: usize,
     parsed: Option<Header>,
-    /// Sealed body storage, positioned so the decrypted payload is aligned
-    /// for zero-copy canonical decoding.
+    /// Alignment padding followed by exactly the sealed bytes read so far.
     body: Vec<u8>,
     body_start: usize,
-    body_len: usize,
-    body_read: usize,
+    body_end: usize,
     reservation: Option<Reservation>,
 }
 /// Position of a sealed body inside `buffer` whose plaintext, `nonce` bytes
@@ -119,8 +119,15 @@ pub(super) fn aligned_body_start(buffer: &[u8], nonce: usize, align: usize) -> u
     (align - misalignment) % align
 }
 impl Reading {
-    fn new() -> Self {
-        Self {
+    fn new(payload_align: usize, crypto_overhead: usize) -> Result<Self, Error> {
+        if crypto_overhead > MAX_CRYPTO_OVERHEAD
+            || !payload_align.is_power_of_two()
+            || payload_align - 1 > ENVELOPE_BYTES - crypto_overhead
+        {
+            return Err(Error::Format);
+        }
+        Ok(Self {
+            payload_align,
             prefix: [0; 4],
             prefix_read: 0,
             header: [0; record::HEADER_CAP],
@@ -129,10 +136,9 @@ impl Reading {
             parsed: None,
             body: Vec::new(),
             body_start: 0,
-            body_len: 0,
-            body_read: 0,
+            body_end: 0,
             reservation: None,
-        }
+        })
     }
     /// Read toward one complete record; `Ok(true)` once it is complete.
     async fn advance<E: Enc>(
@@ -140,10 +146,9 @@ impl Reading {
         read: &mut (dyn AsyncRead + Send + Unpin),
         ledger: &mut Ledger,
         binding: &Binding,
-        align: usize,
     ) -> Result<bool, Error> {
-        // Each await performs one cancellation-safe `read`. Every completed
-        // offset is committed before another await or return.
+        // Keep offsets across cancellation. A buffered record can finish in
+        // one turn, with at most one read of each prefix, header and body.
         if self.prefix_read < 4 {
             let n = read.read(&mut self.prefix[self.prefix_read..]).await?;
             if n == 0 {
@@ -158,8 +163,6 @@ impl Reading {
                 return Err(Error::Format);
             }
             self.header_len = length;
-            self.header_read = 0;
-            return Ok(false);
         }
         if self.parsed.is_none() {
             let n = read
@@ -179,46 +182,51 @@ impl Reading {
                 &binding.incoming
             };
             header.check(expected)?;
-            let plaintext = if header.kind()? == Kind::Data {
+            let (plaintext, align) = if header.kind()? == Kind::Data {
                 // This exact existing reservation is consumed before allocating
                 // any variable-size payload. No semaphore or byte wait follows.
                 self.reservation = Some(ledger.consume(&header)?);
-                usize::try_from(header.plaintext).map_err(|_| Error::Format)?
+                (
+                    usize::try_from(header.plaintext).map_err(|_| Error::Format)?,
+                    self.payload_align,
+                )
             } else {
-                0
+                (0, 1)
             };
             let encrypted = record::encrypted_len::<E>(plaintext)?;
-            let needed = encrypted.checked_add(align).ok_or(Error::FrameTooLarge)?;
-            if needed > self.body.capacity().max(RETAINED_RECEIVE_BYTES) {
-                // A large granted body gets its own zeroed allocation (lazily
-                // zeroed by the allocator), released after decoding.
-                self.body = vec![0; needed];
-            } else {
-                self.body.clear();
-                self.body.resize(needed, 0);
+            let needed = encrypted
+                .checked_add(align - 1)
+                .ok_or(Error::FrameTooLarge)?;
+            if needed > self.body.capacity() {
+                // Small buffers grow in buckets within the tenure's fixed
+                // allowance. A larger grant funds exactly its own allocation.
+                let capacity = if needed <= RETAINED_RECEIVE_BYTES {
+                    needed.next_power_of_two()
+                } else {
+                    needed
+                };
+                self.body
+                    .try_reserve_exact(capacity)
+                    .map_err(|_| Error::FrameTooLarge)?;
             }
             self.body_start =
                 aligned_body_start(&self.body, core::mem::size_of::<aead::Nonce<E>>(), align);
-            self.body_len = encrypted;
-            self.body_read = 0;
+            self.body.resize(self.body_start, 0);
+            self.body_end = self.body_start + encrypted;
             self.parsed = Some(header);
-            if encrypted != 0 {
-                return Ok(false);
-            }
         }
-        if self.body_read < self.body_len {
-            let from = self.body_start + self.body_read;
-            let to = self.body_start + self.body_len;
-            let n = read.read(&mut self.body[from..to]).await?;
+        let remaining = self.body_end - self.body.len();
+        if remaining != 0 {
+            // The retained allocation can fit multiple small records. Expose
+            // only this body's remaining bytes to the transport.
+            let n = read
+                .read_buf(&mut (&mut self.body).limit(remaining))
+                .await?;
             if n == 0 {
                 return Err(Error::ConnectionResetByPeer);
             }
-            self.body_read += n;
-            if self.body_read != self.body_len {
-                return Ok(false);
-            }
         }
-        Ok(true)
+        Ok(self.body.len() == self.body_end)
     }
     /// Release the completed record's state, keeping a small buffer.
     fn reset(&mut self) {
@@ -227,8 +235,7 @@ impl Reading {
         self.header_read = 0;
         self.parsed = None;
         self.body_start = 0;
-        self.body_len = 0;
-        self.body_read = 0;
+        self.body_end = 0;
         self.reservation = None;
         self.body.clear();
         if self.body.capacity() > RETAINED_RECEIVE_BYTES {
@@ -307,9 +314,10 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         if !peer_matches {
             return Err(Error::Format);
         }
-        if record::encrypted_len::<E>(0)? > 64 {
-            return Err(Error::Format);
-        }
+        let reading = Reading::new(
+            ncore::archived_payload_align::<T>(),
+            record::encrypted_len::<E>(0)?,
+        )?;
         let bytes = super::writer_partitions(maximum, limits)?;
         // Keep read/write/source in their ordered owner until every fallible
         // admission has passed. Rejection must close I/O before source reuse.
@@ -322,7 +330,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         Ok(Self {
             read,
             write,
-            reading: Reading::new(),
+            reading,
             writing: None,
             ledger: Ledger::new(source),
             queued: std::array::from_fn(|_| None),
@@ -429,7 +437,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         });
         Ok(())
     }
-    fn schedule(&mut self) -> Result<(), Error> {
+    fn schedule(&mut self, mut check_grants: bool) -> Result<(), Error> {
         // Weighted fixed ranks include bounded Ping/Pong. Control chatter cannot
         // exclude an eligible application rank on an honest completing stream.
         const RANKS: usize = Class::SCHEDULE.len() * 3 + 2;
@@ -473,12 +481,16 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
                         let class = post.header.class()?;
                         Writing::data(&self.crypto, post, class)?
                     }
-                    _ => {
+                    _ if check_grants => {
+                        // Every grant rank shares the same ledger. A release
+                        // during this scan wakes the already registered stream.
+                        check_grants = false;
                         let Some(header) = self.ledger.next_grant()? else {
                             continue;
                         };
                         Writing::control(&self.crypto, header)?
                     }
+                    _ => continue,
                 }
             };
             self.writing = Some(writing);
@@ -493,13 +505,13 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         let reservation = self.reading.reservation.take();
         let header_bytes = self.reading.header;
         let header_len = self.reading.header_len;
-        let (start, len) = (self.reading.body_start, self.reading.body_len);
+        let start = self.reading.body_start;
         let mut body = core::mem::take(&mut self.reading.body);
         let outcome = self.receive_sealed(
             header,
             reservation,
             &header_bytes[..header_len],
-            &mut body[start..start + len],
+            &mut body[start..],
         );
         self.reading.body = body;
         self.reading.reset();
@@ -606,10 +618,9 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         if awaiting_capacity {
             changed.as_mut().enable();
         }
-        self.schedule()?;
-        let align = ncore::archived_payload_align::<T>().max(1);
+        self.schedule(awaiting_capacity)?;
         tokio::select! {
-            complete = self.reading.advance::<E>(&mut *self.read, &mut self.ledger, &self.binding, align) => {
+            complete = self.reading.advance::<E>(&mut *self.read, &mut self.ledger, &self.binding) => {
                 if complete? { self.receive() } else { Ok(None) }
             }
             done = async {
@@ -790,7 +801,9 @@ async fn data_record_is_sealed_when_granted_not_when_enqueued() {
     );
     queued.requested = true;
     queued.granted = true;
-    stream.schedule().unwrap();
+    stream
+        .schedule(stream.ledger.has_ungranted_request())
+        .unwrap();
     let writing = stream.writing.as_ref().expect("granted data is scheduled");
     assert_eq!(writing.class, Some(Class::Payload));
     let record = &writing.record;
@@ -907,6 +920,9 @@ async fn authenticated_health_burst_keeps_original_limit_and_cannot_refresh_idle
 
 #[cfg(test)]
 mod health_tests;
+
+#[cfg(test)]
+mod reading_tests;
 
 #[cfg(test)]
 mod constructor_tests {

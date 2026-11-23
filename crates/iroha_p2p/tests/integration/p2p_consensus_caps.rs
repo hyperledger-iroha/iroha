@@ -589,6 +589,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let chain = super::test_network_id("conf-caps-recover-test");
     let validator_kp = super::random_node_key_pair();
     let peer_kp = super::random_node_key_pair();
+    let validator_id = PeerId::from(validator_kp.public_key().clone());
     let addr1 = super::next_addr();
     let addr_stale = super::next_addr();
     let addr_fresh = super::next_addr();
@@ -647,9 +648,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
             panic!("capability alignment fixture must start: {error:?}");
         }
     };
-    net2_stale.update_topology(UpdateTopology(HashSet::from([PeerId::from(
-        validator_kp.public_key().clone(),
-    )])));
+    net2_stale.update_topology(UpdateTopology(HashSet::from([validator_id.clone()])));
     let stale_peer =
         iroha_model_base::peer::Peer::new(addr_stale.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
@@ -659,12 +658,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
         stale_peer.id().clone(),
         addr_stale.clone(),
     )]));
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let stale_online = net1.online_peers(|set| set.len());
-    assert_eq!(
-        stale_online, 0,
-        "stale digest must keep peer out of rotation"
-    );
+    assert_peer_stays_offline(&net1, stale_peer.id()).await;
     shutdown_stale.send();
     drop(net2_stale);
     let shutdown_fresh = ShutdownSignal::new();
@@ -689,9 +683,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
             panic!("capability alignment fixture must start: {error:?}");
         }
     };
-    net2_fresh.update_topology(UpdateTopology(HashSet::from([PeerId::from(
-        validator_kp.public_key().clone(),
-    )])));
+    net2_fresh.update_topology(UpdateTopology(HashSet::from([validator_id.clone()])));
     let fresh_peer =
         iroha_model_base::peer::Peer::new(addr_fresh.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
@@ -701,29 +693,11 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
         fresh_peer.id().clone(),
         addr_fresh.clone(),
     )]));
-    let target_peer = fresh_peer.clone();
-    let net1_clone = net1.clone();
-    let wait_result = tokio::time::timeout(Duration::from_millis(750), async move {
-        loop {
-            let online = net1_clone.online_peers(|set| set.clone());
-            if online.contains(&target_peer) {
-                break online.len();
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
+    assert_peer_connects(&net1, fresh_peer.id()).await;
+    assert_peer_connects(&net2_fresh, &validator_id).await;
     shutdown_fresh.send();
     shutdown_validator.send();
     drop(net2_fresh);
-    let count = match wait_result {
-        Ok(count) => count,
-        Err(error) => panic!("capability fixture failed before its required assertion: {error:?}"),
-    };
-    assert!(
-        count >= 1,
-        "aligned digest should allow the peer into rotation"
-    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_match_connects() {
