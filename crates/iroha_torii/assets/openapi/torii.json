@@ -75480,8 +75480,338 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body, payload geometry or signed metadata is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The listener API token is missing or invalid, canonical account credentials are missing, or a DA producer or pin signature is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The caller lacks authority for this operation or the request does not match the admitted account, network, lane or epoch.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Accept header is malformed or excludes application/json and application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request exceeded the route execution deadline.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The sequence, replay record or pin authorization conflicts with previously submitted data.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The HTTP body or payload exceeds the configured size limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body requires application/json.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request admission exceeded its rate or capacity limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Minimum delay in seconds before retrying.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Torii could not complete a required ingest or storage operation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Ingest processing is temporarily unavailable or at capacity.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Minimum retry delay in seconds when capacity is exhausted. Emergency Fast mode can omit the delay.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "507": {
-            "description": "The local retained-source spool cannot reserve capacity for this ticket."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The retained-source spool cannot reserve capacity for this ticket.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -75728,37 +76058,391 @@
             }
           },
           "400": {
-            "description": "Malformed upload descriptor, part or final metadata."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The upload descriptor, part, final metadata or reconstructed ingest request is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Canonical account authentication failed."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The listener API token is missing or invalid, canonical account credentials are missing, or a DA producer or pin signature is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Producer, network, lane or epoch admission failed."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The caller lacks authority for this operation or the request does not match the admitted account, network, lane or epoch.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "The selected upload session is absent or expired."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The upload session is absent or has expired.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Accept header is malformed or excludes application/json and application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request exceeded the route execution deadline.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Conflicting upload, out-of-order part or incomplete transfer."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A part is out of order, the upload is incomplete, or the request conflicts with staged or previously submitted data.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
-            "description": "The wire payload or request body exceeds its bound."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The HTTP body or payload exceeds the configured size limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "415": {
-            "description": "The transfer request requires application/json."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body requires application/json.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
-            "description": "The reconstructed wire payload differs from its descriptor digest."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The reconstructed payload differs from the digest in its upload descriptor.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
-            "description": "The staging session budget is full or the request was rate limited."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The staging session budget is full or request admission exceeded its rate or capacity limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Minimum delay in seconds before retrying.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Torii could not complete a required ingest or storage operation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
-            "description": "The upload or ingest worker is busy, or storage is unavailable."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Ingest processing is temporarily unavailable or at capacity.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Minimum retry delay in seconds when capacity is exhausted. Emergency Fast mode can omit the delay.",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "507": {
-            "description": "The local retained-source spool cannot reserve capacity for this ticket."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The retained-source spool cannot reserve capacity for this ticket.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -91898,7 +92582,7 @@
             "description": "Original selected values and lookup witnesses against the certified keyed State root.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -91918,7 +92602,7 @@
             "description": "Height or exact canonical ordered selector frame is malformed, duplicate or out of bounds.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -91943,7 +92627,7 @@
             "description": "Canonical account authentication is absent, invalid or replayed. Authentication-source capacity remains a separate retryable 429.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -91963,7 +92647,7 @@
             "description": "The account lacks read authority for one or more selected rows, or deployment API-token access is denied.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -91983,7 +92667,7 @@
             "description": "Accept must permit application/json or application/x-norito.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -92008,7 +92692,7 @@
             "description": "Request exceeds the 65536-byte selection limit.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -92028,7 +92712,7 @@
             "description": "Authentication-source capacity, heavy-query admission, rate or exact egress limits refused the read.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -92048,7 +92732,7 @@
             "description": "The selected keyed root or its current certified State originals are unavailable.",
             "headers": {
               "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",

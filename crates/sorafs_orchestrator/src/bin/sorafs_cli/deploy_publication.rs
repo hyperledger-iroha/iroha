@@ -919,17 +919,18 @@ mod tests {
     #[test]
     fn retained_evidence_identifies_the_exact_bytes_relative_to_the_receipt_output() {
         let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().canonicalize().unwrap();
         let name = "publication.completed.assertion.to";
         let bytes = b"signed publication assertion";
-        let item = retain_evidence(directory.path(), name, bytes).unwrap();
+        let item = retain_evidence(&output, name, bytes).unwrap();
         assert_eq!(item["file"].as_str(), Some(name));
-        let stored = fs::read(directory.path().join(name)).unwrap();
+        let stored = fs::read(output.join(name)).unwrap();
         assert_eq!(stored.as_slice(), bytes);
         assert_eq!(
             item["blake3_hex"].as_str(),
             Some(blake3::hash(&stored).to_hex().as_str())
         );
-        assert!(retain_evidence(&directory.path().join(name), "proof", bytes).is_err());
+        assert!(retain_evidence(&output.join(name), "proof", bytes).is_err());
     }
 
     fn network(seed: u8) -> NetworkId {

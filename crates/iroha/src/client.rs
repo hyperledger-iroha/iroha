@@ -30978,6 +30978,7 @@ mod tests {
     }
     #[test]
     fn resumable_da_transport_skips_acknowledged_parts_and_finishes_with_exact_signed_metadata() {
+        use super::data_availability;
         use iroha_torii_shared::da::upload::{
             DA_UPLOAD_PART_BYTES, DaUploadAction, DaUploadRequest,
         };

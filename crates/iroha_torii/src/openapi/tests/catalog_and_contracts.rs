@@ -4,6 +4,63 @@ use super::*;
 
 #[cfg(feature = "app_api")]
 #[test]
+fn da_ingest_openapi_authored_responses_match_the_served_cache_policy() {
+    use iroha_torii_shared::route_catalog::data_availability::{INGEST, INGEST_PARTS};
+
+    let authored = canonical_document();
+    let served = compiled_spec();
+    for route in [INGEST, INGEST_PARTS] {
+        let path = route.path();
+        let responses = &authored["paths"][path]["post"]["responses"];
+        assert_eq!(
+            responses, &served["paths"][path]["post"]["responses"],
+            "{path}"
+        );
+        let responses = responses.as_object().expect("authored DA responses");
+        assert!(responses.contains_key("202"));
+        assert_eq!(responses.contains_key("200"), path == INGEST_PARTS.path());
+        let required_errors = [
+            "400", "401", "403", "406", "408", "409", "413", "415", "429", "500", "503", "507",
+        ];
+        for status in required_errors {
+            assert!(responses.contains_key(status), "{path} {status}");
+        }
+        if path == INGEST_PARTS.path() {
+            assert!(responses.contains_key("404") && responses.contains_key("422"));
+        }
+        for (status, response) in responses {
+            let header = &response["headers"]["Cache-Control"];
+            assert_eq!(header["required"].as_bool(), Some(true), "{path} {status}");
+            assert_eq!(
+                header["schema"]["const"].as_str(),
+                Some("private, no-store"),
+                "{path} {status}"
+            );
+            if status.starts_with('4') || status.starts_with('5') {
+                let content = response["content"]
+                    .as_object()
+                    .expect("error representations");
+                assert_eq!(
+                    content["application/json"]["schema"]["$ref"].as_str(),
+                    Some("#/components/schemas/ErrorEnvelope"),
+                    "{path} {status}"
+                );
+                if status == "406" {
+                    assert_eq!(content.len(), 1, "{path} {status}");
+                } else {
+                    assert_eq!(
+                        content["application/x-norito"]["schema"]["format"].as_str(),
+                        Some("binary"),
+                        "{path} {status}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[test]
 fn wallet_call_and_original_reads_survive_compiled_openapi_projection() {
     use iroha_torii_shared::route_catalog::{
         application_api as calls, contracts_and_verification_keys as originals,
