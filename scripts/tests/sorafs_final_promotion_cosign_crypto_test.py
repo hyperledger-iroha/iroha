@@ -87,7 +87,7 @@ def test_real_cosign_rejects_different_subject(crypto_inputs):
 @pytest.mark.parametrize("field,value", [
     ("provenance_certificate_identity", IDENTITY.replace("@refs/heads/main", "@refs/heads/untrusted")),
     ("provenance_oidc_issuer", "https://accounts.google.com"),
-])
+], ids=str)
 def test_real_cosign_rejects_wrong_independent_identity(crypto_inputs, field, value):
     args, subject, bundle = crypto_inputs
     setattr(args, field, value)
