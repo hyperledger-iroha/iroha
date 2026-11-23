@@ -15242,14 +15242,22 @@
     "excluded": [
       {
         "path": "crates/iroha_core/src/sumeragi/certified_chain.rs",
-        "reason": "Sizes of the process-local cache of verified finality prefixes. A miss only walks from signed genesis as before, so they bound local memory, not a quantity on the proof, transaction, block, transport or VM path.",
+        "reason": "Per-chain size of the process-local cache of verified finality prefixes. A miss only walks from signed genesis as before, so it bounds local memory, not a quantity on the proof, transaction, block, transport or VM path. The total of the same cache (SHARED_PREFIXES_TOTAL, 16) is compared only with `==` before an eviction, which the scan does not read.",
         "symbols": [
-          "SHARED_PREFIXES_PER_CHAIN",
-          "SHARED_PREFIXES_TOTAL"
+          "SHARED_PREFIXES_PER_CHAIN"
         ],
         "exprs": {
-          "SHARED_PREFIXES_PER_CHAIN": "4",
-          "SHARED_PREFIXES_TOTAL": "16"
+          "SHARED_PREFIXES_PER_CHAIN": "4"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+        "reason": "Height window of the process-local reuse of a verified native signer history (CertifiedHistorySource, read by the SoraFS stream-token signer). A prefix through height 256 is reused only while its certificate-inclusive bytes and header journal still match the current State; a longer history or any mismatch runs the ordinary native certified reader. It bounds local reuse, decides no verdict and is no quantity on the proof, transaction, block, transport or VM path.",
+        "symbols": [
+          "MAX_HEIGHT"
+        ],
+        "exprs": {
+          "MAX_HEIGHT": "256"
         }
       },
       {
@@ -16423,6 +16431,16 @@
         "exprs": {
           "P2P_ENCRYPTION_OVERHEAD_BYTES": "core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>()",
           "MAX_WIRE_ENCRYPTED_FRAME_BYTES": "u32::MAX as usize"
+        }
+      },
+      {
+        "path": "crates/iroha_p2p/src/peer/receive_credit.rs",
+        "reason": "The largest nonce-and-tag overhead that the receive-credit envelope funds for one authenticated record (64 bytes, a term of the per-message ENVELOPE_BYTES allowance). The transport cipher adds 28 (transport.aead_frame_overhead_bytes); a record reader built for a cipher with more overhead is refused with Error::Format before any read. It sizes the local credit of one peer's receive ledger, not a frame, transaction, block or proof.",
+        "symbols": [
+          "MAX_CRYPTO_OVERHEAD"
+        ],
+        "exprs": {
+          "MAX_CRYPTO_OVERHEAD": "64"
         }
       },
       {
@@ -18604,7 +18622,7 @@
         ]
       },
       {
-        "reason": "The SoraFS services of Torii: request, response, page, scan, cache, queue, timing and file ceilings of its gateway, registry, moderation, orderbook, proof-of-possession, proof-of-retrievability, reserve, publication-proof, discovery, delegated-routing, evidence-viewer and billing endpoints and of their background workers. They are local serving limits of one HTTP service: a refused request can be sent again or to another node, and none decides validity. Two buffer sizes are found by use: the chunk in which a stream-token response body is handed to the HTTP stack (64 KiB) and the read buffer of the compliance feed transport (8 KiB, also its first allocation when a response states no length). Neither refuses anything.",
+        "reason": "The SoraFS services of Torii: request, response, page, scan, cache, queue, timing and file ceilings of its gateway, registry, moderation, orderbook, proof-of-possession, proof-of-retrievability, reserve, publication-proof, discovery, delegated-routing, evidence-viewer and billing endpoints and of their background workers. They are local serving limits of one HTTP service: a refused request can be sent again or to another node, and none decides validity. Two buffer sizes are found by use: the chunk in which a stream-token response body is handed to the HTTP stack (64 KiB) and the read buffer of the compliance feed transport (8 KiB, also its first allocation when a response states no length). Neither refuses anything. The paid stream-token path stores the unsigned original of one resumable signed-account request in at most 8 KiB, and one paid grant refreshes the current signer state at most eight times while the chain advances before it is refused as unavailable.",
         "files": [
           {
             "path": "crates/iroha_torii/src/routing.rs",
@@ -19078,6 +19096,24 @@
             ],
             "exprs": {
               "RESPONSE_CHUNK_BYTES": "64 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/sorafs/token/paid.rs",
+            "symbols": [
+              "MAX_RECORD"
+            ],
+            "exprs": {
+              "MAX_RECORD": "8192"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/sorafs/token/signer_lifecycle.rs",
+            "symbols": [
+              "MAX_PAID_CURRENT_REFRESHES"
+            ],
+            "exprs": {
+              "MAX_PAID_CURRENT_REFRESHES": "8"
             }
           }
         ]
@@ -20648,7 +20684,7 @@
         ]
       },
       {
-        "reason": "Data-availability bookkeeping of the node: bundle locations, the encoded quota-usage record, the replay cache capacities and the shard cursor journal with its decode limits. They bound local caches and durable journals; the payload geometry is the listed rs16.* bounds.",
+        "reason": "Data-availability bookkeeping of the node: bundle locations, the encoded quota-usage record, the replay cache capacities, the shard cursor journal with its decode limits, and the proposal handoff of producer-authorized DA records: the pending candidates and the encoded bytes of its durable journal, and the frame in which the originating node relays one candidate to the validators of its route (at most 1 MiB, with 1 KiB of framing in the inbound decode limit of NetworkMessage::DaProposal). They bound local caches, durable journals and one local relay: a refused or dropped candidate is only not proposed by that node, and a block that carries DA records is validated on its own. The payload geometry is the listed rs16.* bounds.",
         "files": [
           {
             "path": "crates/iroha_core/src/da/mod.rs",
@@ -20692,6 +20728,21 @@
               "SHARD_CURSOR_JOURNAL_MAX_BYTES": "512 * 1024",
               "SHARD_CURSOR_JOURNAL_MAX_DECODE_ALLOCATED_BYTES": "1024 * 1024",
               "SHARD_CURSOR_JOURNAL_MAX_DECODE_DEPTH": "32"
+            }
+          },
+          {
+            "path": "crates/iroha_core/src/da/proposal_queue.rs",
+            "symbols": [
+              "MAX_PENDING",
+              "MAX_BYTES",
+              "MAX_RELAY_BYTES",
+              "MAX_RELAY_FRAME"
+            ],
+            "exprs": {
+              "MAX_PENDING": "128",
+              "MAX_BYTES": "1024 * 1024",
+              "MAX_RELAY_BYTES": "MAX_BYTES",
+              "MAX_RELAY_FRAME": "MAX_RELAY_BYTES + 1024"
             }
           }
         ]
@@ -21370,7 +21421,7 @@
         ]
       },
       {
-        "reason": "Torii's data-availability ingest: cursor journal and snapshot records, receipt, manifest and pin artifacts, the RS16 chunk, shard, stripe and workspace geometry of the blob ingest and the Taikai anchor batches and frames. They bound the DA blob service, which stores application data outside the block payload; the payload geometry of a block is the listed rs16.* bounds. The rent quote of a blob rounds its size up to whole GiB and its retention up to whole 30-day months. The two units are found by use, because each quotient is raised to at least 1, and bound nothing.",
+        "reason": "Torii's data-availability ingest: cursor journal and snapshot records, receipt, manifest and pin artifacts, the RS16 chunk, shard, stripe and workspace geometry of the blob ingest and the Taikai anchor batches and frames; the resumable upload transport (1 MiB parts, the transmitted total, the JSON body of one part or of the final signed metadata, the sessions one node stores and the parts of one session); and the custody of retained source files (the rows and bytes of its reservation journal and the 4 KiB filesystem block its charges are rounded to). The source geometry (payload length, chunk width and chunk count) and the encoded-manifest ceiling are defined once in sorafs_manifest::da and DaManifestV1, and the SDK client checks the same geometry before an upload; the payload length is excluded with the SoraFS manifest terms, as a term of the transmitted upload total. They bound the DA blob service, which stores application data outside the block payload; the payload geometry of a block is the listed rs16.* bounds. The rent quote of a blob rounds its size up to whole GiB and its retention up to whole 30-day months. The two units are found by use, because each quotient is raised to at least 1, and bound nothing.",
         "files": [
           {
             "path": "crates/iroha_torii/src/da/persistence.rs",
@@ -21380,7 +21431,6 @@
               "CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES",
               "DA_RECEIPT_ARTIFACT_MAX_BYTES_V1",
               "DA_RECEIPT_SIGNATURE_MAX_BYTES_V1",
-              "DA_MANIFEST_ARTIFACT_MAX_BYTES_V1",
               "DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1",
               "DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1",
               "DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1",
@@ -21392,7 +21442,6 @@
               "CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES": "128",
               "DA_RECEIPT_ARTIFACT_MAX_BYTES_V1": "64 * 1024",
               "DA_RECEIPT_SIGNATURE_MAX_BYTES_V1": "4 * 1024",
-              "DA_MANIFEST_ARTIFACT_MAX_BYTES_V1": "2 * 1024 * 1024",
               "DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1": "2 * 1024 * 1024",
               "DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1": "64 * 1024",
               "DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1": "4 * 1024 * 1024",
@@ -21402,25 +21451,19 @@
           {
             "path": "crates/iroha_torii/src/da/rs16.rs",
             "symbols": [
-              "MAX_CHUNK_SIZE_BYTES",
-              "MAX_DATA_CHUNKS",
               "MAX_DATA_SHARDS",
               "MAX_PARITY_SHARDS",
               "MAX_ROW_PARITY_STRIPES",
               "MAX_ROW_PARITY_SOURCE_STRIPES",
-              "MAX_CANONICAL_PAYLOAD_BYTES",
               "MAX_ERASURE_GENERATED_BYTES",
               "MAX_ERASURE_WORKSPACE_BYTES",
               "MAX_MANIFEST_CHUNK_COMMITMENTS"
             ],
             "exprs": {
-              "MAX_CHUNK_SIZE_BYTES": "2 * 1024 * 1024",
-              "MAX_DATA_CHUNKS": "1024",
               "MAX_DATA_SHARDS": "64",
               "MAX_PARITY_SHARDS": "64",
               "MAX_ROW_PARITY_STRIPES": "64",
               "MAX_ROW_PARITY_SOURCE_STRIPES": "64",
-              "MAX_CANONICAL_PAYLOAD_BYTES": "64 * 1024 * 1024",
               "MAX_ERASURE_GENERATED_BYTES": "128 * 1024 * 1024",
               "MAX_ERASURE_WORKSPACE_BYTES": "128 * 1024 * 1024",
               "MAX_MANIFEST_CHUNK_COMMITMENTS": "16 * 1024"
@@ -21462,6 +21505,63 @@
             "exprs": {
               "BYTES_PER_GIB": "1024 * 1024 * 1024",
               "SECS_PER_MONTH": "30 * 24 * 60 * 60"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/da/manifest.rs",
+            "symbols": [
+              "MAX_ENCODED_BYTES"
+            ],
+            "exprs": {
+              "MAX_ENCODED_BYTES": "2 << 20"
+            }
+          },
+          {
+            "path": "crates/sorafs_manifest/src/da.rs",
+            "symbols": [
+              "MAX_CHUNK_SIZE_BYTES",
+              "MAX_DATA_CHUNKS"
+            ],
+            "exprs": {
+              "MAX_CHUNK_SIZE_BYTES": "2 * 1024 * 1024",
+              "MAX_DATA_CHUNKS": "1024"
+            }
+          },
+          {
+            "path": "crates/iroha_torii_shared/src/da/upload.rs",
+            "symbols": [
+              "DA_UPLOAD_PART_BYTES",
+              "DA_UPLOAD_MAX_BYTES",
+              "DA_UPLOAD_REQUEST_MAX_BYTES"
+            ],
+            "exprs": {
+              "DA_UPLOAD_PART_BYTES": "1024 * 1024",
+              "DA_UPLOAD_MAX_BYTES": "iroha_data_model::da::MAX_PAYLOAD_BYTES as usize",
+              "DA_UPLOAD_REQUEST_MAX_BYTES": "4 * DA_UPLOAD_PART_BYTES"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/da/upload.rs",
+            "symbols": [
+              "MAX_SESSIONS",
+              "MAX_PARTS"
+            ],
+            "exprs": {
+              "MAX_SESSIONS": "16",
+              "MAX_PARTS": "DA_UPLOAD_MAX_BYTES / DA_UPLOAD_PART_BYTES"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/da/source_quota.rs",
+            "symbols": [
+              "MAX_TICKETS",
+              "INDEX_BYTES",
+              "BLOCK"
+            ],
+            "exprs": {
+              "MAX_TICKETS": "4096",
+              "INDEX_BYTES": "2 << 20",
+              "BLOCK": "4096"
             }
           }
         ]
@@ -22381,7 +22481,7 @@
             }
           },
           {
-            "path": "crates/iroha_torii/src/da/rs16.rs",
+            "path": "crates/sorafs_manifest/src/da.rs",
             "symbols": [
               "MIN_CHUNK_SIZE_BYTES"
             ],
@@ -22475,7 +22575,7 @@
         ]
       },
       {
-        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the radix of the I105 account-address alphabet (the size of its symbol table), the length prefix of a vector, the payload room of a fixed-size VPN cell, the exact request sizes of the KAGEMUSHA signing tools and the exact raw lengths of the fixed values and proofs of the Parliament anonymous ballot (32 to 233,012 bytes). A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least. The offset of a proposal header after its version byte and the field count of the original-stream State registry (a fixed schema count asserted to fit its u16 index) are layout constants of the same kind.",
+        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the radix of the I105 account-address alphabet (the size of its symbol table), the length prefix of a vector, the payload room of a fixed-size VPN cell and the exact request sizes of the KAGEMUSHA signing tools. A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least. The offset of a proposal header after its version byte and the field count of the original-stream State registry (a fixed schema count asserted to fit its u16 index) are layout constants of the same kind.",
         "files": [
           {
             "path": "crates/iroha_core/src/kura.rs",
@@ -22556,15 +22656,6 @@
             }
           },
           {
-            "path": "crates/iroha_data_model/src/governance/types.rs",
-            "symbols": [
-              "LENGTH"
-            ],
-            "exprs": {
-              "LENGTH": "32"
-            }
-          },
-          {
             "path": "crates/iroha_data_model/src/soranet/vpn.rs",
             "symbols": [
               "max_payload_len"
@@ -22616,15 +22707,6 @@
             ],
             "exprs": {
               "ZK_ACE_PACKED_LIMB_BYTES": "7"
-            }
-          },
-          {
-            "path": "crates/iroha_data_model/src/governance/anonymous_ballot/bytes.rs",
-            "symbols": [
-              "LENGTH"
-            ],
-            "exprs": {
-              "LENGTH": "$len | $len"
             }
           },
           {
@@ -24299,7 +24381,7 @@
         ]
       },
       {
-        "reason": "Terms of excluded limits, defined in the SoraFS manifest, node and CAR crates and the configuration defaults: integer constants found only because the defining expressions of request, response and record ceilings of Torii's SoraFS endpoints (excluded above) name them: the source payload ceiling of the governance DAG with the signed reputation snapshot ceiling it equals, the proof-of-retrievability proof, audit-verdict and status-page record ceilings, the wire and header ceilings of a stream token, the signed billing statement ceiling, the encrypted enrollment envelope ceiling, the publisher-source header ceiling and the runtime-state entry ceiling of the proof-of-retrievability projections. Each shares the reason of the limits `term_of` lists for it: a local serving limit.",
+        "reason": "Terms of excluded limits, defined in the SoraFS manifest, node and CAR crates and the configuration defaults: integer constants found only because the defining expressions of request, response and record ceilings of Torii's SoraFS and data-availability endpoints (excluded above) name them: the source payload ceiling of the governance DAG with the signed reputation snapshot ceiling it equals, the proof-of-retrievability proof, audit-verdict and status-page record ceilings, the wire and header ceilings of a stream token, the signed billing statement ceiling, the encrypted enrollment envelope ceiling, the publisher-source header ceiling, the runtime-state entry ceiling of the proof-of-retrievability projections and the DA source payload ceiling of sorafs_manifest::da, which the transmitted total of Torii's resumable DA upload equals. Each shares the reason of the limits `term_of` lists for it: a local serving limit.",
         "files": [
           {
             "path": "crates/sorafs_manifest/src/governance.rs",
@@ -24425,6 +24507,20 @@
             "term_of": {
               "RUNTIME_STATE_ENTRY_LIMIT_MAX": [
                 "crates/iroha_torii/src/sorafs/por.rs: MAX_POR_COORDINATOR_RECORDS"
+              ]
+            }
+          },
+          {
+            "path": "crates/sorafs_manifest/src/da.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "64 * 1024 * 1024"
+            },
+            "term_of": {
+              "MAX_PAYLOAD_BYTES": [
+                "crates/iroha_torii_shared/src/da/upload.rs: DA_UPLOAD_MAX_BYTES"
               ]
             }
           }
@@ -27103,7 +27199,7 @@
       "why": "A comparison with 0 or 1 tests presence, emptiness, sign or a single item. It is not a size, count or work bound and is not scanned.",
       "groups": [
         {
-          "reason": "Block heights and generations compared with the first heights after genesis (2 is the first block that follows genesis): a reader that serves no evidence at the genesis height, a proof whose window opens after genesis, a generation that has a predecessor. They select which history exists and bound no size, count or work. Runtime records (keyed State and lifecycle activation heights, the retirement history start, the Taira activation effective height, keyed-row and lifecycle-runtime witnesses), the game-partition capture, checkpoint transfer, the certified current cut, the KAGEMUSHA suffix custody record and the ledger State-rows and SNS lease readers compare heights with 2 in the same way.",
+          "reason": "Block heights and generations compared with the first heights after genesis (2 is the first block that follows genesis): a reader that serves no evidence at the genesis height, a proof whose window opens after genesis, a generation that has a predecessor. They select which history exists and bound no size, count or work. Runtime records (keyed State and lifecycle activation heights, the retirement history start, the Taira activation effective height, keyed-row and lifecycle-runtime witnesses), the game-partition capture, checkpoint transfer, the certified current cut, the KAGEMUSHA suffix custody record and the ledger State-rows and SNS lease readers compare heights with 2 in the same way. The native provider capture of a retained World and the reuse window of a verified signer history start at the first height after genesis in the same way.",
           "files": [
             {
               "path": "crates/iroha_data_model/src/sumeragi_amx/approval_proof.rs",
@@ -27635,6 +27731,19 @@
               "path": "crates/iroha_core/src/state/runtime_retirement_cut.rs",
               "sites": {
                 "view.height() < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot/retained_provider.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+              "sites": {
+                "(2..=Self::MAX_HEIGHT).contains(&through)": 2,
+                "through >= 2": 1
               }
             }
           ]
@@ -28855,12 +28964,6 @@
               }
             },
             {
-              "path": "crates/iroha_torii/src/da/ingest.rs",
-              "sites": {
-                "expected_len.min(16 * 1024)": 1
-              }
-            },
-            {
               "path": "crates/iroha_torii/src/game.rs",
               "sites": {
                 ".take(129)": 1
@@ -29030,6 +29133,12 @@
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix/prepare.rs",
               "sites": {
                 "(done + 8).min(total)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/certified_chain.rs",
+              "sites": {
+                "first .max(2)": 1
               }
             }
           ]
@@ -29633,7 +29742,7 @@
           ]
         },
         {
-          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader (its Unix and Windows store readers) and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling. So are the 4,096 certified cuts of one lifecycle witness read, the twenty largest trigger actions a lifecycle preflight reports, the evidence input of the Ironwood activation preflight tool and the sponsor-stage input.",
+          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader (its Unix and Windows store readers) and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling. So are the 4,096 certified cuts of one lifecycle witness read, the twenty largest trigger actions a lifecycle preflight reports, the evidence input of the Ironwood activation preflight tool and the sponsor-stage input. The storage planner of a missing MUSUBI purpose refuses to compose a replication order whose canonical frame exceeds 256 KiB, the ceiling Torii's registry applies to a canonical order; the instruction checks its own payload ceiling when the order is submitted.",
           "files": [
             {
               "path": "crates/iroha_core/src/bin/validation_fee_rewards_evidence_verify.rs",
@@ -29825,6 +29934,12 @@
               "path": "crates/iroha_core/src/state/sponsor_stage.rs",
               "sites": {
                 "bytes.len() > 65_536": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/query/native_musubi_storage.rs",
+              "sites": {
+                "length > 256 * 1024": 1
               }
             }
           ]
@@ -30291,7 +30406,8 @@
             {
               "path": "crates/iroha_torii/src/sorafs/token/signer_lifecycle.rs",
               "sites": {
-                "issued > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)": 1
+                "issued > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)": 1,
+                "self.now_unix_ms()? / 1000 < body.ttl_epoch": 1
               }
             },
             {
@@ -30352,6 +30468,12 @@
               "path": "crates/iroha_torii/src/sorafs/api.rs",
               "sites": {
                 "u64::try_from(retry_after.as_millis().saturating_add(999) / 1_000) .unwrap_or(u64::MAX) .max(1)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot/retained_provider.rs",
+              "sites": {
+                "view .authenticated_query_ledger_time_ms() .ok_or(\"missing authenticated provider expiry clock\")? / 1000 >= expires": 1
               }
             }
           ]
@@ -30881,7 +31003,7 @@
             {
               "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
               "sites": {
-                "view.native_world_snapshot_height_v1()? < 2": 1,
+                "observed_height < 2": 1,
                 "self.height() >= 2": 2
               }
             },
@@ -31183,6 +31305,18 @@
               "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_actions.rs",
               "sites": {
                 "(1..=7).contains(&expected_kind)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Disk accounting of Torii's retained DA source custody: a reservation charges at least two filesystem blocks (its directory and completion marker), so a journal row below `2 * BLOCK` is corrupt; and one submission reclaims at most four expired tickets before it reports a full quota, so no submission removes an unbounded number of shard files. They account for the node's own disk use by application DA sources outside the block payload; no transaction, block or proof is judged.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/da/source_quota.rs",
+              "sites": {
+                "row.charge < 2 * BLOCK": 1,
+                "attempted.len() < 4": 1
               }
             }
           ]
