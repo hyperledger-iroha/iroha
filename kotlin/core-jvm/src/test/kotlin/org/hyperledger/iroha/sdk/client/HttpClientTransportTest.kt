@@ -48,8 +48,6 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
-import org.hyperledger.iroha.sdk.norito.NoritoAdapters
-import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -4890,46 +4888,18 @@ class HttpClientTransportTest {
 
     @Test
     fun noritoErrorEnvelopeDetailsProvideRejectCode() {
-        val body = encodeErrorEnvelope("queue_full", "transaction queue is at capacity", "TX_QUEUE_FULL")
+        // The Rust ErrorEnvelope writer includes both layer and reject_code in ErrorDetails.
+        val body = requireNotNull(javaClass.getResourceAsStream("/torii-error/queue-full.nrt")).use { it.readBytes() }
+        val error = ToriiApiException.fromResponse(429, emptyMap(), body)
+        assertEquals(429, error.status)
+        assertEquals("queue_full", error.code)
+        assertEquals("TX_QUEUE_FULL", error.rejectCode)
 
         assertEquals(
             "TX_QUEUE_FULL",
             HttpErrorMessageExtractor.extractRejectCode(emptyMap(), "x-iroha-reject-code", body),
         )
         assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
-    }
-
-    private fun encodeErrorEnvelope(code: String, message: String, rejectCode: String): ByteArray {
-        val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
-        val detailsAdapter = NoritoAdapters.struct(
-            listOf(
-                NoritoAdapters.field("reject_code", optionalString),
-                NoritoAdapters.field("queue", optionalString),
-                NoritoAdapters.field("retry_after_seconds", NoritoAdapters.option(NoritoAdapters.uint(64))),
-                NoritoAdapters.field("endpoint", optionalString),
-                NoritoAdapters.field("axt", optionalString),
-            )
-        )
-        val envelopeAdapter = NoritoAdapters.struct(
-            listOf(
-                NoritoAdapters.field("code", NoritoAdapters.stringAdapter()),
-                NoritoAdapters.field("message", NoritoAdapters.stringAdapter()),
-                NoritoAdapters.field("details", NoritoAdapters.option(detailsAdapter)),
-            )
-        )
-        val details = linkedMapOf<String, Any>(
-            "reject_code" to Optional.of(rejectCode),
-            "queue" to Optional.empty<String>(),
-            "retry_after_seconds" to Optional.empty<Long>(),
-            "endpoint" to Optional.empty<String>(),
-            "axt" to Optional.empty<String>(),
-        )
-        val envelope = linkedMapOf<String, Any>(
-            "code" to code,
-            "message" to message,
-            "details" to Optional.of(details),
-        )
-        return NoritoCodec.encode(envelope as Any, "iroha_torii_shared::ErrorEnvelope", envelopeAdapter)
     }
 
     private fun signedClientConfig(baseUri: String): ClientConfig =

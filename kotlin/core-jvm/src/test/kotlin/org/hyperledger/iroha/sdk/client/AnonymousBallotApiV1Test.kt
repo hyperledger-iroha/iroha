@@ -6,7 +6,6 @@ package org.hyperledger.iroha.sdk.client
 import java.net.URI
 import java.security.KeyPairGenerator
 import java.util.Locale
-import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeUnit
@@ -24,8 +23,6 @@ import okhttp3.mockwebserver.MockWebServer
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.norito.NoritoAdapters
-import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 class AnonymousBallotApiV1Test {
@@ -202,8 +199,10 @@ class AnonymousBallotApiV1Test {
         }
 
         // A Norito error envelope (the negotiated format of a Norito client) yields the same code.
+        val noritoBody = requireNotNull(javaClass.getResourceAsStream("/torii-error/anonymous-ballot-malformed.nrt"))
+            .use { it.readBytes() }
         val noritoRefusal = assertIs<AnonymousBallotToriiExceptionV1>(
-            submitFailure(TransportResponse(400, noritoErrorEnvelope("anonymous_ballot_malformed"), "", emptyMap(), null, false)),
+            submitFailure(TransportResponse(400, noritoBody, "", emptyMap(), null, false)),
         )
         assertEquals("anonymous_ballot_malformed", noritoRefusal.code)
 
@@ -387,33 +386,6 @@ class AnonymousBallotApiV1Test {
             null,
             false,
         )
-
-    /** A Norito-framed `ErrorEnvelope { code, message, details: None }` as Torii renders it. */
-    private fun noritoErrorEnvelope(code: String): ByteArray {
-        val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
-        val detailsAdapter = NoritoAdapters.struct(
-            listOf(
-                NoritoAdapters.field("reject_code", optionalString),
-                NoritoAdapters.field("queue", optionalString),
-                NoritoAdapters.field("retry_after_seconds", NoritoAdapters.option(NoritoAdapters.uint(64))),
-                NoritoAdapters.field("endpoint", optionalString),
-                NoritoAdapters.field("axt", optionalString),
-            ),
-        )
-        val envelopeAdapter = NoritoAdapters.struct(
-            listOf(
-                NoritoAdapters.field("code", NoritoAdapters.stringAdapter()),
-                NoritoAdapters.field("message", NoritoAdapters.stringAdapter()),
-                NoritoAdapters.field("details", NoritoAdapters.option(detailsAdapter)),
-            ),
-        )
-        val envelope = linkedMapOf<String, Any>(
-            "code" to code,
-            "message" to "server text that must not be echoed",
-            "details" to Optional.empty<Any>(),
-        )
-        return NoritoCodec.encode(envelope as Any, "iroha_torii_shared::ErrorEnvelope", envelopeAdapter)
-    }
 
     private class StubExecutor(var next: TransportResponse?) : HttpTransportExecutor {
         val requests = mutableListOf<TransportRequest>()
