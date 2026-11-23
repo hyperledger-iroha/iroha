@@ -209,3 +209,80 @@ fn resume_with_reused_predecessor_rebuilds_the_same_preparation() {
         assert_eq!(p.receipt_body, cold.receipt_body, "{label}: receipt template");
     }
 }
+
+fn retained_receive(parameters: &AuthenticatedParameters) -> (RecoveryCapsule, CompletionRecord) {
+    let root = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
+    let capsule = RecoveryCapsule::decode(
+        &std::fs::read(root.join("counterparty-receive-capsule.norito")).unwrap(),
+        &parameters.inner.scheme,
+    )
+    .unwrap();
+    let record = CompletionRecord::decode(
+        &std::fs::read(root.join("counterparty-receive-completion.norito")).unwrap(),
+        capsule.wallet(),
+    )
+    .unwrap();
+    (capsule, record)
+}
+
+/// Hardware consent on the reused path: the receipt the hardware signed for
+/// this capsule verifies against the stock, reused and restarted preparations
+/// alike, a tampered signature is refused alike, and finalize refuses it before
+/// any proof work.
+#[test]
+#[ignore = "requires a five-kind bundle and a retained Receive capsule with its completion"]
+fn reused_resume_keeps_hardware_consent() {
+    let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+    let parameters = install(&bundle);
+    let (capsule, record) = retained_receive(&parameters);
+    let signed = record.exact_receipt();
+    let (body, signature): (&[u8], [u8; 64]) = (&signed[..338], signed[338..].try_into().unwrap());
+    let mut forged = signature;
+    forged[63] ^= 1;
+    let engine = NativeEngine::default();
+    engine.resume(&capsule, &parameters).map(drop).unwrap();
+    *parameters.verified_head.entry.lock().unwrap() = None;
+    let stock = engine.resume(&capsule, &parameters).unwrap();
+    let reused = engine.resume(&capsule, &parameters).unwrap();
+    let restart = NativeEngine::default();
+    let fresh = restart.resume(&capsule, &parameters).unwrap();
+    assert_eq!(decodes(&parameters), 3, "cold, stock and restart verify; the reused resume does not");
+    let consent = |p: &PreparedOperation| {
+        let accepted = HardwareAdvanceReceipt::verify_selected(p, body, signature).unwrap();
+        (accepted.operation_id, accepted.capsule_digest, accepted.receipt.body, accepted.receipt.signature)
+    };
+    let refusal = |p: &PreparedOperation| format!("{:?}", HardwareAdvanceReceipt::verify_selected(p, body, forged).err());
+    assert_eq!(consent(&reused), consent(&stock), "the signed receipt binds the reused preparation");
+    assert_eq!(consent(&fresh), consent(&stock), "and the restarted one");
+    assert!(refusal(&stock) != "None" && refusal(&reused) == refusal(&stock) && refusal(&fresh) == refusal(&stock));
+    let accepted = HardwareAdvanceReceipt::verify_selected(&stock, body, signature).unwrap();
+    let tampered = HardwareAdvanceReceipt {
+        receipt: bootstrap::Receipt { body: accepted.receipt.body, signature: forged },
+        operation_id: accepted.operation_id,
+        capsule_digest: accepted.capsule_digest,
+    };
+    let start = std::time::Instant::now();
+    let refused_reused = format!("{:?}", engine.finalize(reused, &tampered, &parameters).err());
+    let refused_stock = format!("{:?}", engine.finalize(stock, &tampered, &parameters).err());
+    assert!(refused_reused != "None" && refused_reused == refused_stock, "{refused_reused} {refused_stock}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(30), "refused before proving");
+}
+
+/// The public wallet path end to end on the reused preparation: finalize with
+/// the hardware-signed receipt proves, and its output passes the stock head
+/// verifier inside finalize.
+#[test]
+#[ignore = "requires a five-kind bundle and a retained Receive capsule with its completion; proves a Receive"]
+fn reused_resume_finalizes_with_the_signed_receipt() {
+    let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+    let parameters = install(&bundle);
+    let (capsule, record) = retained_receive(&parameters);
+    let signed = record.exact_receipt();
+    let engine = NativeEngine::default();
+    engine.resume(&capsule, &parameters).map(drop).unwrap();
+    let reused = engine.resume(&capsule, &parameters).unwrap();
+    assert_eq!(decodes(&parameters), 1, "the second resume reused the head");
+    let receipt = HardwareAdvanceReceipt::verify_selected(&reused, &signed[..338], signed[338..].try_into().unwrap()).unwrap();
+    let completed = engine.finalize(reused, &receipt, &parameters).unwrap();
+    assert_eq!(completed.completion().exact_receipt(), signed, "the completion carries the signed receipt");
+}
