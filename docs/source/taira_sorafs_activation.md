@@ -42,3 +42,9 @@ defaults to 600 s. Raise it with `--client-deadline-secs=N` (60 to 86400) for
 multi-gigabyte packages: staging a 3 GB, 24,259-chunk package to three providers in
 turn at about 15 chunks/s takes well over an hour, so allow several hours. A pending
 order's on-chain ingest deadline still ends the wait.
+
+With `--stage-providers=N` the publisher stops staging once N assigned providers have
+completed, wherever they fall in assignment order; each remaining assignment then
+replicates natively from a completed provider while the publisher waits for its
+authenticated completion. Native replication can be slower than staging, so allow a
+correspondingly longer client deadline.

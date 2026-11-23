@@ -889,6 +889,30 @@ fn provider_completion_progress(
     Ok(true)
 }
 
+/// How many assigned providers `current` records as exactly completed, in any order.
+fn completed_assignments(
+    expected: &iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
+    current: &iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
+    assignments: &[sorafs_manifest::capacity::ReplicationAssignmentV1],
+) -> Result<usize, String> {
+    let mut completed = 0;
+    for assignment in assignments {
+        if provider_completion_progress(expected, current, &assignment.provider_id)? {
+            completed += 1;
+        }
+    }
+    Ok(completed)
+}
+
+/// How publisher source bytes reach the assigned providers.
+pub(super) struct SourceSupply<'a> {
+    /// Candidate provider source endpoints.
+    pub(super) endpoints: &'a [String],
+    /// Stage bytes only until this many assigned providers completed, in any order; every
+    /// remaining assignment then replicates natively from a completed provider.
+    pub(super) staged_provider_limit: Option<usize>,
+}
+
 /// Exact provider completions of one assignment, read while source bytes are supplied. These
 /// reads only schedule source writes; the final challenged native proof remains mandatory.
 #[derive(Clone, Copy)]
@@ -976,14 +1000,15 @@ fn assignment_refusal(status: StatusCode) -> bool {
 
 /// Stage source bytes for one assigned provider at a time. Each provider's exact order/revision
 /// completion schedules the next upload, and a provider that completed in the background is not
-/// staged again. Only the final challenged native proof establishes publication.
+/// staged again. Once a staged-provider limit is met, the rest replicate natively. Only the final
+/// challenged native proof establishes publication.
 fn supply_sources(
     session: PublicationSession<'_>,
     artifacts: &mut DeployPackArtifacts,
     assigned: &SorafsPublicationPreparationV1,
     order: &ReplicationOrderV1,
     registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
-    provider_urls: &[String],
+    supply: &SourceSupply<'_>,
     out_dir: &Path,
 ) -> Result<(), String> {
     let PublicationSession {
@@ -1001,7 +1026,16 @@ fn supply_sources(
     let digest = assigned.pin.digest;
     'providers: for assignment in &order.assignments {
         let provider = &assignment.provider_id;
-        if progress.completed(&progress.read()?, provider)? {
+        let current = progress.read()?;
+        if progress.completed(&current, provider)? {
+            continue;
+        }
+        // Completions count wherever they fall in assignment order: a provider later in the
+        // order can already hold the content, natively or from an earlier attempt.
+        if let Some(limit) = supply.staged_provider_limit
+            && completed_assignments(&assigned.order, &current.order, &order.assignments)? >= limit
+        {
+            progress.await_completion(provider)?;
             continue;
         }
         let header = PublisherSourceHeaderV1::new(
@@ -1019,7 +1053,7 @@ fn supply_sources(
             .map_err(|_| "publisher source encoding failed".to_owned())?;
         let mut selected = None;
         let mut refused_by_assignment = false;
-        for candidate in provider_urls {
+        for candidate in supply.endpoints {
             ensure_live(expires)?;
             let candidate =
                 Url::parse(candidate).map_err(|_| "invalid provider source URL".to_owned())?;
@@ -1103,10 +1137,10 @@ pub(super) fn qualify(
     artifacts: &mut DeployPackArtifacts,
     registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
     checkpoint: SumeragiFinalityCheckpoint,
-    provider_urls: &[String],
+    supply: &SourceSupply<'_>,
     out_dir: &Path,
 ) -> Result<Value, String> {
-    if provider_urls.is_empty() || provider_urls.len() > 64 {
+    if supply.endpoints.is_empty() || supply.endpoints.len() > 64 {
         return Err("publication requires 1..=64 provider source endpoints".to_owned());
     }
     let digest = ManifestDigest::new(
@@ -1133,7 +1167,7 @@ pub(super) fn qualify(
         &assigned,
         &order,
         registration_hash,
-        provider_urls,
+        supply,
         out_dir,
     )?;
     let complete = preparation(waiting, digest, registration_hash, true)?;
@@ -1157,7 +1191,17 @@ pub(super) fn qualify(
         ("completion_finalized".into(), Value::from(true)),
         (
             "source_upload_scheduling".into(),
-            Value::from("one_provider_at_a_time"),
+            Value::from(if supply.staged_provider_limit.is_some() {
+                "staged_then_native_replication"
+            } else {
+                "one_provider_at_a_time"
+            }),
+        ),
+        (
+            "staged_provider_limit".into(),
+            supply
+                .staged_provider_limit
+                .map_or(Value::Null, |limit| Value::from(limit as u64)),
         ),
         (
             "provider_progress_is_native_proof".into(),
@@ -2238,6 +2282,7 @@ mod tests {
         row: &SorafsPublicationPreparationV1,
         order: &ReplicationOrderV1,
         out: &Path,
+        staged_provider_limit: Option<usize>,
     ) -> (Result<(), String>, Vec<String>) {
         let config = publication_test_config();
         let (client, base, server) = status_server(replies);
@@ -2247,7 +2292,10 @@ mod tests {
             row,
             order,
             None,
-            &[base.to_string()],
+            &SourceSupply {
+                endpoints: &[base.to_string()],
+                staged_provider_limit,
+            },
             out,
         );
         (result, server.join().unwrap())
@@ -2284,6 +2332,7 @@ mod tests {
             &row,
             &order,
             &out,
+            None,
         );
         result.unwrap();
         assert_eq!(
@@ -2322,6 +2371,7 @@ mod tests {
             &row,
             &order,
             &out,
+            None,
         );
         result.unwrap();
         assert_eq!(
@@ -2346,7 +2396,7 @@ mod tests {
             row_reply(&completed(&row, &[second])),
             rereads,
         ));
-        let (result, requests) = supply_through(replies, &mut artifacts, &row, &order, &out);
+        let (result, requests) = supply_through(replies, &mut artifacts, &row, &order, &out, None);
         let error = result.unwrap_err();
         assert!(
             error.contains("no configured endpoint accepted initial source"),
@@ -2360,6 +2410,7 @@ mod tests {
             &row,
             &order,
             &out,
+            None,
         );
         assert_eq!(
             result.unwrap_err(),
@@ -2372,6 +2423,7 @@ mod tests {
             &row,
             &order,
             &out,
+            None,
         );
         assert!(
             result
@@ -2498,5 +2550,82 @@ mod tests {
                 session.expires
             );
         }
+    }
+
+    #[test]
+    fn staged_provider_limit_counts_every_assigned_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = fs::canonicalize(temp.path()).unwrap();
+        let providers = [[0x31; 32], [0x32; 32], [0x33; 32]];
+        let (mut artifacts, row, order) = source_fixture(&out, &providers);
+        let done =
+            |completed_providers: &[[u8; 32]]| row_reply(&completed(&row, completed_providers));
+        let [first, second, third] = providers;
+        let (result, requests) = supply_through(
+            vec![
+                // Only the first assignment receives publisher bytes.
+                done(&[]),
+                staged(),
+                staged(),
+                done(&[first]),
+                // The rest are never staged; each completion is awaited in assignment order.
+                done(&[first]),
+                done(&[first]),
+                done(&[first, second]),
+                done(&[first, second]),
+                done(&providers),
+            ],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+            Some(1),
+        );
+        result.unwrap();
+        assert_eq!(
+            request_paths(&requests),
+            [
+                PREPARE, SOURCE, SOURCE, PREPARE, PREPARE, PREPARE, PREPARE, PREPARE, PREPARE
+            ]
+        );
+        // The last assignment completed before this run. With a limit of two, it counts as soon
+        // as the first provider completes, so the second is left to native replication too.
+        let (result, requests) = supply_through(
+            vec![
+                done(&[third]),
+                staged(),
+                staged(),
+                done(&[first, third]),
+                done(&[first, third]),
+                done(&providers),
+                done(&providers),
+            ],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+            Some(2),
+        );
+        result.unwrap();
+        assert_eq!(
+            request_paths(&requests),
+            [PREPARE, SOURCE, SOURCE, PREPARE, PREPARE, PREPARE, PREPARE]
+        );
+        for provider in providers {
+            assert!(progress_file(&out, provider).exists());
+        }
+    }
+
+    #[test]
+    fn stage_providers_requires_a_positive_count() {
+        for value in ["0", "-1", "two", ""] {
+            assert_eq!(
+                deploy(vec![format!("--stage-providers={value}")]).unwrap_err(),
+                "--stage-providers must be a positive integer",
+                "{value:?}"
+            );
+        }
+        let error = deploy(vec!["--stage-providers=2".to_owned()]).unwrap_err();
+        assert!(error.contains("--client-config"), "{error}");
     }
 }
