@@ -498,6 +498,8 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             bytes.len()
         ));
     }
+    // B shares the installed programs. Release its last reference before A reopens custody.
+    drop(counterparty);
     // The measured Receive, in a launch that did not prove for B: retained
     // incoming bytes to a verified, durable output in A's platform custody.
     let receive_start = Instant::now();
