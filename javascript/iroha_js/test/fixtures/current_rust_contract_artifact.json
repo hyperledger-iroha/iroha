@@ -169,8 +169,8 @@
   "source_provenance": {
     "scope": "semantic-worktree-source-closure-v2",
     "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
-    "closure_sha256": "ed9b7702fe839d1c99892e80aa3b8aa4199d3d36cce3f834cefd00f2d79929cc",
-    "file_count": 4633,
+    "closure_sha256": "50e720959fa574c18e4b6352794131b7949be0ef2c53d0f8c750d7102a5bbc71",
+    "file_count": 4635,
     "contract_source_git_blob": "92d9de2ad29bd78bb0f764cb675324993b959e0d",
     "artifact_generator_git_blob": "81d8be32684a11b5e247b35f099205b30d75a4a1"
   }
