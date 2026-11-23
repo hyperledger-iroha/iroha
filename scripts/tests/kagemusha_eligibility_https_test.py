@@ -159,6 +159,10 @@ class LinuxCustody(unittest.TestCase):
 #include <unistd.h>
 int main(int argc, char **argv) {
     if (argc != 2 || getenv("KAGEMUSHA_FIXTURE_ENV")) return 9;
+    /* Read the forwarded request before returning or closing the input pipe. */
+    unsigned char request[2049];
+    size_t request_size = fread(request, 1, sizeof(request), stdin);
+    if (ferror(stdin) || request_size == 0 || request_size == sizeof(request)) return 5;
     char path[4096], mode[32] = {0};
     if (snprintf(path, sizeof(path), "%s/mode", argv[1]) >= sizeof(path)) return 8;
     FILE *f = fopen(path, "r"); if (!f) return 7;
