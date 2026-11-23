@@ -5,6 +5,8 @@ use group::{Curve, Group};
 
 #[path = "archive_remove_successor_tests.rs"]
 mod archive_remove_successor_tests;
+#[path = "engine_output_reuse_tests.rs"]
+mod output_reuse_tests;
 #[path = "signed_receive_scalar_tests.rs"]
 mod signed_receive_scalar_tests;
 

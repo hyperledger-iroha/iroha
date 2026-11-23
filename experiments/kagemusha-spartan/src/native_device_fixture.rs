@@ -1195,6 +1195,184 @@ mod tests {
         }
         run().unwrap();
     }
+
+    /// The canonical provider's dispatch order for every operation of an
+    /// ordinary Send and its Receive: reconstruct the selected capsule,
+    /// finalize it, then check the completion it staged. That check gets the
+    /// head finalization verified. Another owner verifies the output itself,
+    /// and so does a cold recovery from the retained capsule and completion.
+    #[test]
+    #[ignore = "requires the authenticated five-family native-device bundle; proves five operations"]
+    fn staged_completion_reuses_the_finalized_output_for_send_and_receive() {
+        fn run() -> Result<()> {
+            use std::time::Instant;
+            let path = std::path::PathBuf::from(
+                std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+            );
+            let parameters = install_test_bundle(&path)?;
+            let engine = NativeEngine::default();
+            let same = |a: &VerifiedWalletHead, b: &VerifiedWalletHead| {
+                a.profile == b.profile
+                    && a.pair[..] == b.pair[..]
+                    && a.custody_digest == b.custody_digest
+            };
+            let advance = |label: &str,
+                           sign: &dyn Fn(&PreparedOperation) -> Result<HardwareAdvanceReceipt>,
+                           head: &VerifiedWalletHead,
+                           witness: &ExactOperationWitness|
+             -> Result<CompletedOperation> {
+                let refused = |what: &str| Error::Rejected(format!("{label}: {what}"));
+                let prepared = engine.prepare(witness, head, &parameters)?;
+                let receipt = sign(&prepared)?;
+                let capsule = prepared.capsule().clone();
+                drop(prepared);
+
+                let begun = Instant::now();
+                let prepared = engine.resume(&capsule, &parameters)?;
+                let resume = begun.elapsed().as_secs_f64();
+                let begun = Instant::now();
+                let (prepared, completed) =
+                    engine.finalize_selected(prepared, &receipt, &parameters)?;
+                let finalize = begun.elapsed().as_secs_f64();
+                // The record as it is read back from storage.
+                let record =
+                    CompletionRecord::decode(&completed.completion().encode()?, capsule.wallet())?;
+                let begun = Instant::now();
+                let staged = engine.verify_staged_completion(&prepared, &record, &parameters)?;
+                let same_owner = begun.elapsed().as_secs_f64();
+                if !Arc::ptr_eq(&completed.head.pair, &staged.head.pair)
+                    || !same(&completed.head, &staged.head)
+                    || staged.completion().encode()? != completed.completion().encode()?
+                {
+                    return Err(refused("the staged check did not get the finalized head"));
+                }
+
+                // A second owner reconstructs the same capsule; its staged
+                // check verifies the output in full. So does a cold recovery.
+                let second = NativeEngine::default();
+                let reconstructed = second.resume(&capsule, &parameters)?;
+                let begun = Instant::now();
+                let independent =
+                    second.verify_staged_completion(&reconstructed, &record, &parameters)?;
+                let other_owner = begun.elapsed().as_secs_f64();
+                let begun = Instant::now();
+                let recovered =
+                    NativeEngine::default().verify_completion(&capsule, &record, &parameters)?;
+                let recovery = begun.elapsed().as_secs_f64();
+                for other in [&independent, &recovered] {
+                    if Arc::ptr_eq(&completed.head.pair, &other.head.pair)
+                        || !same(&completed.head, &other.head)
+                    {
+                        return Err(refused("another owner did not verify the output itself"));
+                    }
+                }
+
+                // The owner that holds the output refuses an altered one,
+                // inside a released Payment too, and still holds the original.
+                let payment = record.output_part(1)?;
+                let length = record.frame.output.len();
+                let mut places = vec![length / 3, length - 1];
+                if !payment.is_empty() {
+                    let at = record
+                        .frame
+                        .output
+                        .windows(payment.len())
+                        .position(|window| window == payment.as_slice())
+                        .ok_or(Error::Malformed("released Payment in the output"))?;
+                    places.push(at + payment.len() / 2);
+                }
+                for at in places {
+                    let mut altered = record.clone();
+                    altered.frame.output[at] ^= 1;
+                    if engine
+                        .verify_staged_completion(&prepared, &altered, &parameters)
+                        .is_ok()
+                    {
+                        return Err(refused("an altered output passed the staged check"));
+                    }
+                }
+                let again = engine.verify_staged_completion(&prepared, &record, &parameters)?;
+                if !Arc::ptr_eq(&completed.head.pair, &again.head.pair) {
+                    return Err(refused("a refusal displaced the held output"));
+                }
+                eprintln!(
+                    "output reuse {label}: resume={resume:.3}s finalize={finalize:.3}s \
+                     staged_same_owner={same_owner:.3}s staged_other_owner={other_owner:.3}s \
+                     cold_recovery={recovery:.3}s output_bytes={length} payment_bytes={}",
+                    payment.len()
+                );
+                Ok(completed)
+            };
+
+            // Wallet A, issued as on a device, then loaded.
+            let a_key = crate::full::WalletKey::labelled("two-wallet fixture wallet A");
+            let a_sign = |prepared: &PreparedOperation| {
+                sign_selected(prepared, &a_key.d, "two-wallet fixture wallet A receipt")
+            };
+            let challenge = KagemushaWalletEnrollmentChallengeV1 {
+                version: 1,
+                scheme_id: scheme().scheme_id(),
+                asset_digest: [0xa1; 32],
+                account_digest: [0xa2; 32],
+                app_policy: [0xa3; 32],
+                enrollment_policy: [0xa4; 32],
+                issuer_nonce: [0xa5; 32],
+            };
+            let a_bootstrap = bootstrap(&parameters, &challenge, &device_key(&a_key.q))?;
+            let ExactOperationWitness::Bootstrap(a_input) = &a_bootstrap else {
+                unreachable!()
+            };
+            let a_origin = engine.enrollment_origin(
+                a_input,
+                enrollment_marker(&challenge, &device_key(&a_key.q))?,
+                &parameters,
+            )?;
+            let a_enrolled = advance("A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
+            let a_load = load100(&a_bootstrap)?;
+            let a_loaded = advance("A Load100", &a_sign, a_enrolled.head(), &a_load)?;
+
+            // Wallet B, the software counterparty under A's scheme and asset.
+            let b = Counterparty::new(&parameters, a_bootstrap.credential())?;
+            let b_sign = |prepared: &PreparedOperation| b.sign(prepared);
+            let b_origin = b.origin(&engine, &parameters)?;
+            let b_enrolled = advance("B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
+
+            // B makes the Request; A pays it; B verifies the exact Payment and receives it.
+            let request = request_to(&a_load, b.credential())?;
+            let send = send10_to(&a_load, b.credential(), b.sign_request(&request)?)?;
+            let sent = advance("A Send10 to B", &a_sign, a_loaded.head(), &send)?;
+            let bytes = sent.completion().output_part(1)?;
+            let payment = engine.verify_payment(&bytes, &parameters)?;
+            let receive = receive_from(
+                b.bootstrap(),
+                b.bootstrap(),
+                b_enrolled.head().profile(),
+                &payment,
+            )?;
+            let received = advance("B Receive", &b_sign, b_enrolled.head(), &receive)?;
+
+            let ExactOperationWitness::Send(sent_step) = &send else {
+                unreachable!()
+            };
+            let ExactOperationWitness::Receive {
+                step: received_step,
+                ..
+            } = &receive
+            else {
+                unreachable!()
+            };
+            assert_eq!(sent_step.after_core[9], Fp::from(90), "A keeps 90");
+            assert_eq!(received_step.after_core[9], Fp::from(10), "B holds 10");
+            assert!(!bytes.is_empty(), "Send releases a Payment");
+            assert!(
+                received.completion().output_part(1)?.is_empty(),
+                "Receive emits no Payment"
+            );
+            require_credited(b_enrolled.head().profile(), received.head().profile())?;
+            Ok(())
+        }
+        run().unwrap();
+    }
 }
 
 /// The exact wallet state a fixture Send10 spends from: the Core and Rest its
