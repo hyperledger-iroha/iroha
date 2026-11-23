@@ -1055,7 +1055,7 @@ impl SignedBlock {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 alias: "default".to_string(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
             }])
         });
         let proof_policy_hash = HashOf::new(&proof_policies);

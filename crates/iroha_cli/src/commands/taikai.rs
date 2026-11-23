@@ -475,6 +475,9 @@ pub struct IngestWatchArgs {
     /// Override the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`).
     #[arg(long = "da-endpoint", value_name = "URL")]
     pub da_endpoint: Option<String>,
+    /// Trusted Torii receipt public key for DA publication.
+    #[arg(long, value_name = "PUBLIC_KEY", required_if_eq("publish_da", "true"))]
+    pub operator_public_key: Option<iroha_crypto::PublicKey>,
 }
 impl Run for IngestWatchArgs {
     #[allow(clippy::too_many_lines)]
@@ -504,6 +507,9 @@ impl Run for IngestWatchArgs {
             Some(DaPublisher::new(
                 context.config(),
                 self.da_endpoint.as_deref(),
+                self.operator_public_key
+                    .as_ref()
+                    .ok_or_else(|| eyre!("--publish-da requires --operator-public-key"))?,
             )?)
         } else {
             None

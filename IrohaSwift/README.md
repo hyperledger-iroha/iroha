@@ -261,7 +261,18 @@ activation or payout, and rejection applies only to that signed envelope. The
 confirmed identity is the native consensus commit hash. There is no manual
 block-walking confirmation API.
 
-The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
+For DA writes, configure the client's local signing context for the target
+network and its canonical request credentials for the producer. `submitDaBlob`
+uses resumable 1 MiB parts for large payloads. On `pending_pin_authorization`,
+review the effective retention in the receipt. With `artifactDirectory` set,
+pass the saved `da_request.json` and `da_response.json` to
+`iroha app da authorize-pin --request da_request.json --response da_response.json --operator-public-key KEY`
+using the producer's CLI configuration and the trusted Torii receipt verification
+key. Set `submission.pinScopeSignature` to the resulting signature bytes and
+resubmit the same request. The final `accepted` status acknowledges local
+admission. Native publication supplies the independent provider evidence.
+
+Configure the client with its local network signing context and canonical account credentials for prove and verify calls. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
 `listDaPinIntents`, `proveDaPinIntent`, and `verifyDaPinIntent`. Manifest and
 storage-ticket query conveniences accept 32-byte hex, but encode the canonical

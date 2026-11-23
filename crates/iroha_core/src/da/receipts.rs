@@ -1066,7 +1066,7 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::{
         da::{
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
@@ -1096,6 +1096,7 @@ mod tests {
             storage_ticket: StorageTicketId::new([0xEE; 32]),
             pdp_commitment: None,
             stripe_layout: DaStripeLayout::default(),
+            retention_policy: RetentionClass::default(),
             queued_at_unix: 0,
             rent_quote: DaRentQuote::default(),
             operator_signature: Signature::try_from_bytes(&[0x11; 64])
@@ -1109,8 +1110,8 @@ mod tests {
             sequence,
             receipt.client_blob_id,
             ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed(*receipt.chunk_root.as_bytes()),
+            DaProofScheme::SorafsPorBlake3,
+            receipt.chunk_root,
             None,
             RetentionClass::default(),
             receipt.storage_ticket,

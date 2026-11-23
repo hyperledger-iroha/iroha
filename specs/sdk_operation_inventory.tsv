@@ -397,6 +397,7 @@ data_availability.commitment.list	POST	/v1/da/commitments	public	torii_default	p
 data_availability.commitment.prove	POST	/v1/da/commitments/prove	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.commitment.verify	POST	/v1/da/commitments/verify	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.ingest	POST	/v1/da/ingest	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	true	true
+data_availability.ingest.parts	POST	/v1/da/ingest/parts	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	true	true
 data_availability.manifest.read	GET	/v1/da/manifests/{ticket}	public	torii_default	public	read	http	feature(app_api)	true	true	true	false
 data_availability.pin_intent.list	POST	/v1/da/pin-intents	public	torii_default	public	read	http	always	true	true	true	false
 data_availability.pin_intent.prove	POST	/v1/da/pin-intents/prove	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true

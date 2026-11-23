@@ -87,7 +87,7 @@ LaneConfigEntry {
     shard_id: ShardId,         // WSV/Kura shard binding (defaults to lane_id)
     visibility: LaneVisibility,// public vs restricted lanes
     storage_profile: LaneStorageProfile,
-    proof_scheme: DaProofScheme,// DA proof policy (merkle_sha256 default)
+    proof_scheme: DaProofScheme,// DA proof policy (sorafs_por_blake3 default)
     manifest_policy: DaManifestPolicy,
     confidential_compute: Option<ConfidentialComputePolicy>,
     scheduler: Option<LaneSchedulerPolicy>,

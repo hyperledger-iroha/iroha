@@ -12,7 +12,7 @@ use iroha_core::{
     state::{State, World, range_bounds::index_contains},
 };
 #[cfg(feature = "bench")]
-use iroha_crypto::{Hash, Signature};
+use iroha_crypto::Signature;
 #[cfg(feature = "bench")]
 use iroha_data_model::{
     da::{
@@ -63,8 +63,8 @@ fn receipt_cursor_record(lane_id: LaneId, sequence: u64) -> DaCommitmentRecord {
         sequence,
         BlobDigest::new([0xAA; 32]),
         ManifestDigest::new([0xBB; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0xCC; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0xCC; 32]),
         None,
         RetentionClass::default(),
         StorageTicketId::new([0xDD; 32]),

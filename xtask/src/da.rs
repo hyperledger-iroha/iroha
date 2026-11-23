@@ -968,7 +968,7 @@ fn diff_receipt_and_commitment(
             hex_encode(commitment.manifest_hash.as_bytes())
         ));
     }
-    if receipt.chunk_root.as_ref() != commitment.chunk_root.as_ref() {
+    if receipt.chunk_root != commitment.chunk_root {
         differences.push(format!(
             "chunk_root {} vs {}",
             hex_encode(receipt.chunk_root.as_ref()),
@@ -1640,6 +1640,7 @@ mod tests {
                 manifest_hash: BlobDigest::new(manifest),
                 storage_ticket: StorageTicketId::new(ticket),
                 pdp_commitment: Some(vec![0x11, 0x22]),
+                retention_policy: Default::default(),
                 stripe_layout: DaStripeLayout {
                     total_stripes: 1,
                     shards_per_stripe: 1,
@@ -1665,8 +1666,8 @@ mod tests {
                 3,
                 BlobDigest::new([0xAA; 32]),
                 ManifestDigest::new(manifest),
-                DaProofScheme::MerkleSha256,
-                CryptoHash::prehashed(chunk_root),
+                DaProofScheme::SorafsPorBlake3,
+                BlobDigest::new(chunk_root),
                 Some(CryptoHash::new([0x11, 0x22])),
                 RetentionPolicy::default(),
                 StorageTicketId::new(ticket),

@@ -17,34 +17,32 @@ use tokio::runtime::Runtime;
 
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 
-fn builder() -> NetworkBuilder {
+fn builder_with_fee(n: usize, sink: AccountId, amount: &str) -> NetworkBuilder {
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.fee_sink_account_id = sink;
+    fees.base_fee = amount.parse().expect("fixture fee");
+    fees.per_byte_fee = "0".parse().expect("fixture fee");
+    fees.per_instruction_fee = "0".parse().expect("fixture fee");
+    fees.per_gas_unit_fee = "0".parse().expect("fixture fee");
     NetworkBuilder::new()
-        .with_peers(4)
+        .with_peers(n)
         .with_auto_populated_trusted_peers()
         .with_genesis_instruction(iroha_data_model::isi::SetParameter::new(
-            iroha_data_model::parameter::Parameter::Custom({
-                let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-                fees.fee_sink_account_id = iroha_test_samples::ALICE_ID.clone();
-                fees.base_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_byte_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_instruction_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_gas_unit_fee = ("0").parse().expect("explicit fixture fee quantity");
+            iroha_data_model::parameter::Parameter::Custom(
                 fees.into_custom_parameter()
-                    .expect("explicit signed fixture fee policy")
-            }),
+                    .expect("signed fixture fee policy"),
+            ),
         ))
         .with_config_layer(|layer| {
-            layer
-                .write(
-                    ["nexus", "storage", "local_budget_bytes"],
-                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
-                )
-                // Isolate consensus from fee funding: keep the fee asset, quote zero charges.
-
-
-
-                ;
+            layer.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
         })
+}
+
+fn builder() -> NetworkBuilder {
+    builder_with_fee(4, iroha_test_samples::ALICE_ID.clone(), "0")
 }
 
 fn start(name: &str) -> Result<Option<(SerializedNetwork, Runtime)>> {
@@ -235,6 +233,10 @@ fn a_crashed_leader_is_replaced() -> Result<()> {
 mod transport_evidence;
 
 #[cfg(unix)]
+#[path = "support/rs16_validator_loss.rs"]
+mod rs16_validator_loss;
+
+#[cfg(unix)]
 #[path = "support/rs16_local_state.rs"]
 mod rs16_local_state;
 
@@ -249,42 +251,17 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
     use rs16_hold::{balances, certified_at, exact_processes, observer_held, supply, wait_applied};
 
     init_instruction_registry();
-    let sink = BOB_ID.to_i105_for_discriminant(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
-    )?;
-    let recipe = NetworkBuilder::new()
-        .with_peers(4)
+    let recipe = builder_with_fee(4, BOB_ID.clone(), "1")
         .with_base_seed(stringify!(
             observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality
         ))
-        .with_auto_populated_trusted_peers()
         .with_observer_p2p_bootstrap(ObserverP2pBootstrap::new(1)?)?
         .with_observer_slow_reader_relays(ObserverSlowReaderRelayConfig::new(
             1_024,
             Duration::from_millis(1),
         )?)?
-        .with_genesis_instruction(iroha_data_model::isi::SetParameter::new(
-            iroha_data_model::parameter::Parameter::Custom({
-                let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-                fees.fee_sink_account_id = iroha_test_samples::ALICE_ID.clone();
-                fees.base_fee = ("1").parse().expect("explicit fixture fee quantity");
-                fees.per_byte_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_instruction_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_gas_unit_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.fee_sink_account_id =
-                    iroha_data_model::account::AccountId::parse_encoded(&(sink))
-                        .expect("canonical fixture fee account");
-                fees.into_custom_parameter()
-                    .expect("explicit signed fixture fee policy")
-            }),
-        ))
         .with_config_layer(|layer| {
-            layer
-                .write(
-                    ["nexus", "storage", "local_budget_bytes"],
-                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
-                )
-                .write(["logger", "format"], "json");
+            layer.write(["logger", "format"], "json");
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         recipe,
@@ -542,7 +519,7 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
         );
         // Different honest exact-quorum certificate bytes are permissible; the
         // independently authenticated header, result and original body agree.
-        let evidence = rs16_hold::verify_observer_rows(
+        let evidence = rs16_hold::verify_peer_rows(
             &network,
             observer,
             original[4].0,
@@ -571,7 +548,7 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
         Ok(())
     })();
     rt.block_on(network.shutdown());
-    let closure = rs16_hold::clean_exits(&network, &rt, &mut exits);
+    let closure = rs16_hold::clean_exits(&network, &rt, &mut exits, &[1; 5]);
     result.and(closure)
 }
 
@@ -646,17 +623,28 @@ mod rs16_hold {
         deadline: Instant,
         observer: bool,
     ) -> Result<()> {
+        let peers = network
+            .validators()
+            .iter()
+            .chain(network.observers().iter().filter(|_| observer))
+            .collect::<Vec<_>>();
+        wait_applied_on(network, &peers, height, deadline)
+    }
+
+    pub fn wait_applied_on(
+        network: &Network,
+        peers: &[&NetworkPeer],
+        height: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        ensure!(!peers.is_empty(), "at least one receiver is required");
         loop {
             ensure!(
                 Instant::now() < deadline,
                 "original transport deadline elapsed at {height}"
             );
             let mut ready = true;
-            for peer in network
-                .validators()
-                .iter()
-                .chain(network.observers().iter().filter(|_| observer))
-            {
+            for &peer in peers {
                 let status = peer
                     .client()
                     .with_request_deadline(deadline)?
@@ -797,7 +785,9 @@ mod rs16_hold {
         let target = target.ok_or_else(|| eyre!("nonempty certified successor absent"))?;
         let committee = &target.committed().commitment().schedule.current.committee;
         ensure!(
-            committee.len() == 4
+            committee.len() == network.validators().len()
+                && (4..=31).contains(&committee.len())
+                && (committee.len() - 1) % 3 == 0
                 && committee
                     .iter()
                     .map(|seat| seat.validator.clone())
@@ -807,10 +797,10 @@ mod rs16_hold {
                         .iter()
                         .map(NetworkPeer::id)
                         .collect::<BTreeSet<_>>()
-                && target
-                    .commit_qc()
-                    .is_some_and(|qc| qc.signers.count_ones() == 3),
-            "finality must use the original four voters and exact three-vote quorum"
+                && target.commit_qc().is_some_and(
+                    |qc| qc.signers.count_ones() == committee.len() - (committee.len() - 1) / 3
+                ),
+            "finality must use the original signed committee and exact quorum"
         );
         Ok(target)
     }
@@ -851,7 +841,7 @@ mod rs16_hold {
         Ok(bytes)
     }
 
-    pub fn verify_observer_rows(
+    pub fn verify_peer_rows(
         network: &Network,
         peer: &NetworkPeer,
         pid: u32,
@@ -862,7 +852,12 @@ mod rs16_hold {
         let header = committed
             .header()
             .ok_or_else(|| eyre!("non-genesis native header missing"))?;
-        let layout = committed.commitment().schedule.current.da_layout;
+        let current = &committed.commitment().schedule.current;
+        let author = current
+            .committee
+            .get(usize::try_from(header.proposer)?)
+            .ok_or_else(|| eyre!("certified proposer missing"))?;
+        let layout = current.da_layout;
         let shape = layout.shape(u64::from(header.payload_len))?;
         let key = |peer: &PeerId| -> Result<String> {
             Ok(hex::encode(
@@ -881,7 +876,7 @@ mod rs16_hold {
             epoch: header.epoch.epoch,
             context: header.epoch.context.to_string(),
             proposer: u64::from(header.proposer),
-            local_is_author: false,
+            local_is_author: author.validator == peer.id(),
             local: key(&peer.id())?,
             peers: network
                 .all_peers()
@@ -893,9 +888,10 @@ mod rs16_hold {
         };
         let snapshot = network
             .startup_snapshot()
-            .pop()
-            .ok_or_else(|| eyre!("observer source snapshot absent"))?;
-        ensure!(snapshot.is_running, "observer source exited");
+            .into_iter()
+            .find(|snapshot| snapshot.mnemonic == peer.mnemonic())
+            .ok_or_else(|| eyre!("peer source snapshot absent"))?;
+        ensure!(snapshot.is_running, "peer source exited");
         let path = snapshot
             .logs
             .stdout_log
@@ -919,12 +915,13 @@ mod rs16_hold {
         let log = transport_log_prefix(path)?;
         let verified = transport_evidence::verify(&log, &expected)?;
         ensure!(
-            verified.admitted_rows
-                >= expected
-                    .k
-                    .checked_mul(expected.stripes)
-                    .ok_or_else(|| eyre!("RS16 geometry overflow"))?,
-            "observer lacks actual signed row custody"
+            expected.local_is_author
+                || verified.admitted_rows
+                    >= expected
+                        .k
+                        .checked_mul(expected.stripes)
+                        .ok_or_else(|| eyre!("RS16 geometry overflow"))?,
+            "receiver lacks actual signed row custody"
         );
         ensure!(
             Instant::now() < deadline,
@@ -937,18 +934,20 @@ mod rs16_hold {
         network: &Network,
         rt: &Runtime,
         exits: &mut [broadcast::Receiver<PeerLifecycleEvent>],
+        runs: &[usize],
     ) -> Result<()> {
         ensure!(
-            exits.len() == 5 && network.all_peers().count() == 5,
-            "exact five process owners required"
+            exits.len() == runs.len() && network.all_peers().count() == runs.len(),
+            "each run must have an owned peer event stream"
         );
         let mut total = 0;
-        for (peer, events) in network.all_peers().zip(exits) {
+        for ((peer, events), &expected) in network.all_peers().zip(exits).zip(runs) {
             ensure!(
                 !peer.is_running() && rt.block_on(peer.process_id()).is_none(),
                 "process survived cleanup"
             );
             let mut terminated = 0;
+            let mut restarts = 0;
             let mut count = 0;
             loop {
                 count += 1;
@@ -966,7 +965,10 @@ mod rs16_hold {
                         terminated += 1;
                     }
                     Ok(PeerLifecycleEvent::Killed) => bail!("peer was forcibly killed"),
-                    Ok(PeerLifecycleEvent::Spawned) => bail!("original peer process was replaced"),
+                    Ok(PeerLifecycleEvent::Spawned) => {
+                        ensure!(terminated == restarts + 1, "unexpected peer replacement");
+                        restarts += 1;
+                    }
                     Ok(_) => {}
                     Err(
                         broadcast::error::TryRecvError::Empty
@@ -978,13 +980,16 @@ mod rs16_hold {
                 }
             }
             ensure!(
-                terminated == 1,
-                "peer {} lacks exactly one clean exit",
+                terminated == expected && restarts + 1 == expected,
+                "peer {} lacks its exact clean exits",
                 peer.mnemonic()
             );
             total += terminated;
         }
-        ensure!(total == 5, "clean process closure omitted an original peer");
+        ensure!(
+            total == runs.iter().sum::<usize>(),
+            "clean process closure omitted a boot"
+        );
         eprintln!("RS16_TRANSPORT_HOLD_CLEAN_EXITS {total}");
         Ok(())
     }

@@ -61,45 +61,9 @@ Kotlin projects while preserving these exact coordinates in generated POMs.
 
 ## DA commitment and pin-intent proofs
 
-`HttpClientTransport.newDaToriiClient()` returns the Java typed DA client. It
-covers the proof-policy, commitment list/prove/verify, and pin-intent
-list/prove/verify routes. Use `DaModels.Digest32` for manifest and storage-ticket
-digests and `BigInteger` for unsigned 64-bit counters.
-
-```java
-final DaToriiClient da = transport.newDaToriiClient();
-DaModels.PinIntentListResponse page =
-    da.listPinIntents(
-            new DaModels.PinIntentListRequest(BigInteger.valueOf(100), null))
-        .join();
-while (page.nextCursor() != null) {
-  page =
-      da.listPinIntents(
-              new DaModels.PinIntentListRequest(
-                  BigInteger.valueOf(100), page.nextCursor()))
-          .join();
-}
-final DaModels.PinIntentProof proof =
-    da.provePinIntent(
-            new DaModels.PinIntentQueryRequest(
-                null,
-                DaModels.Digest32.fromHex(ticketHex),
-                null, null, null, null))
-        .join();
-if (proof != null) {
-  assert da.verifyPinIntent(proof).join().valid();
-}
-```
-
-List routes use immutable, server-issued snapshot cursors and return an explicit
-nullable `nextCursor()`. Proof routes use separate selector-only request types;
-pagination fields are not accepted by proof requests.
-
-Responses are decoded into closed typed models. The client rejects unknown
-fields, malformed transparent byte wrappers, invalid checksummed hashes,
-contradictory verification responses, and Merkle paths whose direction/length
-does not match the advertised bundle location. Requests are capped at 64 KiB
-and buffered responses at 8 MiB.
+Java applications use the Kotlin-owned `org.hyperledger.iroha.sdk.client.DaToriiClient`.
+It carries the ingest and pin-scope witnesses through list, prove and verify
+operations. See the [JVM proof client](../../kotlin/README.md#da-commitment-and-pin-intent-proofs).
 
 ## Authoritative Sumeragi status and operational diagnostics
 

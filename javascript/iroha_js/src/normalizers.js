@@ -47,6 +47,11 @@ function assertString(value, name) {
 }
 
 export function canonicalizeMultihashHex(value, name) {
+  return canonicalPublicKeyMultihashHex(value, name).toUpperCase();
+}
+
+/** Format a public key with lowercase varints and uppercase key bytes, as on the Rust wire. */
+export function canonicalPublicKeyMultihashHex(value, name) {
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length % 2 !== 0) {
     fail(
@@ -117,8 +122,8 @@ export function canonicalizeMultihashHex(value, name) {
     );
   }
 
-  const fnHex = bytes.subarray(0, fnEnd + 1).toString(HEX_ENCODING).toUpperCase();
-  const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString(HEX_ENCODING).toUpperCase();
+  const fnHex = bytes.subarray(0, fnEnd + 1).toString(HEX_ENCODING);
+  const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString(HEX_ENCODING);
   const payloadHex = payload.toString(HEX_ENCODING).toUpperCase();
 
   return `${fnHex}${lenHex}${payloadHex}`;

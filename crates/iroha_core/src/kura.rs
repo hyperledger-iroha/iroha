@@ -254,6 +254,8 @@ pub struct Kura {
     membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
+    /// Bounded local handoff of signed DA candidates to the native proposer.
+    pub(crate) da_proposal_queue: crate::da::proposal_queue::ProposalQueue,
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
     /// Opened canonical store-root owner used to mint descriptor-relative WAL storage.
@@ -1533,6 +1535,7 @@ impl Kura {
             ),
             membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
+            da_proposal_queue: Default::default(),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
@@ -1763,6 +1766,7 @@ impl Kura {
                 .expect("default transaction history budget fits supported platforms"),
             ),
             resource_inventory: Arc::clone(&resource_inventory),
+            da_proposal_queue: Default::default(),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
@@ -1958,6 +1962,22 @@ impl Kura {
                 "original Kura directory custody is required for native context publication",
             ))
         }
+    }
+    /// Bind the DA queue writer to this instance's original Kura root.
+    pub(crate) fn da_proposal_root(&self) -> std::io::Result<iroha_fs::OwnerDirectory> {
+        #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
+        {
+            let root = &self.store_root_directory;
+            let owner = iroha_fs::OwnerDirectory::open(&root.canonical_path)?;
+            if owner.identity()? != iroha_fs::FileIdentity::of(&root.file)?
+                || !self.bound_storage_directory_unchanged(root)
+            {
+                return Err(std::io::Error::other("original Kura DA queue root changed"));
+            }
+            Ok(owner)
+        }
+        #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
+        Err(std::io::ErrorKind::Unsupported.into())
     }
     /// Original configured limit for each canonical native context projection.
     #[must_use]

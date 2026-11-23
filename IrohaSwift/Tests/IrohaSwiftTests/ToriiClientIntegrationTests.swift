@@ -483,7 +483,14 @@ final class ToriiClientIntegrationTests: XCTestCase {
         )
         submission.codec = "application/octet-stream"
 
+        let prepared = try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody()
+        let authorizationDigest = try XCTUnwrap(Data(hexString: prepared.artifacts.signingDigestHex))
+        let blobDigest = try XCTUnwrap(Data(hexString: prepared.artifacts.payloadHashHex))
+        var returnedOwner = owner
+        var returnedStatus = "pending_pin_authorization"
+        var returnedDuplicate = false
         StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), canonicalRequestAccountHeaderValue(owner))
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.path, "/v1/da/ingest")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
@@ -509,11 +516,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
                 "client_blob_id": [digestArray],
                 "lane_id": 9,
                 "epoch": 4,
-                "blob_hash": [digestArray],
+                "blob_hash": [Array(blobDigest)],
                 "chunk_root": [digestArray],
                 "manifest_hash": [digestArray],
                 "storage_ticket": [responseTicket],
                 "pdp_commitment": Data("commit".utf8).base64EncodedString(),
+                "retention_policy": [
+                    "hot_retention_secs": 3600, "cold_retention_secs": 172800, "required_replicas": 3,
+                    "storage_class": ["type": "Hot", "value": NSNull()] as [String: Any],
+                    "governance_tag": ["da.sidecar"]
+                ] as [String: Any],
                 "stripe_layout": [
                     "total_stripes": 1,
                     "shards_per_stripe": 14,
@@ -531,9 +543,14 @@ final class ToriiClientIntegrationTests: XCTestCase {
                 ]
             ]
             let responseObject: [String: Any] = [
-                "status": "Accepted",
-                "duplicate": false,
-                "receipt": receiptPayload
+                "status": returnedStatus,
+                "duplicate": returnedDuplicate,
+                "receipt": receiptPayload,
+                "pin_scope": ["network_id": TestNetworkIds.canonical.literal, "owner": returnedOwner,
+                              "request_authorization_digest": [Array(authorizationDigest)],
+                              "lane_id": 9, "epoch": 4, "sequence": 2, "alias": NSNull(),
+                              "storage_ticket": [responseTicket], "manifest_hash": [digestArray],
+                              "commitment_digest": [digestArray]] as [String: Any]
             ]
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -548,8 +565,14 @@ final class ToriiClientIntegrationTests: XCTestCase {
             return (response, bodyData)
         }
 
-        let result = try await tcMakeClient().submitDaBlob(submission)
-        XCTAssertEqual(result.status, "Accepted")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let client = ToriiClient(baseURL: URL(string: "https://example.test")!,
+                                 session: URLSession(configuration: configuration),
+                                 localSigningContext: ToriiLocalSigningContext(networkId: submission.networkId),
+                                 canonicalRequestAuth: ToriiCanonicalRequestAuth(accountId: owner, privateKey: privateKeyBytes))
+        let result = try await client.submitDaBlob(submission)
+        XCTAssertEqual(result.status, "pending_pin_authorization")
         XCTAssertFalse(result.duplicate)
         XCTAssertEqual(result.artifacts.clientBlobIdHex, digest.upperHexString())
         XCTAssertEqual(result.artifacts.payloadLength, submission.payload.count)
@@ -560,6 +583,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
         XCTAssertEqual(receipt.laneId, 9)
         XCTAssertEqual(receipt.epoch, 4)
         XCTAssertEqual(receipt.operatorSignatureHex, "DEADBEEF")
+        XCTAssertEqual(receipt.retentionPolicy.requiredReplicas, 3)
+        XCTAssertEqual(receipt.retentionPolicy.governanceTag, "da.sidecar")
         let rentQuote = receipt.rentQuote
         XCTAssertEqual(rentQuote.baseRentMicro, "900")
         XCTAssertEqual(rentQuote.protocolReserveMicro, "180")
@@ -567,6 +592,36 @@ final class ToriiClientIntegrationTests: XCTestCase {
         XCTAssertEqual(rentQuote.pdpBonusMicro, "45")
         XCTAssertEqual(rentQuote.potrBonusMicro, "30")
         XCTAssertEqual(rentQuote.egressCreditPerGibMicro, "3")
+        let currentPrefix = try AccountAddress.inspectI105NetworkPrefix(owner).chainDiscriminant
+        returnedOwner = try AccountAddress.fromI105(owner).toI105(chainDiscriminant: currentPrefix == 369 ? 753 : 369)
+        do {
+            _ = try await client.submitDaBlob(submission)
+            XCTFail("accepted a returned scope with a foreign I105 prefix")
+        } catch ToriiClientError.invalidPayload(let reason) {
+            XCTAssertTrue(reason.contains("signed request"))
+        }
+        returnedOwner = owner
+        returnedStatus = "accepted"
+        do {
+            _ = try await client.submitDaBlob(submission)
+            XCTFail("accepted a first submission without a scope witness")
+        } catch ToriiClientError.invalidPayload(let reason) {
+            XCTAssertTrue(reason.contains("acknowledgement status"))
+        }
+        returnedDuplicate = true
+        let replay = try await client.submitDaBlob(submission)
+        XCTAssertEqual(replay.status, "accepted")
+        XCTAssertTrue(replay.duplicate)
+        submission.pinScopeSignature = Data(repeating: 0x31, count: 64)
+        let completed = try await client.submitDaBlob(submission)
+        XCTAssertEqual(completed.status, "accepted")
+        returnedStatus = "pending_pin_authorization"
+        do {
+            _ = try await client.submitDaBlob(submission)
+            XCTFail("accepted a pending acknowledgement for an authorized pin")
+        } catch ToriiClientError.invalidPayload(let reason) {
+            XCTAssertTrue(reason.contains("acknowledgement status"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

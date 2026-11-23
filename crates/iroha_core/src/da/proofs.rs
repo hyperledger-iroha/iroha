@@ -466,8 +466,8 @@ mod tests {
             1,
             BlobDigest::new([lane_byte; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([manifest_tag; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([manifest_tag; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([manifest_tag; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new([manifest_tag; 32]),
@@ -480,7 +480,7 @@ mod tests {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "lane-1".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         }])
     }
     fn header_with_hash(height: u64, da_hash: HashOf<DaCommitmentBundle>) -> BlockHeader {
@@ -795,7 +795,7 @@ mod tests {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "substituted".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         }]);
         assert!(matches!(
             verify_da_commitment_proof(&proof, &header, &supplied),

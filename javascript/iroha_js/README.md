@@ -3014,7 +3014,7 @@ const ingestResult = await torii.submitDaBlob({
   codec: "nexus_lane_sidecar",
   laneId: 7,
   epoch: 11,
-  sequence: Date.now(),
+  sequence: nextDaSequence,
   retentionPolicy: { storageClass: "Hot", governanceTag: "nexus.sidecars" },
   metadata: {
     "content-type": "application/car",
@@ -3023,7 +3023,9 @@ const ingestResult = await torii.submitDaBlob({
       visibility: "Public",
     },
   },
-  privateKeyHex: process.env.DA_SUBMITTER_PRIVATE_KEY,
+  canonicalAuth: { accountId: operatorId, privateKey: producerSigningKey },
+  artifactDir: "./artifacts/da",
+  privateKey: producerSigningKey,
 });
 if (ingestResult.receipt) {
   console.log(
@@ -3031,6 +3033,8 @@ if (ingestResult.receipt) {
   );
   console.log(`quoted base rent ${ingestResult.receipt.rent_quote?.base_rent ?? "unavailable"} XOR`);
 }
+
+```
 
 DA ingest always emits a signed first-release request, including `noSubmit`
 artifact preparation. The canonical digest binds the exact genesis-derived
@@ -3040,11 +3044,21 @@ Consensus re-verifies these witnesses against the committed account controller
 and charges per-owner count and bytes; display chain labels and metadata cannot
 select the security domain or quota identity.
 
+The client authenticates each request with the producer's exact-network
+canonical HTTP credentials. It sends large payloads in resumable 1 MiB parts.
+On `pending_pin_authorization`, review the effective retention and run
+`iroha app da authorize-pin --request da_request.json --response da_response.json --operator-public-key KEY`
+in the artifact directory using the producer's CLI configuration and trusted
+operator key. Supply the returned signature as `pinScopeSignatureHex` on the
+same submission. `accepted` acknowledges local admission. Native publication
+provides independent storage confirmation.
+
 DA rent-quote values use the same exact unit-free XOR contract: `base_rent`,
 `protocol_reserve`, `provider_reward`, `pdp_bonus`, `potr_bonus`, and
 `egress_credit_per_gib` remain canonical decimal strings. The SDK never
 converts them to JavaScript numbers or projects them into `_micro` fields.
 
+```js
 const session = await torii.fetchDaPayloadViaGateway({
   storageTicketHex: ingestResult.receipt.storage_ticket_hex,
   gatewayProviders: [

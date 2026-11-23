@@ -8,7 +8,7 @@ use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
-    to_bytes,
+    encode_canonical,
 };
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -47,9 +47,9 @@ enum PreparationPhase {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofScheme")]
 pub enum DaProofScheme {
-    /// Merkle proof over SHA-256 chunk digests.
+    /// SoraFS proof of retrievability over the domain-separated BLAKE3 chunk tree.
     #[default]
-    MerkleSha256,
+    SorafsPorBlake3,
 }
 /// Policy snapshot describing the proof scheme expected for a lane.
 #[derive(
@@ -85,7 +85,7 @@ pub use proof_policy::{
 };
 
 fn hash_policies(policies: &[DaProofPolicy]) -> Hash {
-    let bytes = to_bytes(&policies.to_vec())
+    let bytes = encode_canonical(&policies.to_vec())
         .expect("serializing proof policies with Norito must not fail at runtime");
     Hash::new(bytes)
 }
@@ -94,7 +94,7 @@ impl DaProofScheme {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::MerkleSha256 => "merkle_sha256",
+            Self::SorafsPorBlake3 => "sorafs_por_blake3",
         }
     }
 }
@@ -111,7 +111,7 @@ impl FromStr for DaProofScheme {
     type Err = DaProofSchemeParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "merkle_sha256" => Ok(Self::MerkleSha256),
+            "sorafs_por_blake3" => Ok(Self::SorafsPorBlake3),
             other => Err(DaProofSchemeParseError(other.to_string())),
         }
     }
@@ -148,7 +148,7 @@ pub struct DaCommitmentRecord {
     /// Proof scheme expected for the target lane.
     pub proof_scheme: DaProofScheme,
     /// Merkle root over chunk digests for the blob.
-    pub chunk_root: Hash,
+    pub chunk_root: BlobDigest,
     /// Optional digest covering PDP/PoTR scheduling metadata.
     #[norito(required)]
     pub proof_digest: Option<Hash>,
@@ -160,6 +160,17 @@ pub struct DaCommitmentRecord {
     pub acknowledgement_sig: Signature,
 }
 impl DaCommitmentRecord {
+    /// Exact domain-separated BLAKE3 digest approved by the producer's pin witnesses.
+    #[must_use]
+    pub fn pin_scope_digest(&self) -> BlobDigest {
+        let bytes =
+            encode_canonical(self).expect("a DA commitment record has a canonical encoding");
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"iroha:da:commitment-record:v1\0");
+        hasher.update(&bytes);
+        BlobDigest::from_hash(hasher.finalize())
+    }
+
     /// Convenience constructor assembling a record with the default bundle version.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -169,7 +180,7 @@ impl DaCommitmentRecord {
         client_blob_id: BlobDigest,
         manifest_hash: ManifestDigest,
         proof_scheme: DaProofScheme,
-        chunk_root: Hash,
+        chunk_root: BlobDigest,
         proof_digest: Option<Hash>,
         retention_class: RetentionClass,
         storage_ticket: StorageTicketId,
@@ -357,7 +368,7 @@ const DA_COMMITMENT_MERKLE_COMMITMENT_DOMAIN_V1: &[u8] =
 #[must_use]
 pub fn commitment_leaf_hash(record: &DaCommitmentRecord) -> Hash {
     // Encoding a commitment must be infallible; treat failures as unreachable.
-    let bytes = to_bytes(record).expect("DA commitment must encode");
+    let bytes = encode_canonical(record).expect("DA commitment must encode");
     let mut preimage = Vec::with_capacity(DA_COMMITMENT_MERKLE_LEAF_DOMAIN_V1.len() + bytes.len());
     preimage.extend_from_slice(DA_COMMITMENT_MERKLE_LEAF_DOMAIN_V1);
     preimage.extend_from_slice(&bytes);
@@ -405,13 +416,41 @@ mod tests {
             sequence: 3,
             client_blob_id: BlobDigest::new([0x11; 32]),
             manifest_hash: ManifestDigest::new([0x22; 32]),
-            proof_scheme: DaProofScheme::MerkleSha256,
-            chunk_root: Hash::prehashed([0x33; 32]),
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
+            chunk_root: BlobDigest::new([0x33; 32]),
             proof_digest: Some(Hash::prehashed([0x55; 32])),
             retention_class: RetentionClass::default(),
             storage_ticket: StorageTicketId::new([0x66; 32]),
             acknowledgement_sig: Signature::try_from_bytes(&[0x77; 64])
                 .expect("checked data-model DA commitment acknowledgement signature fixture"),
+        }
+    }
+    #[test]
+    fn producer_commitment_digest_covers_retention_root_and_acknowledgement() {
+        let record = sample_record();
+        let original = record.pin_scope_digest();
+        let leaf = commitment_leaf_hash(&record);
+        let mut changed = record.clone();
+        changed.retention_class.hot_retention_secs += 1;
+        assert_ne!(changed.pin_scope_digest(), original);
+        changed = record.clone();
+        changed.chunk_root.0[31] ^= 1;
+        assert_ne!(commitment_leaf_hash(&changed), leaf);
+        assert_ne!(
+            encode_canonical(&changed).unwrap(),
+            encode_canonical(&record).unwrap()
+        );
+        assert_ne!(changed.pin_scope_digest(), original);
+        changed = record.clone();
+        changed.acknowledgement_sig = Signature::try_from_bytes(&[0x29; 64]).unwrap();
+        assert_ne!(changed.pin_scope_digest(), original);
+        let decoded: DaCommitmentRecord =
+            norito::decode_from_bytes(&encode_canonical(&record).unwrap()).unwrap();
+        assert_eq!(original, decoded.pin_scope_digest());
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(original, record.pin_scope_digest());
+            assert_eq!(leaf, commitment_leaf_hash(&record));
         }
     }
     #[test]
@@ -450,7 +489,7 @@ mod tests {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "default".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let mut unknown_policy =
             norito::json::to_value(&policy).expect("serialize DA proof policy");
@@ -568,7 +607,7 @@ mod tests {
     #[test]
     fn merkle_leaf_and_internal_nodes_use_disjoint_hash_domains() {
         let record = sample_record();
-        let encoded = to_bytes(&record).expect("encode commitment");
+        let encoded = encode_canonical(&record).expect("encode commitment");
         assert_ne!(commitment_leaf_hash(&record), Hash::new(&encoded));
         let left = Hash::new(b"left");
         let right = Hash::new(b"right");
@@ -600,12 +639,31 @@ mod tests {
         assert!(DaCommitmentBundle::default().merkle_commitment().is_none());
     }
     #[test]
-    fn proof_scheme_from_str_accepts_only_canonical_merkle_label() {
+    fn proof_scheme_uses_only_sorafs_por_labels() {
         assert_eq!(
-            DaProofScheme::from_str("merkle_sha256").expect("parse"),
-            DaProofScheme::MerkleSha256
+            DaProofScheme::from_str("sorafs_por_blake3").expect("parse"),
+            DaProofScheme::SorafsPorBlake3
         );
-        for retired_alias in ["Merkle_Sha256", "merkle-sha256", "merkle"] {
+        let tag = r#"{"type":"SorafsPorBlake3","value":null}"#;
+        assert_eq!(
+            norito::json::from_str::<DaProofScheme>(tag).unwrap(),
+            DaProofScheme::SorafsPorBlake3
+        );
+        assert_eq!(
+            norito::json::to_value(&DaProofScheme::SorafsPorBlake3).unwrap(),
+            norito::json::from_str::<norito::json::Value>(tag).unwrap()
+        );
+        assert!(
+            norito::json::from_str::<DaProofScheme>(r#"{"type":"MerkleSha256","value":null}"#)
+                .is_err()
+        );
+        for retired_alias in [
+            "merkle_sha256",
+            "MerkleSha256",
+            "merkle",
+            "sorafs-por-blake3",
+            "SorafsPorBlake3",
+        ] {
             assert!(
                 DaProofScheme::from_str(retired_alias).is_err(),
                 "non-canonical proof scheme `{retired_alias}` must fail closed"
@@ -628,7 +686,7 @@ mod tests {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::new(11),
             alias: "lane-a".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let mut switched = base.clone();
         switched.alias = "lane-b".to_string();
@@ -642,13 +700,13 @@ mod tests {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(1),
             alias: "one".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let policy_b = DaProofPolicy {
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(2),
             alias: "two".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let first = DaProofPolicyBundle::new(vec![policy_a.clone(), policy_b.clone()]);
         let second = DaProofPolicyBundle::new(vec![policy_a, policy_b]);

@@ -2143,7 +2143,12 @@ mod tests {
                 "non-canonical manifest policy `{retired_alias}` must fail closed"
             );
         }
-        for retired_alias in ["MerkleSha256", "merkle-sha256", "MERKLE_SHA256"] {
+        for retired_alias in [
+            "SorafsPorBlake3",
+            "sorafs-por-blake3",
+            "SORAFS_POR_BLAKE3",
+            "merkle_sha256",
+        ] {
             assert!(
                 retired_alias.parse::<DaProofScheme>().is_err(),
                 "non-canonical proof scheme `{retired_alias}` must fail closed"
@@ -2706,7 +2711,7 @@ mod tests {
             governance: Some("governance-v2".into()),
             settlement: Some("settlement-v3".into()),
             storage: LaneStorageProfile::SplitReplica,
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             manifest_policy: DaManifestPolicy::Strict,
             confidential_compute: None,
             scheduler: Some(LaneSchedulerPolicy::new(

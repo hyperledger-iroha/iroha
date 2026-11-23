@@ -330,6 +330,9 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     );
     let transaction = chain.sign(&owner_keypair, [Log::new(iroha_logger::Level::INFO, "ordinary DA source".into()).into()], 1);
     let mut proposal = chain.proposal(None, vec![transaction]);
+    proposal.set_da_commitments(Some(iroha_data_model::da::commitment::DaCommitmentBundle::new(
+        vec![crate::da::test_pin_commitment(&intent.authorization, intent.storage_ticket, intent.manifest_hash)],
+    )));
     proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
     let mut pending = chain.begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::default()).unwrap();
     pending.prepare(Signers::Quorum).unwrap();

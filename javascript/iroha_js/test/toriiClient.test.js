@@ -1,3 +1,4 @@
+import { computeDaIngestSigningDigest } from "../src/dataAvailability.js";
 import { ISO_PAYMENT_INTENT } from "./fixtures/isoNativePayment.js";
 import { withArtifactResponseIdentity } from "./contractArtifactReadTestHelpers.js";
 import { buildRegisterSmartContractCodeInstruction } from "../src/instructionBuilders.js";
@@ -6236,6 +6237,28 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
   );
 });
 
+const DA_AUTH = { accountId: SEED_11_OWNER, privateKey: Buffer.alloc(32, 0x11) };
+
+function preparedDaFixture(init, receipt) {
+  const signed = JSON.parse(init.body);
+  Object.assign(receipt, { client_blob_id: signed.client_blob_id, blob_hash: signed.payload_hash, lane_id: signed.lane_id, epoch: signed.epoch });
+  return {
+    status: "pending_pin_authorization", duplicate: false, receipt,
+    pin_scope: {
+      network_id: signed.network_id, owner: signed.owner, lane_id: signed.lane_id, epoch: signed.epoch, sequence: signed.sequence,
+      request_authorization_digest: [Array.from(computeDaIngestSigningDigest(signed))],
+      storage_ticket: receipt.storage_ticket, manifest_hash: receipt.manifest_hash, commitment_digest: [Array(32).fill(79)], alias: null,
+    },
+  };
+}
+
+const CURRENT_DA_RETENTION = Object.freeze({
+  hot_retention_secs: 3600,
+  cold_retention_secs: 172800,
+  required_replicas: 3,
+  storage_class: { type: "Hot", value: null },
+  governance_tag: ["da.sidecar"],
+});
 const CURRENT_DA_STRIPE_LAYOUT = Object.freeze({
   total_stripes: 1,
   shards_per_stripe: 14,
@@ -6262,8 +6285,9 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
     storage_ticket: [digest],
     pdp_commitment: "AAAA====",
     stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+    retention_policy: CURRENT_DA_RETENTION,
     queued_at_unix: 1234,
-    operator_signature: "aa".repeat(64),
+    operator_signature: "AA".repeat(64),
     rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
   };
   const fetchImpl = async () =>
@@ -6272,18 +6296,18 @@ test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
       jsonData: { status: "accepted", duplicate: false, receipt },
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, { canonicalRequestAuth: DA_AUTH, fetchImpl });
   await assert.rejects(
     () =>
       client.submitDaBlob({
         networkId: VK_SIGNING_NETWORK_ID,
-        owner: SAMPLE_ACCOUNT_OWNER,
+        owner: SEED_11_OWNER,
         payload: Buffer.from("car-bytes"),
         codec: "nexus_lane_sidecar",
         laneId: 11,
         epoch: 22,
         sequence: 33,
-        signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+        signerPublicKey: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
         signatureHex: "aa".repeat(64),
         clientBlobId: Buffer.alloc(32, 0x11),
       }),
@@ -6303,15 +6327,21 @@ test("submitDaBlob rejects pre-release receipt omissions and unknown fields", as
     storage_ticket: [digest],
     pdp_commitment: null,
     stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+    retention_policy: CURRENT_DA_RETENTION,
     queued_at_unix: 1234,
-    operator_signature: "aa".repeat(64),
+    operator_signature: "AA".repeat(64),
     rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
   };
   const cases = [
     ["missing pdp_commitment", (receipt) => delete receipt.pdp_commitment, /pdp_commitment/u],
     ["missing stripe_layout", (receipt) => delete receipt.stripe_layout, /stripe_layout/u],
     ["missing row parity", (receipt) => delete receipt.stripe_layout.row_parity_stripes, /row_parity_stripes/u],
+    ["missing retention", (receipt) => delete receipt.retention_policy, /retention_policy/u],
+    ["invalid retention class", (receipt) => { receipt.retention_policy.storage_class = "Hot"; }, /storage_class/u],
     ["missing rent_quote", (receipt) => delete receipt.rent_quote, /rent_quote/u],
+    ...["", "00", "AA0", "aa", "AB".repeat(4097)].map((signature) => [
+      "invalid operator signature", (receipt) => { receipt.operator_signature = signature; }, /operator_signature/u,
+    ]),
     ["unknown receipt field", (receipt) => { receipt.pre_release_extension = true; }, /unsupported fields.*pre_release_extension/u],
     ["unknown stripe field", (receipt) => { receipt.stripe_layout.pre_release_extension = true; }, /unsupported fields.*pre_release_extension/u],
   ];
@@ -6320,6 +6350,7 @@ test("submitDaBlob rejects pre-release receipt omissions and unknown fields", as
     const receipt = structuredClone(canonicalReceipt);
     mutate(receipt);
     const client = new ToriiClient(BASE_URL, {
+      canonicalRequestAuth: DA_AUTH,
       fetchImpl: async () =>
         createResponse({
           status: 202,
@@ -6331,13 +6362,13 @@ test("submitDaBlob rejects pre-release receipt omissions and unknown fields", as
       () =>
         client.submitDaBlob({
           networkId: VK_SIGNING_NETWORK_ID,
-          owner: SAMPLE_ACCOUNT_OWNER,
+          owner: SEED_11_OWNER,
           payload: Buffer.from("car-bytes"),
           codec: "nexus_lane_sidecar",
           laneId: 11,
           epoch: 22,
           sequence: 33,
-          signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+          signerPublicKey: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
           signatureHex: "aa".repeat(64),
           clientBlobId: Buffer.alloc(32, 0x11),
         }),
@@ -6363,11 +6394,13 @@ test("submitDaBlob rejects coercible non-byte digest entries in responses", asyn
       storage_ticket: [validDigest],
       pdp_commitment: null,
       stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+      retention_policy: CURRENT_DA_RETENTION,
       queued_at_unix: 1234,
-      operator_signature: "aa".repeat(64),
+      operator_signature: "AA".repeat(64),
       rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
     };
     const client = new ToriiClient(BASE_URL, {
+      canonicalRequestAuth: DA_AUTH,
       fetchImpl: async () =>
         createResponse({
           status: 202,
@@ -6379,13 +6412,13 @@ test("submitDaBlob rejects coercible non-byte digest entries in responses", asyn
       () =>
         client.submitDaBlob({
           networkId: VK_SIGNING_NETWORK_ID,
-          owner: SAMPLE_ACCOUNT_OWNER,
+          owner: SEED_11_OWNER,
           payload: Buffer.from("car-bytes"),
           codec: "nexus_lane_sidecar",
           laneId: 11,
           epoch: 22,
           sequence: 33,
-          signerPublicKey: SAMPLE_ACCOUNT_SIGNATORY,
+          signerPublicKey: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
           signatureHex: "aa".repeat(64),
           clientBlobId: Buffer.alloc(32, 0x11),
         }),
@@ -6394,8 +6427,30 @@ test("submitDaBlob rejects coercible non-byte digest entries in responses", asyn
   }
 });
 
+nativeTest("submitDaBlob refuses a foreign I105 discriminant before sending any bytes", async () => {
+  const address = AccountAddress.fromI105(SEED_11_OWNER);
+  const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID, 369);
+  const selected = address.toI105(369);
+  const foreign = address.toI105(753);
+  let calls = 0;
+  for (const principal of [selected, foreign]) {
+    const client = new ToriiClient(BASE_URL, {
+      localSigningContext: context,
+      canonicalRequestAuth: { ...DA_AUTH, accountId: principal },
+      fetchImpl: async () => { calls += 1; throw new Error("unexpected DA POST"); },
+    });
+    await assert.rejects(client.submitDaBlob({
+      networkId: VK_SIGNING_NETWORK_ID, owner: foreign, privateKey: DA_AUTH.privateKey, payload: Buffer.from("test"),
+    }), /exact network and I105 owner/u);
+  }
+  assert.equal(calls, 0);
+});
+
 nativeTest("submitDaBlob builds ingest payload and normalizes response", async () => {
   let captured = null;
+  let returnedOwner = SEED_11_OWNER;
+  let returnedStatus = "pending_pin_authorization";
+  let returnedDuplicate = false;
   const digest = Array.from({ length: 32 }, (_, index) => index);
   const receipt = {
     client_blob_id: [digest],
@@ -6407,8 +6462,9 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     storage_ticket: [digest.map((value) => (value + 4) & 0xff)],
     pdp_commitment: Buffer.from("commitment").toString("base64"),
     stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+    retention_policy: CURRENT_DA_RETENTION,
     queued_at_unix: 1234,
-    operator_signature: "aa".repeat(64),
+    operator_signature: "AB".repeat(3309),
     rent_quote: {
       base_rent: "100",
       protocol_reserve: "25",
@@ -6420,17 +6476,21 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
+    const reply = preparedDaFixture(init, receipt);
+    reply.pin_scope.owner = returnedOwner;
+    reply.status = returnedStatus;
+    reply.duplicate = returnedDuplicate;
     return createResponse({
       status: 202,
-      jsonData: { status: "accepted", duplicate: false, receipt },
+      jsonData: reply,
       headers: {
         "content-type": "application/json",
         "sora-pdp-commitment": Buffer.from("header").toString("base64"),
       },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitDaBlob({
+  const client = new ToriiClient(BASE_URL, { canonicalRequestAuth: DA_AUTH, fetchImpl });
+  const submission = {
     networkId: VK_SIGNING_NETWORK_ID,
     owner: SEED_11_OWNER,
     payload: Buffer.from("car-bytes"),
@@ -6441,7 +6501,11 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     retentionPolicy: { governanceTag: "da.demo", storageClass: "Warm" },
     metadata: [{ key: "content-type", value: "application/car" }],
     privateKeyHex: "11".repeat(32),
-  });
+  };
+  const result = await client.submitDaBlob(submission);
+  assert.equal(result.receipt.operator_signature_hex, "AB".repeat(3309));
+  assert.equal(result.receipt.retention_policy.storage_class, "Hot");
+  assert.equal(result.receipt.retention_policy.governance_tag, "da.sidecar");
   assert.equal(captured?.url, `${BASE_URL}/v1/da/ingest`);
   assert.equal(captured?.init?.method, "POST");
   assert.equal(
@@ -6452,7 +6516,7 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
   const submitted = JSON.parse(captured?.init?.body ?? "{}");
   assert.equal(submitted.blob_class.class, "TaikaiSegment");
   assert.equal(submitted.codec[0], "nexus_lane_sidecar");
-  assert.equal(submitted.compression, "Identity");
+  assert.deepEqual(submitted.compression, { kind: "Identity", value: null });
   assert.equal(submitted.norito_manifest, null);
   assert.equal(submitted.metadata.items[0].key, "content-type");
   assert.equal(
@@ -6464,15 +6528,15 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     requestDigest.toString("hex").toUpperCase(),
     result.artifacts.clientBlobIdHex,
   );
-  assert.equal(result.status, "accepted");
+  assert.equal(result.status, "pending_pin_authorization");
   assert.equal(result.duplicate, false);
   assert.equal(result.pdpCommitmentHeader, Buffer.from("header").toString("base64"));
   assert.ok(result.receipt);
-  assert.equal(result.receipt?.lane_id, 1);
+  assert.equal(result.receipt?.lane_id, 11);
   assert.equal(result.receipt?.blob_hash_bytes.length, 32);
   assert.equal(
     result.receipt?.client_blob_id_hex,
-    Buffer.from(digest).toString("hex").toUpperCase(),
+    Buffer.from(receipt.client_blob_id[0]).toString("hex").toUpperCase(),
   );
   assert.deepEqual(result.receipt?.rent_quote, {
     base_rent: "100",
@@ -6482,6 +6546,17 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     potr_bonus: "3",
     egress_credit_per_gib: "2",
   });
+  returnedOwner = AccountAddress.fromI105(SEED_11_OWNER).toI105(369);
+  await assert.rejects(client.submitDaBlob(submission), /differs from the original signed request/u);
+  returnedOwner = SEED_11_OWNER;
+  returnedStatus = "accepted";
+  await assert.rejects(client.submitDaBlob(submission), /acknowledgement status/u);
+  returnedDuplicate = true;
+  assert.equal((await client.submitDaBlob(submission)).status, "accepted");
+  const authorized = { ...submission, pinScopeSignatureHex: "31".repeat(64) };
+  assert.equal((await client.submitDaBlob(authorized)).status, "accepted");
+  returnedStatus = "pending_pin_authorization";
+  await assert.rejects(client.submitDaBlob(authorized), /acknowledgement status/u);
 });
 
 nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => {
@@ -6496,20 +6571,24 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
     storage_ticket: [digest.map((value) => (value + 4) & 0xff)],
     pdp_commitment: Buffer.from("commitment").toString("base64"),
     stripe_layout: CURRENT_DA_STRIPE_LAYOUT,
+    retention_policy: CURRENT_DA_RETENTION,
     queued_at_unix: 1234,
-    operator_signature: "aa".repeat(64),
+    operator_signature: "AA".repeat(64),
     rent_quote: CURRENT_DA_ZERO_RENT_QUOTE,
   };
-  const fetchImpl = async () =>
-    createResponse({
+  let postedBody;
+  const fetchImpl = async (_url, init) => {
+    postedBody = init.body;
+    return createResponse({
       status: 202,
-      jsonData: { status: "accepted", duplicate: false, receipt },
+      jsonData: preparedDaFixture(init, receipt),
       headers: {
         "content-type": "application/json",
         "sora-pdp-commitment": Buffer.from("header").toString("base64"),
       },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  };
+  const client = new ToriiClient(BASE_URL, { canonicalRequestAuth: DA_AUTH, fetchImpl });
   const dir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-submit-"));
   try {
     const result = await client.submitDaBlob({
@@ -6527,9 +6606,9 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
     });
     assert.ok(result.artifactPaths);
     const { artifactPaths } = result;
-    const requestJson = JSON.parse(
-      await fs.readFile(artifactPaths?.requestJsonPath ?? "", "utf8"),
-    );
+    const requestSource = await fs.readFile(artifactPaths?.requestJsonPath ?? "", "utf8");
+    assert.equal(requestSource, postedBody);
+    const requestJson = JSON.parse(requestSource);
     assert.equal(requestJson.lane_id, 11);
     const receiptJson = JSON.parse(
       await fs.readFile(artifactPaths?.receiptJsonPath ?? "", "utf8"),

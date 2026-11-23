@@ -9170,7 +9170,7 @@ pub struct LaneDescriptor {
     pub visibility: Option<String>,
     /// Optional shard identifier used for DA cursor tracking (defaults to lane id).
     pub shard_id: Option<u32>,
-    /// Proof scheme for DA commitments (`merkle_sha256` in V1).
+    /// Proof scheme for DA commitments (`sorafs_por_blake3` in V1).
     ///
     /// KZG is not part of the V1 data model.
     pub proof_scheme: Option<String>,
@@ -10700,7 +10700,7 @@ impl Nexus {
                                 .unwrap_or(&invalid);
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
-                                    "lane[{idx}] proof scheme \"{value}\" is invalid (V1 supports only `merkle_sha256`; KZG requires a separately reviewed future protocol version)"
+                                    "lane[{idx}] proof scheme \"{value}\" is invalid (V1 supports only `sorafs_por_blake3`; KZG requires a separately reviewed future protocol version)"
                                 ),
                             ));
                             continue;
@@ -18917,6 +18917,9 @@ pub struct DaIngest {
     /// Directory where canonical DA manifests are queued for `SoraFS` orchestration.
     #[config(default = "defaults::torii::da_manifest_store_dir()")]
     pub manifest_store_dir: PathBuf,
+    /// Hard per-spool DA source reservation limit, including retained shards and write headroom.
+    #[config(default = "defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES")]
+    pub source_storage_budget_bytes: NonZeroU64,
     /// Maximum number of concurrent CPU-intensive DA ingest jobs.
     #[config(default = "defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS")]
     pub max_concurrent_compute_jobs: NonZeroUsize,
@@ -18933,7 +18936,7 @@ pub struct DaIngest {
     /// Optional Taikai envelope anchoring configuration.
     pub taikai_anchor: Option<DaTaikaiAnchor>,
     /// Replication policy overrides applied per blob class.
-    #[config(default = "da_replication_policy_default()")]
+    #[config(nested)]
     pub replication_policy: DaReplicationPolicy,
     /// Rent policy configuration applied to DA submissions.
     #[config(default = "da_rent_policy_default()")]
@@ -18957,6 +18960,10 @@ impl core::fmt::Debug for DaIngest {
             )
             .field("replay_cache_store_dir", &self.replay_cache_store_dir)
             .field("manifest_store_dir", &self.manifest_store_dir)
+            .field(
+                "source_storage_budget_bytes",
+                &self.source_storage_budget_bytes,
+            )
             .field(
                 "max_concurrent_compute_jobs",
                 &self.max_concurrent_compute_jobs,
@@ -18987,6 +18994,7 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: defaults::torii::da_manifest_store_dir(),
+            source_storage_budget_bytes: defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES,
             max_concurrent_compute_jobs: defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS,
             spool_queue_capacity: defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
             spool_batch_max: defaults::torii::DA_SPOOL_BATCH_MAX,
@@ -19012,6 +19020,7 @@ impl DaIngest {
             replay_cache_max_sequence_lag: self.replay_cache_max_sequence_lag,
             replay_cache_store_dir: self.replay_cache_store_dir,
             manifest_store_dir: self.manifest_store_dir,
+            source_storage_budget_bytes: self.source_storage_budget_bytes,
             max_concurrent_compute_jobs: self.max_concurrent_compute_jobs,
             spool_queue_capacity: self.spool_queue_capacity,
             spool_batch_max: self.spool_batch_max,
@@ -19056,38 +19065,39 @@ fn parse_da_governance_metadata_key(
     }
     Some(key)
 }
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-#[doc = "User-facing configuration for the DA replication policy."]
+/// User-facing DA replication policy. Class entries override the corresponding built-in profiles.
+#[derive(Debug, ReadConfig, Clone)]
 pub struct DaReplicationPolicy {
     /// Default retention template applied whenever no class override matches.
-    #[config(default = "da_retention_template_default()")]
+    #[config(default)]
     pub default_retention: DaRetentionTemplate,
     /// Per-class overrides keyed by blob class string.
-    #[config(default = "Vec::new()")]
+    #[config(default = "default_da_class_overrides()")]
     pub overrides: Vec<DaReplicationOverride>,
     /// Optional availability-class overrides for Taikai segments.
-    #[config(default = "Vec::new()")]
+    #[config(default = "default_da_availability_overrides()")]
     pub taikai_availability: Vec<DaTaikaiAvailabilityOverride>,
 }
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[doc = "Override entry for a specific blob class."]
 pub struct DaReplicationOverride {
     /// Blob class identifier (e.g., `taikai_segment`, `custom:42`).
     pub class: String,
     /// Retention template applied when the override matches.
-    #[config(default = "da_retention_template_default()")]
     pub retention: DaRetentionTemplate,
 }
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[doc = "Override entry for a Taikai availability class."]
 pub struct DaTaikaiAvailabilityOverride {
     /// Availability class identifier (`hot`, `warm`, `cold`).
     pub availability_class: String,
     /// Retention template applied when the override matches.
-    #[config(default = "da_retention_template_default()")]
     pub retention: DaRetentionTemplate,
 }
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[doc = "Retention template describing hot/cold windows and replica targets."]
 pub struct DaRetentionTemplate {
     /// Duration (seconds) the blob must remain in the hot tier.
@@ -19110,7 +19120,9 @@ impl DaReplicationPolicy {
                 emitter,
             )
             .unwrap_or_else(defaults::torii::da_replication_default_policy);
-        let mut overrides = BTreeMap::new();
+        let mut overrides: BTreeMap<_, _> = defaults::torii::da_replication_overrides()
+            .into_iter()
+            .collect();
         let mut seen_classes = BTreeSet::new();
         for (index, DaReplicationOverride { class, retention }) in
             self.overrides.into_iter().enumerate()
@@ -19137,7 +19149,10 @@ impl DaReplicationPolicy {
                 }
             }
         }
-        let mut taikai_availability = BTreeMap::new();
+        let mut taikai_availability: BTreeMap<_, _> =
+            defaults::torii::taikai_availability_overrides()
+                .into_iter()
+                .collect();
         let mut seen_availability_classes = BTreeSet::new();
         for (
             index,
@@ -19177,30 +19192,32 @@ impl DaReplicationPolicy {
 }
 impl Default for DaReplicationPolicy {
     fn default() -> Self {
-        let default_policy = defaults::torii::da_replication_default_policy();
-        let default_retention = DaRetentionTemplate::from_policy(&default_policy);
-        let overrides = defaults::torii::da_replication_overrides()
-            .into_iter()
-            .map(|(class, policy)| DaReplicationOverride {
-                class: format_blob_class(class),
-                retention: DaRetentionTemplate::from_policy(&policy),
-            })
-            .collect();
-        let taikai_availability = defaults::torii::taikai_availability_overrides()
-            .into_iter()
-            .map(
-                |(availability_class, policy)| DaTaikaiAvailabilityOverride {
-                    availability_class: format_taikai_availability_class(availability_class),
-                    retention: DaRetentionTemplate::from_policy(&policy),
-                },
-            )
-            .collect();
         Self {
-            default_retention,
-            overrides,
-            taikai_availability,
+            default_retention: DaRetentionTemplate::default(),
+            overrides: default_da_class_overrides(),
+            taikai_availability: default_da_availability_overrides(),
         }
     }
+}
+
+fn default_da_class_overrides() -> Vec<DaReplicationOverride> {
+    defaults::torii::da_replication_overrides()
+        .into_iter()
+        .map(|(class, policy)| DaReplicationOverride {
+            class: format_blob_class(class),
+            retention: DaRetentionTemplate::from_policy(&policy),
+        })
+        .collect()
+}
+
+fn default_da_availability_overrides() -> Vec<DaTaikaiAvailabilityOverride> {
+    defaults::torii::taikai_availability_overrides()
+        .into_iter()
+        .map(|(class, policy)| DaTaikaiAvailabilityOverride {
+            availability_class: format_taikai_availability_class(class),
+            retention: DaRetentionTemplate::from_policy(&policy),
+        })
+        .collect()
 }
 impl DaRetentionTemplate {
     fn from_policy(policy: &RetentionPolicy) -> Self {
@@ -19251,12 +19268,6 @@ impl Default for DaRetentionTemplate {
     fn default() -> Self {
         DaRetentionTemplate::from_policy(&defaults::torii::da_replication_default_policy())
     }
-}
-fn da_retention_template_default() -> DaRetentionTemplate {
-    DaRetentionTemplate::default()
-}
-fn da_replication_policy_default() -> DaReplicationPolicy {
-    DaReplicationPolicy::default()
 }
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[doc = "User-facing configuration for DA rent and incentive policy."]

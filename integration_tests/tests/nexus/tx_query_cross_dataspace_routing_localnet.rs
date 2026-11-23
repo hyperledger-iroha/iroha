@@ -2561,7 +2561,7 @@ mod tests {
         assert_eq!(bundle.policies()[0].alias, "lane-nexus");
         assert_eq!(
             bundle.policies()[0].proof_scheme,
-            DaProofScheme::MerkleSha256
+            DaProofScheme::SorafsPorBlake3
         );
         assert_eq!(bundle.policies()[1].lane_id.as_u32(), DS1_LANE_INDEX);
         assert_eq!(bundle.policies()[1].dataspace_id.as_u64(), DS1_ID_U64);

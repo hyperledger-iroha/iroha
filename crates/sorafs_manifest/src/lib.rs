@@ -18,6 +18,7 @@ pub mod alias_cache;
 mod canonical_test_support;
 pub mod capacity;
 pub mod chunker_registry;
+pub mod da;
 pub mod deal;
 pub mod gar;
 pub mod gateway;

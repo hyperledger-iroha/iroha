@@ -7,13 +7,14 @@ use iroha::{
         canonical_request_signature_header_value, canonical_request_timestamp_header_value,
     },
     config::Config,
-    crypto::{KeyPair, Signature},
+    crypto::{KeyPair, PublicKey, Signature},
+    da::DA_INGEST_RESPONSE_MAX_BYTES_V1,
     http::Method as HttpMethod,
 };
 use iroha_data_model::{
     NetworkId,
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeSignatureV1, DaPinScopeV1},
         types::{
             BlobClass, ExtraMetadata, FecScheme, MetadataEncryption, MetadataEntry,
             MetadataVisibility,
@@ -38,7 +39,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use url::Url;
-const DA_INGEST_RESPONSE_MAX_BYTES_V1: usize = 256 * 1024;
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 const HEADER_IROHA_ACCOUNT: &str = "x-iroha-account";
 const HEADER_IROHA_SIGNATURE: &str = "x-iroha-signature";
@@ -53,6 +53,7 @@ pub(super) struct DaPublisher {
     client: HttpClient,
     endpoint: Url,
     basic_auth: Option<(String, String)>,
+    operator: PublicKey,
     network_id: NetworkId,
     account: AccountId,
     key_pair: KeyPair,
@@ -69,6 +70,7 @@ pub(super) struct DaPublisherReceipt {
     pub(super) pdp_commitment_header: Option<String>,
 }
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct DaIngestResponsePayload {
     status: String,
     duplicate: bool,
@@ -81,7 +83,11 @@ pub(super) struct DaManifestFetcher {
 }
 impl DaPublisher {
     /// Build a publisher using CLI config (Torii URL + basic auth).
-    pub(super) fn new(config: &Config, endpoint_override: Option<&str>) -> Result<Self> {
+    pub(super) fn new(
+        config: &Config,
+        endpoint_override: Option<&str>,
+        operator: &PublicKey,
+    ) -> Result<Self> {
         let endpoint = if let Some(url) = endpoint_override {
             Url::parse(url).map_err(|err| eyre!("invalid DA endpoint `{url}`: {err}"))?
         } else {
@@ -107,6 +113,7 @@ impl DaPublisher {
             client,
             endpoint,
             basic_auth,
+            operator: operator.clone(),
             network_id: config.network_id,
             account: config.account.clone(),
             key_pair: config.key_pair.clone(),
@@ -130,20 +137,34 @@ impl DaPublisher {
             .verify_signatures()
             .map_err(|err| eyre!("DA ingest request signatures are invalid: {err}"))?;
         let first = self.publish_once(&request)?;
-        validate_da_ingest_response(&request, &first)?;
+        let (receipt, scope) = validate_da_ingest_response(&request, &first)?;
         let (response, submitted_request) = match first.status.as_str() {
-            "accepted" => (first, request),
+            "accepted" => {
+                eyre::ensure!(
+                    first.duplicate || !request.pin_scope_signatures.is_empty(),
+                    "Torii accepted a new DA publication without producer pin authorization"
+                );
+                iroha::da::verify_da_pin_receipt(&request, scope, receipt, &self.operator)?;
+                (first, request)
+            }
             "pending_pin_authorization" => {
-                let scope = first.pin_scope.as_ref().ok_or_else(|| {
-                    eyre!("Torii returned `pending_pin_authorization` without a DA pin scope")
-                })?;
+                eyre::ensure!(
+                    request.pin_scope_signatures.is_empty(),
+                    "Torii returned pending after producer pin authorization"
+                );
                 let mut authorized_request = request.clone();
-                authorized_request
-                    .try_add_pin_scope_signature(scope, &self.key_pair)
-                    .map_err(|err| eyre!("failed to authorize DA pin scope: {err}"))?;
+                iroha::da::authorize_da_pin_receipt(
+                    &mut authorized_request,
+                    scope,
+                    receipt,
+                    &self.operator,
+                    self.network_id,
+                    &self.account,
+                    &self.key_pair,
+                )?;
                 let retried = self.publish_once(&authorized_request)?;
                 validate_da_ingest_response(&authorized_request, &retried)?;
-                if retried.status != "accepted" && retried.status != "pending_pin_authorization" {
+                if retried.status != "accepted" {
                     return Err(eyre!(
                         "Torii returned unexpected DA ingest status `{}` after pin authorization",
                         retried.status
@@ -185,12 +206,31 @@ impl DaPublisher {
     }
 
     fn publish_once(&self, request_body: &DaIngestRequest) -> Result<DaIngestResponse> {
-        let request_json = norito::json::to_vec(request_body)
-            .map_err(|err| eyre!("failed to encode DA ingest request JSON: {err}"))?;
-        let auth = self.canonical_auth_headers(&request_json)?;
+        let (bytes, pdp_commitment_header) = iroha::client::data_availability::submit_ingest_phase(
+            &self.endpoint,
+            request_body,
+            |endpoint, body| self.post_ingest(endpoint, body),
+        )?;
+        let payload: DaIngestResponsePayload = norito::json::from_slice(&bytes)
+            .map_err(|err| eyre!("failed to decode DA ingest response JSON: {err}"))?;
+        Ok(DaIngestResponse {
+            status: payload.status,
+            duplicate: payload.duplicate,
+            receipt: payload.receipt,
+            pin_scope: payload.pin_scope,
+            pdp_commitment_header,
+        })
+    }
+
+    fn post_ingest(
+        &self,
+        endpoint: &Url,
+        request_json: Vec<u8>,
+    ) -> Result<(Vec<u8>, Option<String>)> {
+        let auth = self.canonical_auth_headers(endpoint, &request_json)?;
         let mut request = self
             .client
-            .post(self.endpoint.clone())
+            .post(endpoint.clone())
             .header(CONTENT_TYPE, "application/json")
             .header(ACCEPT, "application/json")
             .header(HEADER_IROHA_ACCOUNT, auth.account)
@@ -237,18 +277,10 @@ impl DaPublisher {
                 preview
             ));
         }
-        let payload: DaIngestResponsePayload = norito::json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to decode DA ingest response JSON: {err}"))?;
-        Ok(DaIngestResponse {
-            status: payload.status,
-            duplicate: payload.duplicate,
-            receipt: payload.receipt,
-            pin_scope: payload.pin_scope,
-            pdp_commitment_header,
-        })
+        Ok((bytes, pdp_commitment_header))
     }
 
-    fn canonical_auth_headers(&self, body: &[u8]) -> Result<CanonicalAuthHeaders> {
+    fn canonical_auth_headers(&self, endpoint: &Url, body: &[u8]) -> Result<CanonicalAuthHeaders> {
         use rand::{rand_core::TryRng as _, rngs::SysRng};
 
         let timestamp_ms = SystemTime::now()
@@ -265,7 +297,7 @@ impl DaPublisher {
         let message = canonical_network_request_signature_message(
             &self.network_id,
             &HttpMethod::POST,
-            &self.endpoint,
+            endpoint,
             body,
             timestamp_ms,
             &nonce,
@@ -297,10 +329,10 @@ struct DaIngestResponse {
     pin_scope: Option<DaPinScopeV1>,
     pdp_commitment_header: Option<String>,
 }
-fn validate_da_ingest_response(
+fn validate_da_ingest_response<'a>(
     request: &DaIngestRequest,
-    response: &DaIngestResponse,
-) -> Result<()> {
+    response: &'a DaIngestResponse,
+) -> Result<(&'a DaIngestReceipt, &'a DaPinScopeV1)> {
     if response.status != "accepted" && response.status != "pending_pin_authorization" {
         return Err(eyre!(
             "Torii returned unexpected DA ingest status `{}`",
@@ -320,20 +352,67 @@ fn validate_da_ingest_response(
             "Torii DA pin scope does not match the submitted request authorization"
         ));
     }
-    let payload_matches = receipt.blob_hash == request.payload_hash;
-    if receipt.client_blob_id != request.client_blob_id
-        || receipt.lane_id != request.lane_id
-        || receipt.epoch != request.epoch
-        || !payload_matches
-        || receipt.storage_ticket != scope.storage_ticket
-        || receipt.manifest_hash.as_bytes() != scope.manifest_hash.as_bytes()
-    {
+    if !receipt.matches_request_and_pin_scope(request, scope) {
         return Err(eyre!(
             "Torii DA receipt does not match the submitted request and durable pin scope"
         ));
     }
-    Ok(())
+    if let Some(header) = &response.pdp_commitment_header {
+        eyre::ensure!(
+            Some(iroha::da::decode_pdp_commitment_header(header)?)
+                == iroha::da::receipt_pdp_commitment(receipt)?,
+            "PDP header differs from signed receipt"
+        );
+    }
+    Ok((receipt, scope))
 }
+/// Verify both parties' signed artifacts against the selected account and pinned operator key.
+pub(super) fn authorize_pin_artifacts(
+    config: &Config,
+    request_path: &Path,
+    response_path: &Path,
+    operator: &PublicKey,
+) -> Result<DaPinScopeSignatureV1> {
+    use iroha_torii_shared::da::upload::{DA_UPLOAD_MAX_BYTES, DA_UPLOAD_REQUEST_MAX_BYTES};
+    // The original JSON carries the entire base64 payload and the bounded Finish metadata.
+    const MAX_REQUEST: usize = 4 * DA_UPLOAD_MAX_BYTES.div_ceil(3) + DA_UPLOAD_REQUEST_MAX_BYTES;
+    let mut request: DaIngestRequest = norito::json::from_slice(
+        &iroha_fs::read_regular(request_path, MAX_REQUEST).wrap_err("read original DA request")?,
+    )
+    .wrap_err("decode original DA request")?;
+    let prepared: DaIngestResponsePayload = norito::json::from_slice(
+        &iroha_fs::read_regular(response_path, DA_INGEST_RESPONSE_MAX_BYTES_V1)
+            .wrap_err("read prepared DA response")?,
+    )
+    .wrap_err("decode prepared DA response")?;
+    eyre::ensure!(
+        prepared.status == "pending_pin_authorization",
+        "DA response is not pending pin authorization"
+    );
+    let receipt = prepared
+        .receipt
+        .as_ref()
+        .ok_or_else(|| eyre!("DA response is missing its receipt"))?;
+    let scope = prepared
+        .pin_scope
+        .as_ref()
+        .ok_or_else(|| eyre!("DA response is missing its pin scope"))?;
+    iroha::da::authorize_da_pin_receipt(
+        &mut request,
+        scope,
+        receipt,
+        operator,
+        config.network_id,
+        &config.account,
+        &config.key_pair,
+    )?;
+    request
+        .pin_scope_signatures
+        .into_iter()
+        .find(|w| &w.signer == config.key_pair.public_key())
+        .ok_or_else(|| eyre!("missing approved pin witness"))
+}
+
 fn extract_pdp_header(headers: &reqwest::header::HeaderMap) -> Result<Option<String>> {
     headers
         .get(HEADER_SORA_PDP_COMMITMENT)
@@ -425,10 +504,31 @@ pub(super) fn parse_storage_class(label: &str) -> Result<StorageClass> {
         other => Err(eyre!("unsupported storage class `{other}`")),
     }
 }
+/// Read a producer-selected file up to the protocol limit, including when it grows after opening.
+pub(super) fn read_da_input(path: &Path, limit: usize) -> Result<Vec<u8>> {
+    let file = std::fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    eyre::ensure!(
+        metadata.is_file() && metadata.len() <= limit as u64,
+        "DA input {} must be a regular file of at most {limit} bytes",
+        path.display()
+    );
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    eyre::ensure!(
+        bytes.len() <= limit,
+        "DA input {} exceeds {limit} bytes",
+        path.display()
+    );
+    Ok(bytes)
+}
 /// Load a Norito JSON file containing simple metadata entries.
 pub(super) fn load_metadata_from_path(path: &Path) -> Result<ExtraMetadata> {
-    let bytes = std::fs::read(path)
-        .wrap_err_with(|| format!("failed to read metadata JSON `{}`", path.display()))?;
+    let bytes = read_da_input(
+        path,
+        iroha_torii_shared::da::upload::DA_UPLOAD_REQUEST_MAX_BYTES,
+    )
+    .wrap_err_with(|| format!("failed to read metadata JSON `{}`", path.display()))?;
     let value: Value = norito::json::from_slice(&bytes)
         .map_err(|err| eyre!("failed to parse metadata JSON `{}`: {err}", path.display()))?;
     let map = value
@@ -483,15 +583,27 @@ mod tests {
     fn receipt_for_request(request: &DaIngestRequest) -> DaIngestReceipt {
         let operator = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
             .expect("derive deterministic receipt operator key");
-        DaIngestReceipt {
+        let mut store = sorafs_car::ChunkStore::with_profile(
+            sorafs_car::da_payload::chunk_profile_for_request(request.chunk_size),
+        );
+        store.ingest_bytes(&request.payload).unwrap();
+        let pdp = sorafs_car::da_payload::pdp_commitment(
+            &store,
+            [0x45; 32],
+            iroha_torii_shared::da::sampling::compute_sample_window(request.total_size),
+            1,
+        )
+        .unwrap();
+        let mut receipt = DaIngestReceipt {
             client_blob_id: request.client_blob_id,
             lane_id: request.lane_id,
             epoch: request.epoch,
             blob_hash: request.payload_hash,
-            chunk_root: BlobDigest::new([0x44; 32]),
+            chunk_root: BlobDigest::new(*store.por_tree().root()),
             manifest_hash: BlobDigest::new([0x45; 32]),
             storage_ticket: StorageTicketId::new([0x46; 32]),
-            pdp_commitment: None,
+            pdp_commitment: Some(norito::encode_canonical(&pdp).unwrap()),
+            retention_policy: Default::default(),
             stripe_layout: DaStripeLayout {
                 total_stripes: 1,
                 shards_per_stripe: 1,
@@ -499,9 +611,14 @@ mod tests {
             },
             queued_at_unix: 1,
             rent_quote: DaRentQuote::default(),
-            operator_signature: Signature::try_new(operator.private_key(), b"receipt")
-                .expect("sign deterministic receipt fixture"),
-        }
+            operator_signature: DaIngestReceipt::signature_placeholder(),
+        };
+        receipt.operator_signature = Signature::try_new(
+            operator.private_key(),
+            &receipt.operator_signing_bytes(request.sequence).unwrap(),
+        )
+        .unwrap();
+        receipt
     }
 
     fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
@@ -584,6 +701,14 @@ mod tests {
             .unwrap_or_else(|| panic!("missing {expected_name} request header"))
     }
     #[test]
+    fn read_da_input_accepts_the_limit_and_rejects_one_byte_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("blob");
+        std::fs::write(&input, [1, 2, 3]).unwrap();
+        assert_eq!(read_da_input(&input, 3).unwrap(), [1, 2, 3]);
+        assert!(read_da_input(&input, 2).is_err());
+    }
+    #[test]
     fn parse_blob_class_supports_aliases() {
         assert!(matches!(
             parse_blob_class("taikai_segment").expect("alias"),
@@ -637,6 +762,12 @@ mod tests {
             &request.authorization(),
             receipt.storage_ticket,
             ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt
+                .commitment_record(
+                    request.sequence,
+                    iroha_data_model::da::commitment::DaProofScheme::SorafsPorBlake3,
+                )
+                .pin_scope_digest(),
             None,
         );
         let pending = norito::json::to_vec(&DaIngestResponsePayload {
@@ -659,6 +790,10 @@ mod tests {
         let account = request.owner.clone();
         let public_key = key_pair.public_key().clone();
         let publisher = DaPublisher {
+            operator: KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone(),
             client: HttpClient::builder()
                 .build()
                 .expect("build mock HTTP client"),
@@ -746,6 +881,10 @@ mod tests {
         let endpoint =
             Url::parse(&format!("http://{address}/v1/da/ingest")).expect("mock endpoint URL");
         let publisher = DaPublisher {
+            operator: KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone(),
             client: HttpClient::builder()
                 .build()
                 .expect("build mock HTTP client"),

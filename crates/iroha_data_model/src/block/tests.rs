@@ -199,7 +199,7 @@ fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAu
         sequence,
         payload_hash: BlobDigest::new([0xDF; 32]),
         payload_bytes: 1,
-        request_content_hash: Hash::prehashed([0xE0; 32]),
+        request_content_hash: BlobDigest::new([0xE0; 32]),
         signatures: Vec::new(),
     };
     authorization.signatures.push(DaIngestSignatureV1 {
@@ -219,7 +219,13 @@ pub(super) fn test_pin_intent(
     let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
         .expect("valid deterministic block pin-intent key");
     let authorization = test_pin_authorization(lane, epoch, sequence);
-    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
+    let scope = DaPinScopeV1::new(
+        &authorization,
+        storage_ticket,
+        manifest_hash,
+        Default::default(),
+        None,
+    );
     let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
         .expect("sign deterministic block pin scope");
     DaPinIntent::new(authorization, scope_authorization)
@@ -231,8 +237,8 @@ pub(super) fn sample_da_bundle() -> DaCommitmentBundle {
         1,
         BlobDigest::new([0x11; 32]),
         ManifestDigest::new([0x22; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x33; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0x33; 32]),
         Some(Hash::prehashed([0x55; 32])),
         RetentionPolicy::default(),
         StorageTicketId::new([0x66; 32]),
@@ -1459,8 +1465,8 @@ fn set_da_commitments_updates_header_hash() {
         3,
         BlobDigest::new([0xAA; 32]),
         ManifestDigest::new([0xBB; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0xCC; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0xCC; 32]),
         Some(Hash::prehashed([0xEE; 32])),
         RetentionPolicy::default(),
         StorageTicketId::new([0xFF; 32]),
@@ -1872,7 +1878,7 @@ fn genesis_can_override_da_proof_policies() {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "custom".to_string(),
-        proof_scheme: DaProofScheme::MerkleSha256,
+        proof_scheme: DaProofScheme::SorafsPorBlake3,
     }]);
     let expected_hash = HashOf::new(&bundle);
     let block = SignedBlock::try_genesis_with_da_proof_policies(
@@ -1908,7 +1914,7 @@ fn try_genesis_with_da_proof_policies_signs_and_rejects_empty() {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "checked".to_string(),
-        proof_scheme: DaProofScheme::MerkleSha256,
+        proof_scheme: DaProofScheme::SorafsPorBlake3,
     }]);
     let block = SignedBlock::try_genesis_with_da_proof_policies(
         vec![tx],

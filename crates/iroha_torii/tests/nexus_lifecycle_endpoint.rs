@@ -259,7 +259,7 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
     let lane = LaneId::new(1);
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
     let before_limits = harness.queue.queue_limits().for_lane(lane);
-    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"forbidden-local","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"forbidden-local","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"sorafs_por_blake3","metadata":{}}],"retire":[]}"#;
     for (method, path, expected_status) in [
         (
             "POST",
