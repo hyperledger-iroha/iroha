@@ -31,6 +31,31 @@ use std::time::Instant;
 const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
 const PREPARATION_MAX_BYTES: usize = 2 * 1024 * 1024;
 
+/// Spacing of a provider's completion reads while it ingests or replicates.
+const COMPLETION_POLL_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(5)
+} else {
+    Duration::from_millis(500)
+};
+/// A source write the assignment refuses (403 or 409) can come from a provider a block ahead of
+/// the configured Torii, so that provider's progress is reread up to this many times, this far
+/// apart and within this long, before the refusal fails the publication.
+const REFUSAL_PROGRESS_READS: u32 = 60;
+const REFUSAL_PROGRESS_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(1)
+} else {
+    Duration::from_secs(1)
+};
+const REFUSAL_PROGRESS_WAIT: Duration = Duration::from_secs(60);
+/// One preparation read absorbs fewer than this many consecutive transport failures (no HTTP
+/// response, or 502/504 from a gateway in front of Torii), backing off from this base.
+const PREPARATION_TRANSPORT_ATTEMPTS: u32 = 5;
+const PREPARATION_TRANSPORT_BACKOFF: Duration = if cfg!(test) {
+    Duration::from_millis(5)
+} else {
+    Duration::from_secs(1)
+};
+
 // Public status DTOs are small; retain the SDK's bounded response envelope.
 const REGISTRATION_STATUS_MAX_BYTES: usize = 64 * 1024;
 
@@ -210,13 +235,24 @@ fn post(
     url: Url,
     bytes: Vec<u8>,
 ) -> Result<reqwest::blocking::Response, String> {
+    signed_request(client, config, url, bytes)?
+        .send()
+        .map_err(|_| "publication transport unavailable".to_owned())
+}
+
+fn signed_request(
+    client: &HttpClient,
+    config: &DeployClientConfig,
+    url: Url,
+    bytes: Vec<u8>,
+) -> Result<reqwest::blocking::RequestBuilder, String> {
     let authority = AccountId::new(config.public_key.clone());
     let timestamp = reputation_request_timestamp_ms_at(SystemTime::now())?;
     let nonce = reputation_request_nonce_with_rng(&mut rand::rngs::SysRng)?;
     let message = request_message(&config.network_id, &url, &bytes, timestamp, &nonce)?;
     let signature = Signature::try_new(&config.private_key, &message)
         .map_err(|_| "failed to authenticate publication request".to_owned())?;
-    client
+    Ok(client
         .post(url)
         .header(CONTENT_TYPE, "application/x-norito")
         .header("Accept", "application/x-norito")
@@ -233,9 +269,7 @@ fn post(
         )
         .header(REPUTATION_HEADER_TIMESTAMP_MS, timestamp.to_string())
         .header(REPUTATION_HEADER_NONCE, nonce)
-        .body(bytes)
-        .send()
-        .map_err(|_| "publication transport unavailable".to_owned())
+        .body(bytes))
 }
 
 fn read_response(
@@ -412,15 +446,50 @@ fn observe_preparation(
         config,
         started,
     } = session;
+    let mut transport_failures = 0;
     loop {
         ensure_live(started)?;
-        let response = post(
+        let sent = signed_request(
             client,
             config,
             endpoint(base, "v1/sorafs/publish/prepare")?,
             norito::to_bytes(&digest)
                 .map_err(|_| "manifest selector encoding failed".to_owned())?,
-        )?;
+        )?
+        .send();
+        // A read lost in transport, or a gateway that could not reach Torii, is retried a bounded
+        // number of times. Every answer from Torii itself is handled below, refusals as final.
+        let response = match sent {
+            Ok(response)
+                if !matches!(
+                    response.status(),
+                    StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
+                ) =>
+            {
+                response
+            }
+            failed => {
+                transport_failures += 1;
+                if transport_failures >= PREPARATION_TRANSPORT_ATTEMPTS {
+                    return Err(match failed {
+                        Ok(response) => format!(
+                            "publication preparation rejected with {}",
+                            response.status()
+                        ),
+                        Err(_) => "publication transport unavailable".to_owned(),
+                    });
+                }
+                drop(failed);
+                // Read the deadline after the reply, so no backoff sleeps past it.
+                let backoff =
+                    PREPARATION_TRANSPORT_BACKOFF.saturating_mul(1 << (transport_failures - 1));
+                std::thread::sleep(
+                    backoff.min(PUBLICATION_TIMEOUT.saturating_sub(started.elapsed())),
+                );
+                continue;
+            }
+        };
+        transport_failures = 0;
         let status = response.status();
         if let Some(wait) = publication_read_backoff(
             status,
@@ -744,46 +813,146 @@ fn assert_and_verify(
     }
 }
 
-pub(super) fn qualify(
+fn provider_completion_progress(
+    expected: &iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
+    current: &iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
+    provider: &[u8; 32],
+) -> Result<bool, String> {
+    if current.order_id != expected.order_id
+        || current.manifest_digest != expected.manifest_digest
+        || current.assignment_revision != expected.assignment_revision
+        || current.canonical_order != expected.canonical_order
+    {
+        return Err(
+            "publication assignment changed while waiting for provider progress".to_owned(),
+        );
+    }
+    let mut matching = current
+        .provider_completions
+        .iter()
+        .filter(|completion| completion.provider_id.as_bytes() == provider);
+    let Some(completion) = matching.next() else {
+        return Ok(false);
+    };
+    if matching.next().is_some() || completion.assignment_revision != expected.assignment_revision {
+        return Err("provider completion progress has an invalid revision or duplicate".to_owned());
+    }
+    Ok(true)
+}
+
+/// Exact provider completions of one assignment, read while source bytes are supplied. These
+/// reads only schedule source writes; the final challenged native proof remains mandatory.
+#[derive(Clone, Copy)]
+struct ProviderProgress<'a> {
+    session: PublicationSession<'a>,
+    expected: &'a SorafsPublicationPreparationV1,
+    registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
+    out_dir: &'a Path,
+}
+
+impl ProviderProgress<'_> {
+    fn read(&self) -> Result<SorafsPublicationPreparationV1, String> {
+        preparation(
+            self.session,
+            self.expected.pin.digest,
+            self.registration_hash,
+            false,
+        )
+    }
+
+    /// Whether `current` records `provider`'s exact completion; that observation is retained.
+    fn completed(
+        &self,
+        current: &SorafsPublicationPreparationV1,
+        provider: &[u8; 32],
+    ) -> Result<bool, String> {
+        if !provider_completion_progress(&self.expected.order, &current.order, provider)? {
+            return Ok(false);
+        }
+        write_bytes(
+            &self.out_dir.join(format!(
+                "publication.provider-{}.progress.to",
+                hex_encode(provider)
+            )),
+            &norito::encode_canonical(current)
+                .map_err(|_| "provider progress encoding failed".to_owned())?,
+        )?;
+        Ok(true)
+    }
+
+    /// Wait for `provider`'s completion; only the client deadline ends this wait.
+    fn await_completion(&self, provider: &[u8; 32]) -> Result<(), String> {
+        loop {
+            if self.completed(&self.read()?, provider)? {
+                return Ok(());
+            }
+            ensure_live(self.session.started)?;
+            std::thread::sleep(COMPLETION_POLL_INTERVAL);
+        }
+    }
+
+    /// Whether `provider` completed although its source write was refused. Only an assignment
+    /// refusal is reread for a bounded short time; any other failure reads once.
+    fn completed_after_refusal(
+        &self,
+        provider: &[u8; 32],
+        by_assignment: bool,
+    ) -> Result<bool, String> {
+        let reads = if by_assignment {
+            REFUSAL_PROGRESS_READS
+        } else {
+            1
+        };
+        let refused = Instant::now();
+        for read in 1..=reads {
+            if self.completed(&self.read()?, provider)? {
+                return Ok(true);
+            }
+            if read == reads || refused.elapsed() >= REFUSAL_PROGRESS_WAIT {
+                break;
+            }
+            ensure_live(self.session.started)?;
+            std::thread::sleep(REFUSAL_PROGRESS_INTERVAL);
+        }
+        Ok(false)
+    }
+}
+
+/// Torii refuses a source write with 403 when the assignment no longer admits it, for example
+/// after that provider completed, and with 409 when the node is not that provider or its staging
+/// changed.
+fn assignment_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::FORBIDDEN | StatusCode::CONFLICT)
+}
+
+/// Stage source bytes for one assigned provider at a time. Each provider's exact order/revision
+/// completion schedules the next upload, and a provider that completed in the background is not
+/// staged again. Only the final challenged native proof establishes publication.
+fn supply_sources(
     session: PublicationSession<'_>,
     artifacts: &mut DeployPackArtifacts,
+    assigned: &SorafsPublicationPreparationV1,
+    order: &ReplicationOrderV1,
     registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
-    checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
-) -> Result<Value, String> {
+) -> Result<(), String> {
     let PublicationSession {
         client,
         base: _,
         config,
         started,
     } = session;
-    if provider_urls.is_empty() || provider_urls.len() > 64 {
-        return Err("publication requires 1..=64 provider source endpoints".to_owned());
-    }
-    let digest = ManifestDigest::new(
-        *artifacts
-            .manifest
-            .digest()
-            .map_err(|_| "manifest digest failed".to_owned())?
-            .as_bytes(),
-    );
-    let assigned = preparation(session, digest, registration_hash, false)?;
-    let order: ReplicationOrderV1 = decode(&assigned.order.canonical_order, 256 * 1024)?;
-    order
-        .validate()
-        .map_err(|_| "publication assignment is invalid".to_owned())?;
-    // Both assertions bind the same independently selected checkpoint: the compact proof
-    // authenticates execution under it and never replaces it.
-    let (_, assignment_evidence) =
-        assert_and_verify(session, &assigned, &checkpoint, false, out_dir)?;
-    for assignment in &order.assignments {
-        if assigned
-            .order
-            .provider_completions
-            .iter()
-            .any(|completion| completion.provider_id.as_bytes() == &assignment.provider_id)
-        {
+    let progress = ProviderProgress {
+        session,
+        expected: assigned,
+        registration_hash,
+        out_dir,
+    };
+    let digest = assigned.pin.digest;
+    'providers: for assignment in &order.assignments {
+        let provider = &assignment.provider_id;
+        if progress.completed(&progress.read()?, provider)? {
             continue;
         }
         let header = PublisherSourceHeaderV1::new(
@@ -800,6 +969,7 @@ pub(super) fn qualify(
         let reservation = norito::encode_canonical(&PublisherSourceRequestV1::Metadata(header))
             .map_err(|_| "publisher source encoding failed".to_owned())?;
         let mut selected = None;
+        let mut refused_by_assignment = false;
         for candidate in provider_urls {
             ensure_live(started)?;
             let candidate =
@@ -810,15 +980,19 @@ pub(super) fn qualify(
                     selected = Some(url);
                     break;
                 }
-                _ => {}
+                Ok(response) => refused_by_assignment |= assignment_refusal(response.status()),
+                Err(_) => {}
             }
         }
-        let url = selected.ok_or_else(|| {
-            format!(
+        let Some(url) = selected else {
+            if progress.completed_after_refusal(provider, refused_by_assignment)? {
+                continue;
+            }
+            return Err(format!(
                 "no configured endpoint accepted initial source for assigned provider {}",
-                hex_encode(assignment.provider_id)
-            )
-        })?;
+                hex_encode(provider)
+            ));
+        };
         for (index, chunk) in artifacts.plan.chunks.iter().enumerate() {
             ensure_live(started)?;
             artifacts
@@ -851,15 +1025,66 @@ pub(super) fn qualify(
                 url.clone(),
                 norito::encode_canonical(&request)
                     .map_err(|_| "publisher chunk encoding failed".to_owned())?,
-            )?;
-            if response.status() != StatusCode::NO_CONTENT {
-                return Err(format!(
-                    "publisher source chunk was rejected with {}",
-                    response.status()
-                ));
+            );
+            let (error, by_assignment) = match response {
+                Ok(response) if response.status() == StatusCode::NO_CONTENT => continue,
+                Ok(response) => (
+                    format!(
+                        "publisher source chunk was rejected with {}",
+                        response.status()
+                    ),
+                    assignment_refusal(response.status()),
+                ),
+                Err(error) => (error, false),
+            };
+            if progress.completed_after_refusal(provider, by_assignment)? {
+                continue 'providers;
             }
+            return Err(error);
         }
+        // The authenticated response schedules the next upload; only the final
+        // challenged native proof establishes publication completion.
+        progress.await_completion(provider)?;
     }
+    Ok(())
+}
+
+pub(super) fn qualify(
+    session: PublicationSession<'_>,
+    artifacts: &mut DeployPackArtifacts,
+    registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
+    checkpoint: SumeragiFinalityCheckpoint,
+    provider_urls: &[String],
+    out_dir: &Path,
+) -> Result<Value, String> {
+    if provider_urls.is_empty() || provider_urls.len() > 64 {
+        return Err("publication requires 1..=64 provider source endpoints".to_owned());
+    }
+    let digest = ManifestDigest::new(
+        *artifacts
+            .manifest
+            .digest()
+            .map_err(|_| "manifest digest failed".to_owned())?
+            .as_bytes(),
+    );
+    let assigned = preparation(session, digest, registration_hash, false)?;
+    let order: ReplicationOrderV1 = decode(&assigned.order.canonical_order, 256 * 1024)?;
+    order
+        .validate()
+        .map_err(|_| "publication assignment is invalid".to_owned())?;
+    // Both assertions bind the same independently selected checkpoint: the compact proof
+    // authenticates execution under it and never replaces it.
+    let (_, assignment_evidence) =
+        assert_and_verify(session, &assigned, &checkpoint, false, out_dir)?;
+    supply_sources(
+        session,
+        artifacts,
+        &assigned,
+        &order,
+        registration_hash,
+        provider_urls,
+        out_dir,
+    )?;
     let complete = preparation(session, digest, registration_hash, true)?;
     if complete.order.assignment_revision != assigned.order.assignment_revision
         || complete.order.canonical_order != assigned.order.canonical_order
@@ -872,6 +1097,14 @@ pub(super) fn qualify(
         ("state".into(), Value::from("completed")),
         ("assignment_finalized".into(), Value::from(true)),
         ("completion_finalized".into(), Value::from(true)),
+        (
+            "source_upload_scheduling".into(),
+            Value::from("one_provider_at_a_time"),
+        ),
+        (
+            "provider_progress_is_native_proof".into(),
+            Value::from(false),
+        ),
         (
             "initial_source".into(),
             Value::from("authenticated_chunk_staging"),
@@ -974,8 +1207,17 @@ mod tests {
     }
 
     // Exercise real HTTP response parsing without a node or any signing material from disk.
+    // Status 0 closes the connection without a response, as a lost transport does.
     fn status_server(
         replies: Vec<(u16, &'static str, Vec<u8>)>,
+    ) -> (HttpClient, Url, thread::JoinHandle<Vec<String>>) {
+        slow_status_server(replies, Duration::ZERO)
+    }
+
+    /// Like `status_server`, with every reply sent `delay` after its request arrived.
+    fn slow_status_server(
+        replies: Vec<(u16, &'static str, Vec<u8>)>,
+        delay: Duration,
     ) -> (HttpClient, Url, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
@@ -1021,6 +1263,10 @@ mod tests {
                 assert!(body_length <= 16 * 1024, "test request body bound");
                 stream.read_exact(&mut vec![0; body_length]).unwrap();
                 requests.push(request);
+                thread::sleep(delay);
+                if status == 0 {
+                    continue;
+                }
                 let head = format!(
                     "HTTP/1.1 {status} Test\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n",
                     body.len()
@@ -1665,5 +1911,430 @@ mod tests {
                 .unwrap_err()
                 .contains("not supported")
         );
+    }
+
+    fn progress_completion(
+        provider: [u8; 32],
+    ) -> iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+        use iroha_data_model::sorafs::pin_registry::*;
+        let account = AccountId::new(publication_test_config().public_key);
+        ReplicationOrderCompletionRecord {
+            provider_id: iroha_data_model::sorafs::capacity::ProviderId::new(provider),
+            completed_by: account.clone(),
+            completion_epoch: 3,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                account.clone(),
+                account,
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [6; 32],
+                    revision: 1,
+                    predecessor_digest: None,
+                    policy_digest: [7; 32],
+                },
+            ),
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: 2,
+                block_hash: [8; 32],
+            },
+        }
+    }
+
+    fn progress_row() -> SorafsPublicationPreparationV1 {
+        let mut row = published_row(
+            &publication_test_config(),
+            &super::super::tests::sample_manifest(),
+        );
+        row.order.canonical_order = vec![5];
+        row
+    }
+
+    fn completed(
+        row: &SorafsPublicationPreparationV1,
+        providers: &[[u8; 32]],
+    ) -> SorafsPublicationPreparationV1 {
+        let mut row = row.clone();
+        row.order
+            .provider_completions
+            .extend(providers.iter().copied().map(progress_completion));
+        row
+    }
+
+    fn row_reply(row: &SorafsPublicationPreparationV1) -> (u16, &'static str, Vec<u8>) {
+        (
+            200,
+            "Content-Type: application/x-norito\r\n",
+            norito::encode_canonical(row).unwrap(),
+        )
+    }
+
+    fn progress_file(out: &Path, provider: [u8; 32]) -> PathBuf {
+        out.join(format!(
+            "publication.provider-{}.progress.to",
+            hex_encode(provider)
+        ))
+    }
+
+    #[test]
+    fn fresh_progress_recognizes_background_completion_after_an_incomplete_read() {
+        let config = publication_test_config();
+        let expected = progress_row();
+        let complete = completed(&expected, &[[9; 32]]);
+        let (client, base, server) =
+            status_server(vec![row_reply(&expected), row_reply(&complete)]);
+        let out_temp = tempfile::tempdir().unwrap();
+        let out = fs::canonicalize(out_temp.path()).unwrap();
+        let progress = ProviderProgress {
+            session: PublicationSession::begin(&client, &base, &config),
+            expected: &expected,
+            registration_hash: Some(registration_hash(1)),
+            out_dir: &out,
+        };
+        for observed in [false, true] {
+            assert_eq!(
+                progress
+                    .completed(&progress.read().unwrap(), &[9; 32])
+                    .unwrap(),
+                observed
+            );
+        }
+        assert_eq!(server.join().unwrap().len(), 2);
+        let bytes = fs::read(progress_file(&out, [9; 32])).unwrap();
+        assert_eq!(
+            decode::<SorafsPublicationPreparationV1>(&bytes, PREPARATION_MAX_BYTES).unwrap(),
+            complete
+        );
+        assert!(!out.join("publication.completed.proof.to").exists());
+    }
+
+    #[test]
+    fn provider_progress_waits_for_exact_provider_and_revision() {
+        let expected = progress_row().order;
+        let mut current = expected.clone();
+        assert!(!provider_completion_progress(&expected, &current, &[9; 32]).unwrap());
+        current
+            .provider_completions
+            .push(progress_completion([10; 32]));
+        assert!(!provider_completion_progress(&expected, &current, &[9; 32]).unwrap());
+        current
+            .provider_completions
+            .push(progress_completion([9; 32]));
+        assert!(provider_completion_progress(&expected, &current, &[9; 32]).unwrap());
+        current.provider_completions[1].assignment_revision = 2;
+        assert!(provider_completion_progress(&expected, &current, &[9; 32]).is_err());
+        current.provider_completions[1].assignment_revision = 1;
+        current
+            .provider_completions
+            .push(progress_completion([9; 32]));
+        assert!(provider_completion_progress(&expected, &current, &[9; 32]).is_err());
+    }
+
+    #[test]
+    fn provider_progress_refuses_order_or_manifest_or_assignment_substitution() {
+        use iroha_data_model::sorafs::pin_registry::ReplicationOrderId;
+        let expected = progress_row().order;
+        for variant in 0..4 {
+            let mut current = expected.clone();
+            current
+                .provider_completions
+                .push(progress_completion([9; 32]));
+            match variant {
+                0 => current.order_id = ReplicationOrderId::new([99; 32]),
+                1 => current.manifest_digest = ManifestDigest::new([99; 32]),
+                2 => current.assignment_revision = 2,
+                _ => current.canonical_order.push(99),
+            }
+            assert!(provider_completion_progress(&expected, &current, &[9; 32]).is_err());
+        }
+    }
+
+    #[test]
+    fn preparation_reads_absorb_only_a_bounded_run_of_transport_failures() {
+        let config = publication_test_config();
+        let row = progress_row();
+        let lost = || (0, "", Vec::new());
+        let gateway = |status| (status, "", Vec::new());
+        let read = |replies| {
+            let (client, base, server) = status_server(replies);
+            let result = observe_preparation(
+                PublicationSession::begin(&client, &base, &config),
+                row.pin.digest,
+            );
+            (result, server.join().unwrap().len())
+        };
+        // Four consecutive lost reads or gateway failures are retried; the fifth read lands.
+        let (result, requests) = read(vec![
+            lost(),
+            gateway(502),
+            lost(),
+            gateway(504),
+            row_reply(&row),
+        ]);
+        assert!(matches!(result, Ok(Preparation::Order(found)) if *found == row));
+        assert_eq!(requests, 5);
+        // A fifth consecutive failure is final.
+        let (result, requests) = read(vec![lost(), lost(), lost(), lost(), lost()]);
+        assert_eq!(result.err().unwrap(), "publication transport unavailable");
+        assert_eq!(requests, 5);
+        let (result, requests) = read(vec![lost(), lost(), lost(), lost(), gateway(504)]);
+        assert_eq!(
+            result.err().unwrap(),
+            "publication preparation rejected with 504 Gateway Timeout"
+        );
+        assert_eq!(requests, 5);
+        // An answer from Torii resets the run, and its refusals are never retried.
+        let (result, requests) = read(vec![lost(), lost(), lost(), lost(), gateway(403)]);
+        assert_eq!(
+            result.err().unwrap(),
+            "publication preparation rejected with 403 Forbidden"
+        );
+        assert_eq!(requests, 5);
+        let (result, requests) = read(vec![gateway(409)]);
+        assert!(result.err().unwrap().contains("409"));
+        assert_eq!(requests, 1);
+    }
+
+    /// A one-chunk package and an assignment of `providers` over the published row.
+    fn source_fixture(
+        out: &Path,
+        providers: &[[u8; 32]],
+    ) -> (
+        DeployPackArtifacts,
+        SorafsPublicationPreparationV1,
+        ReplicationOrderV1,
+    ) {
+        use sorafs_manifest::capacity::{
+            REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+        };
+        let payload = out.join("site.bin");
+        fs::write(&payload, b"serialized publisher source fixture").unwrap();
+        let artifacts = build_deploy_artifacts(
+            &payload,
+            &out.join("site.car"),
+            &out.join("site.plan.json"),
+            &out.join("site.pack.json"),
+            &out.join("site.manifest.to"),
+            &out.join("site.manifest.json"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(artifacts.plan.chunks.len(), 1);
+        let mut row = published_row(&publication_test_config(), &artifacts.manifest);
+        let order = ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
+            order_id: *row.order.order_id.as_bytes(),
+            manifest_cid: artifacts.manifest.root_cid.clone(),
+            manifest_digest: *row.pin.digest.as_bytes(),
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            target_replicas: u16::try_from(providers.len()).unwrap(),
+            assignments: providers
+                .iter()
+                .map(|provider| ReplicationAssignmentV1 {
+                    provider_id: *provider,
+                    slice_gib: 1,
+                    lane: None,
+                })
+                .collect(),
+            issued_at: 5,
+            deadline_at: 30,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 25,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 99_000,
+            },
+            metadata: Vec::new(),
+        };
+        row.order.canonical_order = norito::encode_canonical(&order).unwrap();
+        (artifacts, row, order)
+    }
+
+    fn request_paths(requests: &[String]) -> Vec<&str> {
+        requests
+            .iter()
+            .map(|request| request.split(' ').nth(1).unwrap())
+            .collect()
+    }
+
+    const PREPARE: &str = "/v1/sorafs/publish/prepare";
+    const SOURCE: &str = "/v1/sorafs/publish/source";
+
+    /// Supply the fixture through one loopback endpoint that answers `replies` in order.
+    fn supply_through(
+        replies: Vec<(u16, &'static str, Vec<u8>)>,
+        artifacts: &mut DeployPackArtifacts,
+        row: &SorafsPublicationPreparationV1,
+        order: &ReplicationOrderV1,
+        out: &Path,
+    ) -> (Result<(), String>, Vec<String>) {
+        let config = publication_test_config();
+        let (client, base, server) = status_server(replies);
+        let result = supply_sources(
+            PublicationSession::begin(&client, &base, &config),
+            artifacts,
+            row,
+            order,
+            None,
+            &[base.to_string()],
+            out,
+        );
+        (result, server.join().unwrap())
+    }
+
+    fn staged() -> (u16, &'static str, Vec<u8>) {
+        (204, "", Vec::new())
+    }
+
+    fn refused(status: u16) -> (u16, &'static str, Vec<u8>) {
+        (status, "", Vec::new())
+    }
+
+    #[test]
+    fn sources_are_staged_one_provider_at_a_time_and_refreshed_before_each_upload() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = fs::canonicalize(temp.path()).unwrap();
+        let (first, second) = ([0x31; 32], [0x32; 32]);
+        let (mut artifacts, row, order) = source_fixture(&out, &[first, second]);
+        let (result, requests) = supply_through(
+            vec![
+                // The first provider is incomplete, so its source is staged.
+                row_reply(&row),
+                staged(),
+                staged(),
+                // The accepted upload alone does not schedule the next provider; its exact
+                // completion does.
+                row_reply(&row),
+                row_reply(&completed(&row, &[first])),
+                // The second provider completed natively meanwhile: no duplicate upload.
+                row_reply(&completed(&row, &[first, second])),
+            ],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+        );
+        result.unwrap();
+        assert_eq!(
+            request_paths(&requests),
+            [PREPARE, SOURCE, SOURCE, PREPARE, PREPARE, PREPARE]
+        );
+        assert!(progress_file(&out, first).exists());
+        assert!(progress_file(&out, second).exists());
+        assert!(!out.join("publication.completed.proof.to").exists());
+    }
+
+    #[test]
+    fn refused_source_writes_wait_briefly_for_that_providers_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = fs::canonicalize(temp.path()).unwrap();
+        let (first, second) = ([0x31; 32], [0x32; 32]);
+        let (mut artifacts, row, order) = source_fixture(&out, &[first, second]);
+        let first_done = completed(&row, &[first]);
+        let (result, requests) = supply_through(
+            vec![
+                row_reply(&row),
+                // The assignment refuses the header: that provider completed, but the configured
+                // Torii shows it only on the third reread.
+                refused(403),
+                row_reply(&row),
+                row_reply(&row),
+                row_reply(&first_done),
+                row_reply(&first_done),
+                staged(),
+                // The second provider's chunk is refused once its staging is consumed.
+                refused(409),
+                row_reply(&first_done),
+                row_reply(&completed(&row, &[first, second])),
+            ],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+        );
+        result.unwrap();
+        assert_eq!(
+            request_paths(&requests),
+            [
+                PREPARE, SOURCE, PREPARE, PREPARE, PREPARE, PREPARE, SOURCE, SOURCE, PREPARE,
+                PREPARE
+            ]
+        );
+    }
+
+    #[test]
+    fn refusal_waits_are_bounded_and_other_failures_read_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = fs::canonicalize(temp.path()).unwrap();
+        let (first, second) = ([0x31; 32], [0x32; 32]);
+        let (mut artifacts, row, order) = source_fixture(&out, &[first, second]);
+        let rereads = REFUSAL_PROGRESS_READS as usize;
+        // Another provider's completion does not excuse a refusal of this one.
+        let mut replies = vec![row_reply(&row), refused(409)];
+        replies.extend(std::iter::repeat_n(
+            row_reply(&completed(&row, &[second])),
+            rereads,
+        ));
+        let (result, requests) = supply_through(replies, &mut artifacts, &row, &order, &out);
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("no configured endpoint accepted initial source"),
+            "{error}"
+        );
+        assert_eq!(requests.len(), 2 + rereads);
+        // A refusal that is not the assignment's reads progress once.
+        let (result, requests) = supply_through(
+            vec![row_reply(&row), staged(), refused(400), row_reply(&row)],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "publisher source chunk was rejected with 400 Bad Request"
+        );
+        assert_eq!(requests.len(), 4);
+        let (result, requests) = supply_through(
+            vec![row_reply(&row), refused(406), row_reply(&row)],
+            &mut artifacts,
+            &row,
+            &order,
+            &out,
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .contains("no configured endpoint accepted initial source")
+        );
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[test]
+    fn preparation_backoff_never_sleeps_past_the_deadline_after_a_slow_reply() {
+        // One second of the deadline is left; the reply arrives two seconds later and asks for a
+        // thirty-second retry. Only the deadline left after the reply may be slept.
+        let left = Duration::from_secs(1);
+        let Some(started) = Instant::now().checked_sub(PUBLICATION_TIMEOUT - left) else {
+            return; // A monotonic clock younger than the deadline cannot express this state.
+        };
+        let config = publication_test_config();
+        let (client, base, server) = slow_status_server(
+            vec![(503, "Retry-After: 30\r\n", Vec::new())],
+            Duration::from_secs(2),
+        );
+        let session = PublicationSession {
+            client: &client,
+            base: &base,
+            config: &config,
+            started,
+        };
+        let before = Instant::now();
+        let result = observe_preparation(session, progress_row().pin.digest);
+        let elapsed = before.elapsed();
+        assert_eq!(
+            result.err().unwrap(),
+            "publication did not finalize before its ten-minute deadline"
+        );
+        assert!(elapsed < Duration::from_millis(2_700), "{elapsed:?}");
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 }

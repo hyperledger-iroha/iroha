@@ -23,3 +23,16 @@ qualification, payload, signature and finalized transaction evidence together.
 Ordinary authenticated transactions then configure reserve, provider credit and
 capacity. `sorafs_cli deploy` consumes the verified prepared package. Only a finalized
 publication with verified public browser retrieval establishes a working gateway URL.
+
+Publication uploads one assigned provider at a time, waiting for that provider's
+exact order/revision completion before sending the next source. Progress is
+refreshed before each upload, so a provider that completed in the background, for
+example by native replication from a provider that already completed, is not
+uploaded again. When the assignment refuses a header or chunk (403 or 409), the
+publisher rereads that provider's progress for up to a minute, because a provider
+can be a block ahead of `--torii-url`, and fails only if its completion does not
+appear. Progress reads retry a short run of lost connections and gateway timeouts;
+Torii's own refusals stay final. These reads are scheduling signals; the final
+challenged native proof still must authenticate completion of all replicas. The
+publisher needs only the providers' public source endpoints, never access to their
+storage.
