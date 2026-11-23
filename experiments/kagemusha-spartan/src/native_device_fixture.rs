@@ -101,7 +101,7 @@ pub fn install_selected(
 
 /// Install the signed fixture with the World selection required by its manifest.
 #[cfg(test)]
-fn install_test_bundle(path: &std::path::Path) -> Result<AuthenticatedParameters> {
+pub(crate) fn install_test_bundle(path: &std::path::Path) -> Result<AuthenticatedParameters> {
     let read = |name: &str| {
         std::fs::read(path.join(name)).map_err(|error| Error::Rejected(format!("{name}: {error}")))
     };

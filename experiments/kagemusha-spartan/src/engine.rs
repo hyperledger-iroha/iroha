@@ -63,6 +63,66 @@ pub use unload_claim::{MAX_UNLOAD_CLAIM_BYTES, UnloadDestinations, VerifiedUnloa
 #[path = "native_epoch.rs"]
 mod selected_epoch;
 
+/// Both traces belong to this finalize call. The head came from the exact head
+/// verifier and the incoming trace came from strict decoding of the exact
+/// Payment that the native verifier accepted under these generators.
+pub(crate) struct VerifiedReceiveFolds<'a> {
+    generators: &'a full::PairGens,
+    pairs: &'a [full::TracedPair; 2],
+}
+
+type FoldProof<'a, C> = (&'a spartan::Proof<C>, &'a crate::verifier::Trace<C>);
+
+/// A single curve's generators, head and Payment from the same verified Receive.
+pub(crate) struct VerifiedCurveInputs<'a, C: iroha_pasta::PastaCurve> {
+    generators: &'a Gens<C>,
+    proofs: [FoldProof<'a, C>; 2],
+}
+
+impl<'a, C: iroha_pasta::PastaCurve> VerifiedCurveInputs<'a, C> {
+    pub(crate) fn into_parts(self) -> (&'a Gens<C>, [FoldProof<'a, C>; 2]) {
+        (self.generators, self.proofs)
+    }
+}
+
+impl<'a> VerifiedReceiveFolds<'a> {
+    fn bind(
+        parameters: &'a AuthenticatedParameters,
+        payment: &VerifiedIncomingPayment,
+        original: &[u8],
+        pairs: &'a [full::TracedPair],
+    ) -> Result<Self> {
+        payment.require_parameters(parameters)?;
+        let pairs: &[full::TracedPair; 2] = pairs.try_into()
+            .map_err(|_| Error::Malformed("verified Receive fold proof count"))?;
+        let [head, incoming] = pairs;
+        if original != payment.exact_bytes()
+            || head.incoming_original.is_some()
+            || incoming.kind != full::SEND
+            || incoming.incoming_original.as_deref() != Some(payment.exact_pair())
+        {
+            return Err(Error::AuthorityMismatch("verified Receive fold sources"));
+        }
+        Ok(Self { generators: &parameters.inner.generators, pairs })
+    }
+
+    pub(crate) fn sources(&self) -> (&'a full::PairGens, &'a [full::TracedPair]) {
+        (self.generators, self.pairs)
+    }
+
+    pub(crate) fn primary(&self) -> VerifiedCurveInputs<'a, Eq> {
+        let [head, incoming] = self.pairs;
+        VerifiedCurveInputs { generators: &self.generators.p,
+            proofs: [(&head.proof_p, &head.tr_p), (&incoming.proof_p, &incoming.tr_p)] }
+    }
+
+    pub(crate) fn secondary(&self) -> VerifiedCurveInputs<'a, Ep> {
+        let [head, incoming] = self.pairs;
+        VerifiedCurveInputs { generators: &self.generators.s,
+            proofs: [(&head.proof_s, &head.tr_s), (&incoming.proof_s, &incoming.tr_s)] }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct NativeEngine {
     // Shared by clones until the protected finality reader changes.
@@ -1815,17 +1875,24 @@ impl NativeEngine {
             .as_slice()
             .try_into()
             .map_err(|_| Error::Malformed("candidate profile"))?;
-        let decoded = carrier::decode_projected_candidate(&trusted, &d.pair_bytes, &d.projection)
-            .map_err(Error::Rejected)?;
-        // Parsing and the exact full verifier derive this private verdict. No
-        // foreign Boolean can skip proof checks or turn a malformed candidate into credit.
-        let valid = match self.verify_payment(bytes, parameters) {
-            Ok(_) => true,
-            Err(
-                e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_)),
-            ) => return Err(e),
-            Err(_) => false,
+        // Only the native verifier can issue this capability. Monetary admission
+        // also checks the receiver, its Request, and its consumed-credit map.
+        let verified = match self.verify_payment(bytes, parameters) {
+            Ok(payment) => Some(payment),
+            Err(e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_))) => {
+                return Err(e);
+            }
+            Err(_) => None,
         };
+        let decoded = if let Some(payment) = verified.as_ref() {
+            if payment.exact_pair() != d.pair_bytes.as_slice() {
+                return Err(Error::AuthorityMismatch("verified Receive proof bytes"));
+            }
+            carrier::decode_projected_pair(&trusted, payment.exact_pair(), &d.projection)
+        } else {
+            carrier::decode_projected_candidate(&trusted, &d.pair_bytes, &d.projection)
+        }
+        .map_err(Error::Rejected)?;
         let program = &p.programs[full::SEND];
         let pair = full::UniformPair {
             cp: program.primary.clone(),
@@ -1843,7 +1910,7 @@ impl NativeEngine {
             payment_digest: d.digests.payment,
             profile,
             proof_digest: d.digests.proof,
-            valid,
+            verified,
             originals: d.originals,
             pair,
             pair_bytes: d.pair_bytes,
@@ -2210,6 +2277,7 @@ impl NativeEngine {
                 let can_credit = relation.valid().value(&w) == Fp::ONE
                     && step.maps.credit_search.leaf.key != step.statement[17];
                 receive = Some(Box::new(PreparedReceive {
+                    verified: candidate.verified,
                     pair: candidate.pair,
                     pair_bytes: candidate.pair_bytes,
                     can_credit,
@@ -2521,13 +2589,16 @@ impl Engine for NativeEngine {
             pairs.push(full::trace_incoming_candidate(incoming.pair.clone(), &p.generators, incoming.pair_bytes.clone()));
         }
         let entropy = ProofEntropy::fresh().map_err(|_| Error::Unavailable("OS proof entropy"))?;
-        let folds = if k == full::BOOTSTRAP {
-            None
-        } else {
-            Some(
-                full::GeneratorFolds::prepare(&p.generators, &pairs, &entropy)
-                    .map_err(Error::Malformed)?,
-            )
+        let verified_payment = prepared.receive.as_ref().and_then(|receive| receive.verified.as_ref());
+        let folds = match (&witness, verified_payment) {
+            (ExactOperationWitness::Bootstrap(_), _) => None,
+            (ExactOperationWitness::Receive { incoming_payment, .. }, Some(payment)) => {
+                let sources = VerifiedReceiveFolds::bind(parameters, payment, incoming_payment, &pairs)?;
+                Some(full::GeneratorFolds::prepare_verified_receive(&sources, &entropy)
+                    .map_err(Error::Malformed)?)
+            }
+            _ => Some(full::GeneratorFolds::prepare(&p.generators, &pairs, &entropy)
+                .map_err(Error::Malformed)?),
         };
         stage.mark("folds");
         let build_control = |control: &crate::control::Witness| -> Result<_> {
@@ -3226,7 +3297,7 @@ fn test_chain_native(
         let malformed = payment_wire::test_replace_pair(&payment_profile, &payment, raw.clone())
             .map_err(Error::Rejected)?;
         let candidate = engine.incoming_candidate(&malformed, &parameters)?;
-        if candidate.valid || candidate.pair_bytes != raw {
+        if candidate.valid() || candidate.pair_bytes != raw {
             return Err(Error::AuthorityMismatch(
                 "native malformed candidate exact originals",
             ));

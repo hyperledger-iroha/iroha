@@ -253,7 +253,7 @@ pub(crate) struct IncomingCandidate {
     payment_digest: Fp,
     profile: [Fp; 64],
     proof_digest: Fp,
-    valid: bool,
+    verified: Option<VerifiedIncomingPayment>,
     originals: crate::payment_wire::Originals,
     pair: crate::full::UniformPair,
     pair_bytes: Vec<u8>,
@@ -266,7 +266,7 @@ impl IncomingCandidate {
         self.proof_digest
     }
     pub(crate) fn valid(&self) -> bool {
-        self.valid
+        self.verified.is_some()
     }
 }
 
@@ -552,6 +552,7 @@ impl VerifiedIncomingPayment {
 /// Derived from the exact frozen Payment during preparation or cold resume.
 /// This in-process witness is never serialized into a custody record.
 struct PreparedReceive {
+    verified: Option<VerifiedIncomingPayment>,
     pair: crate::full::UniformPair,
     pair_bytes: Vec<u8>,
     can_credit: bool,
