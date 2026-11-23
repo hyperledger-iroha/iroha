@@ -42,15 +42,15 @@ signed receipt and exact pin scope. Clients select the response format with
 
 ```
 GET /v1/da/proof-policies
-Accept: application/json | application/x-norito
+Accept: application/json
 ```
 
 Returns a versioned `DaProofPolicyBundle` derived from the current lane catalog.
 The bundle advertises `version` (currently `1`), a `policy_hash` (hash of the
 ordered policy list), and `policies` entries carrying `lane_id`, `dataspace_id`,
-`alias`, and the enforced `proof_scheme` (`sorafs_por_blake3` is the only V1
-variant; KZG requires a separately reviewed future protocol version and wire
-layout). Each block header
+`alias`, and the enforced `proof_scheme`. Its Norito JSON value is
+`{"type":"SorafsPorBlake3","value":null}`. Lane configuration uses the label
+`sorafs_por_blake3`. Each block header
 commits to the policy sidecar used for that block via
 `da_proof_policies_hash`. This endpoint and the commitment list endpoint expose
 the node's active snapshot for discovery. The commitment prove endpoint instead
@@ -85,9 +85,15 @@ pub struct DaIngestRequest {
     pub payload: Vec<u8>,                 // raw blob data (<= configured limit)
     pub metadata: ExtraMetadata,          // optional key/value metadata map
     pub signatures: Vec<DaIngestSignatureV1>, // canonical account-controller witnesses
+    pub pin_scope_signatures: Vec<DaPinScopeSignatureV1>, // [] on prepare, exact scope witnesses on retry
 }
 
 pub struct DaIngestSignatureV1 {
+    pub signer: PublicKey,
+    pub signature: Signature,
+}
+
+pub struct DaPinScopeSignatureV1 {
     pub signer: PublicKey,
     pub signature: Signature,
 }
@@ -213,6 +219,7 @@ pub struct DaIngestReceipt {
     pub pdp_commitment: Option<Vec<u8>>, // required slot: Norito-encoded PDP bytes or explicit null
     pub stripe_layout: DaStripeLayout,   // total_stripes, shards_per_stripe, row_parity_stripes
     pub queued_at_unix: u64,
+    pub retention_policy: RetentionPolicy, // effective policy approved by the pin witnesses
     pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
     pub operator_signature: Signature,
 }
@@ -234,13 +241,14 @@ binary fields, so already-valid current V1 bytes retain their encoding.
 > `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
 > and the manifest structure in `iroha_data_model::da::manifest`.
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+The Norito JSON `compression` field uses a tagged object, for example
+`{"kind":"Identity","value":null}`. The supported tags are `Identity`, `Gzip`,
+`Deflate` and `Zstd`. Torii decompresses the payload before hashing, chunking
+and checking any supplied manifest.
 
 ### Validation Checklist
 
-1. Verify request Norito header matches `DaIngestRequest`.
+1. Decode the authenticated JSON body as the closed Norito `DaIngestRequest` type.
 2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims
    and reject `sequence = u64::MAX`, which cannot have a monotonic successor.
 3. Enforce power-of-two `chunk_size` in the inclusive 1 KiB–2 MiB range and
@@ -258,7 +266,8 @@ hashing, chunking, and verifying optional manifests.
    still running. Admission is fail-fast: a request that reaches a saturated
    compute boundary receives `503` instead of retaining its decoded payload in
    an unbounded semaphore wait queue.
-5. `retention_policy.required_replica_count` must respect governance baseline.
+5. Compare `retention_policy.required_replicas` with the configured replication
+   policy. The prepared receipt records the effective replica count.
 6. Require the exact genesis-derived `NetworkId`, bind `owner` to the
    authenticated account, and verify the canonical witness set against the
    committed account controller. Single-key accounts require exactly their

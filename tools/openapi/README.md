@@ -155,9 +155,10 @@ node tools/openapi/scripts/sync-openapi.mjs \
 ```
 
 Copy the five reviewed release outputs listed in `generated-files.toml` from
-staging into `artifacts/openapi/` and make a signed output-only commit on the
-candidate branch. Run the production gate at that clean commit. The manifests
-must still identify the source commit from which the operator signed the payload.
+staging into `artifacts/openapi/` and sign the output-only Git commit on the
+candidate branch. Run the production gate at that clean commit. The gate
+checks the operator's detached Ed25519 signature on the manifest payload and
+verifies that the manifests identify the original source commit.
 
 ```bash
 OPENAPI_REQUIRE_SIGNED=1 \

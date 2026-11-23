@@ -3073,3 +3073,176 @@ async fn ingest_response_binary_body_advertises_exact_current_owner() {
         .expect("read response body");
     assert_eq!(body.as_ref(), expected.as_slice());
 }
+
+#[test]
+fn da_ingest_openapi_matches_signed_request_and_receipt_json() {
+    fn assert_fields(schema: &Value, wire: &Value) {
+        let keys = wire
+            .as_object()
+            .expect("Norito object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let required = schema["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .map(|v| v.as_str().expect("field"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(properties, keys);
+        assert_eq!(required, keys);
+        assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    }
+    let schemas = &crate::openapi::compiled_spec()["components"]["schemas"];
+    let request = sample_request();
+    let wire = json::to_value(&request).expect("encode signed request");
+    let request_schema = &schemas["DaIngestRequest"];
+    assert_fields(request_schema, &wire);
+    assert_fields(&schemas["DaErasureProfile"], &wire["erasure_profile"]);
+    assert_fields(&schemas["DaMetadataEntry"], &wire["metadata"]["items"][0]);
+    assert_fields(&schemas["DaControllerWitnessV1"], &wire["signatures"][0]);
+    let properties = &request_schema["properties"];
+    for field in ["signatures", "pin_scope_signatures"] {
+        assert_eq!(
+            properties[field]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/DaControllerWitnessV1")
+        );
+    }
+    assert_eq!(properties["signatures"]["minItems"].as_u64(), Some(1));
+    assert!(properties["pin_scope_signatures"].get("minItems").is_none());
+    assert!(wire["pin_scope_signatures"].as_array().unwrap().is_empty());
+    assert_eq!(
+        wire["payload"].as_str(),
+        Some(BASE64.encode(&request.payload).as_str())
+    );
+    assert!(wire["norito_manifest"].is_null());
+    assert_eq!(
+        properties["norito_manifest"]["type"],
+        norito::json!(["string", "null"])
+    );
+    let signer = checked_fixture_ed25519_keypair(0x42);
+    let receipt = test_receipt(&signer, request.lane_id, request.epoch, request.sequence, 7);
+    let scope = build_da_pin_scope(
+        &request,
+        receipt.storage_ticket,
+        receipt.manifest_hash,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    )
+    .expect("scope");
+    let response = DaIngestResponse {
+        status: "pending_pin_authorization",
+        duplicate: false,
+        receipt: Some(receipt),
+        pin_scope: Some(scope),
+    };
+    let wire = json::to_value(&response).expect("encode prepared response");
+    let response_schema = &schemas["DaIngestResponse"];
+    assert_fields(response_schema, &wire);
+    assert_fields(&schemas["DaIngestReceipt"], &wire["receipt"]);
+    assert_fields(
+        &schemas["DaStripeLayout"],
+        &wire["receipt"]["stripe_layout"],
+    );
+    assert_fields(&schemas["DaRentQuote"], &wire["receipt"]["rent_quote"]);
+    assert_fields(&schemas["DaPinScopeV1"], &wire["pin_scope"]);
+    let result = &response_schema["properties"];
+    assert_eq!(
+        result["status"]["enum"],
+        norito::json!(["pending_pin_authorization", "accepted"])
+    );
+    assert_eq!(
+        result["receipt"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestReceipt")
+    );
+    assert_eq!(
+        result["pin_scope"]["$ref"].as_str(),
+        Some("#/components/schemas/DaPinScopeV1")
+    );
+    assert!(wire["pin_scope"]["alias"].is_null());
+    let receipt = &schemas["DaIngestReceipt"]["properties"];
+    let pdp = wire["receipt"]["pdp_commitment"]
+        .as_str()
+        .expect("present commitment");
+    assert_eq!(BASE64.decode(pdp).unwrap(), [7]);
+    assert_eq!(
+        receipt["pdp_commitment"]["contentEncoding"].as_str(),
+        Some("base64")
+    );
+    assert_eq!(
+        receipt["operator_signature"]["allOf"][0]["$ref"].as_str(),
+        Some("#/components/schemas/CanonicalSignature")
+    );
+    for field in [
+        "client_blob_id",
+        "blob_hash",
+        "chunk_root",
+        "manifest_hash",
+        "storage_ticket",
+    ] {
+        assert_eq!(
+            receipt[field]["$ref"].as_str(),
+            Some("#/components/schemas/DaDigest32")
+        );
+        assert_eq!(wire["receipt"][field][0].as_array().unwrap().len(), 32);
+    }
+}
+
+#[test]
+fn da_ingest_openapi_binds_direct_and_multipart_finish_representations() {
+    let paths = &crate::openapi::compiled_spec()["paths"];
+    let direct = &paths["/v1/da/ingest"]["post"];
+    let parts = &paths["/v1/da/ingest/parts"]["post"];
+    for operation in [direct, parts] {
+        let content = operation["requestBody"]["content"].as_object().unwrap();
+        assert_eq!(content.len(), 1);
+        assert!(content.contains_key("application/json"));
+    }
+    let request = &direct["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        request["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestRequest")
+    );
+    assert_eq!(
+        request["properties"]["payload"]["minLength"].as_u64(),
+        Some(4)
+    );
+    let actions = &parts["requestBody"]["content"]["application/json"]["schema"]["properties"]["action"]
+        ["oneOf"];
+    let finish = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["properties"]["kind"]["const"].as_str() == Some("Finish"))
+        .expect("Finish");
+    let metadata = &finish["properties"]["value"];
+    assert_eq!(metadata["$ref"], request["$ref"]);
+    assert_eq!(
+        metadata["properties"]["payload"]["const"].as_str(),
+        Some("")
+    );
+    let response = &direct["responses"]["202"];
+    assert_eq!(response, &parts["responses"]["202"]);
+    let content = &response["content"];
+    assert_eq!(content.as_object().unwrap().len(), 2);
+    assert_eq!(
+        content["application/json"]["schema"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestResponse")
+    );
+    let binary = &content[utils::NORITO_MIME_TYPE]["schema"];
+    assert_eq!(binary["format"].as_str(), Some("binary"));
+    assert_eq!(
+        binary["x-iroha-norito-schema"].as_str(),
+        Some(<DaIngestResponse as norito::NoritoSchema>::nominal_name().as_str())
+    );
+    let header = &response["headers"]["Sora-PDP-Commitment"];
+    assert_eq!(header["required"].as_bool(), Some(true));
+    assert_eq!(header["schema"]["contentEncoding"].as_str(), Some("base64"));
+}

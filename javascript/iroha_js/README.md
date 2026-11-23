@@ -3002,56 +3002,88 @@ console.log(`pin queue depth=${storageState.pin_queue_depth}`);
 const storedManifest = await torii.getSorafsManifest(admission.manifest_digest_hex);
 console.log(`profile=${storedManifest.chunk_profile_handle} chunks=${storedManifest.chunk_count}`);
 
-const daBundle = await torii.getDaManifest("0x" + "aa".repeat(32));
-console.log(
-  `DA manifest lane=${daBundle.lane_id} chunkPlanChunks=${daBundle.chunk_plan.chunk_fetch_specs.length}`,
-);
-
-const ingestResult = await torii.submitDaBlob({
-  networkId,
-  owner: operatorId,
-  payload: fs.readFileSync("./artifacts/nexus_sidecar.car"),
-  codec: "nexus_lane_sidecar",
-  laneId: 7,
-  epoch: 11,
-  sequence: nextDaSequence,
-  retentionPolicy: { storageClass: "Hot", governanceTag: "nexus.sidecars" },
-  metadata: {
-    "content-type": "application/car",
-    "da.stream": {
-      value: "governance",
-      visibility: "Public",
-    },
-  },
-  canonicalAuth: { accountId: operatorId, privateKey: producerSigningKey },
-  artifactDir: "./artifacts/da",
-  privateKey: producerSigningKey,
-});
-if (ingestResult.receipt) {
-  console.log(
-    `storage ticket ${ingestResult.receipt.storage_ticket_hex} hash=${ingestResult.receipt.blob_hash_hex}`,
-  );
-  console.log(`quoted base rent ${ingestResult.receipt.rent_quote?.base_rent ?? "unavailable"} XOR`);
-}
-
 ```
 
-DA ingest always emits a signed first-release request, including `noSubmit`
-artifact preparation. The canonical digest binds the exact genesis-derived
-`NetworkId`, owner controller bytes, lane/epoch/sequence nonce, canonical
-payload hash and byte length, and the complete request-content commitment.
-Consensus re-verifies these witnesses against the committed account controller
-and charges per-owner count and bytes; display chain labels and metadata cannot
-select the security domain or quota identity.
+This single-key producer submits a CAR as a Nexus lane sidecar. Supply the
+deployed Torii URL, genesis-derived network ID, I105 network discriminant, producer
+account and runtime Ed25519 seed. The CLI configuration must identify the same
+producer and network. Obtain the Torii receipt-signing key independently. Select
+the lane, epoch and next sequence from the publication you intend to admit.
+This example uses the default sidecar retention policy. For a network with a
+different policy, set the approved values before preparing the request.
 
-The client authenticates each request with the producer's exact-network
-canonical HTTP credentials. It sends large payloads in resumable 1 MiB parts.
-On `pending_pin_authorization`, review the effective retention and run
-`iroha app da authorize-pin --request da_request.json --response da_response.json --operator-public-key KEY`
-in the artifact directory using the producer's CLI configuration and trusted
-operator key. Supply the returned signature as `pinScopeSignatureHex` on the
-same submission. `accepted` acknowledges local admission. Native publication
-provides independent storage confirmation.
+```js
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Set ${name}`);
+  return value;
+}
+
+const networkId = NetworkId.parse(required("IROHA_NETWORK_ID"));
+const owner = required("DA_PRODUCER_I105");
+const seedHex = required("DA_PRODUCER_SEED_HEX");
+assert.match(seedHex, /^[0-9a-f]{64}$/i);
+const privateKey = Buffer.from(seedHex, "hex");
+const config = required("DA_PRODUCER_CONFIG");
+const operatorKey = required("DA_OPERATOR_PUBLIC_KEY");
+const torii = new ToriiClient(required("TORII_URL"), {
+  localSigningContext: new LocalSigningContext(networkId, Number(required("IROHA_NETWORK_PREFIX"))),
+  canonicalRequestAuth: { accountId: owner, privateKey },
+});
+const evidence = mkdtempSync(join(tmpdir(), "iroha-da-"));
+const submission = {
+  networkId, owner, privateKey,
+  payload: readFileSync(required("DA_CAR_PATH")),
+  blobClass: "NexusLaneSidecar",
+  codec: "application/vnd.ipld.car",
+  laneId: Number(required("DA_LANE_ID")),
+  epoch: Number(required("DA_EPOCH")),
+  sequence: Number(required("DA_SEQUENCE")),
+  retentionPolicy: {
+    hotRetentionSecs: 6 * 60 * 60, coldRetentionSecs: 7 * 24 * 60 * 60,
+    requiredReplicas: 4, storageClass: "Warm", governanceTag: "da.sidecar",
+  },
+};
+let ingestResult = await torii.submitDaBlob({ ...submission, artifactDir: join(evidence, "prepare") });
+if (ingestResult.status === "pending_pin_authorization") {
+  const proposed = ingestResult.receipt.retention_policy;
+  const approved = submission.retentionPolicy;
+  assert.deepEqual(proposed, {
+    hot_retention_secs: approved.hotRetentionSecs, cold_retention_secs: approved.coldRetentionSecs,
+    required_replicas: approved.requiredReplicas, storage_class: approved.storageClass,
+    governance_tag: approved.governanceTag,
+  });
+  const paths = ingestResult.artifactPaths;
+  const witness = JSON.parse(execFileSync("iroha", [
+    "--config", config, "--output-format", "json", "app", "da", "authorize-pin",
+    "--request", paths.requestJsonPath, "--response", paths.responseJsonPath,
+    "--operator-public-key", operatorKey,
+  ], { encoding: "utf8" }));
+  ingestResult = await torii.submitDaBlob({
+    ...submission, pinScopeSignatureHex: witness.signature, artifactDir: join(evidence, "accepted"),
+  });
+}
+assert.equal(ingestResult.status, "accepted");
+const receipt = ingestResult.receipt;
+console.log("storage ticket", receipt.storage_ticket_hex, "payload digest", receipt.blob_hash_hex);
+console.log("quoted base rent", receipt.rent_quote.base_rent, "XOR");
+const daBundle = await torii.getDaManifest(receipt.storage_ticket_hex);
+console.log("manifest lane", daBundle.lane_id, "chunks", daBundle.chunk_plan.chunk_fetch_specs.length);
+```
+
+The offline CLI checks the original signed request and the operator-signed receipt
+before signing the pin scope. An already admitted duplicate can return
+`accepted` on the first call. This status acknowledges local admission.
+Native publication supplies independent storage confirmation. Offline request
+preparation with `noSubmit` still signs the network, owner, lane, epoch, sequence,
+canonical payload digest and length, and complete request-content commitment.
 
 DA rent-quote values use the same exact unit-free XOR contract: `base_rent`,
 `protocol_reserve`, `provider_reward`, `pdp_bonus`, `potr_bonus`, and

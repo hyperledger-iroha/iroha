@@ -9558,6 +9558,50 @@
         ],
         "type": "object"
       },
+      "DaBlobClass": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "enum": [
+                  "TaikaiSegment",
+                  "NexusLaneSidecar",
+                  "GovernanceArtifact"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "class",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "const": "Custom"
+              },
+              "value": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "class",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "DaCommitmentKey": {
         "additionalProperties": false,
         "description": "Canonical DA commitment ordering key.",
@@ -9979,6 +10023,87 @@
         "minItems": 1,
         "type": "array"
       },
+      "DaErasureProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_alignment": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "data_shards": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "fec_scheme": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "scheme": {
+                    "enum": [
+                      "Rs12_10",
+                      "RsWin14_10",
+                      "Rs18_14"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "scheme",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "scheme": {
+                    "const": "Custom"
+                  },
+                  "value": {
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "scheme",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "parity_shards": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "row_parity_stripes": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data_shards",
+          "parity_shards",
+          "row_parity_stripes",
+          "chunk_alignment",
+          "fec_scheme"
+        ],
+        "type": "object"
+      },
       "DaGovernanceTag": {
         "description": "Canonical Norito JSON layout for the transparent governance-tag wrapper.",
         "items": {
@@ -10040,6 +10165,280 @@
         ],
         "type": "object"
       },
+      "DaIngestReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "chunk_root": {
+            "$ref": "#/components/schemas/DaDigest32",
+            "description": "Raw BLAKE3 SoraFS proof-of-retrievability root."
+          },
+          "client_blob_id": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "epoch": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "operator_signature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalSignature"
+              }
+            ],
+            "description": "Torii operator signature over the receipt and request sequence.",
+            "maxLength": 8192
+          },
+          "pdp_commitment": {
+            "contentEncoding": "base64",
+            "description": "Norito-encoded PDP commitment present on every successful ingest and repeated in Sora-PDP-Commitment.",
+            "minLength": 4,
+            "type": "string"
+          },
+          "queued_at_unix": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rent_quote": {
+            "$ref": "#/components/schemas/DaRentQuote"
+          },
+          "retention_policy": {
+            "$ref": "#/components/schemas/DaRetentionPolicy"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "stripe_layout": {
+            "$ref": "#/components/schemas/DaStripeLayout"
+          }
+        },
+        "required": [
+          "client_blob_id",
+          "lane_id",
+          "epoch",
+          "blob_hash",
+          "chunk_root",
+          "manifest_hash",
+          "storage_ticket",
+          "pdp_commitment",
+          "stripe_layout",
+          "queued_at_unix",
+          "retention_policy",
+          "rent_quote",
+          "operator_signature"
+        ],
+        "type": "object"
+      },
+      "DaIngestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_class": {
+            "$ref": "#/components/schemas/DaBlobClass"
+          },
+          "chunk_size": {
+            "enum": [
+              1024,
+              2048,
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072,
+              262144,
+              524288,
+              1048576,
+              2097152
+            ],
+            "type": "integer"
+          },
+          "client_blob_id": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "codec": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "compression": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Identity",
+                  "Gzip",
+                  "Deflate",
+                  "Zstd"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "epoch": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "erasure_profile": {
+            "$ref": "#/components/schemas/DaErasureProfile"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/DaMetadataEntry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "norito_manifest": {
+            "contentEncoding": "base64",
+            "description": "Caller-supplied Norito manifest bytes, or null to generate the manifest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "description": "Transmitted bytes in the declared compression format. Multipart Finish restores them from the upload.",
+            "maxLength": 89478488,
+            "type": "string"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/DaDigest32",
+            "description": "Raw BLAKE3 digest of the decompressed payload."
+          },
+          "pin_scope_signatures": {
+            "description": "An empty array prepares the receipt and pin scope. Retry with the controller witnesses over the verified scope, keeping the original request signatures.",
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "type": "array"
+          },
+          "retention_policy": {
+            "$ref": "#/components/schemas/DaRetentionPolicy"
+          },
+          "sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551614,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signatures": {
+            "description": "Canonically signer-key-ordered controller witnesses over the ingest request.",
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "total_size": {
+            "description": "Number of decompressed payload bytes. The source may span at most 1,024 chunks.",
+            "format": "uint64",
+            "maximum": 67108864,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "client_blob_id",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "blob_class",
+          "codec",
+          "erasure_profile",
+          "retention_policy",
+          "chunk_size",
+          "total_size",
+          "payload_hash",
+          "compression",
+          "norito_manifest",
+          "payload",
+          "metadata",
+          "signatures",
+          "pin_scope_signatures"
+        ],
+        "type": "object"
+      },
+      "DaIngestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicate": {
+            "description": "True when Torii recognized a replay of the ingest.",
+            "type": "boolean"
+          },
+          "pin_scope": {
+            "$ref": "#/components/schemas/DaPinScopeV1"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/DaIngestReceipt"
+          },
+          "status": {
+            "description": "pending_pin_authorization requests controller signatures on the returned scope. accepted confirms pin authorization and may precede block inclusion.",
+            "enum": [
+              "pending_pin_authorization",
+              "accepted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "duplicate",
+          "receipt",
+          "pin_scope"
+        ],
+        "type": "object"
+      },
       "DaIrohaHash": {
         "description": "Canonical checksummed Iroha hash literal. Decoders also verify the CRC-16 checksum and marked-hash bit.",
         "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
@@ -10093,6 +10492,93 @@
         "required": [
           "block_height",
           "block_hash"
+        ],
+        "type": "object"
+      },
+      "DaMetadataEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "encryption": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "cipher": {
+                    "const": "None"
+                  },
+                  "params": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "cipher",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "cipher": {
+                    "const": "ChaCha20Poly1305"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key_label": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "key_label"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "cipher",
+                  "params"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "visibility": {
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "visibility": {
+                "enum": [
+                  "Public",
+                  "GovernanceOnly"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "visibility",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "visibility",
+          "encryption"
         ],
         "type": "object"
       },
@@ -10570,6 +11056,38 @@
         ],
         "type": "object"
       },
+      "DaRentQuote": {
+        "additionalProperties": false,
+        "properties": {
+          "base_rent": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "egress_credit_per_gib": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "pdp_bonus": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "potr_bonus": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "protocol_reserve": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "provider_reward": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "base_rent",
+          "protocol_reserve",
+          "provider_reward",
+          "pdp_bonus",
+          "potr_bonus",
+          "egress_credit_per_gib"
+        ],
+        "type": "object"
+      },
       "DaRetentionPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -10598,6 +11116,35 @@
           "required_replicas",
           "storage_class",
           "governance_tag"
+        ],
+        "type": "object"
+      },
+      "DaStripeLayout": {
+        "additionalProperties": false,
+        "properties": {
+          "row_parity_stripes": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shards_per_stripe": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_stripes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_stripes",
+          "shards_per_stripe",
+          "row_parity_stripes"
         ],
         "type": "object"
       },
@@ -74884,7 +75431,12 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/DaIngestRequest",
+                "properties": {
+                  "payload": {
+                    "minLength": 4
+                  }
+                }
               }
             }
           },
@@ -74895,17 +75447,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaIngestResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito frame containing the signed ingest result. Request this representation in Accept.",
+                  "format": "binary",
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_torii::da::ingest::DaIngestResponse"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Signed ingest result. Read status to determine whether the returned pin scope still needs controller signatures.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Sora-PDP-Commitment": {
+                "description": "Base64 of the same Norito PDP commitment carried in the signed receipt.",
+                "required": true,
+                "schema": {
+                  "contentEncoding": "base64",
+                  "minLength": 4,
                   "type": "string"
                 }
               }
@@ -75006,8 +75575,13 @@
                             "const": "Finish"
                           },
                           "value": {
-                            "description": "Signed DaIngestRequest with an empty payload field.",
-                            "type": "object"
+                            "$ref": "#/components/schemas/DaIngestRequest",
+                            "description": "Signed ingest metadata for the authenticated owner, network, lane and epoch of this upload. Supply an empty payload string. Torii restores and verifies the staged bytes.",
+                            "properties": {
+                              "payload": {
+                                "const": ""
+                              }
+                            }
                           }
                         },
                         "required": [
@@ -75054,20 +75628,8 @@
                         "type": "integer"
                       },
                       "wire_hash": {
-                        "description": "BLAKE3 digest of the transmitted bytes, encoded as a Norito BlobDigest.",
-                        "items": {
-                          "items": {
-                            "maximum": 255,
-                            "minimum": 0,
-                            "type": "integer"
-                          },
-                          "maxItems": 32,
-                          "minItems": 32,
-                          "type": "array"
-                        },
-                        "maxItems": 1,
-                        "minItems": 1,
-                        "type": "array"
+                        "$ref": "#/components/schemas/DaDigest32",
+                        "description": "BLAKE3 digest of the exact transmitted bytes."
                       }
                     },
                     "required": [
@@ -75132,23 +75694,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaIngestResponse"
                 }
               },
               "application/x-norito": {
                 "schema": {
+                  "description": "Canonical Norito frame containing the signed ingest result. Request this representation in Accept.",
                   "format": "binary",
-                  "type": "string"
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_torii::da::ingest::DaIngestResponse"
                 }
               }
             },
-            "description": "Signed ingest result with status pending_pin_authorization or accepted.",
+            "description": "Signed ingest result. Read status to determine whether the returned pin scope still needs controller signatures.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Sora-PDP-Commitment": {
+                "description": "Base64 of the same Norito PDP commitment carried in the signed receipt.",
+                "required": true,
+                "schema": {
+                  "contentEncoding": "base64",
+                  "minLength": 4,
                   "type": "string"
                 }
               }

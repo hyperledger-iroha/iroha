@@ -640,8 +640,8 @@ replay the authority to refresh the canonical manifest and current alias:
                  --version=current --latest \
                  --allowed-signers=<absolute-operator-allowlist-path> \
                  --output-dir=<absolute-private-tmp>/openapi
-Copy the five reviewed outputs from staging to artifacts/openapi/ and create
-a signed output-only commit on the candidate branch before running this gate.
+Copy the five reviewed outputs from staging to artifacts/openapi/ and sign
+the output-only Git commit on the candidate branch before running this gate.
 Verification authenticates the exact manifest signature against the governed
 public-key allowlist. Signer implementation and key storage are operator choices;
 the release contract does not claim to observe software or hardware custody.

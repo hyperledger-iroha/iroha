@@ -3961,7 +3961,8 @@ pub struct FetchArgs {
         required_unless_present = "storage_ticket"
     )]
     pub manifest_id: Option<String>,
-    /// Gateway provider descriptor (`name=... , provider-id=... , base-url=... , stream-token=...`).
+    /// Gateway provider descriptor `name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64`.
+    /// The gateway key is its 32-byte public key encoded in hex.
     #[arg(long = "gateway-provider", value_name = "SPEC", required = true)]
     pub gateway_provider: Vec<String>,
     /// Storage ticket identifier to fetch manifest + chunk plan automatically from Torii.

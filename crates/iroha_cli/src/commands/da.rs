@@ -848,7 +848,8 @@ pub struct ProveAvailabilityArgs {
     /// Storage ticket issued by Torii (hex string).
     #[arg(long = "storage-ticket", value_name = "HEX")]
     pub storage_ticket: String,
-    /// Gateway provider descriptor reused by `sorafs fetch` (name=... , provider-id=... , base-url=... , stream-token=...).
+    /// Gateway provider descriptor `name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64`.
+    /// The gateway key is its 32-byte public key encoded in hex.
     #[arg(long = "gateway-provider", value_name = "SPEC", required = true)]
     pub gateway_provider: Vec<String>,
     /// Optional Torii base URL for manifest reads (must end with `/`).
