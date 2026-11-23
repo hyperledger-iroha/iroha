@@ -1638,7 +1638,8 @@ def require_block_start_construction(state: str) -> None:
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
-        (hydration_path, "30b0ad1d1de3e74e938da7501266250fa09e94358060a05c1f622feaae6c9670"),
+        # Optional proposal selection reads the existing hydration result with try_read().
+        (hydration_path, "9c22d1de740ba0c367d60a7a74673def99e1d03408698fda6a82b15f787e035d"),
     ):
         if rust_token_digest(sources[location]) != expected:
             raise RuntimeError(f"{location}: start construction changed its defining module tokens")

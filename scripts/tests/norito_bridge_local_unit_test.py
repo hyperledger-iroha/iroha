@@ -133,17 +133,24 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == len(set(policy['c_jni'])) == 150
+    assert len(policy['c_jni']) == len(set(policy['c_jni'])) == 169
     assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 37
     assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 25
     for c_name, jni_name in (
         ('install', 'install'), ('begin_account', 'beginAccount'),
         ('authorize_account', 'authorizeAccount'), ('prepare', 'prepare'),
+        ('credit_status', 'creditStatus'), ('epoch', 'epoch'),
+        ('activation_settlement', 'activationSettlement'), ('unload_settlement', 'unloadSettlement'),
+        ('issue_open_request', 'issueOpenRequest'), ('install_blacklist', 'installBlacklist'),
+        ('confirm', 'confirm'), ('time', 'time'),
         ('execute', 'execute'), ('output', 'output'),
         ('verify_payment', 'verifyPayment'), ('discard', 'discard'),
     ):
         assert 'connect_norito_kagemusha_spartan_' + c_name + '_v1' in policy['c_jni']
         assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_' + jni_name in policy['c_jni']
+    assert 'connect_norito_transcode_instruction_v1' in policy['c_jni']
+    for method in ('nativeBridgeAbiVersion', 'nativeTranscodeInstruction'):
+        assert 'Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_' + method in policy['c_jni']
     for method in ('beginInstallation', 'registerInstallation', 'closeInstallation', 'relocateRegistrationSource'):
         assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_' + method in policy['c_jni']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime' not in policy['c_jni']
