@@ -6334,9 +6334,16 @@ test("submitDaBlob rejects pre-release receipt omissions and unknown fields", as
   };
   const cases = [
     ["missing pdp_commitment", (receipt) => delete receipt.pdp_commitment, /pdp_commitment/u],
+    ...["YQ", "YR==", "YWJ=", "Y Q==", "YQ==\n"].map((value) => [
+      "noncanonical PDP base64", (receipt) => { receipt.pdp_commitment = value; }, /pdp_commitment/u,
+    ]),
+    ["oversized lane", (receipt) => { receipt.lane_id = 0x1_0000_0000; }, /lane_id/u],
+    ["quoted epoch", (receipt) => { receipt.epoch = "22"; }, /epoch/u],
     ["missing stripe_layout", (receipt) => delete receipt.stripe_layout, /stripe_layout/u],
     ["missing row parity", (receipt) => delete receipt.stripe_layout.row_parity_stripes, /row_parity_stripes/u],
     ["missing retention", (receipt) => delete receipt.retention_policy, /retention_policy/u],
+    ["control in effective tag", (receipt) => { receipt.retention_policy.governance_tag = ["da\nsidecar"]; }, /governance_tag/u],
+    ["zero effective replicas", (receipt) => { receipt.retention_policy.required_replicas = 0; }, /required_replicas/u],
     ["invalid retention class", (receipt) => { receipt.retention_policy.storage_class = "Hot"; }, /storage_class/u],
     ["missing rent_quote", (receipt) => delete receipt.rent_quote, /rent_quote/u],
     ...["", "00", "AA0", "aa", "AB".repeat(4097)].map((signature) => [

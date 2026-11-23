@@ -7803,8 +7803,8 @@ export interface DaIngestRequestInput {
   /** Canonical I105 account whose consensus DA quota is charged. */
   owner: string;
   laneId?: number;
-  epoch?: number;
-  sequence?: number;
+  epoch?: number | bigint;
+  sequence?: number | bigint;
   blobClass?:
     | "TaikaiSegment"
     | "NexusLaneSidecar"
@@ -7824,8 +7824,8 @@ export interface DaIngestRequestInput {
       | { scheme: "Custom"; value: number };
   };
   retentionPolicy?: {
-    hotRetentionSecs?: number;
-    coldRetentionSecs?: number;
+    hotRetentionSecs?: number | bigint;
+    coldRetentionSecs?: number | bigint;
     requiredReplicas?: number;
     storageClass?: "Hot" | "Warm" | "Cold";
     governanceTag?: string;
@@ -7867,7 +7867,7 @@ export interface DaIngestReceipt {
   client_blob_id_hex: string;
   client_blob_id_bytes: Buffer;
   lane_id: number;
-  epoch: number;
+  epoch: number | bigint;
   blob_hash_hex: string;
   blob_hash_bytes: Buffer;
   chunk_root_hex: string;
@@ -7878,15 +7878,15 @@ export interface DaIngestReceipt {
   storage_ticket_bytes: Buffer;
   stripe_layout: DaStripeLayout;
   retention_policy: {
-    hot_retention_secs: number;
-    cold_retention_secs: number;
+    hot_retention_secs: number | bigint;
+    cold_retention_secs: number | bigint;
     required_replicas: number;
     storage_class: "Hot" | "Warm" | "Cold";
     governance_tag: string;
   };
   pdp_commitment_b64: string | null;
   pdp_commitment_bytes: Buffer | null;
-  queued_at_unix: number;
+  queued_at_unix: number | bigint;
   operator_signature_hex: string;
   rent_quote: DaRentQuote;
 }
@@ -7919,8 +7919,8 @@ export interface DaIngestSubmitResponse {
     owner: string;
     request_authorization_digest: [number[]];
     lane_id: number;
-    epoch: number;
-    sequence: number;
+    epoch: number | bigint;
+    sequence: number | bigint;
     storage_ticket: [number[]];
     manifest_hash: [number[]];
     commitment_digest: [number[]];

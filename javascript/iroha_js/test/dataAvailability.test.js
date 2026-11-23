@@ -166,6 +166,21 @@ test("DA signing digest rejects pre-release requests with omitted V1 fields", ()
   }
 });
 
+test("DA request signatures bind the governance tag's exact UTF-8 bytes", () => {
+  const options = { payload: PAYLOAD, owner: OWNER, networkId: NETWORK_ID, privateKey: PRIVATE_KEY };
+  const digests = new Set();
+  for (const tag of ["", "tag", " tag ", "tag\u0000"]) {
+    const { request, artifacts } = buildDaIngestRequest({
+      ...options, retentionPolicy: { requiredReplicas: 0, governanceTag: tag },
+    });
+    assert.deepEqual(request.retention_policy.governance_tag, [tag]);
+    assert.equal(request.retention_policy.required_replicas, 0);
+    assert.equal(computeDaIngestSigningDigest(request).toString("hex").toUpperCase(), artifacts.signingDigestHex.toUpperCase());
+    digests.add(artifacts.signingDigestHex);
+  }
+  assert.equal(digests.size, 4);
+});
+
 test("DA intent digest and signature match the shared Rust protocol vectors", async () => {
   const vectors = JSON.parse(await fs.readFile(
     new URL("../../../fixtures/da/ingest/request_signing_v1.json", import.meta.url), "utf8",

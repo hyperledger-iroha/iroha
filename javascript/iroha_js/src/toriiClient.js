@@ -4461,7 +4461,7 @@ export class ToriiClient {
     const { payload, response, sourceBytes } = await postDaIngestPhase(request, wireBytes, async (path, body, status) => {
       const result = await this._request("POST", path, {
         headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(body),
+        body: stringifyStrictLosslessIntegerJson(body, "DA ingest request"),
         canonicalAuth,
         exactNetworkId: rest.networkId,
         redirect: "error",
@@ -22912,19 +22912,6 @@ function normalizeSorafsXorQuantity(value, context) {
   return normalized;
 }
 
-function rejectRetiredSorafsMonetaryFields(record, retiredNames, context) {
-  const present = retiredNames.filter((name) =>
-    objectHasOwn(record, name),
-  );
-  if (present.length > 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} contains retired monetary field${present.length === 1 ? "" : "s"}: ${present.join(", ")}`,
-      context,
-    );
-  }
-}
-
 const SORAFS_REPUTATION_SNAPSHOT_FIELDS = new Set([
   "snapshot_id_hex",
   "generated_at_unix",
@@ -24814,7 +24801,7 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
 async function persistDaRequestArtifacts(artifactDir, request) {
   const pathModule = await getPathModule();
   const requestJsonPath = pathModule.join(artifactDir, "da_request.json");
-  await writeBufferFile(requestJsonPath, Buffer.from(JSON.stringify(request), "utf8"));
+  await writeBufferFile(requestJsonPath, Buffer.from(stringifyStrictLosslessIntegerJson(request, "DA ingest request"), "utf8"));
   return {
     requestJsonPath,
     receiptJsonPath: null,
@@ -24841,7 +24828,7 @@ async function persistDaReceiptArtifacts(
   await writeBufferFile(next.responseJsonPath, responseBytes);
   if (response.receipt) {
     const receiptPath = pathModule.join(artifactDir, "da_receipt.json");
-    await writeJsonFile(receiptPath, response.receipt);
+    await writeBufferFile(receiptPath, Buffer.from(stringifyStrictLosslessIntegerJson(response.receipt, "DA ingest receipt"), "utf8"));
     next.receiptJsonPath = receiptPath;
   }
   if (pdpHeader) {
@@ -25257,12 +25244,18 @@ function normalizeDaRetentionPolicy(value, context) {
   if (!Array.isArray(record.governance_tag) || record.governance_tag.length !== 1) {
     rejectType(`${context}.governance_tag must be a single string tuple`);
   }
+  const tag = record.governance_tag[0];
+  if (typeof tag !== JS_TYPE_STRING || tag.length === 0 || /^\p{White_Space}|\p{White_Space}$|\p{Cc}/u.test(tag)) {
+    rejectType(`${context}.governance_tag must be nonempty with no surrounding whitespace or control characters`);
+  }
+  const replicas = normalizeSorafsPinU64(record.required_replicas, `${context}.required_replicas`, 0xffffn);
+  if (replicas === 0) rejectRange(`${context}.required_replicas must be positive`);
   return {
-    hot_retention_secs: ToriiClient._normalizeUnsignedInteger(record.hot_retention_secs, `${context}.hot_retention_secs`, { allowZero: true }),
-    cold_retention_secs: ToriiClient._normalizeUnsignedInteger(record.cold_retention_secs, `${context}.cold_retention_secs`, { allowZero: true }),
-    required_replicas: ToriiClient._normalizeUnsignedInteger(record.required_replicas, `${context}.required_replicas`, { allowZero: false, max: 0xffff }),
+    hot_retention_secs: normalizeSorafsPinU64(record.hot_retention_secs, `${context}.hot_retention_secs`),
+    cold_retention_secs: normalizeSorafsPinU64(record.cold_retention_secs, `${context}.cold_retention_secs`),
+    required_replicas: replicas,
     storage_class: normalizeTaggedUnit(record.storage_class, "type", new Set(["Hot", "Warm", "Cold"]), `${context}.storage_class`),
-    governance_tag: requireExactNonEmptyString(record.governance_tag[0], `${context}.governance_tag`),
+    governance_tag: tag,
   };
 }
 
@@ -25323,45 +25316,19 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       new Set(["total_stripes", "shards_per_stripe", "row_parity_stripes"]),
       `${context}.stripe_layout`,
     );
-    const totalStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.total_stripes,
-      `${context}.stripe_layout.total_stripes`,
-      { allowZero: true, max: 0xffff_ffff },
-    );
-    const shardsPerStripe = ToriiClient._normalizeUnsignedInteger(
-      layout.shards_per_stripe,
-      `${context}.stripe_layout.shards_per_stripe`,
-      { allowZero: true, max: 0xffff_ffff },
-    );
-    const rowParityStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.row_parity_stripes,
-      `${context}.stripe_layout.row_parity_stripes`,
-      { allowZero: true, max: 0xffff },
-    );
     return {
-      total_stripes: totalStripes,
-      shards_per_stripe: shardsPerStripe,
-      row_parity_stripes: rowParityStripes,
+      total_stripes: normalizeSorafsPinU64(layout.total_stripes, `${context}.stripe_layout.total_stripes`, 0xffff_ffffn),
+      shards_per_stripe: normalizeSorafsPinU64(layout.shards_per_stripe, `${context}.stripe_layout.shards_per_stripe`, 0xffff_ffffn),
+      row_parity_stripes: normalizeSorafsPinU64(layout.row_parity_stripes, `${context}.stripe_layout.row_parity_stripes`, 0xffffn),
     };
   })();
   if (!objectHasOwn(record, "pdp_commitment")) {
     rejectType(`${context}.pdp_commitment is required and must be null or a base64 string`);
   }
   const pdpCommitment = record.pdp_commitment;
-  let pdpCommitmentBytes = null;
-  let pdpCommitmentB64 = null;
-  if (pdpCommitment !== null && pdpCommitment !== undefined) {
-    if (typeof pdpCommitment !== JS_TYPE_STRING) {
-      rejectType(`${context}.pdp_commitment must be a base64 string when present`);
-    }
-    const trimmed = pdpCommitment.trim();
-    try {
-      const decoded = strictDecodeBase64(trimmed);
-      pdpCommitmentBytes = Buffer.from(decoded);
-      pdpCommitmentB64 = Buffer.from(decoded).toString("base64");
-    } catch {
-      rejectType(`${context}.pdp_commitment must be a valid base64 string`);
-    }
+  if (pdpCommitment !== null && (typeof pdpCommitment !== JS_TYPE_STRING ||
+      (pdpCommitment !== "" && !hasExactStandardBase64Shape(pdpCommitment)))) {
+    rejectType(`${context}.pdp_commitment must be canonical standard base64 or null`);
   }
   if (record.rent_quote === null || record.rent_quote === undefined) {
     rejectType(`${context}.rent_quote is required`);
@@ -25373,16 +25340,8 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   return {
     client_blob_id_hex: bufferToUpperHex(clientBlobId),
     client_blob_id_bytes: clientBlobId,
-    lane_id: ToriiClient._normalizeUnsignedInteger(
-      record.lane_id,
-      `${context}.lane_id`,
-      { allowZero: true },
-    ),
-    epoch: ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      `${context}.epoch`,
-      { allowZero: true },
-    ),
+    lane_id: normalizeSorafsPinU64(record.lane_id, `${context}.lane_id`, 0xffff_ffffn),
+    epoch: normalizeSorafsPinU64(record.epoch, `${context}.epoch`),
     blob_hash_hex: bufferToUpperHex(blobHash),
     blob_hash_bytes: blobHash,
     chunk_root_hex: bufferToUpperHex(chunkRoot),
@@ -25392,13 +25351,9 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     storage_ticket_hex: bufferToUpperHex(storageTicket),
     storage_ticket_bytes: storageTicket,
     stripe_layout: stripeLayout,
-    pdp_commitment_b64: pdpCommitmentB64 ?? (pdpCommitment ?? null),
-    pdp_commitment_bytes: pdpCommitmentBytes,
-    queued_at_unix: ToriiClient._normalizeUnsignedInteger(
-      record.queued_at_unix,
-      `${context}.queued_at_unix`,
-      { allowZero: true },
-    ),
+    pdp_commitment_b64: pdpCommitment,
+    pdp_commitment_bytes: pdpCommitment === null ? null : Buffer.from(pdpCommitment, "base64"),
+    queued_at_unix: normalizeSorafsPinU64(record.queued_at_unix, `${context}.queued_at_unix`),
     operator_signature_hex: requireDaSignatureHex(
       record.operator_signature,
       `${context}.operator_signature`,
@@ -25408,23 +25363,17 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   };
 }
 
-function normalizeDaRentQuote(payload, context = "da rent quote") {
-  if (payload === null || payload === undefined) {
-    return null;
-  }
-  const record = ensureRecord(payload, context);
-  rejectRetiredSorafsMonetaryFields(
-    record,
-    [
-      "base_rent_micro",
-      "protocol_reserve_micro",
-      "provider_reward_micro",
-      "pdp_bonus_micro",
-      "potr_bonus_micro",
-      "egress_credit_per_gib_micro",
-    ],
-    context,
-  );
+const DA_RENT_QUOTE_FIELDS = new Set([
+  "base_rent",
+  "protocol_reserve",
+  "provider_reward",
+  "pdp_bonus",
+  "potr_bonus",
+  "egress_credit_per_gib",
+]);
+
+function normalizeDaRentQuote(payload, context) {
+  const record = requireExactFeeQuoteObject(payload, DA_RENT_QUOTE_FIELDS, context);
   return {
     base_rent: normalizeSorafsXorQuantity(
       record.base_rent,

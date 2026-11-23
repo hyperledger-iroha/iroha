@@ -15,7 +15,7 @@ final class ToriiDaIngestTests: XCTestCase {
             networkId: TestNetworkIds.canonical,
             owner: owner,
             payload: payload,
-            laneId: 1,
+            laneId: .max,
             epoch: 2,
             sequence: 3,
             metadata: [metadataEntry],
@@ -43,7 +43,7 @@ final class ToriiDaIngestTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["network_id"] as? String, TestNetworkIds.canonical.literal)
         XCTAssertEqual(json["owner"] as? String, owner)
-        XCTAssertEqual(json["lane_id"] as? Int, 1)
+        XCTAssertEqual(json["lane_id"] as? NSNumber, NSNumber(value: UInt32.max))
         XCTAssertEqual(json["epoch"] as? Int, 2)
         XCTAssertEqual(json["sequence"] as? Int, 3)
         XCTAssertEqual(json["chunk_size"] as? Int, 262_144)
@@ -192,12 +192,12 @@ final class ToriiDaIngestTests: XCTestCase {
                 "queued_at_unix":1700000000,
                 "operator_signature":"DEADBEEF",
                 "rent_quote":{
-                    "base_rent":100,
+                    "base_rent":"100",
                     "protocol_reserve":"25",
-                    "provider_reward":75,
+                    "provider_reward":"75",
                     "pdp_bonus":"5",
-                    "potr_bonus":3,
-                    "egress_credit_per_gib":2
+                    "potr_bonus":"3",
+                    "egress_credit_per_gib":"2"
                 }
             }
         }
@@ -214,12 +214,40 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(receipt.retentionPolicy.requiredReplicas, 3)
         XCTAssertEqual(receipt.retentionPolicy.governanceTag, "da.sidecar")
         let rentQuote = receipt.rentQuote
-        XCTAssertEqual(rentQuote.baseRentMicro, "100")
-        XCTAssertEqual(rentQuote.protocolReserveMicro, "25")
-        XCTAssertEqual(rentQuote.providerRewardMicro, "75")
-        XCTAssertEqual(rentQuote.pdpBonusMicro, "5")
-        XCTAssertEqual(rentQuote.potrBonusMicro, "3")
-        XCTAssertEqual(rentQuote.egressCreditPerGibMicro, "2")
+        XCTAssertEqual(rentQuote.baseRent, "100")
+        XCTAssertEqual(rentQuote.protocolReserve, "25")
+        XCTAssertEqual(rentQuote.providerReward, "75")
+        XCTAssertEqual(rentQuote.pdpBonus, "5")
+        XCTAssertEqual(rentQuote.potrBonus, "3")
+        XCTAssertEqual(rentQuote.egressCreditPerGib, "2")
+    }
+
+    func testReceiptLaneFitsTheUnsigned32BitWireField() throws {
+        var receipt = canonicalReceiptObject()
+        func decodeLane(_ number: NSNumber) throws -> UInt32 {
+            receipt["lane_id"] = number
+            let data = try JSONSerialization.data(withJSONObject: receipt)
+            return try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data).laneId
+        }
+        XCTAssertEqual(try decodeLane(NSNumber(value: UInt32.max)), UInt32.max)
+        XCTAssertThrowsError(try decodeLane(NSNumber(value: UInt64(UInt32.max) + 1)))
+        XCTAssertThrowsError(try decodeLane(NSNumber(value: -1)))
+    }
+
+    func testReceiptPdpCommitmentRequiresCanonicalStandardBase64() throws {
+        var receipt = canonicalReceiptObject()
+        func decodeCommitment(_ value: Any) throws -> Data? {
+            receipt["pdp_commitment"] = value
+            let data = try JSONSerialization.data(withJSONObject: receipt)
+            return try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data).pdpCommitment
+        }
+        XCTAssertNil(try decodeCommitment(NSNull()))
+        XCTAssertEqual(try XCTUnwrap(decodeCommitment("")), Data())
+        XCTAssertEqual(try decodeCommitment("/w=="), Data([0xFF]))
+        XCTAssertEqual(try decodeCommitment("/wA="), Data([0xFF, 0x00]))
+        for invalid in ["/x==", "/wB=", "/w", "_w==", "/w== ", "/w==\n"] {
+            XCTAssertThrowsError(try decodeCommitment(invalid), "accepted \(invalid.debugDescription)")
+        }
     }
 
     func testReceiptRequiresCurrentFieldsAndRejectsUnknownFields() throws {
@@ -272,34 +300,66 @@ final class ToriiDaIngestTests: XCTestCase {
         )
     }
 
-    func testRentQuoteRejectsFractionalNumber() {
-        let payload = """
-        {
-            "base_rent":100.5,
-            "protocol_reserve":25,
-            "provider_reward":75,
-            "pdp_bonus":5,
-            "potr_bonus":3,
-            "egress_credit_per_gib":2
+    func testReceiptRequiresEffectiveReplicationPolicy() throws {
+        let baseline = canonicalReceiptObject()
+        let valid = try XCTUnwrap(baseline["retention_policy"] as? [String: Any])
+        for (replicas, tag) in [(0, "da.sidecar"), (3, ""), (3, " da.sidecar"), (3, "da\nsidecar")] {
+            var receipt = baseline
+            var policy = valid
+            policy["required_replicas"] = replicas
+            policy["governance_tag"] = [tag]
+            receipt["retention_policy"] = policy
+            let data = try JSONSerialization.data(withJSONObject: receipt)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data))
         }
-        """.data(using: .utf8)!
-
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRentQuote.self, from: payload))
     }
 
-    func testRentQuoteRejectsFractionalString() {
-        let payload = """
-        {
-            "base_rent":"100.5",
-            "protocol_reserve":"25",
-            "provider_reward":"75",
-            "pdp_bonus":"5",
-            "potr_bonus":"3",
-            "egress_credit_per_gib":"2"
-        }
-        """.data(using: .utf8)!
+    func testReceiptDecodesRustManifestRentQuoteInExactXor() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("fixtures/da/ingest/manifests/nexus_lane_sidecar/manifest.json")
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var receipt = canonicalReceiptObject()
+        receipt["rent_quote"] = try XCTUnwrap(manifest["rent_quote"] as? [String: String])
+        let data = try JSONSerialization.data(withJSONObject: receipt)
+        let quote = try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data).rentQuote
+        XCTAssertEqual(quote.baseRent, "0.25")
+        XCTAssertEqual(quote.protocolReserve, "0.05")
+        XCTAssertEqual(quote.providerReward, "0.2")
+        XCTAssertEqual(quote.pdpBonus, "0.0125")
+        XCTAssertEqual(quote.potrBonus, "0.00625")
+        XCTAssertEqual(quote.egressCreditPerGib, "0.0015")
+    }
 
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRentQuote.self, from: payload))
+    func testRentQuoteEnforcesCanonicalXorBoundsAndRequiredFields() throws {
+        let fields = try XCTUnwrap(canonicalReceiptObject()["rent_quote"] as? [String: String])
+        func decode(_ object: [String: Any]) throws -> ToriiDaRentQuote {
+            try JSONDecoder().decode(ToriiDaRentQuote.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        let maxMantissa =
+            "67039039649712985497870124991029230637396829102961966888617807218608820150367" +
+            "73488400937149083451713845015929093243025426876941405973284973216824503042047"
+        for amount in ["0", "0.000000001", maxMantissa] {
+            var quote = fields
+            quote["base_rent"] = amount
+            XCTAssertEqual(try decode(quote).baseRent, amount)
+        }
+        let invalid: [Any] = [0, 12.5, NSNull(), "", " 1", "+1", "-1", "01", "1.", "1.0", "1e2",
+                              "0.0000000001", String(maxMantissa.dropLast()) + "8"]
+        for amount in invalid {
+            var quote: [String: Any] = fields
+            quote["base_rent"] = amount
+            XCTAssertThrowsError(try decode(quote), "accepted invalid XOR amount \(amount)")
+        }
+        for field in fields.keys {
+            var quote = fields
+            quote.removeValue(forKey: field)
+            XCTAssertThrowsError(try decode(quote), "accepted missing \(field)")
+        }
+        var retired = fields
+        retired["base_rent_micro"] = "1"
+        XCTAssertThrowsError(try decode(retired))
     }
 
     func testReceiptRejectsDigestWrongLength() {
@@ -484,12 +544,12 @@ final class ToriiDaIngestTests: XCTestCase {
             ],
             "queued_at_unix": 1_700_000_000,
             "rent_quote": [
-                "base_rent": 100,
-                "protocol_reserve": 25,
-                "provider_reward": 75,
-                "pdp_bonus": 5,
-                "potr_bonus": 3,
-                "egress_credit_per_gib": 2
+                "base_rent": "100",
+                "protocol_reserve": "25",
+                "provider_reward": "75",
+                "pdp_bonus": "5",
+                "potr_bonus": "3",
+                "egress_credit_per_gib": "2"
             ],
             "operator_signature": "DEADBEEF"
         ]

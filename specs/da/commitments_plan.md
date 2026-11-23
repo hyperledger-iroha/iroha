@@ -72,4 +72,9 @@ providers and takes the original ingress offline before reading the package
 and recovering the original bytes with a data shard withheld. Run the exact
 `sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery`
 test in the `integration_tests` crate's `core_api` target with
-`IROHA_TEST_REQUIRE_NETWORK=1`. [Four-peer flow](../../integration_tests/tests/sorafs_publication_da.rs)
+`IROHA_TEST_REQUIRE_NETWORK=1`. Set `TEST_NETWORK_BIN_SORAFS_CLI` to the
+absolute path of the same-revision provider CLI. To retain the evidence, set
+`IROHA_TEST_DA_PUBLICATION_EXPORT` to a new absolute directory name under an
+existing parent. The test writes the signed receipt, checkpoint, commitment and
+pin proofs, charged transaction identity, provider certificates and both recovered
+payloads there before teardown. [Four-peer flow](../../integration_tests/tests/sorafs_publication_da.rs)

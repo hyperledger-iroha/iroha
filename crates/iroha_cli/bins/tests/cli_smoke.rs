@@ -3165,7 +3165,9 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         .try_add_pin_scope_signature(&scope, &producer)
         .expect("expected scope witness");
     let mock_phase = |body: &DaIngestRequest, status: &str, duplicate: bool| {
-        let response = norito::json!({"status":status, "duplicate":duplicate, "receipt":&receipt, "pin_scope":&scope});
+        let response = norito::json!({
+            "status": status, "duplicate": duplicate, "receipt": receipt, "pin_scope": scope
+        });
         server.mock(|when, then| {
             when.method(POST)
                 .path("/v1/da/ingest")

@@ -94,46 +94,6 @@ public struct ToriiDaRetentionPolicy: Sendable, Equatable {
     public static var `default`: ToriiDaRetentionPolicy { ToriiDaRetentionPolicy() }
 }
 
-extension ToriiDaRetentionPolicy: Decodable {
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case hot = "hot_retention_secs"
-        case cold = "cold_retention_secs"
-        case replicas = "required_replicas"
-        case storage = "storage_class"
-        case tag = "governance_tag"
-    }
-
-    private enum StorageKeys: String, CodingKey, CaseIterable {
-        case type, value
-    }
-
-    public init(from decoder: Decoder) throws {
-        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "retention_policy")
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        let policy = try fields.superDecoder(forKey: .storage)
-        try requireExactDaFields(from: policy, codingKeys: StorageKeys.allCases, context: "storage_class")
-        let storage = try policy.container(keyedBy: StorageKeys.self)
-        guard try storage.decodeNil(forKey: .value) else {
-            throw ToriiClientError.invalidPayload("storage_class must have a null value")
-        }
-        let storageClass: ToriiDaStorageClass
-        switch try storage.decode(String.self, forKey: .type) {
-        case "Hot": storageClass = .hot
-        case "Warm": storageClass = .warm
-        case "Cold": storageClass = .cold
-        default: throw ToriiClientError.invalidPayload("unknown DA storage class")
-        }
-        let tag = try fields.decode([String].self, forKey: .tag)
-        let replicas = try fields.decode(UInt16.self, forKey: .replicas)
-        guard tag.count == 1, let governanceTag = tag.first, !governanceTag.isEmpty, replicas > 0 else {
-            throw ToriiClientError.invalidPayload("retention_policy requires a governance tag and a positive replica count")
-        }
-        self.init(hotRetentionSecs: try fields.decode(UInt64.self, forKey: .hot),
-                  coldRetentionSecs: try fields.decode(UInt64.self, forKey: .cold),
-                  requiredReplicas: replicas, storageClass: storageClass, governanceTag: governanceTag)
-    }
-}
-
 public enum ToriiDaCompression: Sendable, Equatable {
     case identity
     case gzip
@@ -173,7 +133,7 @@ public struct ToriiDaBlobSubmission: Sendable {
     public var owner: String
     public var payload: Data
     public var chunkSize: Int
-    public var laneId: UInt64
+    public var laneId: UInt32
     public var epoch: UInt64
     public var sequence: UInt64
     public var blobClass: ToriiDaBlobClass
@@ -198,7 +158,7 @@ public struct ToriiDaBlobSubmission: Sendable {
                 owner: String,
                 payload: Data,
                 chunkSize: Int = 262_144,
-                laneId: UInt64 = 0,
+                laneId: UInt32 = 0,
                 epoch: UInt64 = 0,
                 sequence: UInt64 = 0,
                 blobClass: ToriiDaBlobClass = .taikaiSegment,
@@ -269,22 +229,16 @@ public struct ToriiDaIngestSubmitResult: Sendable, Equatable {
     }
 }
 
+/// Exact decimal XOR amounts quoted for an admitted DA blob.
 public struct ToriiDaRentQuote: Decodable, Sendable, Equatable {
-    public let baseRentMicro: String
-    public let protocolReserveMicro: String
-    public let providerRewardMicro: String
-    public let pdpBonusMicro: String
-    public let potrBonusMicro: String
-    public let egressCreditPerGibMicro: String
+    public let baseRent: String
+    public let protocolReserve: String
+    public let providerReward: String
+    public let pdpBonus: String
+    public let potrBonus: String
+    public let egressCreditPerGib: String
 
-    public var baseRentDecimal: Decimal? { Decimal(string: baseRentMicro) }
-    public var protocolReserveDecimal: Decimal? { Decimal(string: protocolReserveMicro) }
-    public var providerRewardDecimal: Decimal? { Decimal(string: providerRewardMicro) }
-    public var pdpBonusDecimal: Decimal? { Decimal(string: pdpBonusMicro) }
-    public var potrBonusDecimal: Decimal? { Decimal(string: potrBonusMicro) }
-    public var egressCreditPerGibDecimal: Decimal? { Decimal(string: egressCreditPerGibMicro) }
-
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case baseRent = "base_rent"
         case protocolReserve = "protocol_reserve"
         case providerReward = "provider_reward"
@@ -294,56 +248,25 @@ public struct ToriiDaRentQuote: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "rent_quote")
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.baseRentMicro = try Self.decodeMicroAmount(from: container, key: .baseRent)
-        self.protocolReserveMicro = try Self.decodeMicroAmount(from: container, key: .protocolReserve)
-        self.providerRewardMicro = try Self.decodeMicroAmount(from: container, key: .providerReward)
-        self.pdpBonusMicro = try Self.decodeMicroAmount(from: container, key: .pdpBonus)
-        self.potrBonusMicro = try Self.decodeMicroAmount(from: container, key: .potrBonus)
-        self.egressCreditPerGibMicro = try Self.decodeMicroAmount(from: container, key: .egressCreditPerGib)
-    }
-
-    private static func decodeMicroAmount(from container: KeyedDecodingContainer<CodingKeys>,
-                                          key: CodingKeys) throws -> String {
-        if let stringValue = try? container.decode(String.self, forKey: key) {
-            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) was empty")
+        func amount(_ key: CodingKeys) throws -> String {
+            let text = try container.decode(String.self, forKey: key)
+            guard text.utf8.count <= 155,
+                  let quantity = try? KotodamaNumericV1Codec.decodeQuantityJSON(text),
+                  quantity.scale <= 9 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key, in: container, debugDescription: "expected a canonical XOR quantity"
+                )
             }
-            guard isAsciiDigits(trimmed) else {
-                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an unsigned integer string")
-            }
-            return trimmed
+            return text
         }
-        if let decimalValue = try? container.decode(Decimal.self, forKey: key) {
-            var source = decimalValue
-            var rounded = Decimal()
-            NSDecimalRound(&rounded, &source, 0, .plain)
-            guard rounded == source else {
-                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an integer")
-            }
-            let number = NSDecimalNumber(decimal: rounded)
-            let zero = NSDecimalNumber(value: 0)
-            guard number.compare(zero) != .orderedAscending else {
-                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be non-negative")
-            }
-            let stringValue = number.stringValue
-            guard !stringValue.isEmpty, isAsciiDigits(stringValue) else {
-                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an unsigned integer")
-            }
-            return stringValue
-        }
-        throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) was missing or invalid")
-    }
-
-    private static func isAsciiDigits(_ value: String) -> Bool {
-        guard !value.isEmpty else { return false }
-        for scalar in value.unicodeScalars {
-            guard scalar.value >= 48 && scalar.value <= 57 else {
-                return false
-            }
-        }
-        return true
+        baseRent = try amount(.baseRent)
+        protocolReserve = try amount(.protocolReserve)
+        providerReward = try amount(.providerReward)
+        pdpBonus = try amount(.pdpBonus)
+        potrBonus = try amount(.potrBonus)
+        egressCreditPerGib = try amount(.egressCreditPerGib)
     }
 }
 
@@ -381,7 +304,7 @@ public struct ToriiDaStripeLayout: Decodable, Sendable, Equatable {
 
 public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
     public let clientBlobId: Data
-    public let laneId: UInt64
+    public let laneId: UInt32
     public let epoch: UInt64
     public let blobHash: Data
     public let chunkRoot: Data
@@ -424,15 +347,16 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.clientBlobId = try decodeDaDigest(from: container, key: .clientBlobId)
-        self.laneId = try container.decode(UInt64.self, forKey: .laneId)
+        self.laneId = try container.decode(UInt32.self, forKey: .laneId)
         self.epoch = try container.decode(UInt64.self, forKey: .epoch)
         self.blobHash = try decodeDaDigest(from: container, key: .blobHash)
         self.chunkRoot = try decodeDaDigest(from: container, key: .chunkRoot)
         self.manifestHash = try decodeDaDigest(from: container, key: .manifestHash)
         self.storageTicket = try decodeDaDigest(from: container, key: .storageTicket)
         if let commitmentB64 = try container.decodeIfPresent(String.self, forKey: .pdpCommitment) {
-            guard let decoded = Data(base64Encoded: commitmentB64) else {
-                throw ToriiClientError.invalidPayload("receipt.pdp_commitment was not valid base64")
+            guard let decoded = Data(base64Encoded: commitmentB64),
+                  decoded.base64EncodedString() == commitmentB64 else {
+                throw ToriiClientError.invalidPayload("receipt.pdp_commitment requires canonical standard base64")
             }
             self.pdpCommitment = decoded
         } else {
@@ -440,7 +364,17 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         }
         self.stripeLayout = try container.decode(ToriiDaStripeLayout.self, forKey: .stripeLayout)
         self.queuedAtUnix = try container.decode(UInt64.self, forKey: .queuedAtUnix)
-        self.retentionPolicy = try container.decode(ToriiDaRetentionPolicy.self, forKey: .retentionPolicy)
+        let retention = try container.decode(ToriiDaRetentionPolicy.self, forKey: .retentionPolicy)
+        // Receipts carry Torii's effective, validated replication template.
+        let tag = retention.governanceTag.unicodeScalars
+        guard retention.requiredReplicas > 0, !tag.isEmpty,
+              tag.first?.properties.isWhitespace == false, tag.last?.properties.isWhitespace == false,
+              !tag.contains(where: { $0.properties.generalCategory == .control }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .retentionPolicy, in: container, debugDescription: "invalid effective DA retention policy"
+            )
+        }
+        self.retentionPolicy = retention
         self.rentQuote = try container.decode(ToriiDaRentQuote.self, forKey: .rentQuote)
         let signature = try container.decode(String.self, forKey: .operatorSignature)
         self.operatorSignatureHex = try requireCanonicalDaSignature(signature, field: "DA receipt operator")
@@ -599,9 +533,6 @@ struct ToriiDaIngestRequestBuilder {
                                              field: "chunkSize",
                                              allowZero: false,
                                              upperBound: Int(UInt32.max))
-        guard UInt32(exactly: submission.laneId) != nil else {
-            throw ToriiClientError.invalidPayload("laneId exceeds UInt32 range")
-        }
         let ownerAddress: AccountAddress
         do {
             ownerAddress = try exactCanonicalToriiAccountAddress(submission.owner).address
@@ -710,8 +641,7 @@ struct ToriiDaIngestRequestBuilder {
         guard payloadHash.count == 32 else {
             throw ToriiClientError.invalidPayload("payload hash must contain exactly 32 bytes")
         }
-        guard let laneId = UInt32(exactly: submission.laneId),
-              let totalSize = UInt64(exactly: submission.payload.count),
+        guard let totalSize = UInt64(exactly: submission.payload.count),
               let metadataCount = UInt64(exactly: submission.metadata.count) else {
             throw ToriiClientError.invalidPayload("DA signing intent exceeds supported integer range")
         }
@@ -816,7 +746,7 @@ struct ToriiDaIngestRequestBuilder {
         var authorization = ToriiDaIngestSigningDomainV1
         authorization.append(submission.networkId.bytes)
         try appendLengthPrefixed(ownerAddress.canonicalBytes(), to: &authorization)
-        appendLittleEndian(laneId, to: &authorization)
+        appendLittleEndian(submission.laneId, to: &authorization)
         appendLittleEndian(submission.epoch, to: &authorization)
         appendLittleEndian(submission.sequence, to: &authorization)
         authorization.append(payloadHash)

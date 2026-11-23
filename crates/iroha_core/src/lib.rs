@@ -956,7 +956,7 @@ mod tests {
             ),
             (
                 NetworkMessage::DaProposal(Arc::new(vec![1, 2, 3])),
-                NETWORK_MESSAGE_DA_PROPOSAL_TAG,
+                20,
                 NetworkTopic::TxGossipRestricted,
                 SubscriberRoute::General,
             ),

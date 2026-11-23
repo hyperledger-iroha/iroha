@@ -534,11 +534,11 @@ final class ToriiClientIntegrationTests: XCTestCase {
                 "queued_at_unix": 1_700_000_000,
                 "operator_signature": "DEADBEEF",
                 "rent_quote": [
-                    "base_rent": 900,
+                    "base_rent": "900",
                     "protocol_reserve": "180",
-                    "provider_reward": 720,
+                    "provider_reward": "720",
                     "pdp_bonus": "45",
-                    "potr_bonus": 30,
+                    "potr_bonus": "30",
                     "egress_credit_per_gib": "3"
                 ]
             ]
@@ -586,12 +586,12 @@ final class ToriiClientIntegrationTests: XCTestCase {
         XCTAssertEqual(receipt.retentionPolicy.requiredReplicas, 3)
         XCTAssertEqual(receipt.retentionPolicy.governanceTag, "da.sidecar")
         let rentQuote = receipt.rentQuote
-        XCTAssertEqual(rentQuote.baseRentMicro, "900")
-        XCTAssertEqual(rentQuote.protocolReserveMicro, "180")
-        XCTAssertEqual(rentQuote.providerRewardMicro, "720")
-        XCTAssertEqual(rentQuote.pdpBonusMicro, "45")
-        XCTAssertEqual(rentQuote.potrBonusMicro, "30")
-        XCTAssertEqual(rentQuote.egressCreditPerGibMicro, "3")
+        XCTAssertEqual(rentQuote.baseRent, "900")
+        XCTAssertEqual(rentQuote.protocolReserve, "180")
+        XCTAssertEqual(rentQuote.providerReward, "720")
+        XCTAssertEqual(rentQuote.pdpBonus, "45")
+        XCTAssertEqual(rentQuote.potrBonus, "30")
+        XCTAssertEqual(rentQuote.egressCreditPerGib, "3")
         let currentPrefix = try AccountAddress.inspectI105NetworkPrefix(owner).chainDiscriminant
         returnedOwner = try AccountAddress.fromI105(owner).toI105(chainDiscriminant: currentPrefix == 369 ? 753 : 369)
         do {

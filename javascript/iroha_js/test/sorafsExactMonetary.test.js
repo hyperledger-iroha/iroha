@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { computeDaIngestSigningDigest } from "../src/dataAvailability.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { publicKeyFromPrivate } from "../src/crypto.js";
 import { AccountAddress } from "../src/address.js";
 import { NetworkId } from "../src/networkId.js";
+import { parseStrictLosslessIntegerJson, stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import {
   buildSignedOrderbookOrderRequest,
   validateOrderbookPayload,
@@ -23,7 +27,7 @@ const WIDE_XOR = "340282366920938463463374607431768211456.000000001";
 const nativeTest = makeNativeTest(test);
 
 function jsonResponse(payload, status = 200) {
-  return new Response(JSON.stringify(payload), {
+  return new Response(stringifyStrictLosslessIntegerJson(payload, "test response"), {
     status,
     headers: { "content-type": "application/json" },
   });
@@ -72,16 +76,17 @@ function daReceiptFixture(rentQuote) {
   };
 }
 
-async function submitDaFixture(rentQuote) {
+async function submitDaFixture(rentQuote, options = {}, changeReceipt = () => {}) {
   const client = new ToriiClient(BASE_URL, {
     localSigningContext: new LocalSigningContext(DA_NETWORK_ID, 753),
     canonicalRequestAuth: { accountId: DA_OWNER, privateKey: PRIVATE_KEY },
     fetchImpl: async (_url, init) => {
-      const signed = JSON.parse(init.body);
+      const signed = parseStrictLosslessIntegerJson(init.body, "signed request");
       const receipt = {
         ...daReceiptFixture(rentQuote), client_blob_id: signed.client_blob_id,
         blob_hash: signed.payload_hash, lane_id: signed.lane_id, epoch: signed.epoch,
       };
+      changeReceipt(receipt);
       const pin_scope = {
         network_id: signed.network_id, owner: signed.owner, lane_id: signed.lane_id, epoch: signed.epoch, sequence: signed.sequence,
         request_authorization_digest: [Array.from(computeDaIngestSigningDigest(signed))], storage_ticket: receipt.storage_ticket,
@@ -100,6 +105,7 @@ async function submitDaFixture(rentQuote) {
     sequence: 33,
     privateKey: PRIVATE_KEY,
     clientBlobId: Buffer.alloc(32, 0x11),
+    ...options,
   });
 }
 
@@ -196,8 +202,40 @@ test("DA rent quotes expose exact unit-free fields without lossy coercion", asyn
   const missing = { ...quote };
   delete missing.base_rent;
   await assert.rejects(() => submitDaFixture(missing), /base_rent/i);
-  await assert.rejects(
-    () => submitDaFixture({ ...quote, base_rent_micro: "1000000" }),
-    /retired monetary field/i,
-  );
+  for (const unexpected of ["base_rent_micro", "egress_surcharge"]) {
+    await assert.rejects(
+      () => submitDaFixture({ ...quote, [unexpected]: "1000000" }),
+      { message: new RegExp(`unsupported fields: ${unexpected}`) },
+    );
+  }
+});
+
+test("DA signed requests and persisted receipts preserve the full unsigned wire range", async (t) => {
+  const artifactDir = await mkdtemp(join(tmpdir(), "iroha-da-wire-"));
+  t.after(() => rm(artifactDir, { recursive: true, force: true }));
+  const max = (1n << 64n) - 1n;
+  const rent = { base_rent: "0", protocol_reserve: "0", provider_reward: "0",
+    pdp_bonus: "0", potr_bonus: "0", egress_credit_per_gib: "0" };
+  const options = { artifactDir, laneId: 0xffff_ffff, epoch: max, sequence: max - 1n,
+    retentionPolicy: { hotRetentionSecs: max, coldRetentionSecs: 0, governanceTag: "" } };
+  const reply = await submitDaFixture(rent, options, (receipt) => {
+    receipt.queued_at_unix = max;
+    receipt.retention_policy.hot_retention_secs = max;
+    receipt.pdp_commitment = "";
+  });
+  const request = parseStrictLosslessIntegerJson(await readFile(reply.artifactPaths.requestJsonPath, "utf8"), "request");
+  const receipt = parseStrictLosslessIntegerJson(await readFile(reply.artifactPaths.receiptJsonPath, "utf8"), "receipt");
+  assert.equal(request.epoch, max);
+  assert.equal(request.sequence, max - 1n);
+  assert.deepEqual(request.retention_policy.governance_tag, [""]);
+  assert.equal(reply.pinScope.sequence, max - 1n);
+  assert.equal(reply.receipt.epoch, max);
+  assert.equal(reply.receipt.lane_id, 0xffff_ffff);
+  assert.equal(reply.receipt.retention_policy.hot_retention_secs, max);
+  assert.equal(receipt.queued_at_unix, max);
+  assert.equal(reply.receipt.pdp_commitment_b64, "");
+  assert.deepEqual(reply.receipt.pdp_commitment_bytes, Buffer.alloc(0));
+  for (const [field, invalid] of [["laneId", 0x1_0000_0000], ["epoch", max + 1n], ["sequence", -1n]]) {
+    await assert.rejects(() => submitDaFixture(rent, { [field]: invalid }), new RegExp(field));
+  }
 });

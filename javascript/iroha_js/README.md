@@ -3044,8 +3044,8 @@ const submission = {
   blobClass: "NexusLaneSidecar",
   codec: "application/vnd.ipld.car",
   laneId: Number(required("DA_LANE_ID")),
-  epoch: Number(required("DA_EPOCH")),
-  sequence: Number(required("DA_SEQUENCE")),
+  epoch: BigInt(required("DA_EPOCH")),
+  sequence: BigInt(required("DA_SEQUENCE")),
   retentionPolicy: {
     hotRetentionSecs: 6 * 60 * 60, coldRetentionSecs: 7 * 24 * 60 * 60,
     requiredReplicas: 4, storageClass: "Warm", governanceTag: "da.sidecar",
@@ -3084,6 +3084,11 @@ before signing the pin scope. An already admitted duplicate can return
 Native publication supplies independent storage confirmation. Offline request
 preparation with `noSubmit` still signs the network, owner, lane, epoch, sequence,
 canonical payload digest and length, and complete request-content commitment.
+
+DA epochs, sequences and retention durations accept exact unsigned 64-bit
+integers. Pass a `bigint` for values above `Number.MAX_SAFE_INTEGER`. The client
+writes integer tokens into both the HTTP body and saved artifacts. Receipt
+values above that limit are returned as `bigint`.
 
 DA rent-quote values use the same exact unit-free XOR contract: `base_rent`,
 `protocol_reserve`, `provider_reward`, `pdp_bonus`, `potr_bonus`, and
@@ -3204,8 +3209,7 @@ if (!metadata.gatewayManifestProvided) {
 }
 ```
 
-`submitDaBlob` computes the BLAKE3 digest via the native binding, so run `npm run build:native`
-before calling it—and the gateway/proof helpers—in development environments. Pass
+`submitDaBlob` hashes the payload and signing preimage with BLAKE3. Pass
 `artifactDir: "./artifacts/da/submission_<stamp>"` (and `noSubmit: true` for dry
 runs) to mirror the CLI ingest artefacts without leaving Node.
 

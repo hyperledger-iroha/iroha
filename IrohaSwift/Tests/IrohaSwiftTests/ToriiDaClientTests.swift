@@ -327,24 +327,24 @@ final class ToriiDaClientTests: XCTestCase {
         XCTAssertTrue(commitment["proof_digest"] is NSNull)
     }
 
+    func testRetentionPolicyPreservesTheWireDomainAndRequiresOneGovernanceTag() throws {
+        let policy = ToriiDaRetentionPolicy(hotRetentionSecs: 0, coldRetentionSecs: 0,
+                                           requiredReplicas: 0, storageClass: .hot, governanceTag: "")
+        let wire = try JSONEncoder().encode(policy)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiDaRetentionPolicy.self, from: wire), policy)
+
+        let valid = try XCTUnwrap(JSONSerialization.jsonObject(with: wire) as? [String: Any])
+        for tag in [[], ["one", "two"]] as [[String]] {
+            var malformed = valid
+            malformed["governance_tag"] = tag
+            let data = try JSONSerialization.data(withJSONObject: malformed)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRetentionPolicy.self, from: data))
+        }
+    }
+
     func testTypedDaModelsRejectBadHashPathAndVerifyInvariant() throws {
         let badChecksum = String(canonicalDaHash.dropLast()) + "A"
         XCTAssertThrowsError(try ToriiDaHash(badChecksum))
-        let emptyGovernanceTag = ToriiDaRetentionPolicy(
-            hotRetentionSecs: 0,
-            coldRetentionSecs: 0,
-            requiredReplicas: 0,
-            storageClass: .hot,
-            governanceTag: ""
-        )
-        let emptyTagWire = try JSONEncoder().encode(emptyGovernanceTag)
-        XCTAssertEqual(
-            try JSONDecoder()
-                .decode(ToriiDaRetentionPolicy.self, from: emptyTagWire)
-                .governanceTag,
-            ""
-        )
-
         let proof = try sampleCommitmentProof()
         let encodedProof = try JSONEncoder().encode(proof)
         let encodedText = try XCTUnwrap(String(data: encodedProof, encoding: .utf8))

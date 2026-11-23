@@ -123,6 +123,7 @@ async fn ingest(published: &PublishedNetwork, payload: &[u8]) -> Result<DaIngest
 async fn finalized_inclusion(
     published: &PublishedNetwork,
     receipt: &DaIngestReceipt,
+    evidence: Option<&Path>,
 ) -> Result<SumeragiFinalityCheckpoint> {
     let expected = receipt.commitment_record(0, DaProofScheme::SorafsPorBlake3);
     let reader = client(&published.network, 2, &ALICE_KEYPAIR);
@@ -200,29 +201,54 @@ async fn finalized_inclusion(
             );
             // A different in-flight ordinary publication transaction can win the proposer race.
             // Authenticate a positive fee from the actual inclusion block's execution outputs.
-            let charged = (0..block.network_entrypoint_count()).any(|index| {
-                let Some(TransactionEntrypoint::External(tx)) = block.network_entrypoint_at(index)
+            let charged = (0..block.network_entrypoint_count()).find_map(|index| {
+                let TransactionEntrypoint::External(tx) = block.network_entrypoint_at(index)?
                 else {
-                    return false;
+                    return None;
                 };
-                let Some((_, output)) = u32::try_from(index)
-                    .ok()
-                    .and_then(|i| block.network_output_at(i))
-                else {
-                    return false;
-                };
-                output.result.0.is_ok()
-                    && output.result.nexus_fee_receipt().is_some_and(|fee| {
-                        fee.block_height == found.proof.location.block_height
-                            && fee.source_id
-                                == *iroha_crypto::Hash::from(tx.hash_as_entrypoint()).as_ref()
-                            && fee.fee_amount == Quantity::from(1_u32)
-                    })
+                let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
+                let fee = output.result.nexus_fee_receipt()?;
+                let tx_hash = tx.hash_as_entrypoint();
+                (output.result.0.is_ok()
+                    && fee.block_height == found.proof.location.block_height
+                    && fee.source_id == *iroha_crypto::Hash::from(tx_hash).as_ref()
+                    && fee.fee_amount == Quantity::from(1_u32))
+                .then_some(tx_hash)
             });
-            ensure!(
-                charged,
-                "the certified DA block must contain a successful ordinary transaction with an actual fee debit"
-            );
+            let charged = charged.ok_or_else(|| {
+                eyre!("the certified DA block must contain a successful ordinary transaction with an actual fee debit")
+            })?;
+            if let Some(directory) = evidence {
+                fs::write(
+                    directory.join("ingest-receipt.json"),
+                    norito::json::to_vec(receipt)?,
+                )?;
+                fs::write(
+                    directory.join("commitment-proof.json"),
+                    norito::json::to_vec(&found)?,
+                )?;
+                fs::write(
+                    directory.join("pin-intent-proof.json"),
+                    norito::json::to_vec(&pin_proof)?,
+                )?;
+                fs::write(
+                    directory.join("inclusion-checkpoint.to"),
+                    checkpoint.encode_canonical()?,
+                )?;
+                let inclusion = norito::json!({
+                    "test_process_id": (std::process::id()),
+                    "network_id": (checkpoint.network_id()),
+                    "chain_id": (checkpoint.chain_id()),
+                    "block_height": (checkpoint.height()),
+                    "block_hash": (checkpoint.block_hash().to_string()),
+                    "charged_transaction_hash": (charged.to_string()),
+                    "receipt_operator_public_key": (receipt_operator(0).public_key().to_string())
+                });
+                fs::write(
+                    directory.join("inclusion.json"),
+                    norito::json::to_vec(&inclusion)?,
+                )?;
+            }
             return Ok(checkpoint);
         }
     }
@@ -481,9 +507,107 @@ async fn recover_cli_with_missing_shard(
     Ok(())
 }
 
+const EXPORTED_PUBLICATION_FILES: [&str; 6] = [
+    "publication.order.to",
+    "publication.assigned.assertion.to",
+    "publication.assigned.proof.to",
+    "publication.completed.assertion.to",
+    "publication.completed.proof.to",
+    "native-cli.manifest.to",
+];
+
+/// Export only public evidence from this test's own runtime directory before it is removed.
+fn export_cold_publication(runtime: &Path, destination: &Path) -> Result<()> {
+    for phase in ["output", "retry"] {
+        let source = runtime.join("cli").join(phase);
+        let target = destination.join(phase);
+        fs::create_dir(&target)?;
+        let receipt: norito::json::Value =
+            norito::json::from_slice(&fs::read(source.join("receipt.json"))?)?;
+        let mut fields = norito::json::Map::new();
+        for name in [
+            "da_storage_ticket",
+            "da_manifest_hash",
+            "da_block_height",
+            "da_block_hash",
+            "manifest_digest_hex",
+            "cid_base32",
+            "success",
+            "publication_verified",
+            "provider_ingest",
+        ] {
+            let value = receipt
+                .get(name)
+                .ok_or_else(|| eyre!("publication receipt omitted {name}"))?;
+            fields.insert(name.to_owned(), value.clone());
+        }
+        fields.insert(
+            "registration_mode".to_owned(),
+            receipt["registration"]["submission_mode"].clone(),
+        );
+        fs::write(
+            target.join("verified-receipt-fields.json"),
+            norito::json::to_vec(&fields)?,
+        )?;
+        for name in EXPORTED_PUBLICATION_FILES {
+            fs::copy(source.join(name), target.join(name))?;
+        }
+    }
+    for name in ["cold-recovered.bin", "cold-parity-recovered.bin"] {
+        fs::copy(runtime.join(name), destination.join(name))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn publication_evidence_export_keeps_private_runtime_files_out() -> Result<()> {
+    let runtime = tempfile::tempdir()?;
+    let export = tempfile::tempdir()?;
+    let receipt = norito::json::to_vec(&norito::json!({
+        "success": true, "publication_verified": true, "private_fixture_marker": 42,
+        "da_storage_ticket": "ticket", "da_manifest_hash": "manifest", "da_block_height": 1,
+        "da_block_hash": "block", "manifest_digest_hex": "digest", "cid_base32": "cid",
+        "provider_ingest": {"state": "completed"}, "registration": {"submission_mode": "existing_pin"}
+    }))?;
+    for phase in ["output", "retry"] {
+        let source = runtime.path().join("cli").join(phase);
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("receipt.json"), &receipt)?;
+        fs::write(source.join("client.toml"), b"private fixture marker")?;
+        for name in EXPORTED_PUBLICATION_FILES {
+            fs::write(source.join(name), name)?;
+        }
+    }
+    for name in ["cold-recovered.bin", "cold-parity-recovered.bin"] {
+        fs::write(runtime.path().join(name), name)?;
+    }
+    export_cold_publication(runtime.path(), export.path())?;
+    for phase in ["output", "retry"] {
+        let folder = export.path().join(phase);
+        let projection: norito::json::Value =
+            norito::json::from_slice(&fs::read(folder.join("verified-receipt-fields.json"))?)?;
+        assert_eq!(projection["success"].as_bool(), Some(true));
+        assert!(projection.get("private_fixture_marker").is_none());
+        assert!(!folder.join("client.toml").exists());
+        assert!(!folder.join("receipt.json").exists());
+        for name in EXPORTED_PUBLICATION_FILES {
+            assert_eq!(fs::read(folder.join(name))?, name.as_bytes());
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn four_peer_multipart_da_publication_and_cold_parity_recovery() -> Result<()> {
     crate::sorafs_network::run("four-peer-multipart-da", || async {
+        let evidence = std::env::var_os("IROHA_TEST_DA_PUBLICATION_EXPORT").map(PathBuf::from);
+        if let Some(directory) = &evidence {
+            ensure!(
+                directory.is_absolute(),
+                "DA evidence export requires an absolute path"
+            );
+            fs::create_dir(directory).wrap_err("create a fresh DA evidence export directory")?;
+        }
         let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         // The inclusion proof checks an exact one-unit native debit for the selected work.
         fees.base_fee = Quantity::one();
@@ -502,7 +626,7 @@ fn four_peer_multipart_da_publication_and_cold_parity_recovery() -> Result<()> {
             .map(|index| ((index * 73 + index / 17) % 251) as u8)
             .collect::<Vec<_>>();
         let receipt = ingest(&published, &payload).await?;
-        let checkpoint = finalized_inclusion(&published, &receipt).await?;
+        let checkpoint = finalized_inclusion(&published, &receipt, evidence.as_deref()).await?;
         let ticket = hex::encode(receipt.storage_ticket.as_bytes());
         let source = published
             .runtime_directory
@@ -568,6 +692,9 @@ fn four_peer_multipart_da_publication_and_cold_parity_recovery() -> Result<()> {
                 !peer.is_running() && peer.process_id().await.is_none(),
                 "DA validator process survived teardown"
             );
+        }
+        if let Some(directory) = evidence {
+            export_cold_publication(published.runtime_directory.path(), &directory)?;
         }
         Ok(())
     })

@@ -480,8 +480,8 @@ public struct ToriiDaProofPolicyBundle: Codable, Sendable, Equatable {
     }
 }
 
-extension ToriiDaRetentionPolicy: Encodable {
-    private enum EncodingKeys: String, CodingKey {
+extension ToriiDaRetentionPolicy: Codable {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case hotRetentionSecs = "hot_retention_secs"
         case coldRetentionSecs = "cold_retention_secs"
         case requiredReplicas = "required_replicas"
@@ -489,8 +489,26 @@ extension ToriiDaRetentionPolicy: Encodable {
         case governanceTag = "governance_tag"
     }
 
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "retention_policy")
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let tag = try container.decode([String].self, forKey: .governanceTag)
+        guard tag.count == 1, let governanceTag = tag.first else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .governanceTag, in: container, debugDescription: "expected a one-element governance tag"
+            )
+        }
+        self.init(
+            hotRetentionSecs: try container.decode(UInt64.self, forKey: .hotRetentionSecs),
+            coldRetentionSecs: try container.decode(UInt64.self, forKey: .coldRetentionSecs),
+            requiredReplicas: try container.decode(UInt16.self, forKey: .requiredReplicas),
+            storageClass: try container.decode(ToriiDaStorageClass.self, forKey: .storageClass),
+            governanceTag: governanceTag
+        )
+    }
+
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: EncodingKeys.self)
+        var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(hotRetentionSecs, forKey: .hotRetentionSecs)
         try container.encode(coldRetentionSecs, forKey: .coldRetentionSecs)
         try container.encode(requiredReplicas, forKey: .requiredReplicas)

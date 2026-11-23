@@ -582,6 +582,30 @@ mod tests {
         assert_eq!(reconstructed, expected);
     }
     #[test]
+    fn reconstruction_fixture_commitment_matches_its_wire_bytes_and_manifest() {
+        let root = fixture_root_path();
+        let json = fs::read(root.join("commitment_bundle.json")).expect("read commitment JSON");
+        let bundle: DaCommitmentBundle = norito_json::from_slice(&json).expect("decode commitment");
+        let wire = fs::read_to_string(root.join("commitment_bundle.norito.hex"))
+            .expect("read commitment hex");
+        assert_eq!(
+            hex::encode(to_bytes(&bundle).expect("encode commitment")),
+            wire
+        );
+
+        let hex_manifest =
+            fs::read_to_string(root.join("manifest.norito.hex")).expect("read manifest hex");
+        let manifest = hex::decode(hex_manifest).expect("decode manifest hex");
+        let [record] = bundle.commitments() else {
+            panic!("fixture must contain exactly one commitment");
+        };
+        assert_eq!(
+            record.manifest_hash.as_bytes(),
+            blake3::hash(&manifest).as_bytes()
+        );
+    }
+
+    #[test]
     fn one_missing_data_shard_fetches_only_one_verified_parity_shard() {
         let root = fixture_root_path();
         let manifest = load_manifest(&root.join("manifest.norito.hex")).unwrap();

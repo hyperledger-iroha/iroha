@@ -10,6 +10,7 @@ import {
   resolveNativeRuntimeBinding,
 } from "./nativeRuntime.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
+import { normalizeSorafsPinU64 } from "./sorafsPinDetail.js";
 
 const DEFAULT_CHUNK_SIZE = 262_144;
 const DEFAULT_ERASURE_PROFILE = {
@@ -110,9 +111,9 @@ export function prepareDaIngest(options, includeFullPayload) {
     "chunkSize",
     { allowZero: false },
   );
-  const laneId = normalizeUnsignedInteger(options.laneId ?? 0, "laneId");
-  const epoch = normalizeUnsignedInteger(options.epoch ?? 0, "epoch");
-  const sequence = normalizeUnsignedInteger(options.sequence ?? 0, "sequence");
+  const laneId = normalizeSorafsPinU64(options.laneId ?? 0, "laneId", 0xffff_ffffn);
+  const epoch = normalizeSorafsPinU64(options.epoch ?? 0, "epoch");
+  const sequence = normalizeSorafsPinU64(options.sequence ?? 0, "sequence");
 
   const codec = tupleWrap(
     requireNonEmptyString(options.codec ?? "application/octet-stream", "codec"),
@@ -563,12 +564,8 @@ function fixedDigestFromTuple(value, name) {
 }
 
 function encodeUnsignedLe(value, width, name) {
-  const normalized = normalizeUnsignedInteger(value, name);
-  const integer = BigInt(normalized);
-  const limit = 1n << BigInt(width * 8);
-  if (integer >= limit) {
-    throw new RangeError(`${name} does not fit in ${width} bytes`);
-  }
+  const maximum = (1n << BigInt(width * 8)) - 1n;
+  const integer = BigInt(normalizeSorafsPinU64(value, name, maximum));
   const bytes = Buffer.alloc(width);
   let remaining = integer;
   for (let index = 0; index < width; index += 1) {
@@ -597,10 +594,10 @@ function encodeLengthPrefixedBytes(bytes, name) {
 }
 
 function unwrapTupleString(value, name) {
-  if (!Array.isArray(value) || value.length !== 1) {
-    throw new TypeError(`${name} must be a single-value tuple`);
+  if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== "string") {
+    throw new TypeError(`${name} must be a single-string tuple`);
   }
-  return requireNonEmptyString(value[0], name);
+  return value[0];
 }
 
 function requireEnumKey(value, tags, name) {
@@ -738,12 +735,15 @@ function encodeRetentionPolicy(policy = {}) {
     ...DEFAULT_RETENTION_POLICY,
     ...(policy ?? {}),
   };
+  if (typeof merged.governanceTag !== "string") {
+    throw new TypeError("retentionPolicy.governanceTag must be a string");
+  }
   return {
-    hot_retention_secs: normalizeUnsignedInteger(merged.hotRetentionSecs, "retentionPolicy.hotRetentionSecs", { allowZero: false }),
-    cold_retention_secs: normalizeUnsignedInteger(merged.coldRetentionSecs, "retentionPolicy.coldRetentionSecs", { allowZero: false }),
-    required_replicas: normalizeUnsignedInteger(merged.requiredReplicas, "retentionPolicy.requiredReplicas", { allowZero: false }),
+    hot_retention_secs: normalizeSorafsPinU64(merged.hotRetentionSecs, "retentionPolicy.hotRetentionSecs"),
+    cold_retention_secs: normalizeSorafsPinU64(merged.coldRetentionSecs, "retentionPolicy.coldRetentionSecs"),
+    required_replicas: normalizeSorafsPinU64(merged.requiredReplicas, "retentionPolicy.requiredReplicas", 0xffffn),
     storage_class: encodeStorageClass(merged.storageClass),
-    governance_tag: tupleWrap(requireNonEmptyString(merged.governanceTag, "retentionPolicy.governanceTag")),
+    governance_tag: tupleWrap(merged.governanceTag),
   };
 }
 

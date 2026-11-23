@@ -805,7 +805,7 @@ fn native_da_relay_rejects_stale_cursors_and_reclaims_retired_epochs() {
         .committee[0]
         .validator
         .clone();
-    let relay = |record, intent| {
+    let relay = |record: &DaCommitmentRecord, intent: &DaPinIntent| {
         state.accept_relayed_da_proposal_candidate(
             &local,
             &crate::da::proposal_queue::relay_bytes_for_test(record, intent),
