@@ -904,6 +904,37 @@ mod tests {
         assert_eq!(decoded, batch);
     }
     #[test]
+    fn compact_query_response_preserves_the_same_frame_on_every_target() {
+        let response = QueryResponse::Iterable(QueryOutput::new(
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
+                Vec::new(),
+            )),
+            0,
+            None,
+        ));
+        let original = hex::decode(concat!(
+            "4e5254300000e355612278fe789c7adaa6a2ff18189b002c000000000000004b",
+            "be859bff3bd2fd0200000000000000000100000027171601000000000000000d",
+            "160000000800000000000000000a0108000000000000000001000100",
+        ))
+        .expect("compact empty committed-transaction response");
+        assert_eq!(norito::encode_canonical(&response).unwrap(), original);
+        assert_eq!(
+            norito::decode_canonical::<QueryResponse>(&original).unwrap(),
+            response
+        );
+
+        let start = norito::core::Header::SIZE;
+        for padding_len in [0, 7, 9, 16] {
+            let mut malformed = original.clone();
+            malformed.splice(start..start + 8, vec![0; padding_len]);
+            assert!(norito::decode_canonical::<QueryResponse>(&malformed).is_err());
+        }
+        let mut nonzero = original;
+        nonzero[start + 7] = 1;
+        assert!(norito::decode_canonical::<QueryResponse>(&nonzero).is_err());
+    }
+    #[test]
     fn query_response_iterable_json_roundtrip() {
         let cursor = parameters::ForwardCursor {
             query: "query-id".to_owned(),

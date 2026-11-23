@@ -2197,6 +2197,9 @@ mod model {
     #[norito(tag = "kind", content = "content")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::model::QueryResponse")]
+    // Keep the established eight padding bytes after the 40-byte Norito frame header
+    // on targets where the largest query variant naturally aligns to eight bytes.
+    #[repr(align(16))]
     pub enum QueryResponse {
         /// Singular query output.
         Singular(SingularQueryOutputBox),
