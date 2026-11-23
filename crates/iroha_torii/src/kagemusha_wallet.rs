@@ -407,7 +407,16 @@ async fn ledger_read(
     }
     let key = rate_limit_key(&headers, Some(remote.ip()), route, principal);
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    // An occupied slot prevents this pass from obtaining a finality original. Both wallet
+    // readers already recognize the route's typed 503 and retain the exact signed attempt.
+    let admission = acquire_query_admission(app.as_ref(), true)
+        .await
+        .map_err(|error| match error {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )) => ledger_finality_unavailable(),
+            other => other,
+        })?;
     let bytes = app.query_fanout_working_set_bytes;
     let memory = crate::acquire_query_pool_credit(&app, bytes)
         .await
@@ -1126,6 +1135,66 @@ mod tests {
                 .await
                 .unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn ledger_finality_and_epoch_wait_for_busy_query_slots() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let caller = KeyPair::from_seed(vec![0x75; 32], Algorithm::Ed25519);
+        let foreign = KeyPair::from_seed(vec![0x76; 32], Algorithm::Ed25519);
+        let (mut app, _chain, _) = ledger_fixture(&caller, &foreign);
+        let state = Arc::get_mut(&mut app).unwrap();
+        state.query_queue_timeout = Duration::ZERO;
+        state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        let occupied = state
+            .query_heavy_inflight
+            .clone()
+            .try_acquire_owned()
+            .unwrap();
+        let router = ledger_router(app.clone());
+        let path = format!(
+            "/v1/kagemusha/{}/wallets/{}/ledger/{}",
+            "11".repeat(32),
+            "22".repeat(32),
+            "5b".repeat(32),
+        );
+        for suffix in ["finality", "epochs/2"] {
+            let (status, headers, body) = ledger_get(
+                &router,
+                &app,
+                &caller,
+                &format!("{path}/{suffix}"),
+                "application/x-norito",
+                true,
+            )
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(headers["x-iroha-reject-code"], "kagemusha_ledger_finality_unavailable");
+            let envelope: ErrorEnvelope = norito::decode_canonical_with_limits(
+                &body,
+                norito::canonical_decode_limits(body.len()),
+            )
+            .unwrap();
+            assert_eq!(envelope.code, "kagemusha_ledger_finality_unavailable");
+        }
+        drop(occupied);
+        let (status, headers, _) = ledger_get(
+            &router,
+            &app,
+            &caller,
+            &format!("{path}/finality"),
+            "application/x-norito",
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            headers["x-iroha-reject-code"],
+            "kagemusha_ledger_entry_not_committed"
+        );
     }
 
     #[tokio::test]
