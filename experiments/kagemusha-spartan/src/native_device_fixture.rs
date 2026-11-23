@@ -1797,6 +1797,7 @@ impl Counterparty {
                 manifest_digest: parameters.manifest_digest,
                 confirmation: ConfirmationScope::FixtureSend,
                 inner: Arc::clone(&parameters.inner),
+                verified_head: Default::default(),
             },
             key,
             bootstrap,

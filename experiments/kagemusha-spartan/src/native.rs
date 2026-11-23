@@ -309,6 +309,8 @@ pub struct AuthenticatedParameters {
     manifest_digest: [u8; 32],
     confirmation: ConfirmationScope,
     inner: Arc<engine::ParameterSet>,
+    // Verified-head reuse, bound to this exact installed instance.
+    verified_head: engine::HeadCache,
 }
 /// Production installation never gains debit authority from a prepared review alone.
 #[derive(Clone, Copy)]

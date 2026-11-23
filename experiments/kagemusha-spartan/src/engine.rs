@@ -32,6 +32,9 @@ mod adversarial_tests;
 #[cfg(test)]
 #[path = "archive_selector_signed_tests.rs"]
 mod archive_selector_signed_tests;
+#[cfg(test)]
+#[path = "engine_head_reuse_tests.rs"]
+mod head_reuse_tests;
 
 #[path = "native_credential.rs"]
 mod issued_credential;
@@ -154,6 +157,31 @@ struct AcceptedOutput {
     installation: Arc<()>,
     output: Vec<u8>,
     head: VerifiedWalletHead,
+}
+
+/// The last wallet head an owner's exact verifier accepted under one installed
+/// parameter instance, with its decoded proof pair. The cache is a field of that
+/// `AuthenticatedParameters` instance, so it lives exactly as long as the
+/// installation: dropping or replacing the installation drops the entry and the
+/// circuits its pair shares with the instance's programs, and no engine holds
+/// either. Head verification is a pure function of the exact head bytes and the
+/// installed parameters, so the same owner, credential and byte-identical head
+/// under the same instance give the same verdict and pair. Any other owner (a
+/// fresh engine after a restart, or one that selected another protected epoch),
+/// instance, credential or head is verified in full. The entry is never
+/// mutated: a hit clones it, and a refusal never replaces it.
+#[derive(Default)]
+pub(crate) struct HeadCache {
+    entry: std::sync::Mutex<Option<AcceptedHead>>,
+    /// Full head decodes under this instance; tests count misses per instance.
+    #[cfg(test)]
+    decodes: std::sync::atomic::AtomicUsize,
+}
+
+struct AcceptedHead {
+    owner: Arc<()>,
+    head: VerifiedWalletHead,
+    pair: full::UniformPair,
 }
 
 /// A reconstruction accepted the exact predecessor bytes and reproduced the capsule.
@@ -970,6 +998,7 @@ impl ParameterSet {
         };
         let authenticated = AuthenticatedParameters {
             installation: Arc::new(()),
+            verified_head: HeadCache::default(),
             id: relation,
             manifest_digest,
             confirmation: ConfirmationScope::Installed,
@@ -1740,11 +1769,32 @@ impl NativeEngine {
         prepared.resumed_under.as_ref().is_some_and(|resume| resume.matches(self, parameters))
     }
 
+    fn accepted_head(
+        &self,
+        bytes: &[u8],
+        credential: &Credential,
+        parameters: &AuthenticatedParameters,
+    ) -> Option<(VerifiedWalletHead, full::UniformPair)> {
+        let held = parameters.verified_head.entry.lock().ok()?;
+        let accepted = held.as_ref()?;
+        (Arc::ptr_eq(&accepted.owner, &self.selection_owner)
+            && accepted.head.require_parameters(parameters).is_ok()
+            && exact_credential(&accepted.head.credential, credential)
+            && accepted.head.pair[..] == *bytes)
+            .then(|| (accepted.head.clone(), accepted.pair.clone()))
+    }
+
     fn verified_head_and_pair(
+        &self,
         bytes: &[u8],
         credential: &Credential,
         parameters: &AuthenticatedParameters,
     ) -> Result<(VerifiedWalletHead, full::UniformPair)> {
+        if let Some(accepted) = self.accepted_head(bytes, credential, parameters) {
+            return Ok(accepted);
+        }
+        #[cfg(test)]
+        parameters.verified_head.decodes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (_, profile, c, cert, pair) = decode_head(bytes, parameters)?;
         if !exact_credential(&c, credential) {
             return Err(Error::AuthorityMismatch("requested head credential"));
@@ -1759,6 +1809,13 @@ impl NativeEngine {
             custody_digest: [0; 32],
             enrollment_marker: None,
         };
+        if let Ok(mut held) = parameters.verified_head.entry.lock() {
+            *held = Some(AcceptedHead {
+                owner: Arc::clone(&self.selection_owner),
+                head: head.clone(),
+                pair: pair.clone(),
+            });
+        }
         Ok((head, pair))
     }
 
@@ -2476,7 +2533,7 @@ impl Engine for NativeEngine {
         credential: &Credential,
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedWalletHead> {
-        Self::verified_head_and_pair(bytes, credential, parameters).map(|(head, _)| head)
+        self.verified_head_and_pair(bytes, credential, parameters).map(|(head, _)| head)
     }
     fn verify_payment(
         &self,
@@ -2545,7 +2602,7 @@ impl Engine for NativeEngine {
             )?;
             (origin, None)
         } else {
-            let (head, pair) = Self::verified_head_and_pair(&r.predecessor, &c, parameters)?;
+            let (head, pair) = self.verified_head_and_pair(&r.predecessor, &c, parameters)?;
             (head, Some(pair))
         };
         if head.profile != profile
