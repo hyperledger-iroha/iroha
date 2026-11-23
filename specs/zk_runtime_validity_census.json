@@ -7375,7 +7375,7 @@
   },
   "iroha_deploy": {
    "mutation-testing": {"class": "development_or_test", "reason": "Test-only mutation feature: the crate unconditionally includes its *_mutation_guard.rs, whose compile_error rejects this feature outside cfg(test). No shipping dependency/library build can enable it."},
-   "test-fixtures": {"class": "development_or_test", "reason": "Exposes ManagedStore::prepare_stopped_fixture for local tests. The feature has no dependencies and the default build omits the fixture constructor."}
+   "test-fixtures": {"class": "development_or_test", "reason": "The Mochi GUI dev dependency exposes ManagedStore::prepare_stopped_fixture to its attachment tests. The helper prepares a fresh, stopped local generation."}
   },
   "iroha_fhe": {
    "bgv-test-fixtures": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},

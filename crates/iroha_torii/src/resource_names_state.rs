@@ -123,7 +123,7 @@ fn refused(stage: &'static str, reason: &'static str) -> Error {
 // No failed StateView or World overlay is retained while parked. Acquire the
 // immutable original before proof work; every retry retains the same deadline
 // and finite budget, and never retries invalid source content or a changed cut.
-fn snapshot_after_busy<T>(
+pub(crate) fn snapshot_after_busy<T>(
     budget: &AllocationBudget,
     deadline: std::time::Instant,
     mut capture: impl FnMut() -> Result<T, WorldStateSnapshotError>,

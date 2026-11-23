@@ -13,6 +13,9 @@ mod child_runtime_admin;
 mod config;
 #[path = "contracts.rs"]
 mod contracts;
+#[cfg(unix)]
+#[path = "da/admission.rs"]
+mod da_admission;
 #[path = "debug_genesis.rs"]
 mod debug_genesis;
 #[path = "domain_links.rs"]

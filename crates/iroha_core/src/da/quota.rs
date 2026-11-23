@@ -235,7 +235,7 @@ mod tests {
             sequence,
             payload_hash: BlobDigest::new([0x11; 32]),
             payload_bytes,
-            request_content_hash: Hash::prehashed([0x22; 32]),
+            request_content_hash: BlobDigest::new([0x22; 32]),
             signatures: Vec::new(),
         };
         let signature = Signature::try_new(key_pair.private_key(), &authorization.signing_digest())

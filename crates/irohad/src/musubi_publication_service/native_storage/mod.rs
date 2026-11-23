@@ -12,11 +12,12 @@ use super::{
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
     MusubiPublicationFinalizedSeedReadCapabilityV1, MusubiPublicationPrivateServiceContextV1,
     MusubiPublicationPrivateServiceFactoryErrorV1, MusubiPublicationPrivateStorageBuilderV1,
-    NativeMusubiFinalizedPinV1, NativeMusubiPinCoordinatorV1, NativeMusubiPinProgressV1,
-    NativePinAuthorizationV1,
+    NativeMusubiFinalizedPinV1, NativeMusubiPinCoordinatorV1, NativeMusubiPinPhaseV1,
+    NativeMusubiPinProgressV1, NativePinAuthorizationV1, native_pin::ArchiveOrderProgress,
 };
 use eyre::{Result, ensure};
 use iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy;
+use iroha_core::query::provider_ingest_source::PublisherSourceBindingV1;
 use iroha_core::{
     query::native_musubi_storage::{
         NativeMusubiStorageObservationV1, with_native_musubi_storage_v1,
@@ -38,6 +39,7 @@ use iroha_musubi_service::{
 };
 use iroha_primitives::numeric::Quantity;
 use sha2::{Digest as _, Sha256};
+use sorafs_node::store::PublisherSourceProgressV1;
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -69,7 +71,7 @@ pub struct NativeMusubiStorageLimitsV1 {
     pub fee_asset: AssetDefinitionId,
     /// Maximum charge for each individual retained native transaction.
     pub per_transaction_fee: Quantity,
-    /// Aggregate ceiling for every retained control and pin payload, including failed work.
+    /// Aggregate ceiling for every retained pin, control and archive order, including failed work.
     pub total_fees: Quantity,
 }
 impl NativeMusubiStorageLimitsV1 {
@@ -197,6 +199,14 @@ struct NativeMusubiStorageBackendV1 {
     clock: Mutex<Box<dyn MusubiPublicationServiceClockV1>>,
     limits: NativeMusubiStorageLimitsV1,
 }
+struct SeedStagingAssignment {
+    binding: PublisherSourceBindingV1,
+    deadline_epoch: u64,
+}
+struct StorageObservation {
+    response: Option<MusubiStorageCoordinationResponseV1>,
+    pending_seed: Option<SeedStagingAssignment>,
+}
 struct ClockSample<'a>(&'a Mutex<Box<dyn MusubiPublicationServiceClockV1>>);
 impl MusubiPublicationServiceClockV1 for ClockSample<'_> {
     fn current_time_ms(&mut self) -> Result<u64, BackendError> {
@@ -212,7 +222,7 @@ impl NativeMusubiStorageBackendV1 {
         request: &MusubiStorageCoordinationRequestV1,
         pin: &NativeMusubiFinalizedPinV1,
         now: u64,
-    ) -> Result<Option<MusubiStorageCoordinationResponseV1>> {
+    ) -> Result<StorageObservation> {
         let view = self.state.view();
         with_native_musubi_storage_v1(
             &view,
@@ -225,11 +235,28 @@ impl NativeMusubiStorageBackendV1 {
             self.seed.provider_id(),
             now / 1_000,
             |facts| {
-                if facts.complete {
-                    Self::response(request, &facts).map(Some)
-                } else {
-                    Ok(None)
-                }
+                Ok(StorageObservation {
+                    response: facts
+                        .complete
+                        .then(|| Self::response(request, &facts))
+                        .transpose()?,
+                    pending_seed: facts
+                        .order
+                        .provider_completion(self.seed.provider_id())
+                        .is_none()
+                        .then_some(SeedStagingAssignment {
+                            binding: PublisherSourceBindingV1 {
+                                provider_id: self.seed.provider_id(),
+                                order_id: facts.order.order_id,
+                                manifest_digest: facts.pin.digest,
+                                assignment_revision: facts.order.assignment_revision,
+                            },
+                            deadline_epoch: facts
+                                .order
+                                .deadline_epoch
+                                .min(facts.pin.policy.retention_epoch),
+                        }),
+                })
             },
         )?
     }
@@ -291,117 +318,264 @@ impl NativeMusubiStorageBackendV1 {
         response.validate_for(request)?;
         Ok(response)
     }
-    fn selected_source(
+    fn original_authorization(
         &self,
         request: &MusubiStorageCoordinationRequestV1,
         digest: [u8; 32],
-    ) -> Result<(
-        [u8; 32],
-        MusubiPublicationFinalizedArchiveRegistrationQueryV1,
-    )> {
-        request.validate()?;
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    ) -> Result<([u8; 32], Option<NativePinAuthorizationV1>)> {
         ensure!(
             request.network_id == *self.state.network_id_ref()
                 && request.staging_receipt.payload.binding.seed_provider == self.seed.provider_id(),
             "native storage request belongs to another original network or seed owner"
         );
         let id = operation_id(request)?;
-        let source = source_query(request)?;
-        self.reader.read_current_archive(&source)?;
-        if let Some(original) = self.pin.original_operation(id)? {
+        let original = self.pin.original_operation(id)?;
+        if let Some(original) = &original {
             ensure!(
-                original.context_digest == digest && original.source == source,
+                original.context_digest == digest && &original.source == source,
                 "native storage request changed its retained original"
             );
             self.limits.matches(&original.authorization)?;
         }
-        Ok((id, source))
+        Ok((id, original.map(|original| original.authorization)))
     }
     fn coordinate(
         &mut self,
         verified: &VerifiedStorageCoordinationRequestV1<'_>,
-    ) -> Result<MusubiStorageCoordinationResponseV1> {
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    ) -> Result<Option<MusubiStorageCoordinationResponseV1>> {
         let request = verified.request();
         ensure!(
             Instant::now() < verified.deadline(),
             "native storage caller deadline expired"
         );
-        let (id, source) = self.selected_source(request, verified.canonical_request_digest())?;
-        let authorization = if let Some(original) = self.pin.original_operation(id)? {
-            // Expiry forbids further effects, not independently observed completion. This
-            // path retains the original request/authorization and never stages or dispatches.
-            if let NativeMusubiPinProgressV1::Finalized(pin) = self.pin.observe_operation(id)?
-                && let Some(response) = read_current_for_call(
-                    verified.authorization_expires_at_ms(),
-                    verified.deadline(),
-                    &mut ClockSample(&self.clock),
-                    |now| self.observe(request, &pin, now),
-                )?
+        let (id, original) = self
+            .original_authorization(request, verified.canonical_request_digest(), source)
+            .inspect_err(|_| iroha_logger::warn!("original archive selection failed"))?;
+        let authorization = if let Some(original) = original {
+            // Recover any finalized work before considering effects under the original deadline.
+            if let NativeMusubiPinProgressV1::Finalized(pin) = self
+                .pin
+                .observe_operation(id)
+                .inspect_err(|_| iroha_logger::warn!("original paid pin observation failed"))?
             {
-                return Ok(response);
+                return self.coordinate_finalized(verified, &pin, &original);
             }
-            original.authorization
+            original
         } else {
             let selected = self.limits.authorization(
                 verified.observed_at_unix_ms(),
                 verified.authorization_expires_at_ms(),
             )?;
             selected.check_effect_boundary(&mut ClockSample(&self.clock), verified.deadline())?;
-            self.pin.prepare_operation(
+            self.pin.prepare_selected_operation(
                 id,
                 verified.canonical_request_digest(),
-                &source,
+                source,
                 selected.clone(),
+                true,
             )?;
             selected
         };
         // Never renew a retained UTC ceiling from this call's newer signed authorization.
-        authorization.check_effect_boundary(&mut ClockSample(&self.clock), verified.deadline())?;
-        let progress = self
-            .pin
-            .advance(id, &mut ClockSample(&self.clock), verified.deadline())?;
-        let NativeMusubiPinProgressV1::Finalized(pin) = progress else {
-            eyre::bail!("original native pin work remains pending");
+        let progress = advance_past_retained_pin(|| {
+            authorization
+                .check_effect_boundary(&mut ClockSample(&self.clock), verified.deadline())?;
+            self.pin
+                .advance(id, &mut ClockSample(&self.clock), verified.deadline())
+        })?;
+        let pin = match progress {
+            NativeMusubiPinProgressV1::Finalized(pin) => pin,
+            NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::Check) => {
+                ensure!(
+                    self.pin.awaiting_check_receipt()?,
+                    "original native Check remains unresolved"
+                );
+                return Ok(None);
+            }
+            NativeMusubiPinProgressV1::Pending(
+                NativeMusubiPinPhaseV1::Initialize
+                | NativeMusubiPinPhaseV1::Advance
+                | NativeMusubiPinPhaseV1::Pin,
+            ) => return Ok(None),
+            NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::RetainedPin) => {
+                eyre::bail!("original native pin work remains pending")
+            }
         };
-        self.stage(request, &pin, &authorization, verified.deadline())?;
-        read_current_for_call(
+        self.coordinate_finalized(verified, &pin, &authorization)
+    }
+
+    fn coordinate_finalized(
+        &mut self,
+        verified: &VerifiedStorageCoordinationRequestV1<'_>,
+        pin: &NativeMusubiFinalizedPinV1,
+        authorization: &NativePinAuthorizationV1,
+    ) -> Result<Option<MusubiStorageCoordinationResponseV1>> {
+        let request = verified.request();
+        let order = read_current_for_call(
             verified.authorization_expires_at_ms(),
             verified.deadline(),
             &mut ClockSample(&self.clock),
-            |now| self.observe(request, &pin, now),
-        )?
-        .ok_or_else(|| eyre::eyre!("native replication has not completed"))
+            |_| {
+                self.pin
+                    .archive_order_progress(pin)
+                    .inspect_err(|_| iroha_logger::warn!("archive order observation failed"))
+            },
+        )?;
+        match order {
+            ArchiveOrderProgress::NeedsSubmission => {
+                self.pin.issue_archive_order(
+                    pin,
+                    self.seed.provider_id(),
+                    &mut ClockSample(&self.clock),
+                    verified.deadline(),
+                )?;
+                return Ok(None);
+            }
+            ArchiveOrderProgress::Submitted => {
+                authorization
+                    .check_effect_boundary(&mut ClockSample(&self.clock), verified.deadline())?;
+                return Ok(None);
+            }
+            ArchiveOrderProgress::Finalized => {}
+        }
+        let observed = read_current_for_call(
+            verified.authorization_expires_at_ms(),
+            verified.deadline(),
+            &mut ClockSample(&self.clock),
+            |now| {
+                self.observe(request, pin, now)
+                    .inspect_err(|_| iroha_logger::warn!("native replication observation failed"))
+            },
+        )?;
+        let Some(assignment) = observed.pending_seed else {
+            return Ok(observed.response);
+        };
+        let binding = &assignment.binding;
+        let progress = read_current_for_call(
+            verified.authorization_expires_at_ms(),
+            verified.deadline(),
+            &mut ClockSample(&self.clock),
+            |_| {
+                Ok(self.storage.publisher_source_progress(
+                    *binding.provider_id.as_bytes(),
+                    *binding.order_id.as_bytes(),
+                    *binding.manifest_digest.as_bytes(),
+                    binding.assignment_revision,
+                    assignment.deadline_epoch,
+                )?)
+            },
+        )?;
+        if progress == PublisherSourceProgressV1::Available {
+            return Ok(None);
+        }
+        self.stage(
+            request,
+            pin,
+            &assignment,
+            progress,
+            authorization,
+            verified.deadline(),
+        )
+        .inspect_err(|_| iroha_logger::warn!("publisher source staging failed"))?;
+        // The provider worker independently admits the staged bytes. Only the next
+        // authenticated native observation can report provider completion.
+        Ok(None)
+    }
+
+    fn verify_cached_registration(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    ) -> Result<()> {
+        let (id, original) =
+            self.original_authorization(request, request.canonical_request_digest()?, source)?;
+        ensure!(
+            original.is_some(),
+            "cached native storage original is missing"
+        );
+        let NativeMusubiPinProgressV1::Finalized(pin) = self.pin.observe_operation(id)? else {
+            eyre::bail!("cached native storage pin is not finalized");
+        };
+        ensure!(
+            self.pin.archive_order_progress(&pin)? == ArchiveOrderProgress::Finalized,
+            "cached native archive order is not finalized"
+        );
+        let now = ClockSample(&self.clock).current_time_ms()?;
+        ensure!(
+            self.observe(request, &pin, now)?.response.is_some(),
+            "cached native replication is incomplete"
+        );
+        Ok(())
     }
 }
+
+fn verified_source(
+    reader: &MusubiPublicationFinalizedArchiveRegistrationReaderV1,
+    request: &MusubiStorageCoordinationRequestV1,
+) -> Result<MusubiPublicationFinalizedArchiveRegistrationQueryV1, BackendError> {
+    request.validate().map_err(|_| BackendError::Permanent)?;
+    let source = source_query(request).map_err(|_| BackendError::Retryable)?;
+    super::storage_coordination::verify_storage_registration(reader, &source)?;
+    Ok(source)
+}
+
 impl MusubiStorageCoordinationBackendV1 for NativeMusubiStorageBackendV1 {
     fn verify_current_registration(
         &self,
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<(), BackendError> {
-        norito::with_decode_limits_scope(decode_limits()?, || -> Result<()> {
-            let (id, _) = self.selected_source(request, request.canonical_request_digest()?)?;
-            ensure!(
-                self.pin.original_operation(id)?.is_some(),
-                "cached native storage original is missing"
-            );
-            let NativeMusubiPinProgressV1::Finalized(pin) = self.pin.observe_operation(id)? else {
-                eyre::bail!("cached native storage pin is not finalized");
-            };
-            let now = ClockSample(&self.clock).current_time_ms()?;
-            ensure!(
-                self.observe(request, &pin, now)?.is_some(),
-                "cached native replication is incomplete"
-            );
-            Ok(())
+        norito::with_decode_limits_scope(decode_limits()?, || {
+            let source = verified_source(&self.reader, request)?;
+            self.verify_cached_registration(request, &source)
+                .map_err(|_| BackendError::Retryable)
         })
-        .map_err(|_| BackendError::Retryable)
+    }
+    fn verify_coordination_source(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), BackendError> {
+        norito::with_decode_limits_scope(decode_limits()?, || {
+            let source = verified_source(&self.reader, request)?;
+            let digest = request
+                .canonical_request_digest()
+                .map_err(|_| BackendError::Retryable)?;
+            self.original_authorization(request, digest, &source)
+                .map(|_| ())
+                .map_err(|_| BackendError::Retryable)
+        })
     }
     fn coordinate_storage(
         &mut self,
         request: &VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, BackendError> {
-        norito::with_decode_limits_scope(decode_limits()?, || self.coordinate(request))
-            .map_err(|_| BackendError::Retryable)
+        if Instant::now() >= request.deadline() {
+            return Err(BackendError::Retryable);
+        }
+        norito::with_decode_limits_scope(decode_limits()?, || {
+            let source = verified_source(&self.reader, request.request())?;
+            self.coordinate(request, &source)
+                .map_err(|_| BackendError::Retryable)?
+                .ok_or(BackendError::StoragePending)
+        })
+    }
+}
+
+// Retaining the exact pin signature is local progress. Only this milestone can immediately
+// start its next Check, at most once in this admitted call and inside the same decode scope.
+// Polling for committed receipts happens outside the service lock.
+fn advance_past_retained_pin(
+    mut advance: impl FnMut() -> Result<NativeMusubiPinProgressV1>,
+) -> Result<NativeMusubiPinProgressV1> {
+    let progress = advance()?;
+    if matches!(
+        progress,
+        NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::RetainedPin)
+    ) {
+        advance()
+    } else {
+        Ok(progress)
     }
 }
 

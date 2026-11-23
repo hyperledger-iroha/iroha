@@ -3,10 +3,9 @@
 _Drafted: 2026-02-20 - Owner: Core Protocol WG / Storage Team / DA WG_
 
 The DA-2 workstream extends Torii with a blob ingest API that emits Norito
-metadata and seeds SoraFS replication. This document captures the proposed
-schema, API surface, and validation flow so implementation can proceed without
-blocking on outstanding simulations (DA-1 follow-ups). All payload formats MUST
-use Norito codecs; no serde/JSON fallbacks are permitted.
+metadata and retains the erasure-coded source. Producers can publish the finalized
+source through the paid SoraFS publisher. This specification covers admission,
+block inclusion and the handoff to storage providers.
 
 ## Goals
 
@@ -14,26 +13,27 @@ use Norito codecs; no serde/JSON fallbacks are permitted.
   deterministically over Torii.
 - Produce canonical Norito manifests describing the blob, codec parameters,
   erasure profile, and retention policy.
-- Persist chunk metadata in SoraFS hot storage and enqueue replication jobs.
-- Publish pin intents + policy tags to the SoraFS registry and governance
-  observers.
-- Expose admission receipts so clients regain deterministic proof of publication.
+- Persist the source and parity shards committed by the manifest.
+- Include the producer-authorized commitment and pin intent in a certified block.
+- Expose distinct evidence for ingest admission, block finality and provider custody.
 
 ## API Surface (Torii)
 
 ```
 POST /v1/da/ingest
-Content-Type: application/norito+v1
+Content-Type: application/json
 ```
 
-Payload is a Norito-encoded `DaIngestRequest`. Responses use
-`application/norito+v1` and return `DaIngestReceipt`.
+The account-authenticated request carries the Norito JSON representation of
+`DaIngestRequest`. The response includes the admission status, duplicate flag,
+signed receipt and exact pin scope. Clients select the response format with
+`Accept`.
 
 | Response | Meaning |
 | --- | --- |
-| 202 Accepted | Blob queued for chunking/replication; receipt returned. |
+| 202 Accepted | Local ingest completed. The response reports `pending_pin_authorization` or `accepted`. |
 | 400 Bad Request | Schema/size violation (see validation checks). |
-| 401 Unauthorized | Missing/invalid API token. |
+| 401 Unauthorized | Missing or invalid canonical account authentication. |
 | 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
 | 413 Payload Too Large | Exceeds configured blob length limit. |
 | 429 Too Many Requests | Rate limit hit. |
@@ -42,15 +42,15 @@ Payload is a Norito-encoded `DaIngestRequest`. Responses use
 
 ```
 GET /v1/da/proof-policies
-Accept: application/json | application/x-norito
+Accept: application/json
 ```
 
 Returns a versioned `DaProofPolicyBundle` derived from the current lane catalog.
 The bundle advertises `version` (currently `1`), a `policy_hash` (hash of the
 ordered policy list), and `policies` entries carrying `lane_id`, `dataspace_id`,
-`alias`, and the enforced `proof_scheme` (`merkle_sha256` is the only V1
-variant; KZG requires a separately reviewed future protocol version and wire
-layout). Each block header
+`alias`, and the enforced `proof_scheme`. Its Norito JSON value is
+`{"type":"SorafsPorBlake3","value":null}`. Lane configuration uses the label
+`sorafs_por_blake3`. Each block header
 commits to the policy sidecar used for that block via
 `da_proof_policies_hash`. This endpoint and the commitment list endpoint expose
 the node's active snapshot for discovery. The commitment prove endpoint instead
@@ -85,9 +85,15 @@ pub struct DaIngestRequest {
     pub payload: Vec<u8>,                 // raw blob data (<= configured limit)
     pub metadata: ExtraMetadata,          // optional key/value metadata map
     pub signatures: Vec<DaIngestSignatureV1>, // canonical account-controller witnesses
+    pub pin_scope_signatures: Vec<DaPinScopeSignatureV1>, // [] on prepare, exact scope witnesses on retry
 }
 
 pub struct DaIngestSignatureV1 {
+    pub signer: PublicKey,
+    pub signature: Signature,
+}
+
+pub struct DaPinScopeSignatureV1 {
     pub signer: PublicKey,
     pub signature: Signature,
 }
@@ -101,7 +107,7 @@ pub struct DaIngestAuthorizationV1 {
     pub sequence: u64,
     pub payload_hash: BlobDigest,
     pub payload_bytes: u64,
-    pub request_content_hash: Hash,
+    pub request_content_hash: BlobDigest,
     pub signatures: Vec<DaIngestSignatureV1>,
 }
 
@@ -213,6 +219,7 @@ pub struct DaIngestReceipt {
     pub pdp_commitment: Option<Vec<u8>>, // required slot: Norito-encoded PDP bytes or explicit null
     pub stripe_layout: DaStripeLayout,   // total_stripes, shards_per_stripe, row_parity_stripes
     pub queued_at_unix: u64,
+    pub retention_policy: RetentionPolicy, // effective policy approved by the pin witnesses
     pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
     pub operator_signature: Signature,
 }
@@ -234,13 +241,14 @@ binary fields, so already-valid current V1 bytes retain their encoding.
 > `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
 > and the manifest structure in `iroha_data_model::da::manifest`.
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+The Norito JSON `compression` field uses a tagged object, for example
+`{"kind":"Identity","value":null}`. The supported tags are `Identity`, `Gzip`,
+`Deflate` and `Zstd`. Torii decompresses the payload before hashing, chunking
+and checking any supplied manifest.
 
 ### Validation Checklist
 
-1. Verify request Norito header matches `DaIngestRequest`.
+1. Decode the authenticated JSON body as the closed Norito `DaIngestRequest` type.
 2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims
    and reject `sequence = u64::MAX`, which cannot have a monotonic successor.
 3. Enforce power-of-two `chunk_size` in the inclusive 1 KiB–2 MiB range and
@@ -258,7 +266,8 @@ hashing, chunking, and verifying optional manifests.
    still running. Admission is fail-fast: a request that reaches a saturated
    compute boundary receives `503` instead of retaining its decoded payload in
    an unbounded semaphore wait queue.
-5. `retention_policy.required_replica_count` must respect governance baseline.
+5. Compare `retention_policy.required_replicas` with the configured replication
+   policy. The prepared receipt records the effective replica count.
 6. Require the exact genesis-derived `NetworkId`, bind `owner` to the
    authenticated account, and verify the canonical witness set against the
    committed account controller. Single-key accounts require exactly their
@@ -305,8 +314,9 @@ golden digest vector.
 ### Exact post-ingest pin authorization
 
 `DaPinScopeV1` binds the original network, owner, authorization digest, lane,
-epoch and sequence to the durable storage ticket, manifest digest and optional
-alias. `request_authorization_digest` is a `BlobDigest` containing all 32 raw
+epoch and sequence to the storage ticket, manifest digest, full commitment
+record digest and optional alias. The signed receipt includes the effective retention
+policy so the client can reconstruct the exact commitment before signing. `request_authorization_digest` is a `BlobDigest` containing all 32 raw
 BLAKE3 bytes from `DaIngestAuthorizationV1::signing_digest()`. No marker bit is
 inserted or normalized. Its binary field uses the ordinary DA digest encoding;
 JSON uses the canonical DA fixed-byte representation. This is the sole field
@@ -362,14 +372,35 @@ forgotten while its active receipt name can still be rediscovered.
 2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
    erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
    and metadata.
-3. Queue the canonical manifest and PDP bytes under the sharded ticket index
-   `config.da_ingest.manifest_store_dir/artifacts/<first-ticket-byte-hex>/<ticket-hex>/`
-   as `manifest.norito` and `pdp-commitment.norito`. The one-record-per-ticket
-   layout gives SoraFS orchestration a direct, unambiguous lookup without
-   scanning the shared spool.
-4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
-5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
-   governance, analytics).
+3. Store the canonical manifest and PDP commitment under
+   `torii.da_ingest.manifest_store_dir/artifacts/<first-ticket-byte-hex>/<ticket-hex>/`.
+   The `source` child contains immutable `chunk_NNNNN.bin` shards, including
+   both parity directions. The last durable write, `source/manifest.blake3`,
+   identifies the completed source.
+4. Once the producer signs the exact pin scope, queue its commitment and pin
+   intent together for a paid proposal. Validators verify the pair against
+   the signed record digest and committed admission policy.
+5. The producer can select the certified block containing the ticket as its
+   trusted checkpoint and run `sorafs_cli deploy --da-source=TICKET_DIRECTORY`
+   with its publication signer. The native publisher stages the package under
+   the certified retention policy, obtains provider and chain evidence, and
+   reads the package through the gateway before reporting success. The
+   publication receipt identifies the package CID and DA manifest digest.
+   A repeat deployment of the same finalized ticket reuses its existing paid
+   pin and obtains fresh assignment and completion proofs. Keep the same
+   output directory after an interruption. It retains the exact signed pin
+   registration before the first POST. On retry, the CLI checks that
+   transaction's global status before replaying its bytes.
+   Its `provider_ingest` section records the ordered provider IDs and the
+   relative filenames and BLAKE3 digests of the canonical assignment order,
+   the signed assignment and completion assertions, and their compact finality
+   proofs. These files can be verified offline against the trusted checkpoint.
+   The certified retention deadline must leave room for the native ingest
+   window at registration.
+   A cold reader supplies that CID, the manifest digest from the certified
+   commitment and independent gateway URLs to `sorafs_cli da-recover`. It
+   checks each fetched shard, uses parity for missing data, verifies the
+   original blob digest and atomically writes the recovered payload.
 6. Return `DaIngestReceipt` (signed by Torii DA service key) and add the
    `Sora-PDP-Commitment` response header containing the base64 Norito encoding
    of the derived commitment so SDKs can stash the sampling seed immediately.
@@ -437,18 +468,22 @@ one-shot nonce and existing pin indexes reject reuse.
 
 ## CLI & SDK Tooling (DA-8)
 
-- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
-  can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
-  `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
-  optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
-  config key. Successful runs persist `da_request.{norito,json}` and `da_receipt.{norito,json}` under
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) so release artefacts can
-  record the exact Norito bytes used during ingestion.
-- The command defaults to `client_blob_id = blake3(payload)` but accepts overrides via
-  `--client-blob-id`, honours metadata JSON maps (`--metadata-json`) and pre-generated manifests
-  (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
-  Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
-  DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
+- Submit a payload with the producer's client configuration and the independently trusted
+  Torii receipt-signing public key:
+
+  ```sh
+  iroha --config "$client_config" --output-format json app da submit \
+    --payload "$payload" --lane-id "$lane" --epoch "$epoch" --sequence "$sequence" \
+    --operator-public-key "$operator_key" --artifact-dir "$submission_dir"
+  ```
+
+  The CLI signs the request, verifies the prepared receipt, signs its pin scope and
+  saves the accepted request and receipt as `da_request.{norito,json}` and
+  `da_receipt.{norito,json}`. The default directory is `artifacts/da/submission_<timestamp>/`.
+  Use `--no-submit` in place of `--operator-public-key` to save the producer-signed
+  request offline. The CLI accepts `--client-blob-id` to override the default
+  BLAKE3 payload digest, `--metadata-json` for metadata, `--manifest` for a prepared
+  manifest and `--endpoint` for a custom ingest endpoint.
 - `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
   `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
   `--plan`, `--manifest-id`) **or** simply pass a Torii storage ticket via `--storage-ticket`. When the
@@ -462,12 +497,11 @@ one-shot nonce and existing pin indexes reject reuse.
   `--torii-url` for a custom Torii base URL, so end-to-end availability checks live entirely under the
   `da` namespace without duplicating orchestrator logic.
 - `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
-  The command now labels artefacts with the manifest hash (blob id), writing
+  The command labels artefacts with the DA manifest hash and writes
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, and `chunk_plan_{manifest_hash}.json`
-  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
-  This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
-  signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
+  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`). Its output includes the
+  manifest and payload digests and the three local paths. Compare the canonical manifest against
+  the digest in the finalized commitment. The JavaScript Torii client mirrors this flow via
   `ToriiClient.getDaManifest(storageTicketHex)` while the Swift SDK now exposes
   `ToriiClient.getDaManifestBundle(...)`. Both return the decoded Norito bytes, manifest JSON, manifest hash,
   and strict payload-bound `sorafs.chunk_fetch_plan.v1` object so SDK callers
@@ -512,15 +546,23 @@ one-shot nonce and existing pin indexes reject reuse.
   (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
   (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
   expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
-- `da_reconstruct` (new in DA-6) reads a canonical manifest plus the chunk directory emitted by the chunk
-  store (`chunk_{index:05}.bin` layout) and deterministically reassembles the payload while verifying
-  every Blake3 commitment. The CLI lives under `crates/sorafs_car/src/bin/da_reconstruct.rs` and ships as
-  part of the SoraFS tooling bundle. Typical flow:
-  1. `iroha app da get-blob --storage-ticket <ticket>` to download `manifest_<manifest_hash>.norito` and the chunk plan.
-  2. `iroha app sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
-     (or `iroha app da prove-availability`, which writes the fetch artefacts under
-     `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
-  3. `cargo run -p sorafs_car --features da_harness,dev-tools --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
+- For a package published with `sorafs_cli deploy --da-source`, recover the original
+  payload using the package CID in the publication receipt, the DA manifest digest in
+  the finalized commitment and the providers' gateway URLs:
+
+  ```sh
+  sorafs_cli da-recover --cid="$package_cid" --manifest-hash="$manifest_hash" \
+    --gateway="$first_gateway" --gateway="$second_gateway" --output=recovered.bin
+  ```
+
+  For local reconstruction from a retained Torii ticket directory, read its
+  `manifest.norito` and the indexed data and parity shards in its `source/` child.
+  Write the recovered payload and report outside the source directory:
+
+  ```sh
+  da_reconstruct --manifest "$ticket_dir/manifest.norito" --chunks-dir "$ticket_dir/source" \
+    --output reconstructed.bin --json-out reconstruction.json
+  ```
 
   A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures the full manifest
   and chunk matrix (data + parity) used by `tests::reconstructs_fixture_with_parity_chunks`. Regenerate it with
@@ -544,21 +586,22 @@ one-shot nonce and existing pin indexes reject reuse.
   evidence. This closes the DA-6 requirement for a deterministic reconstruction tool that operators and QA
   jobs can invoke without wiring bespoke scripts.
 
-## TODO Resolution Summary
+## Ingest and provider qualification
 
-All previously blocked ingest TODOs have been implemented and verified:
+The four-validator application DA rehearsal exercised three funded software providers
+on one host. Two providers restarted before recovery with the ingress offline.
+The client reproduced the original bytes both with all data shards available and
+with one data shard withheld. Independent-host availability and the consensus
+qualification campaign have separate failure domains. [Four-validator rehearsal](../../integration_tests/tests/sorafs_publication_da.rs)
 
 - **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
-  `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
+  `zstd`) and normalises payloads before validation so the manifest’s `blob_hash` commits to the
   decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
 - **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
   configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
   configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
   `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
-- **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
-  `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
-  under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
+- **Resumable transport** — the Rust client and CLI use authenticated `POST /v1/da/ingest/parts` for wire payloads above 1 MiB. Completion restores the exact bytes covered by the producer's request signature.
 - **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
   unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
@@ -602,8 +645,8 @@ All previously blocked ingest TODOs have been implemented and verified:
 ## Implementation Notes
 
 - Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
-  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and drops the encoded payload
-  into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
+  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and persists the canonical manifest and indexed shards
+  under `torii.da_ingest.manifest_store_dir` before issuing the receipt; the
   handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
   immediately.【crates/iroha_torii/src/da/ingest.rs:220】
 - Client-supplied manifest bytes are admitted only through checked Norito decoding; malformed or
@@ -616,6 +659,10 @@ All previously blocked ingest TODOs have been implemented and verified:
   capacity-sized checkpoint interval, making persistence amortized O(1) per advance instead of
   rewriting the full cursor map for every receipt. Recovery truncates only an incomplete final
   frame; over-capacity or corrupt complete state fails startup closed.
+- The commitment carries the same 32-byte `BlobDigest` chunk root as the
+  manifest and receipt. Pin witnesses sign the domain-separated BLAKE3 digest
+  of the canonical Norito commitment frame. Every bit of the root participates
+  in that signature and in block inclusion proofs.
 - After persisting the canonical `DaCommitmentRecord`, Torii now emits a
   `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` file beside the manifest spool.
   Each entry bundles the record with the raw Norito `PdpCommitment` bytes so DA-3 bundle builders and
@@ -642,28 +689,79 @@ All previously blocked ingest TODOs have been implemented and verified:
   governed VRF output) whose exact block and manifest binding cannot be chosen by the provider.
   【crates/iroha_torii/src/da/ingest.rs:1】【crates/iroha_cli/src/commands/da.rs:1】
 
-### Large Payload Streaming Flow
+### Retained source custody
 
-Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
-`ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
-Each subsequent `DaIngestChunk` request carries:
+`torii.da_ingest.source_storage_budget_bytes` defaults to 4 GiB per manifest
+spool. Before writing any source shard, Torii durably reserves the ticket in
+`source-quota/`. The charge covers each shard rounded to 4 KiB, a 4 KiB
+metadata allowance per shard, the directory and completion marker, and one
+staged shard. The journal holds at most 4,096 tickets. Private control files
+and filesystem-specific allocation overhead are additional. Each manifest
+spool needs capacity for this budget alongside multipart staging, receipts
+and other services sharing its filesystem.
 
-- `client_blob_id` — identical to the final `DaIngestRequest`.
-- `chunk_session_id` — ties slices to the running session.
-- `chunk_index` and `offset` — enforce deterministic ordering.
-- `payload` — up to the negotiated chunk size.
-- `payload_hash` — BLAKE3 hash of the slice so Torii can validate without buffering the entire blob.
-- `is_last` — indicates the terminal slice.
+Identical retries reuse the original charge, including after restart. A full
+spool refuses new custody with HTTP 507. A new admission can reclaim up to
+four expired tickets using finalized block time. The deadline is the later of
+the frozen server assignment and manifest issuance plus the longer negotiated
+hot or cold period. Active source writers, verified receipt readers and queued
+receipt commits hold a filesystem lease. The journal persists the greatest
+authorized retirement deadline before unlinking shards, so a delayed request
+with an earlier chain snapshot cannot reinstate retired custody. Expiry removes source shards and
+preserves the manifest and receipt history. An idle spool retains expired data
+within its configured budget until another admission triggers reclamation.
 
-Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunks/<session>/` and
-records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
-reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
-computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
-are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
-Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
-unchanged.
+### Resumable DA uploads
+
+`POST /v1/da/ingest/parts` accepts account-authenticated JSON with an `upload`
+descriptor and a tagged `action`. Every request checks the producer's committed
+lane and epoch admission. The descriptor carries the network, lane, epoch,
+transmitted length and BLAKE3 digest of the wire payload, including compression.
+
+`Begin` returns the first missing part. `Put` takes that zero-based index and
+standard padded base64 bytes. Parts are 1 MiB except for the last part.
+Identical retries are idempotent and conflicting replacements fail. Torii
+stores progress in private directories under `manifest_store_dir/uploads`.
+Each producer can hold one session. Sixteen sessions bound staged payloads
+to 1 GiB. Expired slots are reclaimed on access or capacity pressure.
+
+`Finish` carries the original signed request with its payload field empty.
+Torii verifies length and wire digest, restores the transmitted bytes, then
+runs ordinary request authentication, canonicalization, replay and pin
+authorization. The prepare and pin-authorization phases can reuse the same
+staged bytes. `Release` frees the matching producer session. Transmitted and
+canonical payloads are each bounded to 64 MiB. Finalization holds the restored
+payload in memory under the DA worker limit.
+
+The producer signs the exact 32 bytes of its genesis network ID, length-prefixed
+canonical account-controller bytes, lane, epoch, sequence, canonical payload
+digest and length, and the full BLAKE3 request-content digest under the V1
+authorization domain. The content digest binds the compression tag and exact
+transmitted bytes. Shared producer vectors cover identity and zlib-wrapped
+DEFLATE in `fixtures/da/ingest/request_signing_v1.json`.
+
+The Rust client requires the trusted Torii receipt public key for live submission.
+The CLI accepts this key through `--operator-public-key` for `app da submit` and
+Taikai `--publish-da`. Both authenticate the receipt, reproduce the PoR root
+and PDP commitment from the producer's original bytes, then sign and retry once.
+Torii must accept the witnessed request. An initial acceptance with no witness
+is valid only on a replay of an already accepted publication.
+The JavaScript and Swift clients expose the pending scope and accept a producer
+witness on resubmission. With artifact capture enabled, both save the complete
+signed request in `da_request.json` and the exact Torii response in
+`da_response.json`. The offline `iroha app da authorize-pin` command accepts these
+files and an independently trusted operator public key. A producer can review the
+effective retention, obtain the witness and repeat the original submission.
+Both phases require exact-network canonical HTTP authentication for the owner.
+
+Before committing a receipt Torii writes each manifest-indexed data and parity
+shard to the private `artifacts/<prefix>/<ticket>/source` directory. The
+manifest digest is written last. A signed receipt acknowledges local ingest.
+Independent storage requires finalized native replication assignments,
+provider completion and readback. The producer-signed scope includes the
+BLAKE3 digest of the complete proposed commitment. The operator-signed receipt
+carries effective retention so clients can reconstruct that commitment
+before approving it.
 
 **Implementation status.** The canonical Norito types now live in
 `crates/iroha_data_model/src/da/`:
@@ -675,11 +773,27 @@ unchanged.
 - `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
   `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
 - Manifest and PDP spool files land in the sharded, storage-ticket-indexed
-  `config.da_ingest.manifest_store_dir/artifacts/` hierarchy, ready for direct
+  `torii.da_ingest.manifest_store_dir/artifacts/` hierarchy, ready for direct
   SoraFS orchestration lookup without a global directory scan.【crates/iroha_torii/src/da/ingest.rs:220】
-- Sumeragi enforces manifest availability when sealing or validating DA bundles:
-  blocks fail validation if the spool is missing the manifest or the hash differs
-  from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】
+- Torii hands the signed pin intent and matching commitment to the node's bounded
+  durable proposal queue. The original ingress node forwards one pending record per
+  transaction-gossip period exclusively to the other committed route validators.
+  A receiving validator retains the authenticated candidate without forwarding it. The authenticated peer transport and bounded receive worker
+  relay only a record and its producer-signed pin scope. The destination checks
+  its committee membership and repeats DA admission before persisting the pair.
+  Every node sweeps its journal on a changed certified tip. Settled identities,
+  exhausted cursors, and revoked or retired producer scopes release their disk slots
+  even if no new upload arrives. Exact retries for a finalized pair acknowledge its
+  original result. An established epoch cursor admits a pending sequence only
+  after every preceding sequence is committed or locally queued. Producers may
+  retry an out-of-order sequence after its predecessors arrive. Proposers rotate
+  optional lanes across paid heights and prefer earlier eligible sequences within
+  a lane.
+  A native proposer attaches eligible pairs to ordinary
+  transactions or certified lane merges when they fit. Validators check the
+  producer's signatures, exact commitment digest, committed policies, quota,
+  uniqueness and cursor progression using the block and its parent State.
+  Provider fulfillment and readback supply separate evidence of storage.
 
 Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
 `crates/iroha_data_model/tests/da_ingest_roundtrip.rs`. Manifest coverage also
@@ -798,15 +912,20 @@ duplicate slashes from firing on the same incident.【crates/sorafs_node/src/lib
   (`stripe_layout` + `chunk_roles` fields) and persisted into the storage worker so
   auditors/repair tooling can plan row/column repairs without re-deriving layout from upstream
 
-### Placement + repair harness
+### Blob reconstruction
 
-`cargo run -p sorafs_car --features da_harness,dev-tools --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>` now
-computes a placement hash over `(index, role, stripe/column, offsets)` and performs row-first then
-column RS(16) repair before reconstructing the payload:
+The SoraFS CAR library exposes `da_recovery::recover_payload` to callers holding an
+authenticated DA manifest and a source of manifest-indexed shards. The offline
+`da_reconstruct` command reads those bodies from a chunk directory. Each filename uses the
+original manifest index, including parity rows interleaved between data stripes.
 
-- Placement defaults to `total_stripes`/`shards_per_stripe` when present and falls back to chunk
-- Missing/corrupted chunks are rebuilt with row parity first; remaining gaps are repaired with
-  stripe (column) parity. Repaired chunks are written back to the chunk directory, and the JSON
-  summary captures the placement hash plus row/column repair counters.
-- If row+column parity cannot satisfy the missing set, the harness fails fast with the unrecoverable
-  indices so auditors can flag irreparable manifests.
+The reader validates the complete manifest layout before requesting data. If a data chunk
+is absent or has the wrong length or digest, the reader fetches parity for the affected
+stripe until it has enough verified rows to reconstruct the missing chunks. If a stripe
+still lacks enough rows, the reader can use cross-stripe parity to recover by column
+and iterate when one repair supplies another. Each repaired line must match its
+original commitments and padding. When too few rows survive in both directions, recovery fails.
+
+The command atomically publishes the verified payload after checking its length, BLAKE3 digest and PoR
+chunk root. The optional JSON summary records the manifest chunk counts, final blob digest,
+payload length, output path and storage ticket. Input shard files are read-only.

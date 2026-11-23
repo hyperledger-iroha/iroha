@@ -64,6 +64,9 @@ fn credential(root: &Path, name: &str, key: &KeyPair) -> Result<PathBuf> {
 }
 
 impl ProviderFixture {
+    /// Capacity for two independently assigned, sub-GiB payloads in this fixture.
+    pub const CAPACITY_GIB: u64 = 2;
+
     pub fn new(root: &Path, index: u8) -> Result<Self> {
         ensure!(index < 3, "publication fixture has exactly three providers");
         let root = root.join(format!("provider-{index}"));
@@ -165,10 +168,21 @@ impl ProviderFixture {
             &["sorafs", "storage", "data_dir"],
             self.storage_dir.display().to_string(),
         );
+        use iroha_config::parameters::defaults::nexus::storage::{BPS_TOTAL, SORAFS_BPS};
+        let capacity_bytes = Self::CAPACITY_GIB << 30;
+        // The node caps SoraFS at its share of the aggregate. Both complete orders
+        // retain one GiB of declared capacity per provider until their pins retire.
+        let aggregate_bytes =
+            (capacity_bytes * u64::from(BPS_TOTAL)).div_ceil(u64::from(SORAFS_BPS));
+        set(
+            &mut layer,
+            &["nexus", "storage", "local_budget_bytes"],
+            i64::try_from(aggregate_bytes)?,
+        );
         set(
             &mut layer,
             &["sorafs", "storage", "max_capacity_bytes"],
-            2_i64 * 1024 * 1024 * 1024,
+            i64::try_from(capacity_bytes)?,
         );
         set(&mut layer, &["sorafs", "storage", "max_pins"], 16_i64);
         let roles = ["proof_outcome", "repair", "reserve", "orderbook"];
@@ -304,6 +318,24 @@ fn software_fixture_writes_distinct_owner_only_runtime_custody() -> Result<()> {
     )])?;
     ensure!(layer["sorafs"]["storage"]["enabled"].as_bool() == Some(true));
     ensure!(layer["sorafs"]["discovery"]["discovery_enabled"].as_bool() == Some(true));
+    let storage = iroha_config_base::read::ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(
+            layer["nexus"]["storage"].as_table().unwrap().clone(),
+        ))
+        .read_and_complete::<iroha_config::parameters::user::NexusStorage>()
+        .expect("publication disk budget must deserialize");
+    let configured = u64::try_from(
+        layer["sorafs"]["storage"]["max_capacity_bytes"]
+            .as_integer()
+            .unwrap(),
+    )?;
+    let aggregate = storage.local_budget_bytes.unwrap().get();
+    let provider_share = aggregate * u64::from(storage.disk_budget_weights.sorafs_bps)
+        / u64::from(iroha_config::parameters::defaults::nexus::storage::BPS_TOTAL);
+    ensure!(
+        configured.min(provider_share) == ProviderFixture::CAPACITY_GIB << 30,
+        "effective provider capacity must cover both ledger assignments"
+    );
     let kura_dir = Path::new(layer["kura"]["store_dir"].as_str().unwrap());
     ensure!(kura_dir.parent() == Some(root.path().canonicalize()?.join("provider-0").as_path()));
     use iroha_config::parameters::defaults::sorafs::storage::provider_ingest_runtime::finalized_archive as archive;

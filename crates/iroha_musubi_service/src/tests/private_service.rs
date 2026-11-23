@@ -2536,3 +2536,61 @@ fn storage_request_digest_charges_one_exact_frame_without_renewal() {
         );
     });
 }
+
+#[test]
+fn only_typed_retryable_http_425_marks_an_original_operation_busy() {
+    use MusubiPublicationServiceErrorCodeV1::{OperationBusy, StorageCoordinationUnavailable};
+    let response = service_backend_error(
+        StorageCoordinationUnavailable,
+        MusubiPublicationServiceBackendErrorV1::StoragePending,
+    )
+    .into_response();
+    assert_eq!(response.status, 425);
+    assert!(remote_transport_error(StatusCode::TOO_EARLY, &response.body).is_operation_busy());
+    assert!(
+        !remote_transport_error(StatusCode::SERVICE_UNAVAILABLE, &response.body)
+            .is_operation_busy()
+    );
+    for (version, code, retryable) in [
+        (2, OperationBusy, true),
+        (1, OperationBusy, false),
+        (1, StorageCoordinationUnavailable, true),
+    ] {
+        let bytes = norito::encode_canonical(&MusubiPublicationServiceErrorResponseV1 {
+            version,
+            code,
+            retryable,
+        })
+        .unwrap();
+        assert!(!remote_transport_error(StatusCode::TOO_EARLY, &bytes).is_operation_busy());
+    }
+    assert!(
+        !remote_transport_error(StatusCode::TOO_EARLY, OperationBusy.as_str().as_bytes())
+            .is_operation_busy()
+    );
+}
+
+#[test]
+fn only_an_exact_native_readback_wait_is_reported_as_readback_progress() {
+    use MusubiPublicationServiceBackendErrorV1 as Backend;
+    use MusubiPublicationServiceErrorCodeV1 as Code;
+    let remote = |code, backend| {
+        let r = service_backend_error(code, backend).into_response();
+        remote_transport_error(StatusCode::from_u16(r.status).unwrap(), &r.body)
+    };
+    assert!(
+        remote(Code::ProviderReadbackUnavailable, Backend::ReadbackPending).is_operation_busy()
+    );
+    for (code, failure) in [
+        (Code::ProviderReadbackUnavailable, Backend::Retryable),
+        (Code::ProviderReadbackUnavailable, Backend::Permanent),
+        (Code::ProviderReadbackUnavailable, Backend::StoragePending),
+        (
+            Code::StorageCoordinationUnavailable,
+            Backend::ReadbackPending,
+        ),
+        (Code::SeedIngressUnavailable, Backend::ReadbackPending),
+    ] {
+        assert!(!remote(code, failure).is_operation_busy());
+    }
+}

@@ -9,7 +9,7 @@ use super::{
 use crate::{
     localnet::LocalnetServiceProfile,
     managed::{
-        ManagedProviderAdvertisement, build_registry,
+        build_registry,
         gateway_compliance::{
             LiveGatewayProcess, ManagedGatewayCompliance, PromotedGeneratedCatalog,
         },
@@ -20,6 +20,7 @@ use crate::{
         service_bootstrap::{
             GeneratedBootstrapAuthorization, ManagedServiceBootstrap, ServiceBootstrapProgress,
         },
+        stream_token_custody::RetainedCustodyEnrollment,
     },
 };
 use iroha_data_model::sorafs::capacity::ProviderId;
@@ -33,7 +34,7 @@ use std::{
 };
 
 #[path = "activation/catalog.rs"]
-mod catalog;
+pub(super) mod catalog;
 
 pub(super) struct Budget {
     pub(super) started: Instant,
@@ -378,129 +379,238 @@ impl Recheck {
             &budget.progress.readiness,
         )?;
         budget.check()?;
-        confirm_carriers(prepared, &self.required, budget)?;
-        let observations = observe_published_gateways(
+        let observation = observe_published_gateways(
             &mut live,
-            |index, gateway| self.publish_provider(prepared, index, gateway, budget),
-            |index, gateway, floor| self.observe_provider(prepared, index, gateway, floor, budget),
+            budget,
+            |barrier| confirm_carriers(prepared, &self.required, barrier),
+            |index, gateway| self.check_promoted(prepared, index, gateway, budget),
+            |gateway| self.advertise(prepared, gateway, budget),
+            |gateways, floors| self.observe_providers(prepared, gateways, floors, budget),
         )?;
-        let observation = budget.call(|_| {
-            let plans = live[0]
-                .original_provider_plans(prepared)?
-                .ok_or_else(|| invalid("original provider plans absent"))?;
-            maintenance::Observation::new(&plans, observations)
-        })?;
         validate_gateways(prepared, &mut live, budget)?;
         budget.check()?;
         Ok(Outcome::Complete(Some(Box::new(observation))))
     }
-    fn publish_provider(
+    /// Read-only half of one provider's publication: the exact floor and its promoted catalog.
+    /// It signs and publishes nothing; its advertisement follows only after it returns.
+    fn check_promoted(
         &self,
         prepared: &PreparedLocalnet,
         index: usize,
         gateway: &mut OwnedGateway,
         budget: &Budget,
     ) -> std::result::Result<ManagedTransactionFinality, Failure> {
-        let provider = gateway.provider();
-        let floor = budget.call(|_| {
-            if gateway.required_transactions()? != self.required.as_slice() {
-                return Err(invalid(
-                    "restarted launch changed exact required transactions",
-                ));
-            }
-            gateway.observation_floor()
-        })?;
+        let floor = budget.call(|_| gateway.publication_floor(&self.required))?;
         budget.progress.enter(Phase::PromotedCatalog);
         budget.call(|deadline| {
-            ManagedGatewayCompliance::open(prepared, provider)?.observe_promoted(
+            gateway.open_catalog_writer(prepared)?.observe_promoted(
                 gateway,
                 self.catalogs[index],
                 deadline,
             )
         })?;
-        budget.progress.enter(Phase::ProviderAdvertisement);
-        validate_live(prepared, gateway, budget)?;
-        budget.call(|deadline| {
-            ManagedProviderAdvertisement::open(prepared, provider)?.publish(deadline)
-        })?;
-        validate_live(prepared, gateway, budget)?;
         Ok(floor)
     }
 
-    fn observe_provider(
+    /// The sole write half: open the advert purpose and publish, bracketed by live checks.
+    fn advertise(
         &self,
         prepared: &PreparedLocalnet,
-        index: usize,
         gateway: &mut OwnedGateway,
-        floor: ManagedTransactionFinality,
         budget: &Budget,
-    ) -> std::result::Result<maintenance::ProviderObservation, Failure> {
-        let provider = gateway.provider();
-        budget.progress.enter(Phase::Discovery);
-        let observed_at = Instant::now();
-        let observed_utc = budget.call(|_| now_ms())?;
-        let current = budget.call(|deadline| {
-            build_registry::observe_generated_service(
-                prepared,
-                provider,
-                gateway.selected_enrollment(floor)?,
-                floor,
-                deadline,
-            )
+    ) -> std::result::Result<(), Failure> {
+        budget.progress.enter(Phase::ProviderAdvertisement);
+        validate_live(prepared, gateway, budget)?;
+        budget.call(|deadline| gateway.open_provider_advert(prepared)?.publish(deadline))?;
+        validate_live(prepared, gateway, budget)
+    }
+
+    fn observe_providers(
+        &self,
+        prepared: &PreparedLocalnet,
+        live: &mut [OwnedGateway; 3],
+        floors: [ManagedTransactionFinality; 3],
+        budget: &Budget,
+    ) -> std::result::Result<maintenance::Observation, Failure> {
+        let started = Instant::now();
+        // Verify the original process/plan bindings before starting the discovery interval.
+        // The complete live set is fenced again in finish after the observation returns.
+        let plans = budget.call(|_| {
+            live[0]
+                .original_provider_plans(prepared)?
+                .ok_or_else(|| invalid("original provider plans absent"))
         })?;
-        let continuation = budget.call(|_| {
-            let enrollment = gateway.selected_enrollment(floor)?;
-            match &self.retained {
-                Some(retained) if provider != retained.renewed => {
-                    let original = &retained.originals[index];
-                    original.revalidate(provider, enrollment, &self.receipt)?;
-                    Ok(original.clone())
-                }
-                _ => {
-                    let plan = gateway
-                        .original_provider_plan(prepared)?
-                        .ok_or_else(|| invalid("renewal requires original provider plan"))?;
-                    renewal::Continuation::new(
-                        &plan,
+        for (gateway, plan) in live.iter_mut().zip(&plans) {
+            if gateway.provider() != plan.provider_id() {
+                return Err(budget.progress.unconfirmed());
+            }
+            validate_live(prepared, gateway, budget)?;
+        }
+        let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+        // Each enrollment has its own signed expiry. Sample before preparing the continuations;
+        // these clocks never replace the later clock that bounds the native discovery itself.
+        let enrollment_mono = Instant::now();
+        let enrollment_utc = budget.call(|_| now_ms())?;
+        let continuation = |index: usize| {
+            budget.call(|_| {
+                let provider = live[index].provider();
+                let enrollment = enrollments[index];
+                match &self.retained {
+                    Some(retained) if provider != retained.renewed => {
+                        let original = &retained.originals[index];
+                        original.revalidate(provider, enrollment, &self.receipt)?;
+                        Ok(original.clone())
+                    }
+                    _ => renewal::Continuation::new(
+                        &plans[index],
                         Arc::clone(&self.receipt),
                         enrollment,
-                        observed_at,
-                        observed_utc,
-                    )
+                        enrollment_mono,
+                        enrollment_utc,
+                    ),
                 }
-            }
-        })?;
-        let observation = budget.call(|_| {
-            maintenance::ProviderObservation::new(
-                continuation,
-                floor,
-                self.catalogs[index],
-                current,
-                observed_at,
-                observed_utc,
+            })
+        };
+        let continuations = [continuation(0)?, continuation(1)?, continuation(2)?];
+        // Authenticate these very same enrollment records on one certified Global cut.
+        let (currents, observed_at, observed_utc) =
+            observe_enrolled_set(prepared, live, floors, enrollments, budget)?;
+        budget.call(|_| {
+            let bind = |index: usize, continuation| {
+                maintenance::ProviderObservation::new(
+                    continuation,
+                    floors[index],
+                    self.catalogs[index],
+                    currents[index],
+                    observed_at,
+                    observed_utc,
+                    started.elapsed(),
+                )
+            };
+            let [first, second, third] = continuations;
+            maintenance::Observation::new(
+                &plans,
+                [bind(0, first)?, bind(1, second)?, bind(2, third)?],
             )
-        })?;
-        validate_live(prepared, gateway, budget)?;
-        Ok(observation)
+        })
     }
 }
 
-// Each discovery starts a finite eligibility window. Complete all three publications before
-// starting those clocks; each native observation and the final aggregate still check expiry.
+/// All native provider and signer checks use one original clock pair and certified Global cut.
+pub(super) fn observe_native_set(
+    prepared: &PreparedLocalnet,
+    live: &[OwnedGateway; 3],
+    floors: [ManagedTransactionFinality; 3],
+    budget: &Budget,
+) -> std::result::Result<
+    (
+        [build_registry::GeneratedServiceObservation; 3],
+        Instant,
+        u64,
+    ),
+    Failure,
+> {
+    let enrollments = budget.call(|_| OwnedGateway::read_enrollments(live, floors))?;
+    observe_enrolled_set(prepared, live, floors, enrollments, budget)
+}
+
+fn observe_enrolled_set(
+    prepared: &PreparedLocalnet,
+    live: &[OwnedGateway; 3],
+    floors: [ManagedTransactionFinality; 3],
+    enrollments: [&RetainedCustodyEnrollment; 3],
+    budget: &Budget,
+) -> std::result::Result<
+    (
+        [build_registry::GeneratedServiceObservation; 3],
+        Instant,
+        u64,
+    ),
+    Failure,
+> {
+    budget.progress.enter(Phase::Discovery);
+    let observed_at = Instant::now();
+    let observed_utc = budget.call(|_| now_ms())?;
+    let currents = budget.call(|deadline| {
+        let reads = std::array::from_fn(|index| build_registry::ServiceRead {
+            provider: live[index].provider(),
+            enrollment: enrollments[index],
+            required: floors[index],
+        });
+        build_registry::observe_generated_service_set(
+            prepared,
+            live[0].read_renderer(),
+            reads,
+            deadline,
+        )
+    })?;
+    Ok((currents, observed_at, observed_utc))
+}
+
+// Complete all three publications before sampling either shared observation clock.
+// Each native row and the final aggregate still check the applicable expiry.
+// Only the read-only carrier barrier overlaps the first read-only promoted-catalog check.
+// Every advertisement still follows its own check, in provider order, and the first one
+// starts only after the barrier and that check have both returned successfully.
 fn observe_published_gateways<G, P, O>(
     gateways: &mut [G; 3],
-    mut publish: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
-    mut observe: impl FnMut(usize, &mut G, P) -> std::result::Result<O, Failure>,
-) -> std::result::Result<[O; 3], Failure> {
+    budget: &Budget,
+    carriers: impl Fn(&Budget) -> std::result::Result<(), Failure> + Sync,
+    mut check: impl FnMut(usize, &mut G) -> std::result::Result<P, Failure>,
+    mut advertise: impl FnMut(&mut G) -> std::result::Result<(), Failure>,
+    observe: impl FnOnce(&mut [G; 3], [P; 3]) -> std::result::Result<O, Failure>,
+) -> std::result::Result<O, Failure> {
     let [first, second, third] = gateways;
-    let first_floor = publish(0, first)?;
-    let second_floor = publish(1, second)?;
-    let third_floor = publish(2, third)?;
-    Ok([
-        observe(0, first, first_floor)?,
-        observe(1, second, second_floor)?,
-        observe(2, third, third_floor)?,
-    ])
+    let first_floor = beside_carrier_barrier(budget, &carriers, || check(0, first))?;
+    advertise(first)?;
+    let second_floor = check(1, second)?;
+    advertise(second)?;
+    let third_floor = check(2, third)?;
+    advertise(third)?;
+    observe(gateways, [first_floor, second_floor, third_floor])
+}
+
+// Scheduling only. The carrier barrier opens no service purpose, holds no lock and signs
+// nothing, so it shares no lock or write effect with the read-only check. Its result keeps its
+// original precedence over the check's, and the caller performs no write until both return.
+// The barrier reports its closed phases through a progress forked at the current phase, so
+// its failures carry the phases the serial barrier reported and the shared diagnostic still
+// advances in the original order. Active decode limits, which are thread-local, and a failed
+// spawn keep the original serial order on the caller's thread.
+fn beside_carrier_barrier<P>(
+    budget: &Budget,
+    barrier: &(impl Fn(&Budget) -> std::result::Result<(), Failure> + Sync),
+    check: impl FnOnce() -> std::result::Result<P, Failure>,
+) -> std::result::Result<P, Failure> {
+    if norito::core::decode_limits_active() {
+        barrier(budget)?;
+        return check();
+    }
+    let private = Budget {
+        started: budget.started,
+        timeout: budget.timeout,
+        startup_deadline_ns: budget.startup_deadline_ns,
+        utc_ceiling_unix_ms: budget.utc_ceiling_unix_ms,
+        cancelled: Arc::clone(&budget.cancelled),
+        progress: Arc::new(budget.progress.fork()),
+    };
+    thread::scope(|scope| {
+        let Ok(worker) = thread::Builder::new().spawn_scoped(scope, || barrier(&private)) else {
+            barrier(budget)?;
+            return check();
+        };
+        // The serial barrier leaves this phase for the first floor check; here it also names
+        // the barrier that is still running until the check enters its own catalog phase.
+        budget.progress.enter(Phase::CarrierPeers);
+        let checked = check();
+        // Join even after a check failure; a panicked barrier is a closed unconfirmed result.
+        let reached = worker.join().unwrap_or(Err(Failure::Activation {
+            phase: Phase::CarrierPeers,
+            cause: super::progress::Cause::Unconfirmed,
+        }));
+        reached?;
+        checked
+    })
 }
 
 pub(super) fn validate_gateways(
@@ -830,6 +940,10 @@ fn join_carrier_peer_reads(
         Ok(())
     })
 }
+
+#[cfg(test)]
+#[path = "activation/barrier_overlap_tests.rs"]
+mod barrier_overlap_tests;
 
 #[cfg(test)]
 #[path = "activation/peer_round_tests.rs"]

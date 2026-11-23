@@ -1553,6 +1553,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
     ),
     function(
+        "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+        "header_digest",
+        1,
+        UseOwner::Other(Use::Record, BLOCK_HASH),
+    ),
+    function(
         "crates/iroha_core/src/sumeragi/genesis_meta.rs",
         "staged_genesis_execution_policy_hash",
         1,

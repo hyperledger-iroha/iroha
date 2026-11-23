@@ -25,8 +25,8 @@ fn record(lane: u32, tag: String, signature: Signature) -> DaCommitmentRecord {
         sequence: 17,
         client_blob_id: BlobDigest::new([0x11; 32]),
         manifest_hash: ManifestDigest::new([0x22; 32]),
-        proof_scheme: DaProofScheme::MerkleSha256,
-        chunk_root: Hash::new([0x33; 32]),
+        proof_scheme: DaProofScheme::SorafsPorBlake3,
+        chunk_root: BlobDigest::new([0x33; 32]),
         proof_digest: Some(Hash::new([0x44; 32])),
         retention_class: RetentionPolicy {
             governance_tag: GovernanceTag::new(tag),

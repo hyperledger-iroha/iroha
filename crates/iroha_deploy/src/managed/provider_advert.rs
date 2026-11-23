@@ -43,8 +43,22 @@ impl ManagedProviderAdvertisement {
         })
     }
 
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::ProviderAdvertisement,
+            )?,
+        })
+    }
+
     /// Sign the deterministic current refresh slot and publish it once per original peer.
     ///
+    /// The four validators can acknowledge independently within the same caller deadline.
     /// An exact retry in the same slot produces identical signed bytes. Native replay and
     /// admission checks remain owned by Torii. Clock rollback never invents a larger issue
     /// time, and refresh cannot extend the retained admission or certificate lifetime.
@@ -54,10 +68,7 @@ impl ManagedProviderAdvertisement {
     pub fn publish(&self, deadline: Instant) -> Result<ManagedProviderAdvertisementReport> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let advert = self
-            .authority
-            .prepared
-            .provider_advert(self.authority.provider_id()?, now_ms()? / 1_000)?;
+        let advert = self.authority.sign_provider_advert(now_ms()? / 1_000)?;
         self.publish_original(&advert, deadline)
     }
 
@@ -70,22 +81,50 @@ impl ManagedProviderAdvertisement {
     ) -> Result<ManagedProviderAdvertisementReport> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let mut acknowledged_peers = 0;
-        for (index, (_, client)) in self.authority.peers.iter().enumerate() {
-            let Some(peer_deadline) =
-                peer_deadline(Instant::now(), deadline, self.authority.peers.len() - index)
-            else {
-                break;
+        let peers = &self.authority.peers;
+        let post = |client: &iroha::client::Client, peers_remaining| {
+            let Some(limit) = peer_deadline(Instant::now(), deadline, peers_remaining) else {
+                return false;
             };
-            if client
-                .with_request_deadline(peer_deadline)
+            client
+                .with_request_deadline(limit)
                 .post_sorafs_provider_advert(advert)
                 .is_ok_and(|response| response.status() == iroha::http::StatusCode::OK)
-            {
-                acknowledged_peers += 1;
-            }
-        }
+        };
+        let acknowledged_peers = if peers.len() == usize::from(crate::localnet::MANAGED_PEERS)
+            && !norito::core::decode_limits_active()
+        {
+            // Each original validator receives the same signed advert. Wait for every POST
+            // before releasing the publisher lock or validating the original profile again.
+            std::thread::scope(|scope| -> Result<usize> {
+                let post = &post;
+                let mut workers = Vec::with_capacity(peers.len());
+                let mut acknowledged = 0;
+                for (index, (_, client)) in peers.iter().enumerate() {
+                    match std::thread::Builder::new().spawn_scoped(scope, move || post(client, 1)) {
+                        Ok(worker) => workers.push(worker),
+                        Err(_) => acknowledged += usize::from(post(client, peers.len() - index)),
+                    }
+                }
+                // Consume every handle even if one transport worker unwinds.
+                let replies: Vec<_> = workers.into_iter().map(|worker| worker.join()).collect();
+                for reply in replies {
+                    let accepted =
+                        reply.map_err(|_| invalid("provider advertisement worker failed"))?;
+                    acknowledged += usize::from(accepted);
+                }
+                Ok(acknowledged)
+            })?
+        } else {
+            // Keep thread-local decode budgets on their owning thread.
+            peers
+                .iter()
+                .enumerate()
+                .filter(|(index, (_, client))| post(client, peers.len() - index))
+                .count()
+        };
         self.authority.validate_profile()?;
+        require_deadline(deadline)?;
         if acknowledged_peers == 0 {
             return Err(invalid(
                 "original provider advert was not acknowledged by selected peers",

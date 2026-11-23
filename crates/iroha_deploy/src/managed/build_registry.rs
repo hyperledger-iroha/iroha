@@ -18,7 +18,9 @@ use std::{
 mod generated_local;
 #[cfg(test)]
 mod tests;
-pub(super) use generated_local::{GeneratedServiceObservation, observe_generated_service};
+pub(super) use generated_local::{
+    GeneratedServiceObservation, ServiceRead, observe_generated_service_set,
+};
 
 /// Shared native discovery freshness for registry consumers and managed service observations.
 pub(super) const DISCOVERY_FRESHNESS: Duration = Duration::from_secs(30);

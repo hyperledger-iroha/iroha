@@ -1271,6 +1271,19 @@ impl ManagedStreamTokenCustody {
         block: &VerifiedSumeragiBlock,
         deadline: Instant,
     ) -> Result<CapturedCustody> {
+        self.capture_available_current_at(binding, block, deadline, 0)?
+            .ok_or_else(|| invalid("fresh native operation presence or absence proof unavailable"))
+    }
+
+    // None requires the corresponding, bounded 503 envelope from every selected peer.
+    // A transport, time, scope or verification failure cannot select a replacement cut.
+    fn capture_available_current_at(
+        &self,
+        binding: &SignerCustodyBindingV1,
+        block: &VerifiedSumeragiBlock,
+        deadline: Instant,
+        first_peer: usize,
+    ) -> Result<Option<CapturedCustody>> {
         require_deadline(deadline)?;
         block
             .verify_global_scope(
@@ -1283,19 +1296,36 @@ impl ManagedStreamTokenCustody {
             .provider_role(StreamTokenAuthorityRole::IssuerOperator)?;
         let schema = iroha_core::state::State::native_world_schema_hashes_v1()
             .map_err(|_| invalid("native custody schema is unavailable"))?;
-        read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
+        let provider = self.authority.provider_id()?;
+        let peers = &self.authority.peers;
+        let order = peers.iter().cycle().skip(first_peer).take(peers.len());
+        let mut only_unavailable = !peers.is_empty();
+        let result = read_selected_peers(order, deadline, |client, deadline| {
             client
                 .with_request_deadline(deadline)
                 .get_stream_token_custody_state_with_proof(
-                    self.authority.provider_id()?,
+                    provider,
                     owner,
                     binding,
                     schema.as_slice(),
                     block,
                 )
                 .map(|(state, frame)| CapturedCustody { state, frame })
-                .map_err(|_| invalid("native custody candidate is unavailable or invalid"))
-        })
+                .map_err(|error| {
+                    only_unavailable &= matches!(
+                        error.downcast_ref::<iroha::Error>(),
+                        Some(iroha::Error::Api { operation: "sorafs.stream_token_custody.read", error })
+                            if error.status() == 503 && error.code() == "stream_token_custody_unavailable"
+                    );
+                    invalid("native custody candidate is unavailable or invalid")
+                })
+        });
+        require_deadline(deadline)?;
+        match result {
+            Ok(captured) => Ok(Some(captured)),
+            Err(_) if only_unavailable => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn verify_wallet(

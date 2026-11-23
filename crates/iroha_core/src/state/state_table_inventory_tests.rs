@@ -5034,7 +5034,7 @@ const CARRIERS: &[Carrier] = &[
             ),
             (
                 "DaPinScopeAuthorizationV1",
-                "producer signatures over the ticket, manifest and alias scope of the pin intent: proposal input",
+                "producer signatures over the ticket, manifest, complete commitment digest and alias of the pin intent: proposal input",
             ),
             (
                 "Evidence",
@@ -6109,6 +6109,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "NetworkMessage.TransactionGossiper",
                 "gossiped transactions with their routes and routing plans: admission input, no consensus object",
+            ),
+            (
+                "NetworkMessage.DaProposal",
+                "bounded producer-authorized DA commitment and pin scope submitted to route validators",
             ),
             (
                 "NetworkMessage.PeersGossiper",

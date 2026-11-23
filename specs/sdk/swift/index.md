@@ -361,36 +361,43 @@ the CLI.
 
 ### DA ingest submission
 
-`ToriiClient.submitDaBlob(_:)` mirrors `iroha app da submit`, building the Norito request body, signing it,
-posting to `/v1/da/ingest`, and decoding the receipt. Use `ToriiDaBlobSubmission` to describe the payload,
-erasure profile, retention policy, optional metadata, and signing material:
+`ToriiClient.submitDaBlob` requires the local signing context for the exact
+network and canonical request credentials for the producer. Capture the initial
+response and the signed request in an operator-controlled directory:
 
 ```swift
 var submission = ToriiDaBlobSubmission(
-    networkId: networkId,                       // exact genesis-derived NetworkId
-    owner: authorityI105,                       // canonical authenticated AccountId
+    networkId: networkId,
+    owner: authorityI105,
     payload: payloadData,
     laneId: 42,
     epoch: 7,
     sequence: 1,
-    metadata: [
-        ToriiDaMetadataEntry(key: "da.stream", value: Data("taikai".utf8))
-    ],
-    clientBlobId: digest32Data,              // 32-byte digest (BLAKE3 recommended)
-    privateKeyHex: signerHex,
-    codec: "application/octet-stream"
+    blobClass: .nexusLaneSidecar,
+    codec: "application/octet-stream",
+    privateKeyHex: signerHex
 )
-let ingest = try await torii.submitDaBlob(submission)
-print("status:", ingest.status, "duplicate:", ingest.duplicate)
-if let receipt = ingest.receipt {
-    print("storage ticket", receipt.storageTicketHex)
-}
+let prepared = try await torii.submitDaBlob(submission, artifactDirectory: prepareDirectory)
 ```
 
-`ToriiDaBlobSubmission` defaults match the CLI (chunk size 256 KiB, RS 12/10 profile, `da.default`
-retention tag). When the NoritoBridge XCFramework is linked the builder hashes the payload with BLAKE3
-automatically, but environments without the bridge must still provide a 32-byte `clientBlobId`
-(the CLI’s `blake3(payload)` output matches). Signers can pass a raw Ed25519 seed (`privateKey`),
+For `pending_pin_authorization`, review the proposed retention and use the
+producer's CLI configuration and a trusted Torii receipt-signing public key:
+
+```sh
+iroha --config "$producer_config" --output-format json app da authorize-pin \
+  --request "$prepare_dir/da_request.json" --response "$prepare_dir/da_response.json" \
+  --operator-public-key "$operator_key"
+```
+
+Set `submission.pinScopeSignature` to the decoded bytes of the returned
+`signature` and call `submitDaBlob(submission, artifactDirectory: acceptedDirectory)`
+again with the same submission. `accepted` acknowledges local admission. An
+initial `accepted` result with `duplicate == true` identifies an already accepted
+request.
+
+The Swift builder defaults to 256 KiB chunks and an RS 12/10 profile. It uses the
+native bridge for the canonical payload commitment even when the caller chooses
+an explicit 32-byte `clientBlobId`. Signers can pass a raw Ed25519 seed (`privateKey`),
 hex string (`privateKeyHex`), or a pre-computed `signatureHex` +
 `signerPublicKeyHex`. The builder always produces a signed request, including
 for `noSubmit` artifact preparation. Its digest binds the exact `NetworkId`,

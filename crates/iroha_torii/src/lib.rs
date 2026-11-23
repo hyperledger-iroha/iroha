@@ -2597,6 +2597,7 @@ struct AppState {
     recipient_lookup_rate_limiter: limits::RateLimiter,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
+    da_upload_finishes: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -38699,9 +38700,12 @@ impl Torii {
         #[cfg(feature = "app_api")]
         {
             let body_limit = self.transaction_max_content_len;
+            let part_limit =
+                body_limit.min(iroha_torii_shared::da::upload::DA_UPLOAD_REQUEST_MAX_BYTES);
             mount_catalog_route_rows!(
                 builder, data_availability;
                 INGEST => limited_canonical_account_post(da::handler_post_da_ingest, app_state, body_limit, body_limit);
+                INGEST_PARTS => limited_canonical_account_post(da::handler_post_da_parts, app_state, part_limit, part_limit);
                 MANIFEST => public_get(da::handler_get_da_manifest);
             );
         }
@@ -42489,6 +42493,9 @@ ingress,
             "da_ingest.max_concurrent_compute_jobs",
             self.da_ingest.max_concurrent_compute_jobs.get(),
         )?;
+        let da_upload_finishes = Arc::new(tokio::sync::Semaphore::new(
+            da_ingest_max_concurrent_compute_jobs,
+        ));
         let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
             da_ingest_max_concurrent_compute_jobs,
         ));
@@ -42664,6 +42671,7 @@ ingress,
             recipient_lookup_rate_limiter: self.recipient_lookup_rate_limiter.clone(),
             da_ingest: self.da_ingest.clone(),
             da_ingest_compute_inflight,
+            da_upload_finishes,
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "connect"))]

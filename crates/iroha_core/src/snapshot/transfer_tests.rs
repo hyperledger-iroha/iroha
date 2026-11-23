@@ -18,39 +18,67 @@ pub(crate) fn transferred_checkpoint_fixture() -> TransferredCheckpointFixture {
 fn transferred_checkpoint_fixture_with_da(include_da: bool) -> TransferredCheckpointFixture {
     let directory = tempdir().unwrap();
     let snapshot_store = directory.path().join("source-snapshots");
-    let mut source = native_snapshot_chain();
-    if include_da {
+    let mut source = if include_da {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::da::{
-            commitment::{DaCommitmentBundle, DaCommitmentRecord},
-            prelude::{BlobDigest, DaProofScheme, RetentionClass, StorageTicketId},
+            commitment::DaCommitmentBundle,
+            ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1},
+            pin_intent::DaPinIntentBundle,
+            prelude::StorageTicketId,
         };
-        let acknowledgement = Signature::new(
-            checked_random_snapshot_keypair().private_key(),
-            b"portable DA fixture acknowledgement",
-        );
-        let bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
+        let mut world = crate::state::World::new();
+        crate::runtime::keyed_state::install_for_test(&mut world);
+        let mut config = TestChainConfig::new(world, 1_000);
+        let producer = config.genesis_key.clone();
+        let policy = DaIngestAdmissionPolicyV1 {
+            version: DaIngestAdmissionPolicyV1::VERSION,
+            revision: 1,
+            expected_previous_policy_hash: None,
+            lanes: vec![DaIngestAdmissionLaneV1 {
+                lane_id: LaneId::SINGLE,
+                lane_incarnation: crate::state::derive_static_lane_incarnations(
+                    &LaneCatalog::default(),
+                )[&LaneId::SINGLE],
+                producers: vec![AccountId::new(producer.public_key().clone())],
+                current_epoch: 1,
+                grace_epoch: None,
+            }],
+        };
+        config
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Custom(
+                policy.into_custom_parameter(),
+            ));
+        let mut source = CertifiedTestChain::start(config).expect("signed DA producer genesis");
+        let authorization = crate::da::signed_test_ingest_authorization(
+            source.network_id(),
+            &producer,
             LaneId::SINGLE,
             1,
             1,
-            BlobDigest::new([0x81; 32]),
-            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0x83; 32]),
-            None,
-            RetentionClass::default(),
-            StorageTicketId::new([0x84; 32]),
-            acknowledgement,
-        )]);
+            1,
+        );
+        let ticket = StorageTicketId::new([0x84; 32]);
+        let manifest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]);
+        let record = crate::da::test_pin_commitment(&authorization, ticket, manifest);
+        let intent =
+            crate::da::signed_test_pin_intent(authorization, &producer, ticket, manifest, None);
         source.commit_with_proposal(
             None,
             Vec::new(),
             crate::sumeragi::test_chain::Signers::Quorum,
             Default::default(),
-            |proposal| proposal.set_da_commitments(Some(bundle)),
+            |proposal| {
+                proposal.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
+                proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
+            },
         );
+        source
     } else {
+        let mut source = native_snapshot_chain();
         source.commit(Vec::new());
-    }
+        source
+    };
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(source.state(), &snapshot_store, &key, TEST_CHUNK_SIZE).unwrap();
     let original_snapshot = canonical_state_snapshot_bytes_for_tests(source.state());

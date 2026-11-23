@@ -149,8 +149,9 @@ audits to prove which parameters were in force for any given blob.
   payout derived from `base_rent × bonus_bps`. When the DA scheduler emits proof
   receipts it includes the basis-point tags so incentives can be replayed.
 - **Egress credit:** Providers record GiB served per manifest, multiply by
-  `egress_credit_per_gib`, and submit the receipts via `iroha app da prove-availability`.
-  The rent policy keeps the per-GiB amount in sync with governance.
+  `egress_credit_per_gib`, and retain the metering receipts for reconciliation.
+  `iroha app da prove-availability` fetches the payload and generates a PoR report.
+  An egress credit requires separate settlement evidence.
 
 ## Operational flow
 

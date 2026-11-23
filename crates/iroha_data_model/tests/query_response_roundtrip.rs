@@ -36,7 +36,7 @@ fn checked_da_authorization(lane_id: LaneId, epoch: u64, sequence: u64) -> DaIng
         sequence,
         payload_hash: BlobDigest::new([0xE3; 32]),
         payload_bytes: 1,
-        request_content_hash: iroha_crypto::Hash::prehashed([0xE4; 32]),
+        request_content_hash: BlobDigest::new([0xE4; 32]),
         signatures: Vec::new(),
     };
     authorization.signatures.push(DaIngestSignatureV1 {
@@ -60,7 +60,13 @@ fn checked_da_pin_intent(
         iroha_crypto::KeyPair::try_from_seed(vec![0xE1; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("valid deterministic query-response DA key");
     let authorization = checked_da_authorization(lane_id, epoch, sequence);
-    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
+    let scope = DaPinScopeV1::new(
+        &authorization,
+        storage_ticket,
+        manifest_hash,
+        Default::default(),
+        None,
+    );
     let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
         .expect("sign deterministic query-response DA pin scope");
     DaPinIntent::new(authorization, scope_authorization)

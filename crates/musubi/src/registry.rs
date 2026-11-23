@@ -23,7 +23,8 @@ use crate::{
         PublicationArchiveRegistrationTerminalV1, PublicationArchiveRegistrationV1,
         PublicationBackend, PublicationBackendError, PublicationBackendFailureClass,
         PublicationCarSource, PublicationEngine, PublicationError, PublicationFinalEvidenceV1,
-        PublicationOperationIdV1, PublicationProviderRegistrationCheckpointAdvanceV1,
+        PublicationOperationIdV1, PublicationPhaseV1,
+        PublicationProviderRegistrationCheckpointAdvanceV1,
         PublicationProviderRegistrationCheckpointV1, PublicationReadbackEvidenceV1,
         PublicationRegisteredArchiveV1, PublicationReleaseAbsenceEvidenceV1,
         PublicationReleasePreparationFloorV1, PublicationReleaseSubmissionAdvanceV1,
@@ -71,7 +72,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 mod provider_inventory;
@@ -2312,7 +2313,9 @@ impl PublicationPollPolicyV1 {
         Ok(())
     }
 }
-/// Resume with bounded exponential backoff, preserving pending state when the budget expires.
+/// Resume with bounded exponential backoff. After one minute, return at the next durable
+/// transition or backend response so a slow operation can continue in a later command.
+/// An in-flight backend call retains its own deadline.
 ///
 /// # Errors
 ///
@@ -2325,40 +2328,60 @@ pub fn resume_with_bounded_polling(
     backend: &mut dyn PublicationBackend,
     policy: PublicationPollPolicyV1,
 ) -> Result<PublicationAdvanceV1, PublicationError> {
+    const POLL_TURN: Duration = Duration::from_secs(60);
+    let start = Instant::now();
+    poll_publication(
+        policy,
+        || engine.advance_once(operation_id, source, backend),
+        || engine.journal_phase(operation_id),
+        || POLL_TURN.saturating_sub(start.elapsed()),
+        thread::sleep,
+    )
+}
+
+fn poll_publication(
+    policy: PublicationPollPolicyV1,
+    mut advance: impl FnMut() -> Result<PublicationAdvanceV1, PublicationError>,
+    journal_phase: impl FnOnce() -> Result<PublicationPhaseV1, PublicationError>,
+    remaining: impl Fn() -> Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<PublicationAdvanceV1, PublicationError> {
     policy.validate()?;
     let mut delay = policy.initial_delay;
-    let mut last_pending = None;
-    let mut last_retryable = None;
-    for attempt in 0..policy.max_attempts {
-        match engine.resume(operation_id, source, backend) {
-            Ok(PublicationAdvanceV1::Pending(phase)) => {
-                last_pending = Some(PublicationAdvanceV1::Pending(phase));
-                last_retryable = None;
-            }
-            Ok(result) => return Ok(result),
+    let mut attempt = 1;
+    loop {
+        let result = advance();
+        let left = remaining();
+        let pending_native_operation = match &result {
+            Ok(PublicationAdvanceV1::Progressed(_)) if !left.is_zero() => continue,
+            Ok(PublicationAdvanceV1::Pending(_)) => false,
             Err(PublicationError::Backend(error))
                 if error.class() == PublicationBackendFailureClass::Retryable =>
             {
-                last_pending = None;
-                last_retryable = Some(error);
+                error.is_pending_native_operation()
             }
-            Err(error) => return Err(error),
+            _ => return result,
+        };
+        if pending_native_operation {
+            delay = policy.initial_delay;
         }
-        if attempt + 1 < policy.max_attempts {
-            thread::sleep(delay);
-            delay = delay.saturating_mul(2).min(policy.max_delay);
+        if attempt < policy.max_attempts && delay < left {
+            sleep(delay);
+            if !remaining().is_zero() {
+                attempt += 1;
+                if !pending_native_operation {
+                    delay = delay.saturating_mul(2).min(policy.max_delay);
+                }
+                continue;
+            }
         }
+        // Only an authenticated native operation wait may use the validated journal to report progress.
+        return if pending_native_operation {
+            journal_phase().map(PublicationAdvanceV1::Pending)
+        } else {
+            result
+        };
     }
-    last_retryable.map_or_else(
-        || {
-            last_pending.ok_or_else(|| {
-                PublicationError::InvalidJournal(
-                    "publication polling completed without an observable result".to_owned(),
-                )
-            })
-        },
-        |error| Err(PublicationError::Backend(error)),
-    )
 }
 fn first_page(limit: u32) -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
@@ -4943,5 +4966,156 @@ private_key = "{}"
         .validate()
         .expect_err("sub-minute bound is mandatory");
         assert!(matches!(error, PublicationError::InvalidJournal(_)));
+    }
+    #[test]
+    fn authenticated_storage_wait_uses_bounded_short_polls_and_reports_the_journal_phase() {
+        let policy = PublicationPollPolicyV1::default();
+        let mut calls = 0;
+        let mut delays = Vec::new();
+        let result = poll_publication(
+            policy,
+            || {
+                calls += 1;
+                if calls < 4 {
+                    Ok(PublicationAdvanceV1::Pending(
+                        PublicationPhaseV1::SeedIngress,
+                    ))
+                } else {
+                    Err(PublicationError::Backend(
+                        PublicationBackendError::pending_native_operation(),
+                    ))
+                }
+            },
+            || Ok(PublicationPhaseV1::ArchiveRegistration),
+            || Duration::MAX,
+            |delay| delays.push(delay),
+        )
+        .unwrap();
+        assert_eq!(calls, policy.max_attempts);
+        assert_eq!(delays.len(), usize::from(calls - 1));
+        assert_eq!(
+            &delays[..3],
+            &[
+                policy.initial_delay,
+                policy.initial_delay * 2,
+                policy.initial_delay * 4
+            ]
+        );
+        assert!(
+            delays[3..]
+                .iter()
+                .all(|delay| *delay == policy.initial_delay)
+        );
+        assert_eq!(
+            result,
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ArchiveRegistration)
+        );
+    }
+
+    #[test]
+    fn slow_publication_yields_its_last_durable_transition() {
+        let remaining = std::cell::Cell::new(Duration::from_secs(60));
+        let mut calls = 0;
+        let result = poll_publication(
+            PublicationPollPolicyV1::default(),
+            || {
+                calls += 1;
+                let phase = match calls {
+                    1 => PublicationPhaseV1::ArchiveRegistration,
+                    2 => {
+                        remaining.set(Duration::ZERO);
+                        PublicationPhaseV1::Replication
+                    }
+                    _ => panic!("next backend operation started after the polling turn"),
+                };
+                Ok(PublicationAdvanceV1::Progressed(phase))
+            },
+            || panic!("durable progress already identifies the persisted phase"),
+            || remaining.get(),
+            |_| panic!("durable progress needs no backoff"),
+        )
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(
+            result,
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::Replication)
+        );
+    }
+
+    #[test]
+    fn elapsed_poll_backoff_preserves_the_original_response() {
+        let policy = PublicationPollPolicyV1::default();
+        for (error, authenticated) in [
+            (PublicationBackendError::pending_native_operation(), true),
+            (
+                PublicationBackendError::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY"),
+                false,
+            ),
+        ] {
+            let remaining = std::cell::Cell::new(Duration::from_secs(60));
+            let mut calls = 0;
+            let result = poll_publication(
+                policy,
+                || {
+                    calls += 1;
+                    Err(PublicationError::Backend(error.clone()))
+                },
+                || {
+                    assert!(authenticated);
+                    Ok(PublicationPhaseV1::Replication)
+                },
+                || remaining.get(),
+                |delay| {
+                    assert_eq!(delay, policy.initial_delay);
+                    remaining.set(Duration::ZERO);
+                },
+            );
+            assert_eq!(calls, 1);
+            if authenticated {
+                assert_eq!(
+                    result.unwrap(),
+                    PublicationAdvanceV1::Pending(PublicationPhaseV1::Replication)
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(PublicationError::Backend(original)) if original == error)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unconfirmed_storage_errors_keep_their_original_failure_and_backoff() {
+        let policy = PublicationPollPolicyV1 {
+            max_attempts: 4,
+            ..Default::default()
+        };
+        let mut delays = Vec::new();
+        let generic = PublicationBackendError::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY");
+        let result = poll_publication(
+            policy,
+            || Err(PublicationError::Backend(generic.clone())),
+            || panic!("generic failure cannot report progress"),
+            || Duration::MAX,
+            |delay| delays.push(delay),
+        );
+        assert!(matches!(result, Err(PublicationError::Backend(error)) if error == generic));
+        assert_eq!(
+            delays,
+            [
+                policy.initial_delay,
+                policy.initial_delay * 2,
+                policy.initial_delay * 4
+            ]
+        );
+        let rejected = PublicationBackendError::permanent("MUSUBI_PUBLICATION_OPERATION_BUSY");
+        let result = poll_publication(
+            policy,
+            || Err(PublicationError::Backend(rejected.clone())),
+            || panic!("rejection cannot report progress"),
+            || Duration::MAX,
+            |_| panic!("permanent failure cannot poll"),
+        );
+        assert!(matches!(result, Err(PublicationError::Backend(error)) if error == rejected));
     }
 }

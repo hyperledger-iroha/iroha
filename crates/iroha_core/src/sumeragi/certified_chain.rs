@@ -3162,6 +3162,7 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     terminal_probe: parking_lot::Mutex<Option<TerminalProbe<'v>>>,
     // Only the scoped portable producer enables original canonical-byte capture.
     proof_source_genesis: Option<(u64, Hash)>,
+    publish_signer_prefixes: bool,
     // Only AMX transfers its actual constructor acquisition into this same reader. The
     // genesis body/control lives above; raw bytes and original source retire here after
     // the prefix/terminal graphs at the caller's existing scoped chain drop.
@@ -3228,6 +3229,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             #[cfg(test)]
             terminal_probe: parking_lot::Mutex::new(None),
             proof_source_genesis: None,
+            publish_signer_prefixes: false,
             amx_genesis_authentication: None,
             amx_genesis_source: None,
         }
@@ -3355,6 +3357,51 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// Full native/portable authentication and a fresh byte join still precede reuse.
     pub(crate) fn enable_proof_source_cut(&mut self) {
         self.proof_source_genesis = self.genesis.canonical_wire_identity().ok();
+    }
+
+    /// Verify the source from genesis while publishing the ordinary walk's completed cursors.
+    pub(crate) fn enable_signer_source_cut(&mut self) {
+        self.publish_signer_prefixes = self.shares_prefixes();
+        self.enable_proof_source_cut();
+    }
+
+    /// Whether an already authenticated walk on this view would leave the shared cursor order
+    /// unchanged. The cursors affect the decoder work of later ordinary readers. This is a
+    /// scheduling check and supplies no evidence of finality or source integrity.
+    #[must_use]
+    pub fn shared_history_is_current(&self, first: u64, through: u64) -> bool {
+        if !self.shares_prefixes() {
+            return true;
+        }
+        let ChainSource::State(view) = &self.source else {
+            return false;
+        };
+        let start = first
+            .max(2)
+            .max(through.saturating_sub(SHARED_PREFIXES_PER_CHAIN as u64 - 1));
+        let shared = SHARED_PREFIXES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut newest = shared.iter().rev();
+        let hashes = view.block_hashes();
+        (start..=through).rev().all(|height| {
+            newest.next().is_some_and(|cursor| {
+                cursor.instance == self.instance
+                    && cursor.root_scope == self.root_scope
+                    && cursor.tip_height() == height
+                    && usize::try_from(height - 1)
+                        .ok()
+                        .and_then(|index| hashes.get(index))
+                        == Some(&cursor.tip_block_hash())
+            })
+        })
+    }
+
+    pub(super) fn proof_source_view(&self) -> Option<&V> {
+        match self.source {
+            ChainSource::State(view) => Some(view),
+            _ => None,
+        }
     }
 
     /// Borrow the constant-size source fence from the genuine native prefix.
@@ -3523,8 +3570,8 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     // Retain a copy of this ordinary reader's verified prefix for later fresh readers.
     fn share_prefix(&self, prefix: &VerifiedPrefix) {
-        if !self.shares_prefixes()
-            || prefix.proof_source.is_some()
+        if !(self.publish_signer_prefixes
+            || (self.shares_prefixes() && prefix.proof_source.is_none()))
             || prefix.tip.height() <= GENESIS_HEIGHT
         {
             return;
@@ -3539,14 +3586,30 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let same_chain = |cursor: &CertifiedPrefixCursor| {
             cursor.instance == self.instance && cursor.root_scope == self.root_scope
         };
-        if shared.iter().any(|cursor| {
-            same_chain(cursor)
-                && cursor.tip_height() == height
-                && cursor.tip_block_hash() == prefix.tip.block_hash()
-        }) {
-            return;
+        // Order the bounded slots by last verified use. A recurring historical target must
+        // be able to retain its verified predecessor even while the live tip is advancing.
+        if let Some(index) = shared
+            .iter()
+            .position(|cursor| same_chain(cursor) && cursor.tip_height() == height)
+        {
+            if shared[index].tip_block_hash() == prefix.tip.block_hash() {
+                shared[index..].rotate_left(1);
+                return;
+            }
+            shared.remove(index);
+        } else if let Some(oldest) = shared
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, cursor)| same_chain(cursor))
+            .nth(SHARED_PREFIXES_PER_CHAIN - 1)
+            .map(|(index, _)| index)
+        {
+            shared.remove(oldest);
         }
-        shared.retain(|cursor| !(same_chain(cursor) && cursor.tip_height() == height));
+        if shared.len() == SHARED_PREFIXES_TOTAL {
+            shared.remove(0);
+        }
         shared.push(CertifiedPrefixCursor {
             instance: self.instance,
             root_scope: self.root_scope,
@@ -3558,20 +3621,6 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                 proof_source: None,
             },
         });
-        shared.sort_by_key(|cursor| core::cmp::Reverse(cursor.tip_height()));
-        let mut kept: Vec<CertifiedPrefixCursor> = Vec::with_capacity(shared.len());
-        for cursor in shared.drain(..) {
-            let per_chain = kept
-                .iter()
-                .filter(|other| {
-                    other.instance == cursor.instance && other.root_scope == cursor.root_scope
-                })
-                .count();
-            if per_chain < SHARED_PREFIXES_PER_CHAIN && kept.len() < SHARED_PREFIXES_TOTAL {
-                kept.push(cursor);
-            }
-        }
-        *shared = kept;
     }
 
     // Genesis decoding has returned before these complete target and gap receipts exist.

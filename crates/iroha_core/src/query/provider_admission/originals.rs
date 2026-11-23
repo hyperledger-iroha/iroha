@@ -21,6 +21,15 @@ use iroha_data_model::{
 use sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1;
 use std::alloc::Layout;
 
+/// The original genesis read refused, or a single valid durable append precedes State publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenesisProviderOriginalsReadErrorV1 {
+    /// Every permanent source, admission or consumer refusal retains the original public error.
+    Rejected(ProviderAdmissionErrorV1),
+    /// The exact durable count is one ahead and its original hash journal matches the captured State tip.
+    StateBehind(u64),
+}
+
 /// Borrow the bounded original provider intents from one unique signed genesis initializer.
 ///
 /// The native State independently supplies genesis, chain and network identity. The signed
@@ -38,23 +47,85 @@ pub fn with_genesis_provider_admission_originals_v1<R>(
         &[(AccountId, ProviderAdmissionGenesisMaterialV1)],
     ) -> Result<R, ProviderAdmissionErrorV1>,
 ) -> Result<R, ProviderAdmissionErrorV1> {
+    read_originals(view, maximum_providers, budget, false, consume)
+        .map_err(|_| ProviderAdmissionErrorV1)
+}
+
+/// Read the complete signed originals, additionally classifying one confirmed in-flight append.
+/// A matching count grants no permission by itself. An active decoder retains the physical recipe.
+/// # Errors
+/// Returns the original rejection for invalid sources, permanent admission failures and callback failures.
+pub fn classify_genesis_provider_admission_originals_v1<R>(
+    view: &impl StateReadOnly,
+    maximum_providers: usize,
+    budget: &AllocationBudget,
+    consume: impl FnOnce(
+        &[(AccountId, ProviderAdmissionGenesisMaterialV1)],
+    ) -> Result<R, ProviderAdmissionErrorV1>,
+) -> Result<R, GenesisProviderOriginalsReadErrorV1> {
+    read_originals(view, maximum_providers, budget, true, consume)
+}
+
+fn read_originals<R>(
+    view: &impl StateReadOnly,
+    maximum_providers: usize,
+    budget: &AllocationBudget,
+    observe_append: bool,
+    consume: impl FnOnce(
+        &[(AccountId, ProviderAdmissionGenesisMaterialV1)],
+    ) -> Result<R, ProviderAdmissionErrorV1>,
+) -> Result<R, GenesisProviderOriginalsReadErrorV1> {
+    original_frontier(view, maximum_providers, observe_append)?;
+    read_matching_originals(view, maximum_providers, budget, consume)
+        .map_err(GenesisProviderOriginalsReadErrorV1::Rejected)
+}
+
+fn original_frontier(
+    view: &impl StateReadOnly,
+    maximum: usize,
+    observe_append: bool,
+) -> Result<(), GenesisProviderOriginalsReadErrorV1> {
+    let rejected = GenesisProviderOriginalsReadErrorV1::Rejected(ProviderAdmissionErrorV1);
+    if maximum == 0
+        || maximum > PROVIDER_ADMISSION_GENESIS_MAX_PROVIDERS_V1
+        || view.block_hashes().is_empty()
+    {
+        return Err(rejected);
+    }
+    let height = view.block_hashes().len();
+    let durable = view
+        .kura()
+        .exact_durable_blocks_count()
+        .map_err(|_| rejected)?;
+    if durable == height {
+        return Ok(());
+    }
+    if observe_append
+        && !norito::core::decode_limits_active()
+        && height.checked_add(1) == Some(durable)
+        && let Some(current) = std::num::NonZeroUsize::new(height)
+        && let Some(expected) = view.block_hashes().get(height - 1)
+        && view.kura().get_durable_block_hash(current) == Some(*expected)
+        && let Ok(next) = u64::try_from(durable)
+    {
+        return Err(GenesisProviderOriginalsReadErrorV1::StateBehind(next));
+    }
+    Err(rejected)
+}
+
+fn read_matching_originals<R>(
+    view: &impl StateReadOnly,
+    maximum_providers: usize,
+    budget: &AllocationBudget,
+    consume: impl FnOnce(
+        &[(AccountId, ProviderAdmissionGenesisMaterialV1)],
+    ) -> Result<R, ProviderAdmissionErrorV1>,
+) -> Result<R, ProviderAdmissionErrorV1> {
     struct Originals {
         values: ChargedBuffer<(AccountId, ProviderAdmissionGenesisMaterialV1)>,
         charges: ChargedBuffer<AllocationCharge>,
     }
-
     let invalid = ProviderAdmissionErrorV1;
-    if maximum_providers == 0
-        || maximum_providers > PROVIDER_ADMISSION_GENESIS_MAX_PROVIDERS_V1
-        || view.block_hashes().is_empty()
-        || view
-            .kura()
-            .exact_durable_blocks_count()
-            .map_err(|_| invalid)?
-            != view.block_hashes().len()
-    {
-        return Err(invalid);
-    }
     // Preserve signed-body authentication through the sole native owner, with no result-only
     // genesis execution claim. Prepay the original nested decode envelope before acquisition.
     let extent = bounded_native_carrier_extent(

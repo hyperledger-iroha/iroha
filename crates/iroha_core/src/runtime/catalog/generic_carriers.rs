@@ -6,8 +6,6 @@
 
 use super::*;
 
-/// Independent profile family; it is not a native instruction addition.
-pub(crate) const PROFILE_NAME: &str = "iroha.runtime.generic_carriers.v1";
 /// Metering class of interfaces admitted by the restricted generic host.
 pub(crate) const METERING_CLASS: &str = "ivm.generic_carriers.v1";
 /// Separate physical owner; ordinary native contract storage never contains these values.
@@ -105,6 +103,9 @@ impl ReleaseCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Independent profile family; it is not a native instruction addition.
+    const PROFILE_NAME: &str = "iroha.runtime.generic_carriers.v1";
 
     #[test]
     fn artifact_staging_is_an_independent_real_addition_outside_the_baseline() {

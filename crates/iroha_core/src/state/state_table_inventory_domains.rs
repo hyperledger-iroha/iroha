@@ -775,6 +775,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:da:commitment-merkle:commitment:v1\0",
             r"iroha:da:commitment-merkle:internal:v1\0",
             r"iroha:da:commitment-merkle:leaf:v1\0",
+            r"iroha:da:commitment-record:v1\0",
             r"iroha:da:pin-intent-merkle:commitment:v1\0",
             r"iroha:da:pin-intent-merkle:internal:v1\0",
             r"iroha:da:pin-intent-merkle:leaf:v1\0",
@@ -1385,6 +1386,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:kagemusha:wallet:v1:",
             r"kagemusha-advance-pedersen-capsule-v1",
         ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Identifies the native replication order for one Musubi archive ID and paid manifest digest",
+        literals: &[r"iroha:musubi:native-replication-order:v1"],
     },
     OtherDomains {
         usage: Use::Record,

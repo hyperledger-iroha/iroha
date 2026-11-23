@@ -2261,8 +2261,8 @@ pub fn check_genesis_block(
     authenticate_genesis_block_intents(block, genesis_account)?;
     check_genesis_execution_results(block)
 }
-pub(crate) mod genesis_crypto_policy;
 pub(crate) mod genesis_child_runtime;
+pub(crate) mod genesis_crypto_policy;
 pub(crate) mod genesis_policies;
 pub(crate) mod genesis_staking_policy;
 
@@ -5433,6 +5433,18 @@ pub(crate) mod valid {
             Self::validate_sumeragi_consensus_effects(block)?;
             Self::validate_da_sidecar_hashes(block)?;
             Self::validate_da_pin_intent_bundle(block, state, soft_fork)?;
+            if let Some(records) = block.da_commitments() {
+                crate::da::validate_commitment_bundle_against_nexus_at_height(
+                    records,
+                    state.nexus(),
+                    block.header().height().get(),
+                )
+                .map_err(BlockValidationError::DaCommitmentBundle)?;
+            }
+            crate::da::proposal_queue::validate_pairs(
+                block.da_commitments(),
+                block.da_pin_intents(),
+            )?;
             Self::validate_execution_context_with_state(
                 block,
                 topology,
@@ -5580,11 +5592,27 @@ pub(crate) mod valid {
             let Some(bundle) = block.da_pin_intents() else {
                 return Ok(());
             };
+            Self::validate_da_proposal_pins(
+                bundle,
+                block.header().height().get(),
+                state,
+                &state.nexus_quotas_for_validation(replacement),
+            )
+        }
+
+        /// Check the pin section against the parent, including producer authority and quota.
+        #[expect(clippy::result_large_err, reason = "preserve typed validation errors")]
+        pub(crate) fn validate_da_proposal_pins(
+            bundle: &DaPinIntentBundle,
+            height: u64,
+            state: &impl StateReadOnly,
+            quotas: &iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1,
+        ) -> Result<(), BlockValidationError> {
             let world = state.world();
             crate::da::validate_pin_intent_bundle_against_nexus_at_height(
                 bundle,
                 state.nexus(),
-                block.header().height().get(),
+                height,
                 |account| world.accounts().get(account).is_some(),
             )?;
             crate::da::validate_pin_intent_authorizations(
@@ -5624,16 +5652,16 @@ pub(crate) mod valid {
             crate::da::validate_pin_intent_admission_policy(
                 bundle,
                 admission_policy.as_ref(),
-                |lane_id| state.lane_incarnation_at_height(lane_id, block.header().height().get()),
+                |lane_id| state.lane_incarnation_at_height(lane_id, height),
             )?;
             // The committed quotas of the State this block builds on, as its construction
             // freezes them; the window length is the signed Nexus DA setting.
             crate::da::quota::prepare_ingest_quota_writes(
                 world.smart_contract_state(),
                 bundle,
-                block.header().height().get(),
+                height,
                 state.nexus().da.ingest_quota_window_blocks,
-                &state.nexus_quotas_for_validation(replacement),
+                quotas,
             )?;
             for intent in &bundle.intents {
                 if world

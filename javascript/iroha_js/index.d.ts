@@ -7831,6 +7831,8 @@ export interface DaIngestRequestInput {
     governanceTag?: string;
   };
   metadata?: Record<string, DaIngestMetadataMapValue> | DaIngestMetadataEntry[];
+  /** Exact encoded bytes when compression is selected; payload always contains canonical uncompressed bytes. */
+  compressedPayload?: ArrayBufferView | ArrayBuffer | Buffer;
   compression?: "Identity" | "Gzip" | "Deflate" | "Zstd";
   noritoManifest?: ArrayBufferView | ArrayBuffer | Buffer | string;
   clientBlobId?: ArrayBufferView | ArrayBuffer | Buffer | string;
@@ -7838,6 +7840,9 @@ export interface DaIngestRequestInput {
   privateKey?: ArrayBufferView | ArrayBuffer | Buffer | string;
   privateKeyHex?: string;
   signatureHex?: string;
+  /** External witness over the verified, receipt-bound pin scope for a follow-up submission. */
+  pinScopeSignatureHex?: string;
+  canonicalAuth?: CanonicalRequestAuth;
   artifactDir?: string;
   noSubmit?: boolean;
   dryRun?: boolean;
@@ -7872,6 +7877,13 @@ export interface DaIngestReceipt {
   storage_ticket_hex: string;
   storage_ticket_bytes: Buffer;
   stripe_layout: DaStripeLayout;
+  retention_policy: {
+    hot_retention_secs: number;
+    cold_retention_secs: number;
+    required_replicas: number;
+    storage_class: "Hot" | "Warm" | "Cold";
+    governance_tag: string;
+  };
   pdp_commitment_b64: string | null;
   pdp_commitment_bytes: Buffer | null;
   queued_at_unix: number;
@@ -7891,13 +7903,29 @@ export interface DaIngestArtifacts {
 export interface DaIngestArtifactPaths {
   requestJsonPath: string | null;
   receiptJsonPath: string | null;
+  responseJsonPath: string | null;
   responseHeadersPath: string | null;
 }
 
 export interface DaIngestSubmitResponse {
-  status: string;
+  status: "prepared" | "pending_pin_authorization" | "accepted";
   duplicate: boolean;
+  /** Exact JSON response for independent operator-signature and complete commitment verification. */
+  responseBytes: Uint8Array | null;
   receipt: DaIngestReceipt | null;
+  /** Torii's proposed scope. A pending scope requires independent approval before signing. */
+  pinScope: {
+    network_id: string;
+    owner: string;
+    request_authorization_digest: [number[]];
+    lane_id: number;
+    epoch: number;
+    sequence: number;
+    storage_ticket: [number[]];
+    manifest_hash: [number[]];
+    commitment_digest: [number[]];
+    alias: string | null;
+  } | null;
   artifacts: DaIngestArtifacts;
   pdpCommitmentHeader: string | null;
   artifactPaths: DaIngestArtifactPaths | null;

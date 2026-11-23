@@ -1,7 +1,11 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.io.File
 import java.math.BigInteger
 import java.net.URI
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
@@ -9,10 +13,40 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class DaToriiClientTest {
+    private val keyPair by lazy { KeyPairGenerator.getInstance("Ed25519").generateKeyPair() }
+    private val proofSigner by lazy {
+        val publicKey = keyPair.public.encoded.takeLast(32).toByteArray()
+        ToriiCanonicalRequestAuth(AccountAddress.fromAccount(publicKey, "ed25519").toI105Default(), RequestSigner.ed25519(keyPair.private))
+    }
+    private val proofNetwork = NetworkId.parse(HASH)
+
+    private fun assertSignedProofRequest(request: TransportRequest) {
+        fun header(name: String) = requireNotNull(request.headers[name]?.singleOrNull())
+        assertEquals(AccountAddress.fromI105(proofSigner.accountId, null).canonicalHex(), header(CanonicalRequestSigner.HEADER_ACCOUNT))
+        val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            proofNetwork, request.method, request.uri, request.body,
+            header(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).toLong(), header(CanonicalRequestSigner.HEADER_NONCE),
+        )
+        val verifier = Signature.getInstance("Ed25519")
+        verifier.initVerify(keyPair.public)
+        verifier.update(message)
+        assertTrue(verifier.verify(Base64.getDecoder().decode(header(CanonicalRequestSigner.HEADER_SIGNATURE))))
+    }
+
+    @Test
+    fun proofRequiresSigningContextBeforeDispatch() {
+        val executor = CapturingDaExecutor("null")
+        val unsigned = DaToriiClient.builder().executor(executor).baseUri(URI.create("https://example.com")).build()
+        assertFailsWith<IllegalStateException> { unsigned.provePinIntent() }
+        assertFailsWith<IllegalStateException> { unsigned.proveCommitment() }
+    }
+
     @Test
     fun listCommitmentsUsesSnapshotCursorAndTypedResponse() {
         val executor = CapturingDaExecutor(
@@ -47,6 +81,7 @@ class DaToriiClientTest {
             ),
         ).join()
 
+        assertEquals(8L * 1024 * 1024, executor.lastRequest.maximumResponseBytes)
         assertEquals("POST", executor.lastRequest.method)
         assertEquals("/v1/da/commitments", executor.lastRequest.uri.path)
         val request = DaJson.parse(executor.lastRequest.body, "request") as Map<*, *>
@@ -78,22 +113,24 @@ class DaToriiClientTest {
         requireNotNull(proof)
         val proveRequest = DaJson.parse(proveExecutor.lastRequest.body, "request") as Map<*, *>
         assertEquals(setOf("storage_ticket"), proveRequest.keys)
-        assertEquals(BigInteger("18446744073709551615"), proof.intent.epoch)
+        assertEquals(BigInteger.valueOf(42), proof.intent.epoch)
         assertEquals(2, proof.bundleLength)
         assertEquals(DaModels.MerkleDirection.RIGHT, proof.path.single().direction)
 
         val verifyExecutor = CapturingDaExecutor("""{"valid":true,"error":null}""")
         val response = client(verifyExecutor).verifyPinIntent(proof).join()
+        assertSignedProofRequest(proveExecutor.lastRequest)
+        assertSignedProofRequest(verifyExecutor.lastRequest)
         assertTrue(response.valid)
         assertNull(response.error)
         assertEquals("/v1/da/pin-intents/verify", verifyExecutor.lastRequest.uri.path)
         val posted = DaJson.parse(verifyExecutor.lastRequest.body, "request") as Map<*, *>
         val intent = posted["intent"] as Map<*, *>
-        assertEquals(BigInteger("18446744073709551615"), intent["epoch"])
+        assertEquals(DaJson.parse(signedIntentJson().toByteArray(), "signed intent"), intent)
         assertTrue(intent.containsKey("alias"))
         assertNull(intent["alias"])
-        assertTrue(intent.containsKey("owner"))
-        assertNull(intent["owner"])
+        assertTrue(intent.containsKey("authorization"))
+        assertTrue(intent.containsKey("pin_scope_authorization"))
         val direction = ((posted["path"] as List<*>)[0] as Map<*, *>)["direction"] as Map<*, *>
         assertEquals("Right", direction["direction"])
         assertTrue(direction.containsKey("value"))
@@ -170,11 +207,10 @@ class DaToriiClientTest {
 
     @Test
     fun proofParserRejectsLegacyLocationOnlyPayloadAndMalformedTags() {
-        assertFailsWith<IllegalArgumentException> {
-            DaModels.ProofScheme.fromJson(
-                mapOf("type" to "KzgBls12_381", "value" to null),
-                "proof_scheme",
-            )
+        for (unsupported in listOf("MerkleSha256", "KzgBls12_381")) {
+            assertFailsWith<IllegalArgumentException> {
+                DaModels.ProofScheme.fromJson(mapOf("type" to unsupported, "value" to null), "proof_scheme")
+            }
         }
 
         assertFailsWith<IllegalArgumentException> {
@@ -312,25 +348,52 @@ class DaToriiClientTest {
         assertTrue(error.cause is AssertionError)
     }
 
+    @Test
+    fun commitmentProofPreservesRawEvenRootAndVariableLengthOperatorSignature() {
+        val digest = DaModels.Digest32.fromBytes(ByteArray(32) { 0x10 })
+        val retention = DaModels.RetentionPolicy(BigInteger.ONE, BigInteger.TEN, 1, DaModels.StorageClass.HOT, "da")
+        val signature = "5A".repeat(3309)
+        val record = DaModels.CommitmentRecord(1, BigInteger.ONE, BigInteger.ONE, digest, digest,
+            DaModels.ProofScheme.SORAFS_POR_BLAKE3, digest, null, retention, digest, signature)
+        fun proof(root: Any) = mapOf(
+            "commitment" to (record.toJsonValue() + ("chunk_root" to root)),
+            "location" to mapOf("block_height" to 1, "index_in_bundle" to 0),
+            "bundle_hash" to HASH, "bundle_len" to 1, "root" to HASH, "path" to emptyList<Any>(),
+        )
+        val parsed = DaJson.parseCommitmentProof(proof(digest.toJsonValue()), "proof")
+        assertEquals(digest, parsed.commitment.chunkRoot)
+        assertEquals(signature, parsed.commitment.acknowledgementSignature)
+        assertFailsWith<IllegalArgumentException> { DaJson.parseCommitmentProof(proof(HASH), "proof") }
+    }
+
+    @Test
+    fun pinProofRejectsRepeatedControllersAndOversizedControllerSignatures() {
+        val proof = requireNotNull(DaJson.parsePinIntentProof(
+            DaJson.parse(pinIntentProofJson().toByteArray(), "proof"), "proof",
+        ))
+        val original = proof.intent.authorization
+        val witness = original.signatures.single()
+        assertFailsWith<IllegalArgumentException> { original.copy(signatures = listOf(witness, witness)) }
+        assertFailsWith<IllegalArgumentException> {
+            proof.intent.pinScopeAuthorization.copy(signatures = listOf(witness, witness))
+        }
+        assertFailsWith<IllegalArgumentException> { witness.copy(signature = "AB".repeat(4097)) }
+    }
+
     private fun client(executor: HttpTransportExecutor): DaToriiClient =
         DaToriiClient.builder()
             .executor(executor)
+            .authenticatedProofs(LocalSigningContext(proofNetwork), proofSigner)
             .baseUri(URI.create("https://example.com"))
             .build()
 
+    private fun signedIntentJson(): String = generateSequence(File(".").canonicalFile) { it.parentFile }
+        .map { File(it, "fixtures/da/ingest/pin_intent_v1.json") }.first(File::isFile).readText()
+
     private fun pinIntentProofJson(): String {
-        val digest = digestJson(0x22)
         return """
             {
-              "intent":{
-                "lane_id":7,
-                "epoch":18446744073709551615,
-                "sequence":9,
-                "storage_ticket":$digest,
-                "manifest_hash":$digest,
-                "alias":null,
-                "owner":null
-              },
+              "intent":${signedIntentJson()},
               "location":{"block_height":10,"index_in_bundle":0},
               "bundle_hash":"$HASH",
               "bundle_len":2,
@@ -343,8 +406,19 @@ class DaToriiClientTest {
         """.trimIndent()
     }
 
-    private fun digestJson(byte: Int): String =
-        "[[" + List(32) { byte.toString() }.joinToString(",") + "]]"
+    @Test
+    fun pinProofRetainsFullUnsignedEpochAndRejectsRemovedOwnerOrDifferentScope() {
+        fun parse(text: String) = DaJson.parsePinIntentProof(DaJson.parse(text.toByteArray(), "proof"), "proof")
+        val wire = pinIntentProofJson()
+        val maximum = BigInteger("18446744073709551615")
+        val wide = wire.replace("\"epoch\": 42", "\"epoch\": $maximum")
+        val proof = requireNotNull(parse(wide))
+        assertEquals(maximum, proof.intent.epoch)
+        val serialized = DaJson.parse(proof.toJsonBytes(), "proof") as Map<*, *>
+        assertEquals(maximum, (serialized["intent"] as Map<*, *>)["epoch"])
+        assertFailsWith<IllegalArgumentException> { parse(wire.replaceFirst("\"epoch\": 42", "\"epoch\": 43")) }
+        assertFailsWith<IllegalArgumentException> { parse(wire.replaceFirst("\"authorization\":", "\"owner\":")) }
+    }
 
     private class CapturingDaExecutor(private val responseJson: String) : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest

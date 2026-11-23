@@ -331,7 +331,12 @@ the owner decides otherwise.
 8. **Payload availability.** Signed RS16 `PayloadManifest`/`PayloadChunk` availability
    is mandatory for the first release. The core integrates signed manifests, authenticated RS16 row acquisition and
    source-bound payload custody. Whole-node loss/withholding, committee geometry
-   and resource qualification remain required; component tests do not close them.
+   and resource qualification remain required. The Unix `sumeragi` integration target
+   covers an encrypted observer link hold and contains a real-validator loss/restart
+   test for each supported committee size. Qualification requires successful runs on
+   the candidate. Selective below-threshold row withholding and recovery upon the
+   final necessary row still require whole-daemon evidence, along with measured
+   resource use under the agreed production workload.
 9. **AMX epoch length.** What epoch length should AMX-participating instances use (handoff
    cadence for light clients, spec §11)? Default: `epoch_length` is 3 600 heights, one hour at
    1 s blocks.

@@ -2280,12 +2280,16 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>(),
-        vec!["MerkleSha256"]
+        vec!["SorafsPorBlake3"]
     );
     let commitment_record = schemas
         .get("DaCommitmentRecord")
         .and_then(Value::as_object)
         .expect("DA commitment record schema");
+    assert_eq!(
+        commitment_record["properties"]["chunk_root"]["$ref"].as_str(),
+        Some("#/components/schemas/DaDigest32")
+    );
     assert!(
         !commitment_record
             .get("properties")
@@ -2303,6 +2307,20 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
                     .any(|field| field.as_str() == Some("kzg_commitment"))
             }),
         "removed KZG commitments must not remain in DA record requirements"
+    );
+    let pin_properties = &schemas["DaPinIntent"]["properties"];
+    assert!(pin_properties.get("owner").is_none());
+    assert_eq!(
+        pin_properties["authorization"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestAuthorizationV1")
+    );
+    assert_eq!(
+        pin_properties["pin_scope_authorization"]["$ref"].as_str(),
+        Some("#/components/schemas/DaPinScopeAuthorizationV1")
+    );
+    assert_eq!(
+        schemas["DaPinScopeV1"]["properties"]["commitment_digest"]["$ref"].as_str(),
+        Some("#/components/schemas/DaDigest32")
     );
     let direction = schemas
         .get("MerkleDirection")

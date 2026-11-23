@@ -680,6 +680,21 @@ impl std::fmt::Debug for StreamTokenGatewayCheckBindingFailureV1 {
     }
 }
 
+// A publication overlapping verification cancels this local read. The caller retains
+// the exact signed Check and must authenticate its history and current authority again.
+fn ensure_verification_generation(
+    state: &State,
+    generation: u64,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
+    if is_stable_state_view_generation(generation, state.state_view_generation()) {
+        Ok(())
+    } else {
+        Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+            ivm::error::ExecutionDeferral::VerificationCancelled.into(),
+        ))
+    }
+}
+
 impl PendingStreamTokenGatewayCheckV1 {
     /// Original absolute deadline, unchanged by signed binding or submission.
     #[must_use]
@@ -723,12 +738,7 @@ impl PendingStreamTokenGatewayCheckV1 {
                 prepared.round.ensure_live().map_err(Error::from)?;
                 let generation = prepared.state.state_view_generation();
                 let view = prepared.state.view();
-                if !is_stable_state_view_generation(
-                    generation,
-                    prepared.state.state_view_generation(),
-                ) {
-                    return Err(Error::Authority.into());
-                }
+                ensure_verification_generation(&prepared.state, generation)?;
                 let cut = history::authenticate(&view, &prepared, &mut bound)?;
                 prepared.round.ensure_live().map_err(Error::from)?;
                 let time = sample_time().map_err(|_| Error::Clock)?;
@@ -762,12 +772,7 @@ impl PendingStreamTokenGatewayCheckV1 {
                 let origin = verified_origin(cut.view(), &prepared.instruction)?;
                 let check_block_hash = cut.check_block_hash();
                 let readback = public_readback(snapshot.value, prepared.expected.qualification);
-                if !is_stable_state_view_generation(
-                    generation,
-                    prepared.state.state_view_generation(),
-                ) {
-                    return Err(Error::Authority.into());
-                }
+                ensure_verification_generation(&prepared.state, generation)?;
                 drop(view);
                 Ok((
                     generation,

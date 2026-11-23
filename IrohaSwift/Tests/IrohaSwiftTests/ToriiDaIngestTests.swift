@@ -30,7 +30,7 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(artifacts.payloadLength, payload.count)
         XCTAssertEqual(artifacts.clientBlobIdHex, digest.upperHexString())
 
-        let expectedSigner = encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
+        let expectedSigner = CanonicalNorito.publicKeyMultihash(algorithm: .ed25519, payload: privateKey.publicKey.rawRepresentation)
         XCTAssertEqual(artifacts.signerPublicKeyHex, expectedSigner)
         let signingDigest = try XCTUnwrap(Data(hexString: artifacts.signingDigestHex))
         let signature = try XCTUnwrap(Data(hexString: artifacts.signatureHex))
@@ -69,12 +69,12 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(signatures[0]["signer"], expectedSigner)
     }
 
-    func testDaIntentDigestMatchesSharedRustProtocolVector() throws {
+    func testDaIntentDigestAndSignatureMatchSharedRustProtocolVectors() throws {
         let clientBlobId = Data((0..<32).map { UInt8(0x11 + $0) })
         let privateKey = try Curve25519.Signing.PrivateKey(
             rawRepresentation: Data(repeating: 0x19, count: 32)
         )
-        let submission = ToriiDaBlobSubmission(
+        var submission = ToriiDaBlobSubmission(
             networkId: try NetworkId(bytes: Data(repeating: 0xA5, count: 32)),
             owner: try makeDaOwner(privateKey: privateKey),
             payload: Data("hello data availability".utf8),
@@ -110,14 +110,61 @@ final class ToriiDaIngestTests: XCTestCase {
             privateKey: Data(repeating: 0x19, count: 32)
         )
 
-        let artifacts = try ToriiDaIngestRequestBuilder(submission: submission)
-            .makeRequestBody()
-            .artifacts
+        struct SigningVector: Decodable {
+            let compression: String
+            let wireBase64: String
+            let authorizationDigestHex: String
+            let signer: String
+            let signatureHex: String
+        }
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: root.appendingPathComponent("fixtures/da/ingest/request_signing_v1.json"))
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        for vector in try decoder.decode([SigningVector].self, from: data) {
+            switch vector.compression {
+            case "Identity":
+                submission.compression = .identity
+                submission.compressedPayload = nil
+            case "Deflate":
+                submission.compression = .deflate
+                submission.compressedPayload = try XCTUnwrap(Data(base64Encoded: vector.wireBase64))
+            default:
+                XCTFail("Unexpected fixture compression \(vector.compression)")
+                continue
+            }
+            let (body, artifacts) = try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody()
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(fields["payload"] as? String, vector.wireBase64)
+            XCTAssertEqual(artifacts.signingDigestHex, vector.authorizationDigestHex)
+            XCTAssertEqual(artifacts.signerPublicKeyHex, vector.signer)
+            let witnesses = try XCTUnwrap(fields["signatures"] as? [[String: String]])
+            XCTAssertEqual(witnesses, [["signer": vector.signer, "signature": vector.signatureHex]])
+            XCTAssertEqual(artifacts.signatureHex, vector.signatureHex)
+            var external = submission
+            external.privateKey = nil
+            external.signerPublicKeyHex = vector.signer
+            external.signatureHex = vector.signatureHex
+            let signed = try ToriiDaIngestRequestBuilder(submission: external).makeRequestBody()
+            XCTAssertEqual(signed.artifacts.signerPublicKeyHex, vector.signer)
+            XCTAssertEqual(signed.artifacts.signatureHex, vector.signatureHex)
+        }
+        submission.signerPublicKeyHex = "ed0120" + String(repeating: "41", count: 32)
+        XCTAssertThrowsError(try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody())
+    }
 
-        XCTAssertEqual(
-            artifacts.signingDigestHex,
-            "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA"
-        )
+    func testReceiptRequiresBoundedCanonicalSignatureAndAcceptsMlDsa65Length() throws {
+        var object = canonicalReceiptObject()
+        let signature = String(repeating: "AB", count: 3309)
+        object["operator_signature"] = signature
+        let receipt = try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(receipt.operatorSignatureHex, signature)
+        for malformed in ["", "00", "AA0", "ab", String(repeating: "AB", count: 4097)] {
+            object["operator_signature"] = malformed
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: JSONSerialization.data(withJSONObject: object)))
+        }
     }
 
     func testReceiptDecoding() throws {
@@ -125,7 +172,7 @@ final class ToriiDaIngestTests: XCTestCase {
         let digestJSON = "[[\(bytes.map(String.init).joined(separator: ","))]]"
         let payload = """
         {
-            "status":"Accepted",
+            "status":"accepted",
             "duplicate":false,
             "receipt":{
                 "client_blob_id":\(digestJSON),
@@ -136,6 +183,7 @@ final class ToriiDaIngestTests: XCTestCase {
                 "manifest_hash":\(digestJSON),
                 "storage_ticket":\(digestJSON),
                 "pdp_commitment":"SGVsbG8=",
+                "retention_policy":{"hot_retention_secs":3600,"cold_retention_secs":172800,"required_replicas":3,"storage_class":{"type":"Hot","value":null},"governance_tag":["da.sidecar"]},
                 "stripe_layout":{
                     "total_stripes":4,
                     "shards_per_stripe":12,
@@ -155,7 +203,7 @@ final class ToriiDaIngestTests: XCTestCase {
         }
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ToriiDaIngestSubmitPayload.self, from: payload)
-        XCTAssertEqual(decoded.status, "Accepted")
+        XCTAssertEqual(decoded.status, "accepted")
         XCTAssertFalse(decoded.duplicate)
         let receipt = try XCTUnwrap(decoded.receipt)
         XCTAssertEqual(receipt.clientBlobIdHex.count, 64)
@@ -163,6 +211,8 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(receipt.operatorSignatureHex, "DEADBEEF")
         XCTAssertEqual(receipt.pdpCommitment, Data("Hello".utf8))
         XCTAssertEqual(receipt.stripeLayout.rowParityStripes, 1)
+        XCTAssertEqual(receipt.retentionPolicy.requiredReplicas, 3)
+        XCTAssertEqual(receipt.retentionPolicy.governanceTag, "da.sidecar")
         let rentQuote = receipt.rentQuote
         XCTAssertEqual(rentQuote.baseRentMicro, "100")
         XCTAssertEqual(rentQuote.protocolReserveMicro, "25")
@@ -180,7 +230,7 @@ final class ToriiDaIngestTests: XCTestCase {
         )
         XCTAssertNil(decoded.pdpCommitment, "an explicit null PDP slot remains valid")
 
-        for field in ["pdp_commitment", "stripe_layout", "rent_quote"] {
+        for field in ["pdp_commitment", "stripe_layout", "rent_quote", "retention_policy"] {
             var missing = canonical
             missing.removeValue(forKey: field)
             let data = try JSONSerialization.data(withJSONObject: missing)
@@ -309,6 +359,108 @@ final class ToriiDaIngestTests: XCTestCase {
             .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
+    func testCompressedRequestBindsCanonicalPayloadAndExactWireBytes() throws {
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x11, count: 32))
+        let payload = Data("hello".utf8)
+        // RFC 1950 zlib stream containing “hello”.
+        let wire = try XCTUnwrap(Data(hexString: "789CCB48CDC9C90700062C0215"))
+        var submission = ToriiDaBlobSubmission(networkId: TestNetworkIds.canonical,
+            owner: try makeDaOwner(privateKey: key), payload: payload,
+            compression: .deflate, compressedPayload: wire, privateKey: key.rawRepresentation)
+        let prepared = try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody()
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.body) as? [String: Any])
+        XCTAssertEqual(body["payload"] as? String, wire.base64EncodedString())
+        XCTAssertEqual(body["total_size"] as? Int, payload.count)
+        let expected = try XCTUnwrap(NoritoNativeBridge.shared.blake3Hash(data: payload))
+        XCTAssertEqual(prepared.artifacts.payloadHashHex, expected.upperHexString())
+        submission.compressedPayload = nil
+        XCTAssertThrowsError(try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody())
+    }
+
+    func testCompleteCapturedRequestPreservesUnescapedBase64Bytes() throws {
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
+        let bytes = Data(repeating: 0xff, count: 12 * 1024)
+        let submission = ToriiDaBlobSubmission(networkId: TestNetworkIds.canonical,
+            owner: try makeDaOwner(privateKey: key), payload: bytes, privateKey: key.rawRepresentation)
+        let body = try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody().body
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try ToriiClient.persistDaRequestArtifacts(body: body, directory: directory, fileManager: .default)
+        let stored = try Data(contentsOf: directory.appendingPathComponent("da_request.json"))
+        XCTAssertEqual(stored, body)
+        XCTAssertNotNil(stored.range(of: Data(bytes.base64EncodedString().utf8)))
+        XCTAssertNil(stored.range(of: Data(#"\/"#.utf8)))
+    }
+
+    func testSubmitRejectsAnIdenticalControllerWithAForeignI105PrefixBeforePosting() async throws {
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x47, count: 32))
+        let address = try AccountAddress.fromAccount(publicKey: key.publicKey.rawRepresentation)
+        let submission = ToriiDaBlobSubmission(networkId: TestNetworkIds.canonical,
+            owner: try address.toI105(chainDiscriminant: 753), payload: Data("test".utf8), privateKey: key.rawRepresentation)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.handler = { _ in XCTFail("mismatched DA owner caused a POST"); throw URLError(.badURL) }
+        defer { StubURLProtocol.handler = nil }
+        let client = ToriiClient(baseURL: URL(string: "https://example.test")!,
+            session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(networkId: submission.networkId),
+            canonicalRequestAuth: ToriiCanonicalRequestAuth(accountId: try address.toI105(chainDiscriminant: 369),
+                                                           privateKey: key.rawRepresentation))
+        do {
+            _ = try await client.submitDaBlob(submission)
+            XCTFail("expected a DA owner discriminant rejection")
+        } catch ToriiClientError.invalidPayload(let reason) {
+            XCTAssertTrue(reason.contains("exact network and I105 owner"))
+        }
+    }
+
+    func testMultipartResumesAtAcknowledgedPartAndPreservesSignedMetadata() async throws {
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x12, count: 32))
+        let bytes = Data(repeating: 0xff, count: ToriiDaUpload.partBytes + 3)
+        let submission = ToriiDaBlobSubmission(networkId: TestNetworkIds.canonical,
+                                               owner: try makeDaOwner(privateKey: key), payload: bytes,
+                                               privateKey: key.rawRepresentation)
+        let metadata = try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody(includePayload: false).body
+        var calls: [String] = []
+        let (_, result) = try await ToriiDaUpload.transfer(submission, metadata: metadata) { path, data, status in
+            XCTAssertEqual(path, "/v1/da/ingest/parts")
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let action = try XCTUnwrap(body["action"] as? [String: Any])
+            let kind = try XCTUnwrap(action["kind"] as? String)
+            calls.append(kind)
+            if kind == "Finish" {
+                XCTAssertEqual(status, 202)
+                let request = try XCTUnwrap(action["value"] as? [String: Any])
+                XCTAssertEqual(request["payload"] as? String, "")
+                XCTAssertNotNil(request["signatures"])
+                return (Data(), "submitted")
+            }
+            XCTAssertEqual(status, 200)
+            if kind == "Put" {
+                XCTAssertNil(data.range(of: Data(#"\/"#.utf8)))
+                let part = try XCTUnwrap(action["value"] as? [String: Any])
+                XCTAssertEqual(part["index"] as? Int, 1)
+                XCTAssertEqual(part["bytes_b64"] as? String, Data(bytes.suffix(3)).base64EncodedString())
+            }
+            let ack = try JSONSerialization.data(withJSONObject: ["next_part": kind == "Begin" ? 1 : 2])
+            return (ack, "progress")
+        }
+        XCTAssertEqual(calls, ["Begin", "Put", "Finish"])
+        XCTAssertEqual(result, "submitted")
+    }
+
+    func testPinScopeDecoderRequiresTheCompleteDigestTuple() throws {
+        let bytes = [UInt8](repeating: 0x35, count: 32)
+        let owner = try makeDaOwner(privateKey: Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x19, count: 32)))
+        var scope: [String: Any] = ["network_id": TestNetworkIds.canonical.literal, "owner": owner,
+            "lane_id": 1, "epoch": 2, "sequence": 3, "alias": NSNull(), "storage_ticket": [bytes],
+            "manifest_hash": [bytes], "request_authorization_digest": [bytes], "commitment_digest": [bytes]]
+        let result = try JSONDecoder().decode(ToriiDaPinScope.self, from: JSONSerialization.data(withJSONObject: scope))
+        XCTAssertEqual(result.commitmentDigest, Data(bytes))
+        scope["commitment_digest"] = bytes
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaPinScope.self, from: JSONSerialization.data(withJSONObject: scope)))
+    }
+
     private func canonicalReceiptObject() -> [String: Any] {
         let digest = Array(0..<32)
         return [
@@ -320,6 +472,11 @@ final class ToriiDaIngestTests: XCTestCase {
             "manifest_hash": [digest],
             "storage_ticket": [digest],
             "pdp_commitment": NSNull(),
+            "retention_policy": [
+                "hot_retention_secs": 3600, "cold_retention_secs": 172800, "required_replicas": 3,
+                "storage_class": ["type": "Hot", "value": NSNull()] as [String: Any],
+                "governance_tag": ["da.sidecar"]
+            ] as [String: Any],
             "stripe_layout": [
                 "total_stripes": 4,
                 "shards_per_stripe": 12,
@@ -336,27 +493,5 @@ final class ToriiDaIngestTests: XCTestCase {
             ],
             "operator_signature": "DEADBEEF"
         ]
-    }
-
-    private func encodeEd25519Multihash(_ publicKey: Data) -> String {
-        var bytes: [UInt8] = []
-        bytes.append(contentsOf: encodeVarint(0xED))
-        bytes.append(contentsOf: encodeVarint(publicKey.count))
-        bytes.append(contentsOf: publicKey)
-        return Data(bytes).upperHexString()
-    }
-
-    private func encodeVarint(_ value: Int) -> [UInt8] {
-        var remaining = value
-        var output: [UInt8] = []
-        repeat {
-            var next = UInt8(remaining & 0x7F)
-            remaining >>= 7
-            if remaining != 0 {
-                next |= 0x80
-            }
-            output.append(next)
-        } while remaining != 0
-        return output
     }
 }

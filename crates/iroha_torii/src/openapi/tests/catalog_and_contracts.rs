@@ -1196,7 +1196,32 @@ fn generated_spec_includes_documented_paths() {
         .and_then(Value::as_object)
         .expect("DA ingest response map");
     assert!(da_ingest_responses.contains_key("202"));
+    assert!(da_ingest_responses.contains_key("507"));
     assert!(!da_ingest_responses.contains_key("200"));
+    #[cfg(feature = "app_api")]
+    {
+        let path = route_catalog::data_availability::INGEST_PARTS.path();
+        let parts = &paths.get(path).expect("compiled multipart DA route")["post"];
+        assert_eq!(
+            parts["x-iroha-route-auth"]["stableRouteId"].as_str(),
+            Some("data_availability.ingest.parts")
+        );
+        let responses = parts["responses"].as_object().unwrap();
+        for status in ["200", "202", "409", "413", "422", "429", "503", "507"] {
+            assert!(
+                responses.contains_key(status),
+                "missing DA upload status {status}"
+            );
+        }
+        let schema = &parts["responses"]["200"]["content"]["application/json"]["schema"];
+        assert_eq!(
+            schema["properties"]["next_part"]["maximum"].as_u64(),
+            Some(
+                (iroha_torii_shared::da::upload::DA_UPLOAD_MAX_BYTES
+                    / iroha_torii_shared::da::upload::DA_UPLOAD_PART_BYTES) as u64
+            )
+        );
+    }
     #[cfg(feature = "connect")]
     assert!(paths.contains_key("/v1/connect/session"));
     #[cfg(not(feature = "connect"))]

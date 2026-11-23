@@ -490,15 +490,8 @@ pub(crate) fn run_stages<'world>(
     Ok(())
 }
 
-/// Keep every staged successor exact at the end of the block at `height` (§5.4): mirror the old
-/// rows the block touched at or before each cursor while the migration's barrier holds, and stop
-/// the drain of a migration whose old storage the block still wrote after its cutover.
-///
-/// It reads the block's own journal of touched rows, so it covers every writer of the old
-/// storage: instructions, hooks and the block's tail writes alike. It runs as the last World
-/// write before the block's World commitment is folded. A root that holds no migration pays one
-/// emptiness check. Any error prevents publication of this entire original block; no
-/// incomplete barrier is recorded as success.
+/// The whole barrier of [`resume_barrier`] from fresh progress, for tests that need no resume.
+#[cfg(test)]
 pub(crate) fn barrier(world: &mut WorldBlock<'_>, height: u64) -> MigrationBoundaryResult<()> {
     resume_barrier(world, height, &mut BarrierProgress::default())
 }
@@ -510,9 +503,19 @@ pub(crate) struct BarrierProgress {
     completed_through: Option<DefinitionId>,
 }
 
-/// Resume only the first unfinished migration in the unchanged original World.
-/// An individual failed callback rolls back its existing successor child; prior
-/// successful siblings remain private and are never executed a second time.
+/// Keep every staged successor exact at the end of the block at `height` (§5.4): mirror the old
+/// rows the block touched at or before each cursor while the migration's barrier holds, and stop
+/// the drain of a migration whose old storage the block still wrote after its cutover.
+///
+/// It reads the block's own journal of touched rows, so it covers every writer of the old
+/// storage: instructions, hooks and the block's tail writes alike. It runs as the last World
+/// write before the block's World commitment is folded. A root that holds no migration pays one
+/// emptiness check. Any error prevents publication of this entire original block; no
+/// incomplete barrier is recorded as success.
+///
+/// It resumes only the first unfinished migration in the unchanged original World. An
+/// individual failed callback rolls back its existing successor child; prior successful
+/// siblings, recorded in `progress`, remain private and are never executed a second time.
 pub(crate) fn resume_barrier(
     world: &mut WorldBlock<'_>,
     height: u64,

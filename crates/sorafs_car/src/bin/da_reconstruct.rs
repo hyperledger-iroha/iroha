@@ -3,17 +3,14 @@
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::da::manifest::DaManifestV1;
-use norito::{
-    decode_from_bytes,
-    json::{Map, Value},
-};
+use norito::json::{Map, Value};
 #[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
 #[cfg(not(windows))]
-use std::io;
+use std::fs::File;
 use std::{
-    fs::{self, File},
-    io::{BufWriter, Read, Write},
+    fs,
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
 };
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
@@ -97,120 +94,65 @@ fn reconstruct_payload(
     output_path: &Path,
     chunk_template: &str,
 ) -> Result<ReconstructionSummary> {
-    if !chunk_dir.is_dir() {
-        return Err(eyre!(
-            "chunk directory `{}` does not exist or is not a directory",
-            chunk_dir.display()
-        ));
-    }
-    if manifest.chunks.is_empty() {
-        return Err(eyre!("manifest does not contain any chunk commitments"));
-    }
     render_chunk_template(chunk_template, 0)?;
-    let mut ordered_chunks = manifest.chunks.iter().collect::<Vec<_>>();
-    ordered_chunks.sort_by_key(|chunk| chunk.index);
-    let mut writer = BufWriter::new(open_output_file(output_path, "reconstructed payload")?);
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = Vec::new();
-    let mut total_bytes = 0u64;
-    let mut data_chunks = 0usize;
-    let mut parity_chunks = 0usize;
-    for chunk in ordered_chunks {
-        let file_name = render_chunk_template(chunk_template, chunk.index as usize)?;
-        let path = chunk_dir.join(file_name);
-        let mut file = File::open(&path)
-            .wrap_err_with(|| format!("failed to open chunk `{}`", path.display()))?;
-        let mut metadata_len = file
-            .metadata()
-            .map(|meta| meta.len())
-            .unwrap_or(chunk.length as u64);
-        if metadata_len == 0 {
-            metadata_len = chunk.length as u64;
+    let directory = iroha_fs::OwnerDirectory::open(chunk_dir)
+        .wrap_err_with(|| format!("failed to open chunk directory {}", chunk_dir.display()))?;
+    let payload = sorafs_car::da_recovery::recover_payload(manifest, |chunk| {
+        let name = render_chunk_template(chunk_template, chunk.index as usize)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let Some(file) = directory.open_retained_regular_optional(name)? else {
+            return Ok(None);
+        };
+        if file.file().metadata()?.len() != u64::from(chunk.length) {
+            return Ok(None);
         }
-        if metadata_len != chunk.length as u64 {
-            return Err(eyre!(
-                "chunk {} expected length {} bytes but file `{}` is {} bytes",
-                chunk.index,
-                chunk.length,
-                path.display(),
-                metadata_len
-            ));
-        }
-        buffer.resize(chunk.length as usize, 0);
-        file.read_exact(&mut buffer).wrap_err_with(|| {
+        let mut bytes = vec![0; chunk.length as usize];
+        iroha_fs::read_exact_at(file.file(), &mut bytes, 0)?;
+        file.revalidate()?;
+        Ok(Some(bytes))
+    })?;
+    let parent = output_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = output_path
+        .file_name()
+        .ok_or_else(|| eyre!("payload output needs a filename"))?;
+    iroha_fs::OwnerDirectory::open_or_create(parent)?
+        .write_atomic(name, &payload, iroha_fs::PublishMode::Replace)
+        .wrap_err_with(|| {
             format!(
-                "failed to read {} bytes from `{}`",
-                chunk.length,
-                path.display()
+                "failed to publish verified payload {}",
+                output_path.display()
             )
         })?;
-        let digest = blake3::hash(&buffer);
-        if digest.as_bytes() != chunk.commitment.as_ref() {
-            return Err(eyre!(
-                "chunk {} digest mismatch (expected {}, computed {})",
-                chunk.index,
-                hex::encode(chunk.commitment.as_ref()),
-                hex::encode(digest.as_bytes())
-            ));
-        }
-        if chunk.parity {
-            parity_chunks = parity_chunks
-                .checked_add(1)
-                .ok_or_else(|| eyre!("parity chunk counter overflow"))?;
-            continue;
-        }
-        if chunk.offset != total_bytes {
-            return Err(eyre!(
-                "chunk {} offset {} does not match reconstructed cursor {}",
-                chunk.index,
-                chunk.offset,
-                total_bytes
-            ));
-        }
-        writer
-            .write_all(&buffer)
-            .wrap_err("failed to write reconstructed payload")?;
-        hasher.update(&buffer);
-        total_bytes = total_bytes
-            .checked_add(buffer.len() as u64)
-            .ok_or_else(|| eyre!("payload length overflow"))?;
-        data_chunks = data_chunks
-            .checked_add(1)
-            .ok_or_else(|| eyre!("data chunk counter overflow"))?;
-    }
-    writer
-        .flush()
-        .wrap_err("failed to flush reconstructed payload")?;
-    if total_bytes != manifest.total_size {
-        return Err(eyre!(
-            "reconstructed length {} does not match manifest content_length {}",
-            total_bytes,
-            manifest.total_size
-        ));
-    }
-    let expected = manifest.blob_hash.as_bytes();
-    let computed = hasher.finalize();
-    if expected != computed.as_bytes() {
-        return Err(eyre!(
-            "payload digest mismatch (manifest {}, reconstructed {})",
-            hex::encode(expected),
-            hex::encode(computed.as_bytes())
-        ));
-    }
+    let data_chunks = manifest.chunks.iter().filter(|chunk| !chunk.parity).count();
     Ok(ReconstructionSummary {
         chunk_count: manifest.chunks.len(),
         data_chunks,
-        parity_chunks,
-        payload_bytes: total_bytes,
-        expected_blob_hash_hex: hex::encode(expected),
+        parity_chunks: manifest.chunks.len() - data_chunks,
+        payload_bytes: payload.len() as u64,
+        expected_blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
         output_path: output_path.display().to_string(),
     })
 }
 fn load_manifest(path: &Path) -> Result<DaManifestV1> {
-    let bytes =
-        fs::read(path).wrap_err_with(|| format!("failed to read manifest `{}`", path.display()))?;
+    // The canonical binary cap is 2 MiB. Hex represents each byte with two digits and
+    // optionally one terminal newline in the fixture representation.
+    const MANIFEST_MAX: usize = DaManifestV1::MAX_ENCODED_BYTES;
+    let mut file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take((2 * MANIFEST_MAX + 2) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 2 * MANIFEST_MAX + 1 {
+        return Err(eyre!("encoded DA manifest exceeds its size limit"));
+    }
     let decoded = decode_manifest_bytes(&bytes)?;
-    decode_from_bytes(&decoded).wrap_err("failed to decode Norito manifest")
+    if decoded.len() > MANIFEST_MAX {
+        return Err(eyre!("DA manifest exceeds 2 MiB"));
+    }
+    DaManifestV1::decode_canonical(&decoded).wrap_err("failed to decode Norito manifest")
 }
 fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
     let Ok(text) = std::str::from_utf8(raw) else {
@@ -555,7 +497,8 @@ mod tests {
         let encoded = hex::encode(&bytes);
         let decoded = decode_manifest_bytes(encoded.as_bytes()).expect("decode hex");
         assert_eq!(decoded, bytes);
-        let parsed: DaManifestV1 = decode_from_bytes(&decoded).expect("decode manifest");
+        let parsed: DaManifestV1 =
+            DaManifestV1::decode_canonical(&decoded).expect("decode manifest");
         assert_eq!(parsed.chunks.len(), manifest.chunks.len());
     }
     #[test]
@@ -638,6 +581,151 @@ mod tests {
         let expected = fs::read(fixture_root.join("payload.bin")).expect("read fixture payload");
         assert_eq!(reconstructed, expected);
     }
+    #[test]
+    fn one_missing_data_shard_fetches_only_one_verified_parity_shard() {
+        let root = fixture_root_path();
+        let manifest = load_manifest(&root.join("manifest.norito.hex")).unwrap();
+        let mut parity_reads = Vec::new();
+        let payload = sorafs_car::da_recovery::recover_payload(&manifest, |chunk| {
+            if chunk.index == 0 {
+                return Ok(None);
+            }
+            if chunk.parity {
+                parity_reads.push(chunk.index);
+            }
+            fs::read(
+                root.join("chunks")
+                    .join(format!("chunk_{:05}.bin", chunk.index)),
+            )
+            .map(Some)
+        })
+        .unwrap();
+        assert_eq!(
+            parity_reads.as_slice(),
+            &[u32::from(manifest.erasure_profile.data_shards)]
+        );
+        assert_eq!(payload, fs::read(root.join("payload.bin")).unwrap());
+    }
+    #[test]
+    fn reconstructs_partial_stripe_with_verified_parity_and_zero_padding() {
+        let (manifest, payload, parity) = sample_manifest();
+        let (_dir, root) = canonical_tempdir();
+        let out = root.join("original");
+        fs::write(&out, b"original output").unwrap();
+        // A corrupt real data row is an erasure. The unwritten tail of this source stripe
+        // contains known zeros, leaving only one actual parity row needed for recovery.
+        fs::write(root.join("chunk_00000.bin"), vec![0; payload.len()]).unwrap();
+        let (index, bytes) = &parity[0];
+        let parity_path =
+            root.join(render_chunk_template(DEFAULT_CHUNK_TEMPLATE, *index as usize).unwrap());
+        fs::write(&parity_path, bytes).unwrap();
+        reconstruct_payload(&manifest, &root, &out, DEFAULT_CHUNK_TEMPLATE).unwrap();
+        assert_eq!(fs::read(&out).unwrap(), payload);
+        // Wrong final digest, an inconsistent parity commitment and insufficient rows
+        // must all keep the already-published payload intact.
+        let mut changed = manifest.clone();
+        changed.blob_hash = BlobDigest::new([1; 32]);
+        assert!(reconstruct_payload(&changed, &root, &out, DEFAULT_CHUNK_TEMPLATE).is_err());
+        let mut changed = manifest.clone();
+        changed.chunk_root = BlobDigest::new([2; 32]);
+        assert!(reconstruct_payload(&changed, &root, &out, DEFAULT_CHUNK_TEMPLATE).is_err());
+        let mut changed = manifest.clone();
+        let missing_parity = parity[1].0 as usize;
+        changed.chunks[missing_parity].commitment = ChunkDigest::new([9; 32]);
+        assert!(reconstruct_payload(&changed, &root, &out, DEFAULT_CHUNK_TEMPLATE).is_err());
+        fs::remove_file(parity_path).unwrap();
+        assert!(reconstruct_payload(&manifest, &root, &out, DEFAULT_CHUNK_TEMPLATE).is_err());
+        assert_eq!(fs::read(out).unwrap(), payload);
+        let new_out = root.join("missing");
+        assert!(reconstruct_payload(&manifest, &root, &new_out, DEFAULT_CHUNK_TEMPLATE).is_err());
+        assert!(!new_out.exists());
+    }
+
+    #[test]
+    fn combines_global_and_cross_stripe_parity_using_canonical_manifest_indexes() {
+        use sorafs_car::da_recovery::{RecoveryError, recover_payload};
+
+        let root = fixture_root_path();
+        let mut manifest = load_manifest(&root.join("manifest.norito.hex")).unwrap();
+        let expected = fs::read(root.join("payload.bin")).unwrap();
+        let width = manifest.shards_per_stripe as usize;
+        let stripes = manifest.total_stripes as usize;
+        let size = manifest.chunk_size as usize;
+        let mut files: Vec<_> = manifest
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let name =
+                    render_chunk_template(DEFAULT_CHUNK_TEMPLATE, chunk.index as usize).unwrap();
+                Some(fs::read(root.join("chunks").join(name)).unwrap())
+            })
+            .collect();
+        assert_eq!(files.len(), width * stripes);
+        let extra = 2_usize;
+        let base = manifest.total_size
+            + stripes as u64 * u64::from(manifest.erasure_profile.parity_shards) * size as u64;
+        for column in 0..width {
+            let sources: Vec<_> = (0..stripes)
+                .map(|stripe| {
+                    rs16::symbols_from_chunk(
+                        size / 2,
+                        files[stripe * width + column].as_ref().unwrap(),
+                    )
+                })
+                .collect();
+            for (row, symbols) in rs16::encode_parity(&sources, extra)
+                .unwrap()
+                .into_iter()
+                .enumerate()
+            {
+                let bytes: Vec<_> = symbols.into_iter().flat_map(u16::to_le_bytes).collect();
+                manifest.chunks.push(ChunkCommitment::new_with_role(
+                    files.len() as u32,
+                    base + ((row * width + column) * size) as u64,
+                    size as u32,
+                    ChunkDigest::new(*blake3::hash(&bytes).as_bytes()),
+                    ChunkRole::StripeParity,
+                    column as u32,
+                ));
+                files.push(Some(bytes));
+            }
+        }
+        manifest.erasure_profile.row_parity_stripes = extra as u16;
+        manifest.total_stripes += extra as u32;
+        // Healthy data does not require reading parity from any provider.
+        let healthy = recover_payload(&manifest, |chunk| {
+            assert_eq!(chunk.role, ChunkRole::Data);
+            Ok(files[chunk.index as usize].clone())
+        })
+        .unwrap();
+        assert_eq!(healthy, expected);
+        // Remove an entire original stripe and a second stripe's first data shard.
+        // Removing the first column's parity ensures a horizontal repair is also necessary.
+        for file in &mut files[..=width] {
+            *file = None;
+        }
+        for file in &mut files[stripes * width..stripes * width + extra] {
+            *file = None;
+        }
+        let request = |chunk: &ChunkCommitment| Ok(files[chunk.index as usize].clone());
+        assert_eq!(recover_payload(&manifest, request).unwrap(), expected);
+        let mut malformed = manifest.clone();
+        malformed.chunks[0].index = 101;
+        assert!(matches!(
+            recover_payload(&malformed, |_| panic!("invalid inventory read")),
+            Err(RecoveryError::Manifest(_))
+        ));
+        malformed.chunk_size = u32::MAX;
+        assert!(matches!(
+            recover_payload(&malformed, |_| panic!("excessive geometry read")),
+            Err(RecoveryError::Geometry)
+        ));
+        assert!(matches!(
+            recover_payload(&manifest, |_| Err(io::Error::other("read refused"))),
+            Err(RecoveryError::Read { .. })
+        ));
+    }
+
     #[test]
     fn open_output_file_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
@@ -751,7 +839,6 @@ mod tests {
         write_chunk_matrix_json(&manifest, &fixture_root.join("chunk_matrix.json"));
         fs::write(fixture_root.join("payload.bin"), &payload).expect("write payload copy");
         let manifest_digest = ManifestDigest::new(*blake3::hash(&manifest_bytes).as_bytes());
-        let chunk_root_hash = Hash::prehashed(*manifest.chunk_root.as_ref());
         let proof_digest = Hash::prehashed(*blake3::hash(b"da-fixture-proof").as_bytes());
         let acknowledgement_sig = Signature::try_from_bytes(&[0xA5; 64])
             .expect("DA reconstruction fixture acknowledgement signature is nonzero");
@@ -761,8 +848,8 @@ mod tests {
             42,
             manifest.client_blob_id,
             manifest_digest,
-            DaProofScheme::MerkleSha256,
-            chunk_root_hash,
+            DaProofScheme::SorafsPorBlake3,
+            manifest.chunk_root,
             Some(proof_digest),
             manifest.retention_policy.clone(),
             manifest.storage_ticket,
@@ -964,7 +1051,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn native_reconstruction_and_summary_use_retained_outputs() {
+    fn native_reconstruction_atomically_replaces_output_and_retains_summary() {
         let (manifest, payload, parity_payloads) = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).unwrap();
         let (_temporary, root) = canonical_tempdir();
@@ -992,7 +1079,7 @@ mod tests {
             reconstruct_payload(&manifest, &root, &output, DEFAULT_CHUNK_TEMPLATE).unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         assert_eq!(summary.payload_bytes, manifest.total_size);
-        assert_eq!(
+        assert_ne!(
             iroha_fs::RetainedFile::open_regular(&output)
                 .unwrap()
                 .identity()

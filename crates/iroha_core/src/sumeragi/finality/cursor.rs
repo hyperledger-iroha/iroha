@@ -12,7 +12,7 @@ use std::{
 
 use super::ProofError;
 use crate::{
-    state::StateReadOnly,
+    state::{BlockHashRead, StateReadOnly},
     sumeragi::certified_chain::{
         AdmittedPrefixInitialization, AdmittedPrefixPush, CertifiedBlock, CertifiedPrefix,
         CommittedBlock, GenesisExecutionAnchor, NativeCarrierAcquisition, admit_verification_slot,
@@ -124,6 +124,56 @@ impl NativeCurrentFinalityV1 {
         self.at.native_block()
     }
 }
+
+/// Outcome of [`NativeFinalityCursorV1::advance_current_or_superseded`].
+pub enum NativeCurrentStepV1 {
+    /// The exact current result, as returned by [`NativeFinalityCursorV1::advance_current`].
+    Current(NativeCurrentFinalityV1),
+    /// Incomplete bounded progress, which `advance_current` reports as `None`.
+    Incomplete,
+    /// No result exists for this captured cut: Kura's exact durable count is strictly
+    /// newer. `advance_current` refuses the same call with `Source`.
+    Superseded(NativeSupersededCutV1),
+}
+
+/// A captured State cut whose tip is the block of Kura's durable hash journal at the same
+/// height, beneath a strictly newer exact durable count. It carries no proof and can never
+/// become a result; only a strictly newer cut with an equal durable count can be current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeSupersededCutV1 {
+    height: u64,
+    hash: HashOf<BlockHeader>,
+    durable: u64,
+}
+impl NativeSupersededCutV1 {
+    /// Applied height of the superseded captured State cut.
+    #[must_use]
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+    /// Tip hash of the superseded captured cut, equal to Kura's durable journal entry.
+    #[must_use]
+    pub fn hash(&self) -> HashOf<BlockHeader> {
+        self.hash
+    }
+    /// Kura's exact durable count, strictly above the captured cut.
+    #[must_use]
+    pub fn durable_height(&self) -> u64 {
+        self.durable
+    }
+}
+
+// One bounded call. A superseded cut is classified only for the typed caller; the original
+// methods refuse `Source` at the same point with identical retained progress and projection.
+enum Advanced {
+    At(Option<NativeFinalityAtHeightV1>),
+    Superseded(NativeSupersededCutV1),
+}
+enum Projection {
+    Done(NativeFinalityAtHeightV1),
+    Superseded(NativeSupersededCutV1),
+}
+type Cut = std::ops::ControlFlow<NativeSupersededCutV1, u64>;
 
 struct Original {
     network: NetworkId,
@@ -285,9 +335,37 @@ impl NativeFinalityCursorV1 {
         deadline: Instant,
         maximum_steps: NonZeroU16,
     ) -> Result<Option<NativeCurrentFinalityV1>> {
-        Ok(self
-            .advance_at(view, budget, deadline, maximum_steps, None)?
-            .map(|at| NativeCurrentFinalityV1 { at }))
+        match self.advance_at(view, budget, deadline, maximum_steps, None, false)? {
+            Advanced::At(at) => Ok(at.map(|at| NativeCurrentFinalityV1 { at })),
+            Advanced::Superseded(_) => Err(Error::Source),
+        }
+    }
+
+    /// [`Self::advance_current`] for a caller that may select a strictly newer State cut.
+    ///
+    /// The same progress, deadline and at most 64 steps apply. Where `advance_current`
+    /// refuses `Source` only because Kura's exact durable count is strictly newer than a
+    /// captured cut whose tip is that durable journal's block, this returns `Superseded`
+    /// with identical retained progress and projection. It never returns a result for the
+    /// captured cut; a later call returns one only for a cut with an equal durable count.
+    /// # Errors
+    /// Every other refusal of [`Self::advance_current`], unchanged.
+    pub fn advance_current_or_superseded(
+        &mut self,
+        view: &impl StateReadOnly,
+        budget: &AllocationBudget,
+        deadline: Instant,
+        maximum_steps: NonZeroU16,
+    ) -> Result<NativeCurrentStepV1> {
+        Ok(
+            match self.advance_at(view, budget, deadline, maximum_steps, None, true)? {
+                Advanced::At(Some(at)) => {
+                    NativeCurrentStepV1::Current(NativeCurrentFinalityV1 { at })
+                }
+                Advanced::At(None) => NativeCurrentStepV1::Incomplete,
+                Advanced::Superseded(cut) => NativeCurrentStepV1::Superseded(cut),
+            },
+        )
     }
 
     /// Advance the same original prefix toward one historical committed height.
@@ -310,9 +388,20 @@ impl NativeFinalityCursorV1 {
         if height.get() < 2 {
             return Err(Error::Source);
         }
-        self.advance_at(view, budget, deadline, maximum_steps, Some(height.get()))
+        match self.advance_at(
+            view,
+            budget,
+            deadline,
+            maximum_steps,
+            Some(height.get()),
+            false,
+        )? {
+            Advanced::At(at) => Ok(at),
+            Advanced::Superseded(_) => Err(Error::Source),
+        }
     }
 
+    // `typed` only classifies a superseded captured cut; every transition is identical.
     fn advance_at(
         &mut self,
         view: &impl StateReadOnly,
@@ -320,18 +409,22 @@ impl NativeFinalityCursorV1 {
         deadline: Instant,
         maximum_steps: NonZeroU16,
         requested: Option<u64>,
-    ) -> Result<Option<NativeFinalityAtHeightV1>> {
+        typed: bool,
+    ) -> Result<Advanced> {
         check(deadline)?;
         if maximum_steps.get() > 64 {
             return Err(Error::Source);
         }
-        let current = coherent_height(view)?;
+        let current = match captured_cut(view, typed)? {
+            Cut::Continue(height) => height,
+            Cut::Break(cut) => return Ok(Advanced::Superseded(cut)),
+        };
         let target = requested.unwrap_or(current);
         if target > current {
             return Err(Error::Source);
         }
         if target == 0 {
-            return Ok(None);
+            return Ok(Advanced::At(None));
         }
         if self.original.is_none() {
             let initialized = self.initialize(view, budget, deadline);
@@ -359,9 +452,12 @@ impl NativeFinalityCursorV1 {
             // A newer captured cut may arrive while an older final projection is deferred.
             // Complete that same original operation before advancing its native prefix.
             // Its historical result can never be returned as authority for the newer tip.
-            let completed = original.finish_output(view, budget, deadline, current)?;
+            let completed = match original.finish_output(view, budget, deadline, current, typed)? {
+                Projection::Done(completed) => completed,
+                Projection::Superseded(cut) => return Ok(Advanced::Superseded(cut)),
+            };
             if original.native_height == target {
-                return Ok(Some(completed));
+                return Ok(Advanced::At(Some(completed)));
             }
             drop(completed);
         }
@@ -393,11 +489,14 @@ impl NativeFinalityCursorV1 {
         }
         check(deadline)?;
         if original.pending.is_some() || original.native_height != target || target < 2 {
-            return Ok(None);
+            return Ok(Advanced::At(None));
         }
-        original
-            .finish_output(view, budget, deadline, current)
-            .map(Some)
+        Ok(
+            match original.finish_output(view, budget, deadline, current, typed)? {
+                Projection::Done(completed) => Advanced::At(Some(completed)),
+                Projection::Superseded(cut) => Advanced::Superseded(cut),
+            },
+        )
     }
 
     fn initialize(
@@ -575,7 +674,8 @@ impl Original {
         budget: &AllocationBudget,
         deadline: Instant,
         current: u64,
-    ) -> Result<NativeFinalityAtHeightV1> {
+        typed: bool,
+    ) -> Result<Projection> {
         let bytes = self.checkpoint.as_ref().ok_or(Error::Source)?;
         if self.projecting.is_none() {
             let custody = DecodeCustody::new(bytes.as_slice().len(), budget)?;
@@ -604,17 +704,22 @@ impl Original {
             budget,
             deadline,
             current,
+            typed,
         );
         #[cfg(all(test, sumeragi_core_mutation = "HC235"))]
         if matches!(&completed, Err(Error::Proof(ProofError::Deferred(_)))) {
             self.projecting = None;
         }
-        completed?;
-        Ok(self
-            .projecting
-            .take()
-            .expect("complete original output projection")
-            .into_output())
+        // A superseded cut retains this projection exactly as the original `Source` refusal.
+        if let Some(cut) = completed? {
+            return Ok(Projection::Superseded(cut));
+        }
+        Ok(Projection::Done(
+            self.projecting
+                .take()
+                .expect("complete original output projection")
+                .into_output(),
+        ))
     }
 
     fn finish_pending(&mut self, budget: &AllocationBudget, deadline: Instant) -> Result<()> {
@@ -810,7 +915,8 @@ impl OutputRead {
         budget: &AllocationBudget,
         deadline: Instant,
         current: u64,
-    ) -> Result<()> {
+        typed: bool,
+    ) -> Result<Option<NativeSupersededCutV1>> {
         let Self {
             output,
             native,
@@ -887,7 +993,12 @@ impl OutputRead {
                 native.push_reserved(receipt);
             }
             let receipt = &native.as_slice()[0];
-            if coherent_height(view)? != current
+            let cut = captured_cut(view, typed)?;
+            let captured = match cut {
+                Cut::Continue(count) => count,
+                Cut::Break(cut) => cut.height,
+            };
+            if captured != current
                 || authenticated.height() != *height
                 || authenticated.block().hash() != *hash
                 || receipt.block_hash() != authenticated.block().hash()
@@ -897,7 +1008,11 @@ impl OutputRead {
             {
                 return Err(Error::Source);
             }
-            Ok(())
+            // Identity is checked first; a superseded cut still returns no output.
+            Ok(match cut {
+                Cut::Continue(_) => None,
+                Cut::Break(cut) => Some(cut),
+            })
         })
     }
     fn into_output(self) -> NativeFinalityAtHeightV1 {
@@ -957,6 +1072,50 @@ fn coherent_height(view: &impl StateReadOnly) -> Result<u64> {
         return Err(Error::Source);
     }
     u64::try_from(count).map_err(|_| Error::Source)
+}
+// The original methods keep `coherent_height` unchanged. The typed caller also learns when
+// the refused cut is a durable ancestor: the driver appends a block durably before it
+// publishes that State, so a cut captured in between lies beneath a newer durable head.
+fn captured_cut(view: &impl StateReadOnly, typed: bool) -> Result<Cut> {
+    if !typed {
+        return coherent_height(view).map(Cut::Continue);
+    }
+    let kura = view.kura();
+    let durable = kura
+        .exact_durable_blocks_count()
+        .map_err(|_| Error::Source)?;
+    classify_cut(view.block_hashes(), durable, |tip| {
+        kura.get_durable_block_hash(tip)
+    })
+}
+// Equal counts are exact. A strictly newer durable count supersedes the cut only when its
+// tip is the durable journal's block at the same height. A durable count beneath the cut,
+// an empty cut and an absent or different journal hash (corruption or another fork) are
+// `Source`, as in `coherent_height`.
+fn classify_cut(
+    applied: &dyn BlockHashRead,
+    durable: usize,
+    durable_hash: impl FnOnce(NonZeroUsize) -> Option<HashOf<BlockHeader>>,
+) -> Result<Cut> {
+    let count = applied.len();
+    if durable == count {
+        return u64::try_from(count)
+            .map(Cut::Continue)
+            .map_err(|_| Error::Source);
+    }
+    if durable < count {
+        return Err(Error::Source);
+    }
+    let tip = NonZeroUsize::new(count).ok_or(Error::Source)?;
+    let hash = *applied.get(tip.get() - 1).ok_or(Error::Source)?;
+    if durable_hash(tip) != Some(hash) && !cfg!(all(test, sumeragi_core_mutation = "HC986")) {
+        return Err(Error::Source);
+    }
+    Ok(Cut::Break(NativeSupersededCutV1 {
+        height: u64::try_from(count).map_err(|_| Error::Source)?,
+        hash,
+        durable: u64::try_from(durable).map_err(|_| Error::Source)?,
+    }))
 }
 fn check(deadline: Instant) -> Result<()> {
     if Instant::now() >= deadline {
@@ -1431,6 +1590,176 @@ mod tests {
         assert_eq!(again.block().height(), 3);
         drop(again);
         drop(cursor);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn superseded_cut_requires_the_durable_journal_tip_beneath_a_strictly_newer_count() {
+        let hash = |byte| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([byte; 32]))
+        };
+        let applied = [hash(1), hash(2), hash(3)];
+        let empty: [HashOf<BlockHeader>; 0] = [];
+        let unread = |_: NonZeroUsize| -> Option<HashOf<BlockHeader>> {
+            panic!("only a strictly newer durable count reads the journal")
+        };
+        let journal = |answer: Option<HashOf<BlockHeader>>| {
+            move |tip: NonZeroUsize| {
+                assert_eq!(tip.get(), 3, "only the captured tip is joined");
+                answer
+            }
+        };
+        assert!(matches!(
+            classify_cut(&applied, 3, unread),
+            Ok(Cut::Continue(3))
+        ));
+        assert!(matches!(
+            classify_cut(&empty, 0, unread),
+            Ok(Cut::Continue(0))
+        ));
+        for durable in [4_usize, 5] {
+            let Ok(Cut::Break(cut)) = classify_cut(&applied, durable, journal(Some(hash(3))))
+            else {
+                panic!("a journaled tip beneath a newer durable count is superseded");
+            };
+            assert_eq!(
+                (cut.height(), cut.hash(), cut.durable_height()),
+                (3, hash(3), u64::try_from(durable).unwrap())
+            );
+        }
+        // Corruption or another fork at the captured tip, or a journal that cannot answer.
+        for answer in [Some(hash(9)), Some(hash(2)), None] {
+            assert!(matches!(
+                classify_cut(&applied, 4, journal(answer)),
+                Err(Error::Source)
+            ));
+        }
+        // A durable count beneath the cut, or no captured tip to join.
+        assert!(matches!(
+            classify_cut(&applied, 2, unread),
+            Err(Error::Source)
+        ));
+        assert!(matches!(
+            classify_cut(&empty, 1, unread),
+            Err(Error::Source)
+        ));
+    }
+
+    #[test]
+    fn typed_cursor_reports_a_superseded_cut_and_returns_only_the_strictly_newer_exact_head() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
+        chain.commit_at(20_000, Vec::new());
+        let state = Arc::clone(chain.state());
+        let budget = AllocationBudget::new(2 * 1024 * 1024 * 1024);
+        let steps = NonZeroU16::new(64).unwrap();
+        let mut prefix = NativeFinalityCursorV1::new(SumeragiRootScope::Global);
+        let mut entry = NativeFinalityCursorV1::new(SumeragiRootScope::Global);
+        let reached = (0..4)
+            .find_map(|_| {
+                prefix
+                    .advance_current(&state.view(), &budget, deadline(), steps)
+                    .unwrap()
+            })
+            .expect("bounded catch-up to the exact committed head");
+        assert_eq!(reached.block().height(), 2);
+        drop(reached);
+        // The genuine H3 becomes durable before its State publication, as in the node driver.
+        let proposal = chain.proposal(Some(30_000), Vec::new());
+        let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+        pending.prepare(Signers::Quorum).unwrap();
+        pending.append_prepared().unwrap();
+        {
+            let captured = state.view();
+            let tip = *captured.block_hashes().last().unwrap();
+            assert_eq!(captured.block_hashes().len(), 2);
+            assert_eq!(captured.kura().exact_durable_blocks_count().unwrap(), 3);
+            let superseded = |step: Result<NativeCurrentStepV1>| match step {
+                Ok(NativeCurrentStepV1::Superseded(cut)) => cut,
+                _ => panic!("a durable ancestor cut is superseded, never current"),
+            };
+            // Entry: the original methods keep `Source`; only the typed call classifies it.
+            for cursor in [&mut prefix, &mut entry] {
+                assert!(matches!(
+                    cursor.advance_current(&captured, &budget, deadline(), steps),
+                    Err(Error::Source)
+                ));
+                let cut = superseded(cursor.advance_current_or_superseded(
+                    &captured,
+                    &budget,
+                    deadline(),
+                    steps,
+                ));
+                assert_eq!(
+                    (cut.height(), cut.hash(), cut.durable_height()),
+                    (2, tip, 3)
+                );
+            }
+            assert!(
+                entry.original.is_none(),
+                "an entry refusal starts no progress"
+            );
+            assert!(matches!(
+                prefix.advance_to_height(
+                    &captured,
+                    NonZeroU64::new(2).unwrap(),
+                    &budget,
+                    deadline(),
+                    steps
+                ),
+                Err(Error::Source)
+            ));
+            // The original entry order and the 64-step bound are unchanged.
+            assert!(matches!(
+                prefix.advance_current_or_superseded(&captured, &budget, Instant::now(), steps),
+                Err(Error::Deadline)
+            ));
+            assert!(matches!(
+                prefix.advance_current_or_superseded(
+                    &captured,
+                    &budget,
+                    deadline(),
+                    NonZeroU16::new(65).unwrap()
+                ),
+                Err(Error::Source)
+            ));
+            // Final projection: the entry cut H2 was exact; the durable count is now newer.
+            let original = prefix.original.as_mut().unwrap();
+            let Projection::Superseded(cut) = original
+                .finish_output(&captured, &budget, deadline(), 2, true)
+                .unwrap()
+            else {
+                panic!("a projection beneath a newer durable head returns no output");
+            };
+            assert_eq!((cut.height(), cut.durable_height()), (2, 3));
+            assert!(original.projecting.is_some(), "retained as on refusal");
+            assert!(matches!(
+                original.finish_output(&captured, &budget, deadline(), 2, false),
+                Err(Error::Source)
+            ));
+            assert!(original.projecting.is_some());
+        }
+        pending.publish(Signers::Quorum).unwrap();
+        drop(pending);
+        // Only the strictly newer exact head is returned; the retained H2 projection is not.
+        let head = *state.view().block_hashes().last().unwrap();
+        for cursor in [&mut prefix, &mut entry] {
+            let current = (0..4)
+                .find_map(|_| {
+                    match cursor
+                        .advance_current_or_superseded(&state.view(), &budget, deadline(), steps)
+                        .unwrap()
+                    {
+                        NativeCurrentStepV1::Current(current) => Some(current),
+                        NativeCurrentStepV1::Incomplete => None,
+                        NativeCurrentStepV1::Superseded(_) => panic!("the published head is exact"),
+                    }
+                })
+                .expect("bounded progress to the exact head");
+            assert_eq!(current.block().height(), 3);
+            assert_eq!(current.native_block().block_hash(), head);
+        }
+        drop((prefix, entry));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 

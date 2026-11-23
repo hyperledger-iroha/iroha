@@ -363,13 +363,16 @@ fn joined_carrier_reads_keep_bounded_live_pool_and_every_local_proof() {
 fn native_carrier_pool(parallel: bool) {
     use std::{
         io::{ErrorKind, Read, Write},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
     let _guard = crate::managed::native_test_guard();
     let (_temporary, mut prepared) = fixture();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
+    // A speculative connect can complete while the HTTP pool reuses its idle stream.
+    // Keep a known zero-byte connection open throughout the scalar proof.
+    let idle = (!parallel).then(|| TcpStream::connect(address).unwrap());
     for (index, peer) in prepared.peers.iter_mut().enumerate() {
         peer.torii_url = format!("http://{address}/peer{index}/");
     }
@@ -381,17 +384,21 @@ fn native_carrier_pool(parallel: bool) {
         let mut requests = Vec::new();
         while requests.len() < expected.len() * 4 && Instant::now() < deadline {
             match listener.accept() {
-                Ok((stream, _)) => {
+                Ok((stream, peer)) => {
                     stream.set_nonblocking(true).unwrap();
-                    connections.push((stream, Vec::<u8>::new()));
+                    connections.push((stream, Vec::<u8>::new(), (peer, false)));
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {}
                 Err(error) => panic!("carrier listener: {error}"),
             }
-            for (stream, pending) in &mut connections {
+            for (stream, pending, (_, received_bytes)) in &mut connections {
                 let mut buffer = [0_u8; 4096];
                 match stream.read(&mut buffer) {
-                    Ok(length) => pending.extend_from_slice(&buffer[..length]),
+                    Ok(0) => {}
+                    Ok(length) => {
+                        *received_bytes = true;
+                        pending.extend_from_slice(&buffer[..length]);
+                    }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {}
                     Err(error) => panic!("carrier request: {error}"),
                 }
@@ -444,7 +451,11 @@ fn native_carrier_pool(parallel: bool) {
             }
             thread::sleep(Duration::from_millis(1));
         }
-        (connections.len(), requests)
+        let connections: Vec<_> = connections
+            .into_iter()
+            .map(|(_, _, observation)| observation)
+            .collect();
+        (connections, requests)
     });
     let budget = Budget {
         timeout: Duration::from_secs(15),
@@ -459,7 +470,7 @@ fn native_carrier_pool(parallel: bool) {
     result.unwrap();
     if parallel {
         assert!(
-            (1..=4).contains(&connections),
+            (1..=4).contains(&connections.len()),
             "one outstanding read per peer keeps a bounded pool"
         );
         assert_eq!(requests.len(), 29 * 4);
@@ -479,10 +490,6 @@ fn native_carrier_pool(parallel: bool) {
         }
     } else {
         assert_eq!(
-            connections, 1,
-            "the originating runtime must drive its shared pool until every carrier and peer finishes"
-        );
-        assert_eq!(
             requests,
             (0..29)
                 .flat_map(|_| (0..4).map(|peer| format!(
@@ -491,5 +498,11 @@ fn native_carrier_pool(parallel: bool) {
                 )))
                 .collect::<Vec<_>>()
         );
+        assert_eq!(
+            connections.iter().filter(|(_, received)| *received).count(),
+            1,
+            "the originating runtime must drive its shared pool until every carrier and peer finishes"
+        );
+        assert!(connections.contains(&(idle.unwrap().local_addr().unwrap(), false)));
     }
 }

@@ -561,13 +561,101 @@ It then executes the actual same-source `sorafs_cli deploy` with an independentl
 verified saved checkpoint, requires its complete success receipt and asset
 readback, and independently challenges the resulting native completion again.
 Set `TEST_NETWORK_BIN_SORAFS_CLI` to the absolute prebuilt `sorafs_cli` artifact
-built with `cli-orchestrator`; missing CLI artifacts fail before network startup.
+built with its default `cli-orchestrator` and `moderation-grpc` features. Missing CLI artifacts fail before network startup.
 The publication qualification test fails if the four-validator network cannot
 start; an unavailable sandbox cannot produce a passing skip.
 Each provider explicitly declares and bounds two GiB for these two small pins;
 the test does not preallocate that disk space.
 The gateway uses a genuinely signed and acknowledged empty compliance catalog;
 its configured optional HTTPS feed is not fetched by this scenario.
+
+The `core_api` target also contains
+`sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery`.
+Its signed multipart upload is included with paid ordinary work. The test
+independently verifies finality and calls native `deploy --da-source`. It rechecks
+the receipt's retained signed assignment and completion assertions and their
+compact proofs against the inclusion checkpoint, including the canonical
+replication order and all three provider IDs. After restarting two providers
+and stopping ingress, it checks each survivor's CID lookup against the published
+SoraFS manifest and recovers the original bytes using native `da-recover`. A second execution of the native CLI uses a bounded loopback
+gateway that withholds one data shard and serves each remaining request from a
+cold provider. This run requires an observed parity read and exact output bytes.
+
+For consensus payloads, the Unix `sumeragi` target's
+`rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality`
+stops one voter before paid work, checks the surviving signers and each process's
+signed row custody, then verifies fresh row acquisition after the voter restarts.
+Run `rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality`
+with `--ignored --exact --test-threads=1` and set
+`IROHA_RS16_QUALIFICATION_COMMITTEE` to one of 7, 10, 13, 16, 19, 22, 25, 28,
+or 31 on a host provisioned for that many daemons. Each size stops all
+`f = (n - 1) / 3` voters before submission. The separate
+`observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality`
+test holds the observer's encrypted inbound link during paid consensus work.
+Per-row withholding and measured whole-daemon resource limits remain open
+qualification cases in `specs/sumeragi_goals.md`.
+
+For qualifying runs, point `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_BIN_IROHA`
+and `TEST_NETWORK_BIN_SORAFS_CLI` at the absolute prebuilt candidate executables.
+Set `IROHA_TEST_REQUIRE_NETWORK=1` and `IROHA_TEST_SKIP_BUILD=1`. Run each
+required selection with an anchored filter and an empty-selection failure.
+For example:
+
+```sh
+cargo nextest run --locked -p integration_tests --test core_api --no-tests=fail --test-threads=1 \
+  -E 'test(/^sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery$/)'
+cargo nextest run --locked -p integration_tests --test sumeragi --no-tests=fail --test-threads=1 \
+  -E 'test(/^observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality$/)'
+cargo nextest run --locked -p integration_tests --test sumeragi --no-tests=fail --test-threads=1 \
+  -E 'test(/^rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality$/)'
+IROHA_RS16_QUALIFICATION_COMMITTEE=7 cargo nextest run --locked -p integration_tests \
+  --test sumeragi --run-ignored only --no-tests=fail --test-threads=1 \
+  -E 'test(/^rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality$/)'
+```
+
+Repeat the last command independently for each larger committee.
+
+The standard Cargo harness is also supported. Its exact filter can succeed with
+zero matches. The following shell function checks discovery, the child exit and
+the exact one-test terminal and summary. It keeps Cargo diagnostics on stderr
+and prints the test transcript, including on failure.
+
+```sh
+da_test() (
+  set -eu
+  target=$1
+  name=$2
+  shift 2
+  output=$(mktemp -d)
+  trap 'rm -rf "$output"' EXIT
+  cargo test --locked -p integration_tests --test "$target" "$name" -- \
+    --exact --list --format terse "$@" > "$output/list"
+  if ! awk -v name="$name" '/: test$/ { count++; if ($0 != name ": test") bad=1 }
+       END { exit !(count == 1 && !bad) }' "$output/list"; then
+    cat "$output/list" >&2
+    exit 1
+  fi
+  if ! cargo test --locked -p integration_tests --test "$target" "$name" -- \
+    --exact --format pretty --color never --test-threads=1 "$@" > "$output/run"; then
+    cat "$output/run" >&2
+    exit 1
+  fi
+  cat "$output/run"
+  awk -v name="$name" 'NF {
+      n++
+      if (n == 1 && $0 != "running 1 test") bad=1
+      if (n == 2 && $0 != "test " name " ... ok") bad=1
+      if (n == 3 && $0 !~ /^test result: ok[.] 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s$/) bad=1
+    } END { exit !(n == 3 && !bad) }' "$output/run"
+)
+
+set -e
+da_test core_api sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery
+da_test sumeragi observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality
+da_test sumeragi rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality
+IROHA_RS16_QUALIFICATION_COMMITTEE=7 da_test sumeragi rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality --ignored
+```
+
 
 The Taira-only repair is specified in `specs/sorafs/taira_repair_v1.md`.
 Its deployment identity deliberately refuses a freshly generated test network.

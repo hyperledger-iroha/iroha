@@ -113,11 +113,14 @@ def run_suite(root: Path, target: Path, jobs: int | None, config: dict[str, str]
                              MOBILE_SDK_PYTHON_BINARY=config["python"])
     swift = str(Path(config["developer_dir"]) / "Toolchains/XcodeDefault.xctoolchain/usr/bin/swift")
     test_failure = None
-    try:
-        run_step([swift, "test", "--package-path", str(root / "IrohaSwift"),
+    swift_test = [swift, "test", "--package-path", str(root / "IrohaSwift"),
                   "--configuration", "debug", "--disable-automatic-resolution",
-                  "--manifest-cache", "none", "--scratch-path", str(swift_scratch)],
-                 root=root / "IrohaSwift", environment=swift_environment, log=run / "swift-test.log")
+                  "--manifest-cache", "none", "--scratch-path", str(swift_scratch)]
+    if jobs is not None:
+        swift_test.extend(["--jobs", str(jobs), "-Xswiftc", f"-j{jobs}"])
+    try:
+        run_step(swift_test, root=root / "IrohaSwift", environment=swift_environment,
+                 log=run / "swift-test.log")
     except (subprocess.CalledProcessError, OSError) as error:
         test_failure = error
     try:
@@ -141,7 +144,7 @@ def main(argv=None) -> int:
     parser.add_argument("--target-dir", type=Path, default=root / "target/native-sdk-host-local",
                         help="stable canonical Cargo lane below this checkout's target directory")
     parser.add_argument("--jobs", type=int, choices=range(1, 9),
-                        help="explicit Cargo override; defaults to the native jobserver")
+                        help="maximum concurrent jobs for Cargo, SwiftPM and the Swift compiler")
     args = parser.parse_args(argv)
     try:
         environment = os.environ.copy()

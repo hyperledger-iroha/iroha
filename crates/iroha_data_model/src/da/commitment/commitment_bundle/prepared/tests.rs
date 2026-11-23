@@ -10,8 +10,8 @@ fn record(i: u8, tag: String, payload: &[u8]) -> DaCommitmentRecord {
         u64::from(i) + 1,
         BlobDigest::new([i; 32]),
         ManifestDigest::new([i.wrapping_add(1); 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::new([i; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([i; 32]),
         if i.is_multiple_of(2) {
             Some(Hash::new([i.wrapping_add(2); 32]))
         } else {

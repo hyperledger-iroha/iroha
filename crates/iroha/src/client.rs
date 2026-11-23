@@ -18496,7 +18496,7 @@ impl Client {
             manifest_bytes,
         )
     }
-    /// Add the client's signature over an exact pin scope returned for a prepared request.
+    /// Verify the prepared receipt's commitment before signing its pin scope.
     ///
     /// The original request is left unchanged. The returned clone retains the original
     /// request authorization and adds the post-ingest scope witness needed to finalize it.
@@ -18509,18 +18509,25 @@ impl Client {
         &self,
         request: &DaIngestRequest,
         scope: &DaPinScopeV1,
+        receipt: &DaIngestReceipt,
+        operator: &PublicKey,
     ) -> Result<DaIngestRequest> {
         let mut authorized_request = request.clone();
-        authorized_request
-            .try_add_pin_scope_signature(scope, &self.key_pair)
-            .wrap_err("failed to authorize DA pin scope")?;
+        crate::da::authorize_da_pin_receipt(
+            &mut authorized_request,
+            scope,
+            receipt,
+            operator,
+            self.network_id,
+            &self.account,
+            &self.key_pair,
+        )?;
         Ok(authorized_request)
     }
-    /// Authorize an exact pin scope and retry the prepared DA ingest request once.
+    /// Check the prepared receipt, authorize its exact pin scope and submit the request once.
     ///
-    /// This method performs one HTTP submission and returns its response even when Torii still
-    /// reports `pending_pin_authorization`; callers can gather additional controller witnesses
-    /// explicitly without entering an unbounded retry loop.
+    /// This method submits once and requires Torii to acknowledge the authorized receipt.
+    /// Supply the trusted Torii receipt public key independently of the HTTP response.
     ///
     /// # Errors
     ///
@@ -18530,13 +18537,15 @@ impl Client {
         &self,
         request: &DaIngestRequest,
         scope: &DaPinScopeV1,
+        receipt: &DaIngestReceipt,
+        operator: &PublicKey,
     ) -> Result<DaIngestSubmitResult> {
-        self.authorize_and_retry_da_ingest_with_request(request, scope)
+        self.authorize_and_retry_da_ingest_with_request(request, scope, receipt, operator)
             .map(|(result, _)| result)
     }
     /// Submit a DA blob to `/v1/da/ingest` and return the Torii receipt.
     ///
-    /// This is equivalent to running `iroha da submit` with the provided parameters.
+    /// Supply the trusted receipt public key for the selected Torii endpoint.
     ///
     /// # Errors
     ///
@@ -18547,9 +18556,10 @@ impl Client {
         params: &DaIngestParams,
         metadata: ExtraMetadata,
         manifest_bytes: Option<Vec<u8>>,
+        operator: &PublicKey,
     ) -> Result<DaIngestSubmitResult> {
         let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes)?;
-        self.submit_prepared_da_request(&request)
+        self.submit_prepared_da_request(&request, operator)
     }
     /// Build and persist a DA ingest request without submitting it to Torii.
     ///
@@ -18573,7 +18583,8 @@ impl Client {
     }
     /// Submit a DA ingest request and persist the CLI-compatible artefacts.
     ///
-    /// Writes `da_request.{norito,json}` and, when present, `da_receipt.{norito,json}` plus
+    /// Authenticates the receipt against the supplied operator key and writes
+    /// `da_request.{norito,json}` and, when present, `da_receipt.{norito,json}` plus
     /// `da_response_headers.json` into `output_dir`, mirroring `iroha da submit`.
     ///
     /// # Errors
@@ -18587,11 +18598,13 @@ impl Client {
         metadata: ExtraMetadata,
         manifest_bytes: Option<Vec<u8>>,
         output_dir: impl AsRef<Path>,
+        operator: &PublicKey,
     ) -> Result<(DaIngestSubmitResult, DaIngestPersistedPaths)> {
         let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes)?;
         // Persist the request up front so the caller retains the Norito bytes even if submit fails.
         Self::persist_da_ingest_artifacts(&request, None, None, &output_dir)?;
-        let (result, authorized_request) = self.submit_prepared_da_request_with_retry(&request)?;
+        let (result, authorized_request) =
+            self.submit_prepared_da_request_with_retry(&request, operator)?;
         let persisted_request = authorized_request.as_ref().unwrap_or(&request);
         let persisted = Self::persist_da_ingest_artifacts(
             persisted_request,
@@ -18604,20 +18617,28 @@ impl Client {
     fn submit_prepared_da_request(
         &self,
         request: &DaIngestRequest,
+        operator: &PublicKey,
     ) -> Result<DaIngestSubmitResult> {
-        self.submit_prepared_da_request_with_retry(request)
+        self.submit_prepared_da_request_with_retry(request, operator)
             .map(|(result, _)| result)
     }
     fn submit_prepared_da_request_with_retry(
         &self,
         request: &DaIngestRequest,
+        operator: &PublicKey,
     ) -> Result<(DaIngestSubmitResult, Option<DaIngestRequest>)> {
         let prepared_result = self.submit_prepared_da_request_once(request)?;
         if prepared_result.status == "accepted" {
             let scope = prepared_result.pin_scope.as_ref().ok_or_else(|| {
                 eyre!("Torii returned `accepted` without the durable DA pin scope")
             })?;
-            Self::validate_da_ingest_scoped_response(request, scope, &prepared_result)?;
+            let receipt =
+                Self::validate_da_ingest_scoped_response(request, scope, &prepared_result)?;
+            eyre::ensure!(
+                prepared_result.duplicate || !request.pin_scope_signatures.is_empty(),
+                "Torii accepted a new DA publication without producer pin authorization"
+            );
+            crate::da::verify_da_pin_receipt(request, scope, receipt, operator)?;
             return Ok((prepared_result, None));
         }
         if prepared_result.status != "pending_pin_authorization" {
@@ -18626,26 +18647,19 @@ impl Client {
                 prepared_result.status
             ));
         }
+        eyre::ensure!(
+            request.pin_scope_signatures.is_empty(),
+            "Torii returned pending after producer pin authorization"
+        );
         let scope = prepared_result.pin_scope.as_ref().ok_or_else(|| {
             eyre!("Torii returned `pending_pin_authorization` without a DA pin scope")
         })?;
-        Self::validate_da_ingest_scoped_response(request, scope, &prepared_result)?;
+        let receipt = Self::validate_da_ingest_scoped_response(request, scope, &prepared_result)?;
         let (finalized_result, authorized_request) =
-            self.authorize_and_retry_da_ingest_with_request(request, scope)?;
-        if finalized_result.status != "accepted"
-            && finalized_result.status != "pending_pin_authorization"
-        {
+            self.authorize_and_retry_da_ingest_with_request(request, scope, receipt, operator)?;
+        if finalized_result.pdp_commitment != prepared_result.pdp_commitment {
             return Err(eyre!(
-                "Torii returned unexpected DA ingest status `{}` after pin authorization",
-                finalized_result.status
-            ));
-        }
-        if finalized_result.pin_scope != prepared_result.pin_scope
-            || finalized_result.receipt != prepared_result.receipt
-            || finalized_result.pdp_commitment != prepared_result.pdp_commitment
-        {
-            return Err(eyre!(
-                "Torii changed the durable DA receipt, pin scope, or PDP commitment during pin authorization"
+                "Torii changed the PDP commitment during pin authorization"
             ));
         }
         Ok((finalized_result, Some(authorized_request)))
@@ -18654,17 +18668,27 @@ impl Client {
         &self,
         request: &DaIngestRequest,
         scope: &DaPinScopeV1,
+        receipt: &DaIngestReceipt,
+        operator: &PublicKey,
     ) -> Result<(DaIngestSubmitResult, DaIngestRequest)> {
-        let authorized_request = self.authorize_da_pin_scope(request, scope)?;
+        let authorized_request = self.authorize_da_pin_scope(request, scope, receipt, operator)?;
         let result = self.submit_prepared_da_request_once(&authorized_request)?;
-        Self::validate_da_ingest_scoped_response(request, scope, &result)?;
+        eyre::ensure!(
+            result.status == "accepted",
+            "Torii failed to accept the authorized DA pin scope"
+        );
+        if Self::validate_da_ingest_scoped_response(request, scope, &result)? != receipt {
+            return Err(eyre!(
+                "Torii changed the durable DA receipt during pin authorization"
+            ));
+        }
         Ok((result, authorized_request))
     }
-    fn validate_da_ingest_scoped_response(
+    fn validate_da_ingest_scoped_response<'a>(
         request: &DaIngestRequest,
         expected_scope: &DaPinScopeV1,
-        result: &DaIngestSubmitResult,
-    ) -> Result<()> {
+        result: &'a DaIngestSubmitResult,
+    ) -> Result<&'a DaIngestReceipt> {
         if result.status != "accepted" && result.status != "pending_pin_authorization" {
             return Err(eyre!(
                 "Torii returned unexpected DA ingest status `{}` for a scoped response",
@@ -18685,59 +18709,49 @@ impl Client {
             .receipt
             .as_ref()
             .ok_or_else(|| eyre!("Torii scoped DA ingest response is missing its receipt"))?;
-        let receipt_matches_request = (
-            &receipt.client_blob_id,
-            receipt.lane_id,
-            receipt.epoch,
-            &receipt.blob_hash,
-        ) == (
-            &request.client_blob_id,
-            request.lane_id,
-            request.epoch,
-            &request.payload_hash,
-        );
-        let receipt_matches_scope = receipt.storage_ticket == expected_scope.storage_ticket
-            && receipt.manifest_hash.as_bytes() == expected_scope.manifest_hash.as_bytes();
-        if !receipt_matches_request || !receipt_matches_scope {
+        if !receipt.matches_request_and_pin_scope(request, expected_scope) {
             return Err(eyre!(
                 "Torii DA receipt does not match the submitted request and exact pin scope"
             ));
         }
-        if result.pdp_commitment.as_ref().is_some_and(|commitment| {
-            commitment.manifest_digest != *expected_scope.manifest_hash.as_bytes()
-                || commitment.payload_len != request.total_size
-        }) {
-            return Err(eyre!(
-                "Torii PDP commitment does not match the submitted request and exact pin scope"
-            ));
+        if let Some(header) = &result.pdp_commitment {
+            eyre::ensure!(
+                Some(header) == crate::da::receipt_pdp_commitment(receipt)?.as_ref(),
+                "Torii PDP header differs from the signed DA receipt"
+            );
         }
-        Ok(())
+        Ok(receipt)
     }
     fn submit_prepared_da_request_once(
         &self,
         request: &DaIngestRequest,
     ) -> Result<DaIngestSubmitResult> {
-        let body =
-            norito::json::to_vec(request).wrap_err("failed to encode DA ingest request JSON")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/ingest");
-        let response = self
-            .account_signed_request(HttpMethod::POST, url, body)?
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .build()?;
-        let response = self.send_prepared_request(response)?;
-        let status_code = response.status();
-        if status_code != StatusCode::ACCEPTED && status_code != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to submit DA ingest request", &response)
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::data_availability::INGEST.path(),
+        );
+        let (bytes, pdp_header) =
+            data_availability::submit_ingest_phase(&url, request, |endpoint, body| {
+                let request = self
+                    .account_signed_request(HttpMethod::POST, endpoint.clone(), body)?
+                    .header("Content-Type", APPLICATION_JSON)
+                    .header("Accept", APPLICATION_JSON)
+                    .max_response_bytes(crate::da::DA_INGEST_RESPONSE_MAX_BYTES_V1)
+                    .build()?;
+                let response = self.send_prepared_request(request)?;
+                if !matches!(response.status(), StatusCode::ACCEPTED | StatusCode::OK) {
+                    return Err(ResponseReport::with_msg(
+                        "failed to submit DA ingest request",
+                        &response,
+                    )
                     .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        let (payload, receipt_json, pdp_commitment) = Self::decode_da_ingest_response(
-            response.body(),
-            response.headers().get(PDP_COMMITMENT_HEADER),
-        )?;
+                    .into());
+                }
+                let header = response.headers().get(PDP_COMMITMENT_HEADER).cloned();
+                Ok((response.into_body(), header))
+            })?;
+        let (payload, receipt_json, pdp_commitment) =
+            Self::decode_da_ingest_response(&bytes, pdp_header.as_ref())?;
         Ok(DaIngestSubmitResult {
             status: payload.status,
             duplicate: payload.duplicate,
@@ -18819,7 +18833,7 @@ impl Client {
                 let headers_path = pdp_commitment
                     .map(|commitment| -> Result<_> {
                         let mut headers = JsonMap::new();
-                        let encoded = to_bytes(commitment)
+                        let encoded = norito::encode_canonical(commitment)
                             .wrap_err("failed to encode PDP commitment for header JSON")?;
                         headers.insert(
                             PDP_COMMITMENT_HEADER.into(),
@@ -30962,37 +30976,64 @@ mod tests {
         let expected_blob = blake3::hash(&payload);
         assert_eq!(request.client_blob_id.as_ref(), expected_blob.as_bytes());
     }
-    fn inline_chunk_profile() -> sorafs_manifest::ChunkingProfileV1 {
-        use sorafs_manifest::{ChunkingProfileV1, ProfileId, chunker_registry};
-        ChunkingProfileV1 {
-            profile_id: ProfileId(0),
-            namespace: "inline".into(),
-            name: "inline".into(),
-            semver: "0.0.0".into(),
-            min_size: 512,
-            target_size: 512,
-            max_size: 512,
-            break_mask: 1,
-            multihash_code: chunker_registry::DEFAULT_MULTIHASH_CODE,
-            aliases: vec!["inline.inline@0.0.0".into()],
+    #[test]
+    fn resumable_da_transport_skips_acknowledged_parts_and_finishes_with_exact_signed_metadata() {
+        use iroha_torii_shared::da::upload::{
+            DA_UPLOAD_PART_BYTES, DaUploadAction, DaUploadRequest,
+        };
+        let client = client_with_base_url(base_url());
+        let mut payload = vec![0x34; DA_UPLOAD_PART_BYTES + 1];
+        payload[DA_UPLOAD_PART_BYTES] = 0xab;
+        let request = client
+            .build_da_ingest_request(
+                payload,
+                &DaIngestParams::default(),
+                ExtraMetadata::default(),
+                None,
+            )
+            .expect("signed request");
+        let endpoint = base_url().join("v1/da/ingest").unwrap();
+        let mut actions = Vec::new();
+        let result = data_availability::submit_ingest_phase(&endpoint, &request, |url, body| {
+            assert_eq!(url.path(), "/v1/da/ingest/parts");
+            let message: DaUploadRequest = norito::json::from_slice(&body)?;
+            assert_eq!(
+                message.upload.wire_hash,
+                BlobDigest::from_hash(blake3::hash(&request.payload))
+            );
+            match message.action {
+                DaUploadAction::Begin => {
+                    actions.push("begin");
+                    Ok((br#"{"next_part":1}"#.to_vec(), ()))
+                }
+                DaUploadAction::Put(part) => {
+                    assert_eq!(part.index, 1);
+                    assert_eq!(part.bytes_b64, "qw==");
+                    actions.push("put");
+                    Ok((br#"{"next_part":2}"#.to_vec(), ()))
+                }
+                DaUploadAction::Finish(mut meta) => {
+                    assert!(meta.payload.is_empty());
+                    meta.payload.clone_from(&request.payload);
+                    assert_eq!(*meta, request);
+                    actions.push("finish");
+                    Ok((b"receipt".to_vec(), ()))
+                }
+                DaUploadAction::Release => panic!("client released its pending authorization"),
+            }
+        })
+        .unwrap();
+        assert_eq!(result.0, b"receipt");
+        assert_eq!(actions, ["begin", "put", "finish"]);
+        for reported in [0, 3] {
+            let result = data_availability::submit_ingest_phase(&endpoint, &request, |_, _| {
+                Ok((format!(r#"{{"next_part":{reported}}}"#).into_bytes(), ()))
+            });
+            assert!(result.is_err());
         }
     }
-    fn inline_pdp_commitment(
-        manifest_digest: [u8; 32],
-        payload: &[u8],
-        sample_window: u64,
-        sealed_at: u64,
-    ) -> sorafs_manifest::pdp::PdpCommitmentV1 {
-        use sorafs_manifest::pdp::{PdpCommitmentV1, PdpMerkleTreeV1};
-        let tree = PdpMerkleTreeV1::from_bytes(payload).expect("build inline PDP tree");
-        PdpCommitmentV1::from_tree(
-            &tree,
-            manifest_digest,
-            inline_chunk_profile(),
-            u16::try_from(sample_window).expect("sample window should fit in commitment layout"),
-            sealed_at,
-        )
-        .expect("build canonical inline PDP commitment")
+    fn sample_da_operator() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519).unwrap()
     }
     fn sample_ingest_receipt() -> DaIngestReceipt {
         DaIngestReceipt {
@@ -31004,6 +31045,7 @@ mod tests {
             manifest_hash: BlobDigest::new([0x44; 32]),
             storage_ticket: StorageTicketId::new([0x55; 32]),
             pdp_commitment: None,
+            retention_policy: Default::default(),
             stripe_layout: DaStripeLayout {
                 total_stripes: 1,
                 shards_per_stripe: 1,
@@ -31016,18 +31058,26 @@ mod tests {
         }
     }
     fn sample_pin_scope(request: &DaIngestRequest) -> DaPinScopeV1 {
-        DaPinScopeV1::new(
+        let mut scope = DaPinScopeV1::new(
             &request.authorization(),
             StorageTicketId::new([0x66; 32]),
             ManifestDigest::new([0x77; 32]),
+            Default::default(),
             None,
-        )
+        );
+        scope.commitment_digest = sample_ingest_receipt_for_scope(request, &scope)
+            .commitment_record(
+                request.sequence,
+                iroha_data_model::da::commitment::DaProofScheme::SorafsPorBlake3,
+            )
+            .pin_scope_digest();
+        scope
     }
     fn sample_ingest_receipt_for_scope(
         request: &DaIngestRequest,
         scope: &DaPinScopeV1,
     ) -> DaIngestReceipt {
-        DaIngestReceipt {
+        let mut receipt = DaIngestReceipt {
             client_blob_id: request.client_blob_id,
             lane_id: request.lane_id,
             epoch: request.epoch,
@@ -31035,7 +31085,23 @@ mod tests {
             manifest_hash: BlobDigest::new(*scope.manifest_hash.as_bytes()),
             storage_ticket: scope.storage_ticket,
             ..sample_ingest_receipt()
-        }
+        };
+        let (root, pdp) = sorafs_manifest::da::source_commitments(
+            &request.payload,
+            request.chunk_size,
+            *receipt.manifest_hash.as_bytes(),
+            iroha_torii_shared::da::sampling::compute_sample_window(request.total_size),
+            receipt.queued_at_unix,
+        )
+        .unwrap();
+        receipt.chunk_root = BlobDigest::new(root);
+        receipt.pdp_commitment = Some(norito::encode_canonical(&pdp).unwrap());
+        receipt.operator_signature = Signature::try_new(
+            sample_da_operator().private_key(),
+            &receipt.operator_signing_bytes(request.sequence).unwrap(),
+        )
+        .unwrap();
+        receipt
     }
     #[test]
     fn authorize_da_pin_scope_preserves_primary_request_digest() {
@@ -31052,7 +31118,12 @@ mod tests {
         let original_digest = request.signing_digest();
 
         let authorized = client
-            .authorize_da_pin_scope(&request, &scope)
+            .authorize_da_pin_scope(
+                &request,
+                &scope,
+                &sample_ingest_receipt_for_scope(&request, &scope),
+                sample_da_operator().public_key(),
+            )
             .expect("authorize DA pin scope");
 
         assert!(request.pin_scope_signatures.is_empty());
@@ -31065,6 +31136,73 @@ mod tests {
             .signature
             .verify(&witness.signer, &scope.signing_digest())
             .expect("verify DA pin-scope signature");
+    }
+    #[test]
+    fn da_pin_authorization_requires_pinned_operator_and_original_chunk_root() {
+        let client = client_with_base_url(base_url());
+        let request = client
+            .build_da_ingest_request(
+                vec![0x36],
+                &DaIngestParams::default(),
+                ExtraMetadata::default(),
+                None,
+            )
+            .unwrap();
+        let mut scope = sample_pin_scope(&request);
+        let mut receipt = sample_ingest_receipt_for_scope(&request, &scope);
+        let operator = sample_da_operator();
+        assert!(
+            client
+                .authorize_da_pin_scope(&request, &scope, &receipt, client.key_pair.public_key())
+                .is_err()
+        );
+        let mut wrong_root = *receipt.chunk_root.as_bytes();
+        wrong_root[31] ^= 1;
+        receipt.chunk_root = BlobDigest::new(wrong_root);
+        receipt.operator_signature = Signature::try_new(
+            operator.private_key(),
+            &receipt.operator_signing_bytes(request.sequence).unwrap(),
+        )
+        .unwrap();
+        scope.commitment_digest = receipt
+            .commitment_record(
+                request.sequence,
+                iroha_data_model::da::commitment::DaProofScheme::SorafsPorBlake3,
+            )
+            .pin_scope_digest();
+        let error = client
+            .authorize_da_pin_scope(&request, &scope, &receipt, operator.public_key())
+            .unwrap_err();
+        assert!(error.to_string().contains("chunk root"));
+        assert!(request.pin_scope_signatures.is_empty());
+    }
+    #[test]
+    fn explicit_da_pin_authorization_refuses_substituted_retention_before_signing() {
+        let client = client_with_base_url(base_url());
+        let request = client
+            .build_da_ingest_request(
+                vec![0x36],
+                &DaIngestParams::default(),
+                ExtraMetadata::default(),
+                None,
+            )
+            .unwrap();
+        let scope = sample_pin_scope(&request);
+        let mut receipt = sample_ingest_receipt_for_scope(&request, &scope);
+        assert!(receipt.matches_request_and_pin_scope(&request, &scope));
+        receipt.retention_policy.required_replicas += 1;
+        assert!(!receipt.matches_request_and_pin_scope(&request, &scope));
+        assert!(
+            client
+                .authorize_da_pin_scope(
+                    &request,
+                    &scope,
+                    &receipt,
+                    sample_da_operator().public_key()
+                )
+                .is_err()
+        );
+        assert!(request.pin_scope_signatures.is_empty());
     }
     #[test]
     fn authorize_and_retry_da_ingest_submits_one_scoped_request() {
@@ -31082,7 +31220,7 @@ mod tests {
         let response_body = norito::json::to_vec(&DaIngestResponsePayload {
             status: "accepted".into(),
             duplicate: true,
-            receipt: Some(receipt),
+            receipt: Some(receipt.clone()),
             pin_scope: Some(scope.clone()),
         })
         .expect("encode accepted response");
@@ -31097,7 +31235,12 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.authorize_and_retry_da_ingest(&request, &scope)
+            client.authorize_and_retry_da_ingest(
+                &request,
+                &scope,
+                &receipt,
+                sample_da_operator().public_key(),
+            )
         });
         let result = result.expect("authorize and retry DA ingest");
         assert_eq!(snapshots.len(), 1, "one scoped request must be submitted");
@@ -31105,6 +31248,10 @@ mod tests {
 
         assert_eq!(result.status, "accepted");
         assert_eq!(result.pin_scope, Some(scope));
+        assert_eq!(
+            snapshot.max_response_bytes,
+            crate::da::DA_INGEST_RESPONSE_MAX_BYTES_V1
+        );
         assert_canonical_account_signed_request(&client, &snapshot);
         let submitted: DaIngestRequest =
             norito::json::from_slice(&snapshot.body).expect("decode scoped DA request");
@@ -31129,7 +31276,7 @@ mod tests {
         let response_body = norito::json::to_vec(&DaIngestResponsePayload {
             status: "accepted".into(),
             duplicate: true,
-            receipt: Some(receipt),
+            receipt: Some(receipt.clone()),
             pin_scope: Some(substituted_scope),
         })
         .expect("encode substituted response");
@@ -31144,7 +31291,12 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.authorize_and_retry_da_ingest(&request, &scope)
+            client.authorize_and_retry_da_ingest(
+                &request,
+                &scope,
+                &receipt,
+                sample_da_operator().public_key(),
+            )
         });
         let error = result.expect_err("public finalize helper must reject a substituted scope");
         assert!(
@@ -31165,18 +31317,11 @@ mod tests {
             .expect("build prepared DA request");
         let scope = sample_pin_scope(&prepared);
         let receipt = sample_ingest_receipt_for_scope(&prepared, &scope);
-        let commitment_b64 = base64::engine::general_purpose::STANDARD.encode(
-            norito::to_bytes(&inline_pdp_commitment(
-                *scope.manifest_hash.as_bytes(),
-                &payload,
-                1,
-                1,
-            ))
-            .expect("encode commitment"),
-        );
+        let commitment_b64 = base64::engine::general_purpose::STANDARD
+            .encode(receipt.pdp_commitment.as_ref().unwrap());
         let response_payload = DaIngestResponsePayload {
             status: "accepted".into(),
-            duplicate: false,
+            duplicate: true,
             receipt: Some(receipt.clone()),
             pin_scope: Some(scope.clone()),
         };
@@ -31193,11 +31338,17 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.submit_da_blob(payload.clone(), &params, metadata.clone(), None)
+            client.submit_da_blob(
+                payload.clone(),
+                &params,
+                metadata.clone(),
+                None,
+                sample_da_operator().public_key(),
+            )
         })
         .expect("submit da blob");
         assert_eq!(result.status, "accepted");
-        assert!(!result.duplicate);
+        assert!(result.duplicate);
         assert_eq!(result.payload_len, payload.len());
         let expected_blob = BlobDigest::from_hash(blake3::hash(&payload));
         assert_eq!(result.client_blob_id, expected_blob);
@@ -31230,6 +31381,46 @@ mod tests {
         assert_eq!(echoed.lane_id, params.lane_id);
     }
     #[test]
+    fn submit_da_blob_rejects_new_acceptance_without_pin_witnesses() {
+        let client = client_with_base_url(base_url());
+        let payload = vec![0x51, 0x52];
+        let params = DaIngestParams::default();
+        let request = client
+            .build_da_ingest_request(payload.clone(), &params, ExtraMetadata::default(), None)
+            .unwrap();
+        let scope = sample_pin_scope(&request);
+        let body = norito::json::to_vec(&DaIngestResponsePayload {
+            status: "accepted".into(),
+            duplicate: false,
+            receipt: Some(sample_ingest_receipt_for_scope(&request, &scope)),
+            pin_scope: Some(scope),
+        })
+        .unwrap();
+        let response = HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(body)
+            .unwrap();
+        let (result, snapshots) = capture_requests(response, |transport| {
+            client
+                .clone()
+                .with_test_http_transport(transport.clone())
+                .submit_da_blob(
+                    payload,
+                    &params,
+                    ExtraMetadata::default(),
+                    None,
+                    sample_da_operator().public_key(),
+                )
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("without producer pin authorization")
+        );
+        assert_eq!(snapshots.len(), 1);
+    }
+    #[test]
     fn submit_da_blob_rejects_accepted_response_without_durable_scope() {
         let client = client_with_base_url(base_url());
         let params = DaIngestParams::default();
@@ -31257,7 +31448,13 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.submit_da_blob(payload, &params, metadata, None)
+            client.submit_da_blob(
+                payload,
+                &params,
+                metadata,
+                None,
+                sample_da_operator().public_key(),
+            )
         })
         .0
         .expect_err("accepted response without durable scope must fail closed");
@@ -31298,7 +31495,13 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.submit_da_blob(payload, &params, metadata, None)
+            client.submit_da_blob(
+                payload,
+                &params,
+                metadata,
+                None,
+                sample_da_operator().public_key(),
+            )
         })
         .0
         .expect_err("accepted response with a substituted scope must fail closed");
@@ -31364,7 +31567,13 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.submit_da_blob(payload, &params, metadata, None)
+                client.submit_da_blob(
+                    payload,
+                    &params,
+                    metadata,
+                    None,
+                    sample_da_operator().public_key(),
+                )
             },
         )
         .expect("submit and finalize DA blob");
@@ -31438,7 +31647,13 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.submit_da_blob(payload, &params, metadata, None)
+                client.submit_da_blob(
+                    payload,
+                    &params,
+                    metadata,
+                    None,
+                    sample_da_operator().public_key(),
+                )
             },
         )
         .expect_err("scope substitution must fail closed");
@@ -31450,7 +31665,7 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
     #[test]
-    fn submit_da_blob_returns_second_pending_response_without_looping() {
+    fn submit_da_blob_rejects_second_pending_response_without_looping() {
         let client = client_with_base_url(base_url());
         let params = DaIngestParams::default();
         let metadata = ExtraMetadata::default();
@@ -31479,12 +31694,16 @@ mod tests {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
 
-            client.submit_da_blob(payload, &params, metadata, None)
+            client.submit_da_blob(
+                payload,
+                &params,
+                metadata,
+                None,
+                sample_da_operator().public_key(),
+            )
         })
-        .expect("submit DA blob with a still-pending finalize response");
-
-        assert_eq!(result.status, "pending_pin_authorization");
-        assert_eq!(result.pin_scope, Some(scope));
+        .expect_err("a witnessed submission must complete");
+        assert!(result.to_string().contains("failed to accept"));
         assert_eq!(snapshots.lock().expect("lock snapshots").len(), 2);
     }
     #[test]
@@ -31561,9 +31780,8 @@ mod tests {
             .expect("build prepared DA request");
         let scope = sample_pin_scope(&prepared);
         let receipt = sample_ingest_receipt_for_scope(&prepared, &scope);
-        let commitment = inline_pdp_commitment(*scope.manifest_hash.as_bytes(), &payload, 2, 99);
         let commitment_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&commitment).expect("encode commitment"));
+            .encode(receipt.pdp_commitment.as_ref().unwrap());
         let (pending_response, accepted_response) =
             da_ingest_pin_authorization_responses(&receipt, &scope, &commitment_b64);
         let stored_snapshots = Arc::clone(&snapshots);
@@ -31592,6 +31810,7 @@ mod tests {
                     ExtraMetadata::default(),
                     None,
                     dir.path(),
+                    sample_da_operator().public_key(),
                 )
             },
         )

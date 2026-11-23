@@ -136,7 +136,7 @@ impl ConfidentialComputeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::da::{
         commitment::{DaProofScheme, RetentionClass},
         types::{BlobDigest, StorageTicketId},
@@ -167,8 +167,8 @@ mod tests {
             sequence,
             BlobDigest::new([lane_byte; 32]),
             ManifestDigest::new(manifest_hash),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([epoch_byte; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([epoch_byte; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),

@@ -40,6 +40,7 @@ pub(in crate::musubi_publication_service) enum SlotKind {
     Initialize,
     Advance,
     Check(u16),
+    ArchiveOrder,
 }
 
 #[derive(Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -97,6 +98,28 @@ impl SlotRequest {
                 // Full original archive, manifest policy and principal checks belong to the native
                 // pin signer. Custody refuses even an incorrectly decoded manifest here.
                 sorafs_manifest::decode_manifest_v1_canonical(&pin.manifest_payload)?;
+            }
+            SlotKind::ArchiveOrder => {
+                let issue = instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
+                    .ok_or_else(|| eyre::eyre!("native archive order instruction differs"))?;
+                let archive = issue
+                    .musubi_archive
+                    .ok_or_else(|| eyre::eyre!("native replication order has no archive"))?;
+                let order: sorafs_manifest::capacity::ReplicationOrderV1 =
+                    norito::decode_canonical_with_limits(&issue.order_payload, LIMITS)?;
+                order.validate()?;
+                let manifest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                    order.manifest_digest,
+                );
+                ensure!(
+                    issue.order_id == iroha_core::query::native_musubi_storage::native_musubi_replication_order_id_v1(archive, manifest)
+                        && order.order_id == *issue.order_id.as_bytes()
+                        && order.issued_at == issue.issued_epoch
+                        && order.deadline_at == issue.deadline_epoch,
+                    "native archive order binding differs"
+                );
             }
             SlotKind::Initialize | SlotKind::Advance => {
                 let value = instruction
@@ -186,6 +209,19 @@ impl SlotRequest {
     pub(in crate::musubi_publication_service) fn hash(&self) -> Result<[u8; 32]> {
         Ok(Sha256::digest(norito::json::to_json_bounded_boxed(self, 512 * 1024)?).into())
     }
+    pub(in crate::musubi_publication_service) fn order_creation_time_ms(&self) -> Result<u64> {
+        ensure!(
+            self.kind == SlotKind::ArchiveOrder,
+            "expected archive order slot"
+        );
+        let instruction: iroha_data_model::isi::InstructionBox = decode_frame(&self.instruction)?;
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
+            .and_then(|issue| issue.issued_epoch.checked_mul(1_000))
+            .filter(|start| *start > 0 && *start < self.authorization.deadline_unix_ms)
+            .ok_or_else(|| eyre::eyre!("native archive order has no authorized issue time"))
+    }
     fn validate_payload(&self, payload: &TransactionPayload) -> Result<()> {
         self.validate()?;
         let ttl = payload
@@ -207,6 +243,19 @@ impl SlotRequest {
                 && payload.attachments.is_none(),
             "native payload differs from the original identity or finite terms"
         );
+        if self.kind == SlotKind::ArchiveOrder {
+            let start = self.order_creation_time_ms()?;
+            let window =
+                std::time::Duration::from_millis(self.authorization.deadline_unix_ms - start)
+                    .min(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE);
+            ensure!(
+                payload.creation_time_ms == start
+                    && u128::from(ttl.get()) == window.as_millis()
+                    && payload.nonce.is_none()
+                    && payload.fee_payment == self.authorization.per_transaction,
+                "native archive order changed the original time, fee or nonce"
+            );
+        }
         let Executable::Instructions(instructions) = &payload.instructions else {
             eyre::bail!("native pin slot requires one instruction");
         };
@@ -275,17 +324,23 @@ impl Slot {
         path: &Path,
         expected: &SlotRequest,
     ) -> Result<Self> {
-        norito::with_decode_limits_scope(LIMITS, || Self::open_original(path, expected))
+        norito::with_decode_limits_scope(LIMITS, || {
+            expected.validate()?;
+            Self::open_original(path, Some(expected)).map(|(slot, _)| slot)
+        })
     }
-    fn open_original(path: &Path, expected: &SlotRequest) -> Result<Self> {
-        expected.validate()?;
+    fn open_original(
+        path: &Path,
+        expected: Option<&SlotRequest>,
+    ) -> Result<(Self, Option<TransactionPayload>)> {
         let journal = Journal::open(path)?;
-        journal.verify_native_inventory()?;
-        let request: SlotRequest = journal
-            .read_native(NativeRecord::Request)?
-            .ok_or_else(|| eyre::eyre!("native pin slot lost its original request"))?;
+        let request: SlotRequest = journal.read_native_inventory_scope(|reader| {
+            reader
+                .read_native(NativeRecord::Request)?
+                .ok_or_else(|| eyre::eyre!("native pin slot lost its original request"))
+        })?;
         ensure!(
-            &request == expected,
+            expected.is_none_or(|expected| expected == &request),
             "native pin slot changed its original request"
         );
         let mut slot = Self {
@@ -294,15 +349,16 @@ impl Slot {
             signed: None,
             signed_persisted: Cell::new(false),
         };
-        slot.signed = slot.read_durable_signed()?;
+        let (signed, payload) = slot.read_durable()?;
+        slot.signed = signed;
         slot.signed_persisted.set(slot.signed.is_some());
-        Ok(slot)
+        Ok((slot, payload))
     }
     /// Re-read the exact durable prefix under this already-held Journal lock. A valid in-memory
     /// signature can precede its refused durable write, but cannot replace a changed disk record.
     fn revalidate_original(&self) -> Result<()> {
         norito::with_decode_limits_scope(LIMITS, || {
-            let durable = self.read_durable_signed()?;
+            let (durable, _) = self.read_durable()?;
             match (&self.signed, durable) {
                 (Some(owned), Some(durable)) => {
                     ensure!(
@@ -329,73 +385,68 @@ impl Slot {
         })
     }
     /// Shared decoder for detached reopen and held-owner inspection; neither repairs history.
-    fn read_durable_signed(&self) -> Result<Option<SignedTransaction>> {
-        self.journal.verify_native_inventory()?;
-        let request: SlotRequest = self
-            .journal
-            .read_native(NativeRecord::Request)?
-            .ok_or_else(|| eyre::eyre!("native pin slot lost its original request"))?;
-        ensure!(
-            request == self.request,
-            "native pin slot changed its original request"
-        );
-        request.validate()?;
-        let payload = self.payload()?;
-        let signed = if let Some(record) = self
-            .journal
-            .read_native::<SignedRecord>(NativeRecord::Operation)?
-        {
-            let payload = payload
-                .as_ref()
-                .ok_or_else(|| eyre::eyre!("native signed slot lost its payload"))?;
-            let wire = decode_hex(&record.wire)?;
-            let signed = SignedTransaction::decode_all_versioned(&wire)?;
-            self.verify_signed(&signed, payload)?;
+    fn read_durable(&self) -> Result<(Option<SignedTransaction>, Option<TransactionPayload>)> {
+        self.journal.read_native_inventory_scope(|reader| {
+            let request: SlotRequest = reader
+                .read_native(NativeRecord::Request)?
+                .ok_or_else(|| eyre::eyre!("native pin slot lost its original request"))?;
             ensure!(
-                record == self.signed_record(&signed)?,
-                "native signed slot commitments differ"
+                request == self.request,
+                "native pin slot changed its original request"
             );
-            self.journal.submission_recorded(&record)?;
-            Some(signed)
-        } else {
+            request.validate()?;
+            let payload = self.decode_payload(reader.read_native(NativeRecord::Payload)?)?;
+            let signed = if let Some(record) =
+                reader.read_native::<SignedRecord>(NativeRecord::Operation)?
+            {
+                let payload = payload
+                    .as_ref()
+                    .ok_or_else(|| eyre::eyre!("native signed slot lost its payload"))?;
+                let wire = decode_hex(&record.wire)?;
+                let signed = SignedTransaction::decode_all_versioned(&wire)?;
+                self.verify_signed(&signed, payload)?;
+                ensure!(
+                    record == self.signed_record(&signed)?,
+                    "native signed slot commitments differ"
+                );
+                reader.submission_recorded(&record)?;
+                Some(signed)
+            } else {
+                ensure!(
+                    !reader.has_dispatch_evidence()?,
+                    "native unsigned slot contains exposure evidence"
+                );
+                None
+            };
+            if let Some(retired) = reader.read_native::<Retirement>(NativeRecord::Retired)? {
+                ensure!(
+                    payload.is_none() && signed.is_none(),
+                    "retired native request has later evidence"
+                );
+                ensure!(
+                    retired.request == self.request.hash()?,
+                    "native retirement differs from original request"
+                );
+            }
+            let directory = iroha_fs::PrivateDirectory::open(self.journal.path())?;
             ensure!(
-                !self.journal.has_dispatch_evidence()?,
-                "native unsigned slot contains exposure evidence"
+                directory
+                    .entries(7)?
+                    .iter()
+                    .all(|name| name != "applied.json"),
+                "native pin slot contains unsupported applied evidence"
             );
-            None
-        };
-        if let Some(retired) = self
-            .journal
-            .read_native::<Retirement>(NativeRecord::Retired)?
-        {
-            ensure!(
-                payload.is_none() && signed.is_none(),
-                "retired native request has later evidence"
-            );
-            ensure!(
-                retired.request == self.request.hash()?,
-                "native retirement differs from original request"
-            );
-        }
-        let directory = iroha_fs::PrivateDirectory::open(self.journal.path())?;
-        ensure!(
-            directory
-                .entries(7)?
-                .iter()
-                .all(|name| name != "applied.json"),
-            "native pin slot contains unsupported applied evidence"
-        );
-        Ok(signed)
+            Ok((signed, payload))
+        })
     }
     pub(in crate::musubi_publication_service) fn open_retained(path: &Path) -> Result<Self> {
-        norito::with_decode_limits_scope(LIMITS, || {
-            let journal = Journal::open(path)?;
-            let request: SlotRequest = journal
-                .read_native(NativeRecord::Request)?
-                .ok_or_else(|| eyre::eyre!("native slot has no immutable request"))?;
-            drop(journal);
-            Self::open(path, &request)
-        })
+        Self::open_retained_with_payload(path).map(|(slot, _)| slot)
+    }
+    /// Return the fee-bearing payload authenticated alongside the original signature under the same lock.
+    pub(super) fn open_retained_with_payload(
+        path: &Path,
+    ) -> Result<(Self, Option<TransactionPayload>)> {
+        norito::with_decode_limits_scope(LIMITS, || Self::open_original(path, None))
     }
     pub(in crate::musubi_publication_service) fn require_path(
         &self,
@@ -416,10 +467,10 @@ impl Slot {
         &self,
     ) -> Result<Option<TransactionPayload>> {
         self.journal.verify_native_inventory()?;
-        let Some(record) = self
-            .journal
-            .read_native::<PayloadRecord>(NativeRecord::Payload)?
-        else {
+        self.decode_payload(self.journal.read_native(NativeRecord::Payload)?)
+    }
+    fn decode_payload(&self, record: Option<PayloadRecord>) -> Result<Option<TransactionPayload>> {
+        let Some(record) = record else {
             return Ok(None);
         };
         ensure!(

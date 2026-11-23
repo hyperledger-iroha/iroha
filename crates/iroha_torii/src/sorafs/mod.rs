@@ -1,4 +1,7 @@
 //! SoraFS-related helpers exposed by Torii.
+/// HTTP response header identifying content served by a SoraFS gateway.
+pub(crate) const HEADER_SORA_CONTENT_CID: &str = "sora-content-cid";
+
 pub mod admission;
 pub mod alias_cache;
 #[cfg(feature = "app_api")]

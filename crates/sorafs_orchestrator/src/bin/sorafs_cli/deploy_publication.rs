@@ -9,12 +9,13 @@ use iroha_data_model::{
         },
         publication::{
             PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationPreparationV1,
-            SorafsPublicationProofRequestV1, SorafsPublicationProofV1, VerifiedSorafsPublicationV1,
+            SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
             verify_sorafs_publication_v1,
         },
     },
     sumeragi_finality::{
         MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
+        VerifiedSumeragiBlock,
     },
     transaction::SignedTransaction,
 };
@@ -49,7 +50,7 @@ pub(super) fn load_checkpoint(
     path: &Path,
     network: &NetworkId,
     chain_id: &ChainId,
-) -> Result<SumeragiFinalityCheckpoint, String> {
+) -> Result<(SumeragiFinalityCheckpoint, VerifiedSumeragiBlock), String> {
     let bytes = read_file_bounded(
         path,
         MAX_FINALITY_CHECKPOINT_BYTES as u64,
@@ -60,12 +61,16 @@ pub(super) fn load_checkpoint(
     })?;
     // This local file is independently selected by the caller; response material cannot replace
     // its signed-genesis, network, chain or authenticated lag-2 schedule commitments.
-    SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, network, chain_id.as_str())
-        .map_err(|_| {
-            "trusted publication checkpoint does not match the configured current network and chain"
-                .to_owned()
-        })?;
-    Ok(checkpoint)
+    let (_, tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_tip(
+        &checkpoint,
+        network,
+        chain_id.as_str(),
+    )
+    .map_err(|_| {
+        "trusted publication checkpoint does not match the configured current network and chain"
+            .to_owned()
+    })?;
+    Ok((checkpoint, tip))
 }
 
 fn decode<
@@ -291,7 +296,7 @@ fn check_registration_status(
 fn check_registration_response(
     response: reqwest::blocking::Response,
     expected: iroha_crypto::HashOf<SignedTransaction>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let status = response.status();
     if !matches!(status, StatusCode::OK | StatusCode::NOT_FOUND) {
         return Err(format!(
@@ -332,20 +337,20 @@ fn check_registration_response(
                     .to_owned(),
             );
         }
-        return Ok(());
+        return Ok(false);
     }
     let row: iroha_torii_shared::PipelineTransactionStatusResponse =
         norito::json::from_slice(&bytes)
             .map_err(|_| "pin registration status is malformed".to_owned())?;
-    check_registration_status(expected, &row)
+    check_registration_status(expected, &row).map(|()| true)
 }
 
-fn refuse_terminal_registration(
+fn registration_observed(
     client: &HttpClient,
     base: &Url,
     expected: iroha_crypto::HashOf<SignedTransaction>,
     started: Instant,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     ensure_live(started)?;
     let remaining = PUBLICATION_TIMEOUT.saturating_sub(started.elapsed());
     if remaining.is_zero() {
@@ -389,15 +394,24 @@ fn publication_read_backoff(
     Some(delay.max(Duration::from_millis(100)).min(remaining))
 }
 
-fn preparation(
-    client: &HttpClient,
-    base: &Url,
-    config: &DeployClientConfig,
+/// A 202 from the authenticated prepare route means the pin exists under this publisher
+/// but its order is not available yet. Only a 404 admits a first registration.
+enum Preparation {
+    Absent,
+    AwaitingOrder,
+    Order(Box<SorafsPublicationPreparationV1>),
+}
+
+fn observe_preparation(
+    session: PublicationSession<'_>,
     digest: ManifestDigest,
-    registration_hash: iroha_crypto::HashOf<SignedTransaction>,
-    started: Instant,
-    completed: bool,
-) -> Result<SorafsPublicationPreparationV1, String> {
+) -> Result<Preparation, String> {
+    let PublicationSession {
+        client,
+        base,
+        config,
+        started,
+    } = session;
     loop {
         ensure_live(started)?;
         let response = post(
@@ -417,13 +431,11 @@ fn preparation(
             std::thread::sleep(wait);
             continue;
         }
-        if status == StatusCode::ACCEPTED || status == StatusCode::NOT_FOUND {
-            refuse_terminal_registration(client, base, registration_hash, started)?;
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
-        }
-        if status != StatusCode::OK {
-            return Err(format!("publication preparation rejected with {status}"));
+        match status {
+            StatusCode::NOT_FOUND => return Ok(Preparation::Absent),
+            StatusCode::ACCEPTED => return Ok(Preparation::AwaitingOrder),
+            StatusCode::OK => {}
+            _ => return Err(format!("publication preparation rejected with {status}")),
         }
         let row: SorafsPublicationPreparationV1 = decode(
             &read_response(response, PREPARATION_MAX_BYTES)?,
@@ -433,6 +445,8 @@ fn preparation(
             || row.pin.submitted_by != AccountId::new(config.public_key.clone())
             || row.order.order_id != derive_sorafs_auto_replication_order_id_v1(&digest)
             || row.order.manifest_digest != digest
+            || row.order.manifest_root_cid != row.pin.root_cid
+            || row.order.musubi_archive.is_some()
         {
             return Err(
                 "publication preparation substituted the requested publisher, manifest or order"
@@ -447,14 +461,133 @@ fn preparation(
         {
             return Err("publication pin or assignment is no longer active".to_owned());
         }
-        if !matches!(row.pin.status, PinStatus::Approved(_))
-            || completed && !matches!(row.order.status, ReplicationOrderStatus::Completed(_))
-        {
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
-        }
-        return Ok(row);
+        return Ok(Preparation::Order(Box::new(row)));
     }
+}
+
+fn preparation(
+    session: PublicationSession<'_>,
+    digest: ManifestDigest,
+    registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
+    completed: bool,
+) -> Result<SorafsPublicationPreparationV1, String> {
+    loop {
+        match observe_preparation(session, digest)? {
+            Preparation::Order(row) => {
+                if row.pin.status.is_active()
+                    && (!completed
+                        || matches!(row.order.status, ReplicationOrderStatus::Completed(_)))
+                {
+                    return Ok(*row);
+                }
+            }
+            Preparation::Absent if registration_hash.is_none() => {
+                return Err("previously observed publication pin disappeared".into());
+            }
+            Preparation::Absent | Preparation::AwaitingOrder => {
+                if let Some(hash) = registration_hash {
+                    registration_observed(session.client, session.base, hash, session.started)?;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// The only registration mutations are a new signed envelope or an exact replay
+/// whose hash was absent from the global status lookup.
+pub(super) enum Registration {
+    Existing,
+    Observed(iroha_crypto::HashOf<SignedTransaction>),
+    Submitted(ManifestRegisterSubmission),
+}
+
+fn retained_registration(
+    bytes: &[u8],
+    request: &ManifestSubmitRequest<'_>,
+    manifest: &ManifestV1,
+) -> Result<SignedTransaction, String> {
+    use iroha_data_model::transaction::Executable;
+    use iroha_version::codec::DecodeVersioned as _;
+    let tx = SignedTransaction::decode_all_versioned(bytes)
+        .map_err(|_| "retained pin transaction is malformed".to_owned())?;
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return Err("retained pin transaction must contain a registration".into());
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err("retained pin transaction must contain one registration".into());
+    };
+    let pin = instruction
+        .as_any()
+        .downcast_ref::<RegisterPinManifest>()
+        .ok_or("retained pin transaction contains a different instruction")?;
+    if tx.network_id() != Some(request.network_id)
+        || tx.authority() != request.authority
+        || pin.manifest_payload != manifest.encode().map_err(|e| e.to_string())?
+        || pin.alias.is_some()
+        || pin.successor_of.is_some()
+        || tx.encode_versioned() != bytes
+        || tx.verify_signature().is_err()
+    {
+        return Err(
+            "retained pin transaction does not bind this network, publisher and exact manifest"
+                .into(),
+        );
+    }
+    Ok(tx)
+}
+
+fn registration_filename(network: &NetworkId, digest: &ManifestDigest) -> String {
+    format!(
+        "pin-register-{}-{}.to",
+        hex_encode(network.as_bytes()),
+        hex_encode(digest.as_bytes())
+    )
+}
+
+pub(super) fn register_if_absent(
+    session: PublicationSession<'_>,
+    request: &ManifestSubmitRequest<'_>,
+    manifest: &ManifestV1,
+    out_dir: &Path,
+) -> Result<Registration, String> {
+    let digest = ManifestDigest::from_manifest(manifest).map_err(|e| e.to_string())?;
+    if !matches!(observe_preparation(session, digest)?, Preparation::Absent) {
+        return Ok(Registration::Existing);
+    }
+
+    // A durable exact transaction survives a lost response and races sharing this output
+    // directory. The ledger's unique manifest digest protects independent output directories.
+    let dir = iroha_fs::OwnerDirectory::open(out_dir.canonicalize().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let name = registration_filename(request.network_id, &digest);
+    let limit = MAX_MANIFEST_ENCODED_BYTES + (256 << 10);
+    let read = || {
+        dir.read_private_optional(&name, limit)
+            .map_err(|e| e.to_string())
+    };
+    let prior = match read()? {
+        Some(prior) => prior,
+        None => {
+            let tx = prepare_pin_registration(request, manifest, None)?;
+            let bytes = tx.encode_versioned();
+            if bytes.len() > limit {
+                return Err("pin registration envelope exceeds its retention bound".into());
+            }
+            match dir.write_private_atomic(&name, &bytes, iroha_fs::PublishMode::CreateNew) {
+                Ok(()) => return send_pin_registration(request, &tx).map(Registration::Submitted),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    read()?.ok_or("concurrent pin registration evidence disappeared")?
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    };
+    let tx = retained_registration(&prior, request, manifest)?;
+    if registration_observed(session.client, session.base, tx.hash(), session.started)? {
+        return Ok(Registration::Observed(tx.hash()));
+    }
+    send_pin_registration(request, &tx).map(Registration::Submitted)
 }
 
 /// Transport, signer and deadline shared by every publication round trip of one deployment.
@@ -482,13 +615,25 @@ impl<'a> PublicationSession<'a> {
     }
 }
 
+// Locations in the receipt are relative to the deployment's artifact directory.
+fn retain_evidence(out_dir: &Path, filename: &str, bytes: &[u8]) -> Result<Value, String> {
+    write_bytes(&out_dir.join(filename), bytes)?;
+    Ok(Value::Object(Map::from_iter([
+        ("file".into(), Value::from(filename)),
+        (
+            "blake3_hex".into(),
+            Value::from(blake3::hash(bytes).to_hex().to_string()),
+        ),
+    ])))
+}
+
 fn assert_and_verify(
     session: PublicationSession<'_>,
     row: &SorafsPublicationPreparationV1,
     floor: &SumeragiFinalityCheckpoint,
     completed: bool,
-    out: &Path,
-) -> Result<VerifiedSorafsPublicationV1, String> {
+    out_dir: &Path,
+) -> Result<(u64, Value), String> {
     let PublicationSession {
         client,
         base,
@@ -521,10 +666,11 @@ fn assert_and_verify(
     .into_payload()
     .map_err(|_| "publication assertion construction failed".to_owned())?;
     let signed = quote_and_sign(client, base, &config.private_key, payload)?;
+    let signed_wire = signed.encode_wire_v1().map_err(|error| error.to_string())?;
     let response = client
         .post(endpoint(base, "v1/pipeline/transactions")?)
         .header(CONTENT_TYPE, "application/x-norito")
-        .body(signed.encode_versioned())
+        .body(signed_wire.clone())
         .send()
         .map_err(|_| "publication assertion submission unavailable".to_owned())?;
     if !response.status().is_success() {
@@ -578,22 +724,37 @@ fn assert_and_verify(
         if verified.completed() != completed {
             return Err("publication phase proof substituted".to_owned());
         }
-        write_bytes(out, &bytes)?;
-        return Ok(verified);
+        let phase = if completed { "completed" } else { "assigned" };
+        // Compact inclusion proofs require the exact signed entrypoint for offline verification.
+        let assertion = retain_evidence(
+            out_dir,
+            &format!("publication.{phase}.assertion.to"),
+            &signed_wire,
+        )?;
+        let proof = retain_evidence(out_dir, &format!("publication.{phase}.proof.to"), &bytes)?;
+        let height = verified.height();
+        return Ok((
+            height,
+            Value::Object(Map::from_iter([
+                ("height".into(), Value::from(height)),
+                ("assertion".into(), assertion),
+                ("proof".into(), proof),
+            ])),
+        ));
     }
 }
 
 pub(super) fn qualify(
     session: PublicationSession<'_>,
     artifacts: &mut DeployPackArtifacts,
-    registration_hash: iroha_crypto::HashOf<SignedTransaction>,
+    registration_hash: Option<iroha_crypto::HashOf<SignedTransaction>>,
     checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
 ) -> Result<Value, String> {
     let PublicationSession {
         client,
-        base,
+        base: _,
         config,
         started,
     } = session;
@@ -607,28 +768,15 @@ pub(super) fn qualify(
             .map_err(|_| "manifest digest failed".to_owned())?
             .as_bytes(),
     );
-    let assigned = preparation(
-        client,
-        base,
-        config,
-        digest,
-        registration_hash,
-        started,
-        false,
-    )?;
+    let assigned = preparation(session, digest, registration_hash, false)?;
     let order: ReplicationOrderV1 = decode(&assigned.order.canonical_order, 256 * 1024)?;
     order
         .validate()
         .map_err(|_| "publication assignment is invalid".to_owned())?;
     // Both assertions bind the same independently selected checkpoint: the compact proof
     // authenticates execution under it and never replaces it.
-    assert_and_verify(
-        session,
-        &assigned,
-        &checkpoint,
-        false,
-        &out_dir.join("publication.assigned.proof.to"),
-    )?;
+    let (_, assignment_evidence) =
+        assert_and_verify(session, &assigned, &checkpoint, false, out_dir)?;
     for assignment in &order.assignments {
         if assigned
             .order
@@ -712,27 +860,14 @@ pub(super) fn qualify(
             }
         }
     }
-    let complete = preparation(
-        client,
-        base,
-        config,
-        digest,
-        registration_hash,
-        started,
-        true,
-    )?;
+    let complete = preparation(session, digest, registration_hash, true)?;
     if complete.order.assignment_revision != assigned.order.assignment_revision
         || complete.order.canonical_order != assigned.order.canonical_order
     {
         return Err("publication assignment changed while supplying source bytes".to_owned());
     }
-    let completed = assert_and_verify(
-        session,
-        &complete,
-        &checkpoint,
-        true,
-        &out_dir.join("publication.completed.proof.to"),
-    )?;
+    let (finalized_height, completion_evidence) =
+        assert_and_verify(session, &complete, &checkpoint, true, out_dir)?;
     Ok(Value::Object(Map::from_iter([
         ("state".into(), Value::from("completed")),
         ("assignment_finalized".into(), Value::from(true)),
@@ -753,7 +888,27 @@ pub(super) fn qualify(
             "provider_count".into(),
             Value::from(order.assignments.len() as u64),
         ),
-        ("finalized_height".into(), Value::from(completed.height())),
+        (
+            "provider_ids_hex".into(),
+            Value::Array(
+                order
+                    .assignments
+                    .iter()
+                    .map(|assignment| Value::from(hex_encode(assignment.provider_id)))
+                    .collect(),
+            ),
+        ),
+        (
+            "canonical_order".into(),
+            retain_evidence(
+                out_dir,
+                "publication.order.to",
+                &complete.order.canonical_order,
+            )?,
+        ),
+        ("assignment_evidence".into(), assignment_evidence),
+        ("completion_evidence".into(), completion_evidence),
+        ("finalized_height".into(), Value::from(finalized_height)),
         ("direct_http_ingest".into(), Value::from(false)),
     ])))
 }
@@ -761,6 +916,22 @@ pub(super) fn qualify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_evidence_identifies_the_exact_bytes_relative_to_the_receipt_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = "publication.completed.assertion.to";
+        let bytes = b"signed publication assertion";
+        let item = retain_evidence(directory.path(), name, bytes).unwrap();
+        assert_eq!(item["file"].as_str(), Some(name));
+        let stored = fs::read(directory.path().join(name)).unwrap();
+        assert_eq!(stored.as_slice(), bytes);
+        assert_eq!(
+            item["blake3_hex"].as_str(),
+            Some(blake3::hash(&stored).to_hex().as_str())
+        );
+        assert!(retain_evidence(&directory.path().join(name), "proof", bytes).is_err());
+    }
+
     fn network(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             iroha_crypto::Hash::new([seed]),
@@ -953,8 +1124,11 @@ mod tests {
             ),
         ];
         let (client, base, server) = status_server(replies);
-        for _ in 0..3 {
-            refuse_terminal_registration(&client, &base, expected, Instant::now()).unwrap();
+        for observed in [false, true, true] {
+            assert_eq!(
+                registration_observed(&client, &base, expected, Instant::now()).unwrap(),
+                observed
+            );
         }
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 3);
@@ -991,7 +1165,7 @@ mod tests {
             let (client, base, server) =
                 status_server(vec![(status, "Content-Type: application/json\r\n", body)]);
             let error =
-                refuse_terminal_registration(&client, &base, expected, Instant::now()).unwrap_err();
+                registration_observed(&client, &base, expected, Instant::now()).unwrap_err();
             assert!(!error.contains("private upstream"));
             assert_eq!(server.join().unwrap().len(), 1);
         }
@@ -1025,7 +1199,7 @@ mod tests {
         ] {
             let (client, base, server) = status_server(vec![(status, headers, body)]);
             assert!(
-                refuse_terminal_registration(&client, &base, registration_hash(1), Instant::now())
+                registration_observed(&client, &base, registration_hash(1), Instant::now())
                     .is_err()
             );
             assert_eq!(server.join().unwrap().len(), 1);
@@ -1041,6 +1215,198 @@ mod tests {
             network_id: network(1),
             chain_id: "publication-test".parse().unwrap(),
             chain_discriminant: 777,
+        }
+    }
+
+    fn published_row(
+        config: &DeployClientConfig,
+        manifest: &ManifestV1,
+    ) -> SorafsPublicationPreparationV1 {
+        use iroha_data_model::sorafs::pin_registry::{PinManifestRecord, ReplicationOrderRecord};
+        let owner = AccountId::new(config.public_key.clone());
+        let digest = ManifestDigest::from_manifest(manifest).unwrap();
+        let root = ManifestRootCid::try_from_slice(&manifest.root_cid).unwrap();
+        let mut pin = PinManifestRecord::new(
+            digest,
+            root,
+            chunker_handle_from_profile(&manifest.chunking),
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            manifest.content_length,
+            convert_pin_policy(&manifest.pin_policy),
+            owner.clone(),
+            4,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin.approve(5, None);
+        SorafsPublicationPreparationV1 {
+            pin,
+            order: ReplicationOrderRecord {
+                order_id: derive_sorafs_auto_replication_order_id_v1(&digest),
+                manifest_digest: digest,
+                manifest_root_cid: root,
+                musubi_archive: None,
+                issued_by: owner,
+                issued_epoch: 5,
+                deadline_epoch: 30,
+                canonical_order: Vec::new(),
+                assignment_revision: 1,
+                provider_completions: Vec::new(),
+                status: ReplicationOrderStatus::Pending,
+            },
+        }
+    }
+
+    fn registration_request<'a>(
+        client: &'a HttpClient,
+        base: &'a Url,
+        config: &'a DeployClientConfig,
+        owner: &'a AccountId,
+    ) -> ManifestSubmitRequest<'a> {
+        ManifestSubmitRequest {
+            client,
+            torii_base_url: base,
+            network_id: &config.network_id,
+            authority: owner,
+            private_key: &config.private_key,
+            alias_inputs: None,
+        }
+    }
+
+    #[test]
+    fn existing_pin_skips_registration_for_pending_and_completed_orders_and_refuses_substitution() {
+        let config = publication_test_config();
+        let manifest = super::super::tests::sample_manifest();
+        let owner = AccountId::new(config.public_key.clone());
+        let row = published_row(&config, &manifest);
+        let encoded = |row: &SorafsPublicationPreparationV1| norito::encode_canonical(row).unwrap();
+        let mut complete = row.clone();
+        complete.order.status = ReplicationOrderStatus::Completed(8);
+        let mut wrong_owner = row.clone();
+        wrong_owner.pin.submitted_by = AccountId::new(
+            KeyPair::try_from_seed(vec![99; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        let mut wrong_manifest = row.clone();
+        wrong_manifest.order.manifest_digest = ManifestDigest::new([0x99; 32]);
+        let mut expired = row.clone();
+        expired.order.status = ReplicationOrderStatus::Expired(8);
+        let mut retired = row.clone();
+        retired.pin.retire(9, None);
+        let dir = tempfile::tempdir().unwrap();
+        for (status, bytes, accepted) in [
+            (202, Vec::new(), true),
+            (200, encoded(&row), true),
+            (200, encoded(&complete), true),
+            (403, Vec::new(), false),
+            (200, encoded(&wrong_owner), false),
+            (200, encoded(&wrong_manifest), false),
+            (200, encoded(&expired), false),
+            (200, encoded(&retired), false),
+            (200, b"invalid".to_vec(), false),
+        ] {
+            let (client, base, server) = status_server(vec![(
+                status,
+                "Content-Type: application/x-norito\r\n",
+                bytes,
+            )]);
+            let session = PublicationSession::begin(&client, &base, &config);
+            let request = registration_request(&client, &base, &config, &owner);
+            assert_eq!(
+                matches!(
+                    register_if_absent(session, &request, &manifest, dir.path()),
+                    Ok(Registration::Existing)
+                ),
+                accepted
+            );
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].starts_with("POST /v1/sorafs/publish/prepare "));
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn interrupted_registration_checks_exact_hash_and_only_replays_its_retained_bytes_after_absence()
+     {
+        let config = publication_test_config();
+        let owner = AccountId::new(config.public_key.clone());
+        let manifest = super::super::tests::sample_manifest();
+        let tx = build_pin_register_transaction(
+            &config.network_id,
+            &owner,
+            &config.private_key,
+            &manifest,
+            None,
+            None,
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let retained = iroha_fs::OwnerDirectory::open(dir.path().canonicalize().unwrap()).unwrap();
+        let name = registration_filename(
+            &config.network_id,
+            &ManifestDigest::from_manifest(&manifest).unwrap(),
+        );
+        let bytes = tx.encode_versioned();
+        retained
+            .write_private_atomic(&name, &bytes, iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        for observed in [true, false] {
+            let mut replies = vec![(404, "", Vec::new())];
+            if observed {
+                let mut status = status_row("Queued", "queue");
+                status.hash = tx.hash().to_string();
+                replies.push((
+                    200,
+                    "Content-Type: application/json\r\n",
+                    norito::json::to_vec(&status).unwrap(),
+                ));
+            } else {
+                replies.push((
+                    404,
+                    "Content-Type: application/json\r\n",
+                    absent_status(tx.hash(), "global"),
+                ));
+                replies.push((202, "Content-Type: application/json\r\n", b"{}".to_vec()));
+            }
+            let (client, base, server) = status_server(replies);
+            let request = registration_request(&client, &base, &config, &owner);
+            let result = register_if_absent(
+                PublicationSession::begin(&client, &base, &config),
+                &request,
+                &manifest,
+                dir.path(),
+            )
+            .unwrap();
+            match result {
+                Registration::Observed(hash) if observed => assert_eq!(hash, tx.hash()),
+                Registration::Submitted(response) if !observed => {
+                    assert_eq!(response.transaction_hash, tx.hash())
+                }
+                _ => panic!("unexpected publication registration"),
+            }
+            let requests = server.join().unwrap();
+            assert!(requests[1].contains(&format!("hash={}&scope=global", tx.hash())));
+            assert_eq!(requests.len(), if observed { 2 } else { 3 });
+            assert_eq!(
+                retained
+                    .read_private_optional(&name, bytes.len())
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                bytes
+            );
+            if !observed {
+                assert!(requests[2].starts_with("POST /v1/sorafs/pin/register "));
+            }
+            let mut other = manifest.clone();
+            other.pin_policy.retention_epoch += 1;
+            assert!(retained_registration(&bytes, &request, &other).is_err());
+            assert!(retained_registration(&bytes[..bytes.len() - 1], &request, &manifest).is_err());
         }
     }
 
@@ -1076,12 +1442,9 @@ mod tests {
                     ),
                 ]);
                 let error = preparation(
-                    &client,
-                    &base,
-                    &config,
+                    PublicationSession::begin(&client, &base, &config),
                     ManifestDigest::new([1; 32]),
-                    registration_hash(1),
-                    Instant::now(),
+                    Some(registration_hash(1)),
                     false,
                 )
                 .unwrap_err();
@@ -1116,12 +1479,9 @@ mod tests {
                 ),
             ]);
             let error = preparation(
-                &client,
-                &base,
-                &config,
+                PublicationSession::begin(&client, &base, &config),
                 ManifestDigest::new([1; 32]),
-                registration_hash(1),
-                Instant::now(),
+                Some(registration_hash(1)),
                 false,
             )
             .unwrap_err();
@@ -1166,7 +1526,7 @@ mod tests {
     fn registration_status_deadline_refuses_before_starting_http() {
         let client = HttpClient::builder().no_proxy().build().unwrap();
         let base = Url::parse("http://127.0.0.1:1/").unwrap();
-        let error = refuse_terminal_registration(
+        let error = registration_observed(
             &client,
             &base,
             registration_hash(1),

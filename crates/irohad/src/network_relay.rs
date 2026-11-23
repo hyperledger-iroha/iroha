@@ -8,7 +8,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -17,14 +20,14 @@ use iroha_core::{
     peers_gossiper::PeersGossiperHandle, retained_gossip::RetainedGossip,
     streaming::StreamingHandle,
 };
-use iroha_model_base::peer::{Peer, PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::{Peer, PeerId};
 use iroha_p2p::{
     TransportAdmissionClass,
     network::{SubscriberFilter, message::Topic},
     peer::message::{PeerMessage, PeerMessageRetentionGuard},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// Bound of the single peer/trust subscriber of the read-only emergency runtime.
 const EMERGENCY_FAST_SUBSCRIBER_CAP: usize = 32;
@@ -33,6 +36,9 @@ const RESUBSCRIBE_DELAY: Duration = Duration::from_millis(50);
 
 /// The relay's inputs.
 pub struct NetworkRelay {
+    pub(crate) state: Arc<iroha_core::state::State>,
+    pub(crate) local_peer: PeerId,
+    pub(crate) da_relay_period: Duration,
     pub(crate) tx_gossiper: TransactionGossiperHandle,
     pub(crate) peers_gossiper: PeersGossiperHandle,
     pub(crate) network: IrohaNetwork,
@@ -42,70 +48,215 @@ pub struct NetworkRelay {
     pub(crate) emergency_fast: bool,
 }
 
+type IncomingDa = (Arc<Vec<u8>>, PeerMessageRetentionGuard);
+
 struct Shared {
+    da_inbox: Option<mpsc::Sender<IncomingDa>>,
     tx_gossiper: TransactionGossiperHandle,
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
     streaming: StreamingHandle,
     low_priority_ingress: Mutex<LowPriorityIngressLimiter>,
     emergency_fast: bool,
+    torii_started: AtomicBool,
 }
 
 impl NetworkRelay {
-    /// Relay until `shutdown_signal`.
-    pub(crate) async fn run(self, shutdown_signal: ShutdownSignal) {
+    /// Register the managed validators’ low-priority FIFO before native services submit their startup
+    /// transactions. Signal the returned sender at normal Torii startup to open the other routes.
+    pub(crate) fn commission(
+        self,
+        managed_launch: bool,
+        shutdown_signal: ShutdownSignal,
+    ) -> (oneshot::Sender<()>, impl Future<Output = ()> + Send) {
+        let startup = match (self.emergency_fast, managed_launch) {
+            (true, _) => RelayStartup::EmergencyFast,
+            (false, true) => RelayStartup::Managed,
+            (false, false) => RelayStartup::Ordinary,
+        };
+        let da = (!self.emergency_fast).then(|| mpsc::channel::<IncomingDa>(1));
+        let (da_inbox, da_work) = match da {
+            Some((sender, receiver)) => (Some(sender), Some(receiver)),
+            None => (None, None),
+        };
         let shared = Arc::new(Shared {
+            da_inbox,
             tx_gossiper: self.tx_gossiper,
             peers_gossiper: self.peers_gossiper,
             network: self.network,
             streaming: self.streaming,
             low_priority_ingress: Mutex::new(self.low_priority_ingress),
             emergency_fast: self.emergency_fast,
+            torii_started: AtomicBool::new(false),
         });
-        let subscriptions = if shared.emergency_fast {
-            vec![(
-                SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip]),
-                EMERGENCY_FAST_SUBSCRIBER_CAP,
-            )]
-        } else {
-            let base = shared.network.subscriber_queue_cap().get().max(2);
-            TransportAdmissionClass::ALL
-                .iter()
-                .map(|&class| (SubscriberFilter::semantic_class(class), base))
-                .collect()
+        let base = shared.network.subscriber_queue_cap().get().max(2);
+        let early = early_subscription(startup, base).map(|(filter, capacity)| {
+            let receiver = subscribe(&shared, &filter, capacity);
+            (filter, capacity, receiver)
+        });
+        let (started, ready) = oneshot::channel();
+        let task = async move {
+            let mut tasks = tokio::task::JoinSet::new();
+            if let Some((filter, capacity, receiver)) = early {
+                tasks.spawn(subscribe_and_relay(
+                    Arc::clone(&shared),
+                    filter,
+                    capacity,
+                    receiver,
+                ));
+            }
+            let open = tokio::select! {
+                biased;
+                () = shutdown_signal.receive() => false,
+                result = ready => result.is_ok(),
+            };
+            if open {
+                shared.torii_started.store(true, Ordering::Release);
+                if let Some(receiver) = da_work {
+                    tasks.spawn(run_da_relay(
+                        self.state,
+                        self.local_peer,
+                        shared.network.clone(),
+                        self.da_relay_period,
+                        receiver,
+                    ));
+                }
+                for (filter, capacity) in subscriptions_after_torii(startup, base) {
+                    let receiver = subscribe(&shared, &filter, capacity);
+                    tasks.spawn(subscribe_and_relay(
+                        Arc::clone(&shared),
+                        filter,
+                        capacity,
+                        receiver,
+                    ));
+                }
+                shutdown_signal.receive().await;
+            }
+            tasks.shutdown().await;
         };
-        let mut tasks = tokio::task::JoinSet::new();
-        for (filter, capacity) in subscriptions {
-            tasks.spawn(subscribe_and_relay(Arc::clone(&shared), filter, capacity));
-        }
-        shutdown_signal.receive().await;
-        tasks.abort_all();
+        (started, task)
     }
 }
 
-/// Keep one subscriber registered and relay what it receives, in order.
-async fn subscribe_and_relay(shared: Arc<Shared>, filter: SubscriberFilter, capacity: usize) {
+/// One physical worker and one waiting frame. Dropped or refused attempts are retried by the
+/// originating durable queue on its periodic pass until the pair is committed.
+async fn run_da_relay(
+    state: Arc<iroha_core::state::State>,
+    local: PeerId,
+    network: IrohaNetwork,
+    period: Duration,
+    mut incoming: mpsc::Receiver<IncomingDa>,
+) {
+    let mut timer = tokio::time::interval(period);
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cursor = 0;
     loop {
-        let (sender, mut receiver) = mpsc::channel(capacity);
-        if shared
-            .network
-            .subscribe_to_peers_messages_with_filter(sender, filter.clone())
-            .is_err()
-        {
-            tokio::time::sleep(RESUBSCRIBE_DELAY).await;
-            continue;
+        tokio::select! {
+            _ = timer.tick() => {
+                tokio::task::block_in_place(|| {
+                    if let Err(error) = state.relay_da_proposal_candidate(&local, &mut cursor, &network) {
+                        iroha_logger::debug!(%error, "DA candidate relay deferred");
+                    }
+                });
+            }
+            message = incoming.recv() => {
+                let Some((bytes, retention)) = message else {break};
+                tokio::task::block_in_place(|| {
+                    if let Err(error) = state.accept_relayed_da_proposal_candidate(&local, &bytes) {
+                        iroha_logger::debug!(%error, "DA candidate relay refused");
+                    }
+                    drop(retention);
+                });
+            }
         }
-        while let Some(message) = receiver.recv().await {
-            shared.handle(message);
-        }
-        iroha_logger::warn!(?filter, "relay subscriber closed; subscribing again");
-        tokio::time::sleep(RESUBSCRIBE_DELAY).await;
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RelayStartup {
+    Managed,
+    Ordinary,
+    EmergencyFast,
+}
+
+pub(super) fn early_subscription(
+    startup: RelayStartup,
+    base: usize,
+) -> Option<(SubscriberFilter, usize)> {
+    (startup == RelayStartup::Managed).then(|| {
+        (
+            SubscriberFilter::semantic_class(TransportAdmissionClass::Low),
+            base,
+        )
+    })
+}
+
+pub(super) fn subscriptions_after_torii(
+    startup: RelayStartup,
+    base: usize,
+) -> Vec<(SubscriberFilter, usize)> {
+    if startup == RelayStartup::EmergencyFast {
+        vec![(
+            SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip]),
+            EMERGENCY_FAST_SUBSCRIBER_CAP,
+        )]
+    } else {
+        TransportAdmissionClass::ALL
+            .into_iter()
+            .filter(|class| {
+                startup != RelayStartup::Managed || *class != TransportAdmissionClass::Low
+            })
+            .map(|class| (SubscriberFilter::semantic_class(class), base))
+            .collect()
+    }
+}
+
+fn subscribe(
+    shared: &Shared,
+    filter: &SubscriberFilter,
+    capacity: usize,
+) -> Option<mpsc::Receiver<PeerMessage<NetworkMessage>>> {
+    let (sender, receiver) = mpsc::channel(capacity);
+    shared
+        .network
+        .subscribe_to_peers_messages_with_filter(sender, filter.clone())
+        .ok()
+        .map(|()| receiver)
+}
+
+/// Keep the original class's one subscriber registered across startup and normal service.
+async fn subscribe_and_relay(
+    shared: Arc<Shared>,
+    filter: SubscriberFilter,
+    capacity: usize,
+    mut receiver: Option<mpsc::Receiver<PeerMessage<NetworkMessage>>>,
+) {
+    loop {
+        if let Some(mut receiver) = receiver.take() {
+            while let Some(message) = receiver.recv().await {
+                shared.handle(message);
+            }
+            iroha_logger::warn!(?filter, "relay subscriber closed; subscribing again");
+        }
+        tokio::time::sleep(RESUBSCRIBE_DELAY).await;
+        receiver = subscribe(&shared, &filter, capacity);
+    }
+}
+
+fn accepts_message(torii_started: bool, payload: &NetworkMessage) -> bool {
+    torii_started || matches!(payload, NetworkMessage::TransactionGossiper(_))
+}
+
+#[cfg(test)]
+mod commissioning_tests;
 
 impl Shared {
     fn handle(&self, message: PeerMessage<NetworkMessage>) {
         let (peer, authenticated_via, payload, size_bytes, retention) = message.into_parts();
+        // The retained transport guard drops here for unrelated pre-Torii traffic.
+        if !accepts_message(self.torii_started.load(Ordering::Acquire), &payload) {
+            return;
+        }
         if Self::low_priority(&payload) && !self.admit_low_priority(&authenticated_via, size_bytes)
         {
             iroha_logger::debug!(
@@ -134,6 +285,12 @@ impl Shared {
                     && let Err(error) = self.streaming.process_control_frame(&peer, frame.as_ref())
                 {
                     iroha_logger::warn!(%peer, ?error, "failed to process streaming control frame");
+                }
+            }
+            DaProposal(data) => {
+                if let Some(inbox) = &self.da_inbox {
+                    // Original transport credit follows the body through signature and disk work.
+                    let _ = inbox.try_send((data, retention));
                 }
             }
             TransactionGossiper(data) => {

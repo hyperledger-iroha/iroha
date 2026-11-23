@@ -35,6 +35,108 @@ impl GeneratedServiceRuntime {
         result?.ok_or_else(|| invalid("original service bootstrap purpose is absent"))
     }
 
+    /// Read the original bootstrap policy under its own purpose lock before native discovery.
+    /// The outer renderer checks the immutable image on entry and on every ordinary exit.
+    pub(in crate::managed) fn selected_observation_policies(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<GeneratedServicePolicies> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid(
+                "generated runtime bootstrap belongs to another prepared generation",
+            ));
+        }
+        let Some(intent) = self.authority.original_intent_if_shared()? else {
+            return self.open_original_bootstrap(prepared)?.selected_policies();
+        };
+        let result = (|| {
+            let Some(read) = intent.runtime_read() else {
+                return self.open_original_bootstrap(prepared)?.selected_policies();
+            };
+            let parent = ManagedServiceBootstrap::open_existing_in_runtime(&self.authority, &read);
+            // Keep the renderer's original closing custody check before reading the child journal.
+            self.authority.validate_profile_with_runtime(Some(&read))?;
+            let parent =
+                parent?.ok_or_else(|| invalid("original service bootstrap purpose is absent"))?;
+            parent.selected_policies_in_runtime(&read)
+        })();
+        intent.finish()?;
+        result
+    }
+
+    pub(in crate::managed) fn open_catalog_writer(
+        &self,
+        prepared: &PreparedLocalnet,
+        provider: ProviderId,
+    ) -> Result<crate::managed::gateway_compliance::ManagedGatewayCompliance> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid(
+                "catalog writer belongs to another prepared generation",
+            ));
+        }
+        crate::managed::gateway_compliance::ManagedGatewayCompliance::open_from_original(
+            &self.authority,
+            provider,
+        )
+    }
+
+    pub(in crate::managed) fn open_provider_advert(
+        &self,
+        prepared: &PreparedLocalnet,
+        provider: ProviderId,
+    ) -> Result<crate::managed::ManagedProviderAdvertisement> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid(
+                "advertisement publisher belongs to another prepared generation",
+            ));
+        }
+        crate::managed::ManagedProviderAdvertisement::open_from_original(&self.authority, provider)
+    }
+
+    pub(in crate::managed) fn open_custody(
+        &self,
+        prepared: &PreparedLocalnet,
+        provider: ProviderId,
+    ) -> Result<ManagedStreamTokenCustody> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid("custody belongs to another prepared generation"));
+        }
+        ManagedStreamTokenCustody::open_from_original(&self.authority, provider)
+    }
+
+    /// Reopen this provider's independent catalog scope from its renderer's immutable image.
+    pub(in crate::managed) fn open_catalog_reader(
+        &self,
+        prepared: &PreparedLocalnet,
+        provider: ProviderId,
+    ) -> Result<crate::managed::gateway_compliance::ManagedGatewayCompliance> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid(
+                "catalog reader belongs to another prepared generation",
+            ));
+        }
+        crate::managed::gateway_compliance::ManagedGatewayCompliance::read_from_original(
+            &self.authority,
+            provider,
+        )
+    }
+
+    /// Acquire the exclusive native finality cursor for this exact generated network.
+    pub(in crate::managed) fn open_observation(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<ServiceAuthority> {
+        if prepared != &self.authority.prepared {
+            return Err(invalid(
+                "service observation belongs to another prepared generation",
+            ));
+        }
+        ServiceAuthority::open_network_from_original(
+            &self.authority,
+            NetworkPurpose::ServiceObservation,
+        )
+    }
+
     pub(in crate::managed) fn original_provider_plan(
         &self,
         prepared: &PreparedLocalnet,
@@ -62,13 +164,25 @@ impl GeneratedServiceRuntime {
         &self,
         prepared: &PreparedLocalnet,
     ) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
+        if let Some(plans) = self.shared_provider_plans(prepared)? {
+            return Ok(Some(plans));
+        }
+        prepared.provider_service_plans()
+    }
+
+    /// Project the three provider slots together only from an independently revalidated shared
+    /// original. A standalone profile or an active decoder keeps its full per-provider recipe.
+    pub(in crate::managed) fn shared_provider_plans(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
         if prepared != &self.authority.prepared {
             return Err(invalid(
                 "generated runtime projection belongs to another prepared generation",
             ));
         }
         let Some(intent) = self.authority.original_intent_if_shared()? else {
-            return prepared.provider_service_plans();
+            return Ok(None);
         };
         let result = intent.provider_plans().map(|plans| Some(plans.clone()));
         intent.finish()?;

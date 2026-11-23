@@ -68,7 +68,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, ErrorKind, Read, Write},
+    io::{ErrorKind, Write},
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -277,6 +277,214 @@ fn spool_artifact_path_for_key(
         other => panic!("unknown spool artifact prefix `{other}`"),
     }
 }
+#[test]
+fn source_budget_survives_restart_keeps_busy_custody_and_reclaims_partial_expiry() {
+    use iroha_data_model::da::manifest::DaManifestV1;
+    let temp = tempdir().unwrap();
+    let spool = temp.path().canonicalize().unwrap();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let canonical = normalize_payload(&context.request).unwrap();
+    let store = build_chunk_store(&context.request, canonical.as_slice());
+    let mut first = context.artifacts.manifest.clone();
+    first.issued_at_unix = 10;
+    first.retention_policy.hot_retention_secs = 3;
+    first.retention_policy.cold_retention_secs = 10;
+    let mut second = first.clone();
+    second.storage_ticket = StorageTicketId::new([0x65; 32]);
+    second.issued_at_unix = 22;
+    let digest = |m: &DaManifestV1| *blake3::hash(&norito::to_bytes(m).unwrap()).as_bytes();
+    let extents: Vec<_> = first
+        .chunks
+        .iter()
+        .map(|c| (u64::from(c.length).div_ceil(4096) + 1) * 4096)
+        .collect();
+    let one = 8192 + extents.iter().sum::<u64>() + *extents.iter().max().unwrap();
+    let retain = |manifest: &DaManifestV1, assigned, finalized, budget| {
+        crate::da::source::retain(
+            &spool,
+            &context.request,
+            &store,
+            canonical.as_slice(),
+            manifest,
+            &digest(manifest),
+            (assigned, finalized, budget),
+        )
+    };
+    assert_eq!(
+        retain(&first, 12, 10, one - 1).unwrap_err().0,
+        StatusCode::INSUFFICIENT_STORAGE
+    );
+    assert!(
+        !persistence::ticket_artifact_dir(&spool, &first.storage_ticket)
+            .join("source")
+            .exists()
+    );
+    let writer = retain(&first, 12, 10, one).unwrap();
+    let ticket_dir = persistence::ticket_artifact_dir(&spool, &first.storage_ticket);
+    fs::write(ticket_dir.join("unrelated"), b"preserved receipt metadata").unwrap();
+    // The original server assignment extends an older supplied manifest only once.
+    assert!(writer.require_live(21).is_ok());
+    assert!(writer.require_live(22).is_err());
+    assert_eq!(
+        retain(&second, 22, 22, one).unwrap_err().0,
+        StatusCode::INSUFFICIENT_STORAGE
+    );
+    drop(writer);
+    let stage = iroha_fs::PrivateDirectory::open(
+        spool
+            .join("source-quota")
+            .join(format!("stripe-{:02x}", first.storage_ticket.as_bytes()[0])),
+    )
+    .unwrap();
+    let interrupted = ".iroha-fs-1234-77.tmp";
+    stage
+        .write_atomic(
+            interrupted,
+            b"interrupted unpublished shard",
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .unwrap();
+    // Every invocation opens the durable journal afresh; an identical retry carries no new charge.
+    drop(retain(&first, 12, 21, one - 1).unwrap());
+    assert!(stage.read_optional(interrupted, 64).unwrap().is_none());
+    assert!(retain(&first, 19, 21, one).is_err());
+    assert_eq!(
+        retain(&second, 22, 21, one).unwrap_err().0,
+        StatusCode::INSUFFICIENT_STORAGE
+    );
+    assert!(crate::da::source::verify_completion(&spool, &first, &digest(&first), 19).is_err());
+    let reader = crate::da::source::verify_completion(&spool, &first, &digest(&first), 12).unwrap();
+    assert_eq!(
+        retain(&second, 22, 22, one).unwrap_err().0,
+        StatusCode::INSUFFICIENT_STORAGE
+    );
+    reader.revalidate().unwrap();
+    drop(reader);
+    // An interrupted expiry may leave an original reservation and only some shard files.
+    fs::remove_file(ticket_dir.join("source/manifest.blake3")).unwrap();
+    fs::remove_file(ticket_dir.join("source/chunk_00000.bin")).unwrap();
+    drop(retain(&second, 22, 22, one).unwrap());
+    assert!(!ticket_dir.join("source").exists());
+    assert_eq!(
+        fs::read(ticket_dir.join("unrelated")).unwrap(),
+        b"preserved receipt metadata"
+    );
+    assert!(crate::da::source::verify_completion(&spool, &second, &digest(&second), 22).is_ok());
+    for stale_or_current in [10, 22] {
+        assert_eq!(
+            retain(&first, 12, stale_or_current, one).unwrap_err().0,
+            StatusCode::CONFLICT
+        );
+    }
+}
+
+#[test]
+fn missing_source_journal_cannot_reset_an_occupied_spool_budget() {
+    let temp = tempdir().unwrap();
+    let spool = temp.path().canonicalize().unwrap();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let canonical = normalize_payload(&context.request).unwrap();
+    let store = build_chunk_store(&context.request, canonical.as_slice());
+    let manifest = &context.artifacts.manifest;
+    let retain = || {
+        crate::da::source::retain(
+            &spool,
+            &context.request,
+            &store,
+            canonical.as_slice(),
+            manifest,
+            context.artifacts.manifest_hash.as_bytes(),
+            (0, 0, 1 << 30),
+        )
+    };
+    drop(retain().unwrap());
+    fs::rename(
+        spool.join("source-quota"),
+        spool.join("missing-source-quota"),
+    )
+    .unwrap();
+    assert!(retain().is_err());
+    assert!(!spool.join("source-quota/reservations.norito").exists());
+    assert!(
+        persistence::ticket_artifact_dir(&spool, &manifest.storage_ticket)
+            .join("source/manifest.blake3")
+            .is_file()
+    );
+}
+
+#[test]
+fn retained_da_source_contains_every_committed_shard_and_refuses_replacement() {
+    let temp = tempdir().expect("temporary spool");
+    let spool = temp.path().canonicalize().expect("absolute spool");
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let canonical = normalize_payload(&context.request).expect("canonical payload");
+    let store = build_chunk_store(&context.request, canonical.as_slice());
+    let manifest = &context.artifacts.manifest;
+    let retain = || {
+        crate::da::source::retain(
+            &spool,
+            &context.request,
+            &store,
+            canonical.as_slice(),
+            manifest,
+            context.artifacts.manifest_hash.as_bytes(),
+            (
+                0,
+                0,
+                iroha_config::parameters::defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES.get(),
+            ),
+        )
+    };
+    retain().expect("initial source publication");
+    retain().expect("identical retry");
+    let directory =
+        persistence::ticket_artifact_dir(&spool, &manifest.storage_ticket).join("source");
+    assert_eq!(
+        fs::read(directory.join("manifest.blake3"))
+            .unwrap()
+            .as_slice(),
+        context.artifacts.manifest_hash.as_bytes()
+    );
+    assert!(manifest.chunks.iter().any(|chunk| chunk.parity));
+    for chunk in &manifest.chunks {
+        let bytes = fs::read(directory.join(format!("chunk_{:05}.bin", chunk.index))).unwrap();
+        assert_eq!(bytes.len(), chunk.length as usize);
+        assert_eq!(blake3::hash(&bytes).as_bytes(), chunk.commitment.as_bytes());
+    }
+    let verify = || {
+        crate::da::source::verify_completion(
+            &spool,
+            manifest,
+            context.artifacts.manifest_hash.as_bytes(),
+            0,
+        )
+    };
+    verify().unwrap();
+    assert!(crate::da::source::verify_completion(&spool, manifest, &[0; 32], 0).is_err());
+    let parity = manifest.chunks.iter().find(|chunk| chunk.parity).unwrap();
+    let path = directory.join(format!("chunk_{:05}.bin", parity.index));
+    let original = fs::read(&path).unwrap();
+    let verified = verify().unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(verified.revalidate().is_err());
+    drop(verified);
+    assert!(
+        verify().is_err(),
+        "marker cannot stand in for missing parity"
+    );
+    retain().expect("identical prepare can repair a missing file");
+    fs::write(&path, &original[..original.len() - 1]).unwrap();
+    assert!(verify().is_err(), "truncated parity must reject");
+    fs::write(&path, &original).unwrap();
+    verify().unwrap();
+    let first = directory.join("chunk_00000.bin");
+    let changed = vec![0xDB; manifest.chunks[0].length as usize];
+    fs::write(&first, &changed).unwrap();
+    assert!(verify().is_err(), "equal-length corrupt data must reject");
+    assert!(retain().is_err());
+    assert_eq!(fs::read(first).unwrap(), changed);
+}
+
 fn write_sample_manifest_artifact(
     dir: &Path,
 ) -> (
@@ -1360,7 +1568,7 @@ fn taikai_envelope_fixture() -> taikai_ingest::EnvelopeArtifacts {
     let (_, envelope) = taikai_ssm_validation_fixture();
     envelope
 }
-fn sample_request() -> DaIngestRequest {
+pub(super) fn sample_request() -> DaIngestRequest {
     // Golden fixture tests must not depend on OS randomness.
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let payload = b"example".to_vec();
@@ -1425,7 +1633,13 @@ fn signed_pin_intent(
 ) -> DaPinIntent {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let authorization = request.authorization();
-    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
+    let scope = DaPinScopeV1::new(
+        &authorization,
+        storage_ticket,
+        manifest_hash,
+        Default::default(),
+        alias,
+    );
     let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &keypair)
         .expect("sign canonical DA pin-scope fixture");
     DaPinIntent::new(authorization, scope_authorization)
@@ -1434,10 +1648,16 @@ fn signed_pin_intent(
 fn signed_pin_intent_for_manifest(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
+    digest: BlobDigest,
 ) -> DaPinIntent {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
-    let scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
-        .expect("build canonical DA pin scope");
+    let scope = build_da_pin_scope(
+        request,
+        manifest.storage_ticket,
+        manifest.manifest_hash,
+        digest,
+    )
+    .expect("build canonical DA pin scope");
     let scope_authorization =
         DaPinScopeAuthorizationV1::try_sign(scope, &keypair).expect("sign canonical DA pin scope");
     build_da_pin_intent(request, scope_authorization)
@@ -1581,7 +1801,7 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
     request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
     let computed = compute_da_manifest_artifacts(
         &request,
         &nexus,
@@ -1603,7 +1823,17 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
         &computed.server_assignment,
         "iroha_torii::da::persistence::DaIngestServerAssignmentV1",
     );
-    assert_eq!(computed.proof_scheme, DaProofScheme::MerkleSha256);
+    assert_eq!(computed.proof_scheme, DaProofScheme::SorafsPorBlake3);
+    // The canonical PoR tree for b"example" has one chunk, one segment and one leaf.
+    // Freeze the algorithm output alongside its policy label, including the final raw digest bit.
+    assert_eq!(
+        hex::encode(computed.manifest.manifest.chunk_root.as_bytes()),
+        "e67e020491c078334a680d449818e63fb958a09a294170f5a9ea9a6e89462010"
+    );
+    assert_eq!(
+        computed.manifest.manifest.chunk_root.as_bytes(),
+        computed.chunk_store.por_tree().root()
+    );
     assert_eq!(computed.canonical_payload, request.payload);
     assert_eq!(
         computed.manifest.manifest.retention_policy,
@@ -1638,7 +1868,7 @@ fn governance_assignment_request() -> DaIngestRequest {
 fn durable_server_assignment_survives_metadata_key_and_rent_policy_rotation() {
     let spool = tempdir().expect("assignment spool");
     let request = governance_assignment_request();
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
     let replication_policy = DaReplicationPolicy::default();
     let operator = checked_fixture_ed25519_keypair(0x52);
     let key = [0xA5; 32];
@@ -1693,7 +1923,7 @@ fn durable_server_assignment_survives_metadata_key_and_rent_policy_rotation() {
 fn concurrent_server_assignment_publishers_converge_on_one_replay_slot() {
     let spool = tempdir().expect("assignment spool");
     let request = governance_assignment_request();
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
     let operator = checked_fixture_ed25519_keypair(0x53);
@@ -1784,7 +2014,7 @@ fn signed_receipt_assignment_freezes_randomized_mldsa_signature() {
     let mut request = sample_request();
     request.blob_class = BlobClass::NexusLaneSidecar;
     resign_sample_request(&mut request);
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
     let operator = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
     let computed = compute_da_manifest_artifacts(
         &request,
@@ -1810,7 +2040,6 @@ fn signed_receipt_assignment_freezes_randomized_mldsa_signature() {
         &computed.manifest.manifest_hash,
         &computed.manifest.manifest,
         &computed.chunk_store,
-        &computed.canonical_payload,
         computed.queued_at_secs,
     )
     .expect("compute PDP commitment");
@@ -1827,6 +2056,7 @@ fn signed_receipt_assignment_freezes_randomized_mldsa_signature() {
             pdp_bytes.clone(),
             computed.manifest.manifest.rent_quote.clone(),
             stripe_layout_from_manifest(&computed.manifest.manifest),
+            computed.manifest.manifest.retention_policy.clone(),
         )
         .expect("sign ML-DSA receipt candidate")
     };
@@ -1869,6 +2099,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
         &request.authorization(),
         storage_ticket,
         manifest_hash,
+        Default::default(),
         None,
     );
     request
@@ -1941,7 +2172,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
 #[test]
 fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
     let spool = tempdir().expect("DA assignment spool");
-    let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::SorafsPorBlake3);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
     let operator = checked_fixture_ed25519_keypair(0x51);
@@ -2301,7 +2532,7 @@ fn taikai_ssm_requires_caller_supplied_manifest_in_compute_path() {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let digest = request.signing_digest();
     request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
 
     let err = compute_da_manifest_artifacts(
         &request,
@@ -2338,7 +2569,7 @@ fn taikai_cache_hint_is_rejected_in_compute_path() {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let digest = request.signing_digest();
     request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::SorafsPorBlake3);
 
     let err = compute_da_manifest_artifacts(
         &request,
@@ -2373,7 +2604,7 @@ fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
             id: stale_lane,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "stale-ingest".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         },
     ]);
@@ -2395,7 +2626,7 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
         id: lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "elastic-lane-1".to_owned(),
-        proof_scheme: DaProofScheme::MerkleSha256,
+        proof_scheme: DaProofScheme::SorafsPorBlake3,
         ..ModelLaneConfig::default()
     };
     elastic_lane.metadata.insert(
@@ -2423,7 +2654,7 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
     assert!(err.1.contains("active lane catalog"));
     let scheme = lane_proof_scheme(&nexus, lane_id, 7)
         .expect("autoscale lane should resolve at creation height");
-    assert_eq!(scheme, DaProofScheme::MerkleSha256);
+    assert_eq!(scheme, DaProofScheme::SorafsPorBlake3);
 }
 #[test]
 fn taikai_envelope_generation_requires_metadata() {
@@ -2841,4 +3072,177 @@ async fn ingest_response_binary_body_advertises_exact_current_owner() {
         .await
         .expect("read response body");
     assert_eq!(body.as_ref(), expected.as_slice());
+}
+
+#[test]
+fn da_ingest_openapi_matches_signed_request_and_receipt_json() {
+    fn assert_fields(schema: &Value, wire: &Value) {
+        let keys = wire
+            .as_object()
+            .expect("Norito object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let required = schema["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .map(|v| v.as_str().expect("field"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(properties, keys);
+        assert_eq!(required, keys);
+        assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    }
+    let schemas = &crate::openapi::compiled_spec()["components"]["schemas"];
+    let request = sample_request();
+    let wire = json::to_value(&request).expect("encode signed request");
+    let request_schema = &schemas["DaIngestRequest"];
+    assert_fields(request_schema, &wire);
+    assert_fields(&schemas["DaErasureProfile"], &wire["erasure_profile"]);
+    assert_fields(&schemas["DaMetadataEntry"], &wire["metadata"]["items"][0]);
+    assert_fields(&schemas["DaControllerWitnessV1"], &wire["signatures"][0]);
+    let properties = &request_schema["properties"];
+    for field in ["signatures", "pin_scope_signatures"] {
+        assert_eq!(
+            properties[field]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/DaControllerWitnessV1")
+        );
+    }
+    assert_eq!(properties["signatures"]["minItems"].as_u64(), Some(1));
+    assert!(properties["pin_scope_signatures"].get("minItems").is_none());
+    assert!(wire["pin_scope_signatures"].as_array().unwrap().is_empty());
+    assert_eq!(
+        wire["payload"].as_str(),
+        Some(BASE64.encode(&request.payload).as_str())
+    );
+    assert!(wire["norito_manifest"].is_null());
+    assert_eq!(
+        properties["norito_manifest"]["type"],
+        norito::json!(["string", "null"])
+    );
+    let signer = checked_fixture_ed25519_keypair(0x42);
+    let receipt = test_receipt(&signer, request.lane_id, request.epoch, request.sequence, 7);
+    let scope = build_da_pin_scope(
+        &request,
+        receipt.storage_ticket,
+        receipt.manifest_hash,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    )
+    .expect("scope");
+    let response = DaIngestResponse {
+        status: "pending_pin_authorization",
+        duplicate: false,
+        receipt: Some(receipt),
+        pin_scope: Some(scope),
+    };
+    let wire = json::to_value(&response).expect("encode prepared response");
+    let response_schema = &schemas["DaIngestResponse"];
+    assert_fields(response_schema, &wire);
+    assert_fields(&schemas["DaIngestReceipt"], &wire["receipt"]);
+    assert_fields(
+        &schemas["DaStripeLayout"],
+        &wire["receipt"]["stripe_layout"],
+    );
+    assert_fields(&schemas["DaRentQuote"], &wire["receipt"]["rent_quote"]);
+    assert_fields(&schemas["DaPinScopeV1"], &wire["pin_scope"]);
+    let result = &response_schema["properties"];
+    assert_eq!(
+        result["status"]["enum"],
+        norito::json!(["pending_pin_authorization", "accepted"])
+    );
+    assert_eq!(
+        result["receipt"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestReceipt")
+    );
+    assert_eq!(
+        result["pin_scope"]["$ref"].as_str(),
+        Some("#/components/schemas/DaPinScopeV1")
+    );
+    assert!(wire["pin_scope"]["alias"].is_null());
+    let receipt = &schemas["DaIngestReceipt"]["properties"];
+    let pdp = wire["receipt"]["pdp_commitment"]
+        .as_str()
+        .expect("present commitment");
+    assert_eq!(BASE64.decode(pdp).unwrap(), [7]);
+    assert_eq!(
+        receipt["pdp_commitment"]["contentEncoding"].as_str(),
+        Some("base64")
+    );
+    assert_eq!(
+        receipt["operator_signature"]["allOf"][0]["$ref"].as_str(),
+        Some("#/components/schemas/CanonicalSignature")
+    );
+    for field in [
+        "client_blob_id",
+        "blob_hash",
+        "chunk_root",
+        "manifest_hash",
+        "storage_ticket",
+    ] {
+        assert_eq!(
+            receipt[field]["$ref"].as_str(),
+            Some("#/components/schemas/DaDigest32")
+        );
+        assert_eq!(wire["receipt"][field][0].as_array().unwrap().len(), 32);
+    }
+}
+
+#[test]
+fn da_ingest_openapi_binds_direct_and_multipart_finish_representations() {
+    let paths = &crate::openapi::compiled_spec()["paths"];
+    let direct = &paths["/v1/da/ingest"]["post"];
+    let parts = &paths["/v1/da/ingest/parts"]["post"];
+    for operation in [direct, parts] {
+        let content = operation["requestBody"]["content"].as_object().unwrap();
+        assert_eq!(content.len(), 1);
+        assert!(content.contains_key("application/json"));
+    }
+    let request = &direct["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        request["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestRequest")
+    );
+    assert_eq!(
+        request["properties"]["payload"]["minLength"].as_u64(),
+        Some(4)
+    );
+    let actions = &parts["requestBody"]["content"]["application/json"]["schema"]["properties"]["action"]
+        ["oneOf"];
+    let finish = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["properties"]["kind"]["const"].as_str() == Some("Finish"))
+        .expect("Finish");
+    let metadata = &finish["properties"]["value"];
+    assert_eq!(metadata["$ref"], request["$ref"]);
+    assert_eq!(
+        metadata["properties"]["payload"]["const"].as_str(),
+        Some("")
+    );
+    let response = &direct["responses"]["202"];
+    assert_eq!(response, &parts["responses"]["202"]);
+    let content = &response["content"];
+    assert_eq!(content.as_object().unwrap().len(), 2);
+    assert_eq!(
+        content["application/json"]["schema"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestResponse")
+    );
+    let binary = &content[utils::NORITO_MIME_TYPE]["schema"];
+    assert_eq!(binary["format"].as_str(), Some("binary"));
+    assert_eq!(
+        binary["x-iroha-norito-schema"].as_str(),
+        Some(<DaIngestResponse as norito::NoritoSchema>::nominal_name().as_str())
+    );
+    let header = &response["headers"]["Sora-PDP-Commitment"];
+    assert_eq!(header["required"].as_bool(), Some(true));
+    assert_eq!(header["schema"]["contentEncoding"].as_str(), Some("base64"));
 }

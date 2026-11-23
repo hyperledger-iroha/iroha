@@ -795,7 +795,7 @@ mod tests {
             (
                 "nexus.lane_catalog[index=5].proof_scheme",
                 NodeConfig,
-                "merkle_sha256",
+                "sorafs_por_blake3",
             ),
             (
                 "nexus.lane_catalog[index=5].manifest_policy",

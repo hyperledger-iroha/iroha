@@ -207,7 +207,7 @@ fn complete_comparison_proposal() -> SignedBlock {
         lane_id: LaneId::new(7),
         dataspace_id: DataSpaceId::new(2),
         alias: "comparison lane".into(),
-        proof_scheme: DaProofScheme::MerkleSha256,
+        proof_scheme: DaProofScheme::SorafsPorBlake3,
     }]));
     proposal.payload.da_pin_intents =
         Some(DaPinIntentBundle::new(vec![super::tests::test_pin_intent(
@@ -536,7 +536,8 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
     assert!(pin.pin_scope_authorization.has_valid_canonical_signatures());
 
     let mut changed_request = pin.clone();
-    changed_request.authorization.request_content_hash = Hash::new(b"changed pin request");
+    changed_request.authorization.request_content_hash =
+        crate::da::types::BlobDigest::from_hash(blake3::hash(b"changed pin request"));
     changed_request.authorization.signatures[0].signature = iroha_crypto::Signature::try_new(
         key.private_key(),
         &changed_request.authorization.signing_digest(),
@@ -547,6 +548,7 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
             &changed_request.authorization,
             pin.storage_ticket,
             pin.manifest_hash,
+            Default::default(),
             pin.alias.clone(),
         ),
         &key,

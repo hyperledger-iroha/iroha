@@ -104,6 +104,30 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         )
     }
 
+    /// Prepare the managed cold build's generated-local registry under its original deadline.
+    /// The blocking build collects only authenticated in-flight account-token work. Each
+    /// individual HTTP attempt still observes the configured per-request bound.
+    ///
+    /// # Errors
+    /// Refuses an expired build deadline or invalid generated-local scope.
+    pub fn from_generated_local_build_registry(
+        config: iroha::config::Config,
+        discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+        originals: [GeneratedLocalProviderTransportV1; 3],
+        request_timeout: Duration,
+        build_deadline: Instant,
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        build_time_remaining(build_deadline)?;
+        let mut prepared = Self::from_generated_local_account_registry(
+            config,
+            discovery,
+            originals,
+            request_timeout,
+        )?;
+        prepared.managed_build_deadline = Some(build_deadline);
+        Ok(prepared)
+    }
+
     /// Prepare cold generated-local reads with the exact ordinary account signer.
     ///
     /// This performs no I/O and retains no management client configuration. Original TLS
@@ -163,6 +187,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
             network_id,
             client_id: "musubi-v1".into(),
             request_timeout,
+            managed_build_deadline: None,
             account_registry: Some(Arc::new(AccountRegistryV1 {
                 account,
                 key_pair,
@@ -231,18 +256,37 @@ impl AccountRegistryV1 {
 }
 
 impl AuthenticatedMusubiArchiveFetchClientV1 {
+    #[cfg(test)]
     pub(super) fn discover_account_provider(
         &mut self,
         provider: ProviderId,
     ) -> Result<(), MusubiArchiveRuntimeErrorV1> {
-        let Some(registry) = &self.account_registry else {
+        if self.account_registry.is_none() {
             return Ok(());
+        }
+        self.select_plan_provider(provider, |_| Ok(()), &std::convert::identity)
+    }
+    pub(super) fn select_plan_provider<E>(
+        &mut self,
+        provider: ProviderId,
+        check_origin: impl FnOnce(&str) -> Result<(), E>,
+        source_error: &impl Fn(MusubiArchiveRuntimeErrorV1) -> E,
+    ) -> Result<(), E> {
+        let Some(registry) = &self.account_registry else {
+            let runtime = self.providers.get(&provider).ok_or_else(|| {
+                source_error(unavailable("MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED"))
+            })?;
+            return check_origin(runtime.base_url.as_str());
         };
-        let selected = registry.resolve_provider(self.network_id, provider)?;
+        let selected = registry
+            .resolve_provider(self.network_id, provider)
+            .map_err(source_error)?;
+        check_origin(selected.base_url.as_str())?;
         let http = match &selected.local_transport {
-            Some(local) => pinned_generated_local_http_client(local, self.request_timeout)?,
-            None => pinned_http_client(&selected.base_url, self.request_timeout)?,
-        };
+            Some(local) => pinned_generated_local_http_client(local, self.request_timeout),
+            None => pinned_http_client(&selected.base_url, self.request_timeout),
+        }
+        .map_err(source_error)?;
         if self.providers.len() >= MAX_CONFIGURED_PROVIDERS
             && !self.providers.contains_key(&provider)
         {
@@ -542,6 +586,50 @@ mod tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 3);
         assert!(client.providers.is_empty());
+    }
+
+    #[test]
+    fn only_managed_generated_build_carries_the_supplied_absolute_deadline() {
+        let cfg = config();
+        let originals = || std::array::from_fn(|slot| local_intent(&cfg, slot as u8));
+        let discover: Arc<MusubiArchiveProviderDiscoveryV1> =
+            Arc::new(|_| panic!("preparing cannot discover"));
+        let timeout = Duration::from_secs(30);
+        let ordinary = PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+            cfg.clone(),
+            discover.clone(),
+            originals(),
+            timeout,
+        )
+        .unwrap();
+        assert_eq!(
+            ordinary.build_client().unwrap().managed_build_deadline,
+            None
+        );
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let managed = PreparedMusubiArchiveFetchConfigV1::from_generated_local_build_registry(
+            cfg.clone(),
+            discover.clone(),
+            originals(),
+            timeout,
+            deadline,
+        )
+        .unwrap();
+        assert_eq!(
+            managed.build_client().unwrap().managed_build_deadline,
+            Some(deadline)
+        );
+        assert_eq!(managed.request_timeout, timeout);
+        assert!(
+            PreparedMusubiArchiveFetchConfigV1::from_generated_local_build_registry(
+                cfg.clone(),
+                discover,
+                originals(),
+                timeout,
+                Instant::now()
+            )
+            .is_err()
+        );
     }
 
     #[test]

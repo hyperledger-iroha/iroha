@@ -128,6 +128,7 @@ pub struct SimulatedFinality {
     pub unavailable: std::sync::atomic::AtomicBool,
     pub completed_proof_source_available: std::sync::atomic::AtomicBool,
     pub validations: AtomicUsize,
+    pub before_provider_tip_advances: AtomicUsize,
     pub advance_clock: Mutex<Option<(usize, Arc<FixedClock>, u64)>>,
 }
 impl SimulatedFinality {
@@ -137,6 +138,7 @@ impl SimulatedFinality {
             unavailable: false.into(),
             completed_proof_source_available: true.into(),
             validations: AtomicUsize::new(0),
+            before_provider_tip_advances: AtomicUsize::new(0),
             advance_clock: Mutex::new(None),
         }
     }
@@ -189,6 +191,16 @@ impl SignerFinalityV1 for SimulatedFinality {
         _completed: Option<&super::signer_completed_finality::CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError> {
         let call = self.validations.fetch_add(1, Ordering::SeqCst) + 1;
+        if observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider
+            && self
+                .before_provider_tip_advances
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+        {
+            return Err(StreamTokenIssuerError::BeforeProviderTipAdvanced);
+        }
         if self.unavailable.load(Ordering::SeqCst)
             || !self.known(minimum)
             || !self.known(candidate)

@@ -22,10 +22,18 @@ ARG RUSTFLAGS=""
 ARG FEATURES="external-software-signer-bin"
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
+ARG CONFIG_PROFILE="single"
+ARG BINARIES="sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VERGEN_GIT_SHA=""
+# An image starts one daemon: `iroha3d` for the single and nexus profiles and
+# `iroha3d_taira` for taira. Each links the whole daemon, about 66 CPU-minutes
+# and 9-14 GiB of compiler memory with ThinLTO, so the image builds only the
+# daemon its CONFIG_PROFILE starts, plus every binary BINARIES names; list the
+# other daemon there to ship both. Every binary builds in one Cargo invocation:
+# each invocation resolves its own feature graph, so a separate build compiled
+# iroha_core, iroha_data_model, ivm and about 70 other units a second time.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \
@@ -35,41 +43,35 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     case "${VERGEN_GIT_SHA}" in *[!0-9a-f]*) exit 1 ;; esac; \
     export CARGO_TARGET_DIR=/cargo-target; \
     mkdir -p /outbin; \
+    case "${CONFIG_PROFILE}" in \
+        single|nexus) profile_daemon=iroha3d ;; \
+        taira) profile_daemon=iroha3d_taira ;; \
+        *) echo "Unsupported CONFIG_PROFILE ${CONFIG_PROFILE}" >&2; exit 1 ;; \
+    esac; \
+    build_bins="${profile_daemon}"; \
+    for bin in ${BINARIES}; do \
+        case " ${build_bins} " in *" ${bin} "*) ;; *) build_bins="${build_bins} ${bin}" ;; esac; \
+    done; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
-        for bin in ${BINARIES}; do \
+        for bin in ${build_bins}; do \
             cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"; \
         done; \
     else \
         for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do \
             test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1; \
         done; \
-        regular_bins=""; \
-        build_kagami=0; \
-        for bin in ${BINARIES}; do \
-            if [ "${bin}" = "kagami" ]; then \
-                build_kagami=1; \
-            else \
-                regular_bins="${regular_bins} ${bin}"; \
-            fi; \
-        done; \
         cargo_target_profile_dir="${PROFILE}"; \
         if [ "${PROFILE}" = "dev" ] || [ "${PROFILE}" = "test" ]; then \
             cargo_target_profile_dir="debug"; \
         fi; \
-        if [ -n "${regular_bins}" ]; then \
-            set -- cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" --features "${FEATURES}"; \
-            for bin in ${regular_bins}; do \
-                set -- "$@" --bin "${bin}"; \
-            done; \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run "$@"; \
-            for bin in ${regular_bins}; do \
-                cp "/cargo-target/${cargo_target_profile_dir}/${bin}" "/outbin/${bin}"; \
-            done; \
-        fi; \
-        if [ "${build_kagami}" = "1" ]; then \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
-            cp "/cargo-target/${cargo_target_profile_dir}/kagami" /outbin/kagami; \
-        fi; \
+        set -- cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" --features "${FEATURES}"; \
+        for bin in ${build_bins}; do \
+            set -- "$@" --bin "${bin}"; \
+        done; \
+        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run "$@"; \
+        for bin in ${build_bins}; do \
+            cp "/cargo-target/${cargo_target_profile_dir}/${bin}" "/outbin/${bin}"; \
+        done; \
     fi; \
     chmod 755 /outbin/*
 

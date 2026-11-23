@@ -1,7 +1,6 @@
 //! Native payload verification without materialising a second payload or complete CAR archive.
-use crate::{
-    CarBuildPlan, CarStreamingWriter, CarWriteError, CarWriteStats, ChunkStoreError, PorMerkleTree,
-};
+use crate::{CarBuildPlan, CarStreamingWriter, CarWriteError, CarWriteStats, ChunkStoreError};
+use sorafs_chunker::por::PorRootBuilder;
 use sorafs_manifest::ManifestV1;
 use std::io::{self, Read, Seek, SeekFrom};
 use thiserror::Error;
@@ -34,9 +33,8 @@ pub enum PayloadVerifyError {
 
 /// Reproduce every native manifest commitment using two bounded passes over a payload spool.
 ///
-/// The complete CAR is hashed as the canonical writer emits it into `io::sink()`. PoR keeps one
-/// chunk subtree and a logarithmic Merkle frontier, releasing each subtree before reading the
-/// next chunk. The caller must authenticate the manifest before invoking this function. The
+/// The complete CAR is hashed as the canonical writer emits it into `io::sink()`. PoR reads one
+/// chunk at a time and retains a logarithmic Merkle frontier. The caller must authenticate the manifest before invoking this function. The
 /// reader is rewound on success; neither the payload nor a CAR copy is retained here.
 pub fn verify_payload_reader<R: Read + Seek>(
     manifest: &ManifestV1,
@@ -68,7 +66,7 @@ pub fn verify_payload_reader<R: Read + Seek>(
     })
 }
 
-fn por_commitment<R: Read>(
+pub(crate) fn por_commitment<R: Read>(
     plan: &CarBuildPlan,
     reader: &mut R,
 ) -> Result<([u8; 32], usize), PayloadVerifyError> {
@@ -80,33 +78,20 @@ fn por_commitment<R: Read>(
             context: "streamed PoR chunk",
             requested: validation.max_chunk_len(),
         })?;
-    let mut frontier = [None; crate::POR_CHUNK_MERKLE_MAX_DEPTH + 1];
-    let mut leaf_count = 0u64;
+    let mut builder = PorRootBuilder::default();
     let mut payload_hasher = blake3::Hasher::new();
     for (index, chunk) in plan.chunks.iter().enumerate() {
         bytes.resize(chunk.length as usize, 0);
         reader.read_exact(&mut bytes)?;
-        if blake3::hash(&bytes).as_bytes() != &chunk.digest {
+        let digest = builder
+            .push_chunk(&bytes)
+            .ok_or(ChunkStoreError::PorInvariant {
+                context: "streamed PoR chunk extent",
+            })?;
+        if digest != chunk.digest {
             return Err(ChunkStoreError::DigestMismatch { chunk_index: index }.into());
         }
         payload_hasher.update(&bytes);
-        let (_, mut node, next_leaf_count) = PorMerkleTree::build_chunk_tree_from_bytes(
-            index,
-            chunk.offset,
-            chunk.length,
-            chunk.digest,
-            leaf_count,
-            &bytes,
-        )?;
-        leaf_count = next_leaf_count;
-        let mut level = 0usize;
-        let mut node_index = index as u64;
-        while let Some(left) = frontier[level].take() {
-            node = crate::hash_chunk_node(level as u32, node_index / 2, &left, &node);
-            node_index /= 2;
-            level += 1;
-        }
-        frontier[level] = Some(node);
     }
     let mut trailing = [0u8; 1];
     if reader.read(&mut trailing)? != 0 || payload_hasher.finalize() != plan.payload_digest {
@@ -115,31 +100,10 @@ fn por_commitment<R: Read>(
     if plan.chunks.is_empty() {
         return Ok(([0; 32], 0));
     }
-    let mut carry: Option<([u8; 32], usize, u64)> = None;
-    for (level, left) in frontier.into_iter().enumerate() {
-        let Some(left) = left else { continue };
-        carry = Some(match carry {
-            None => (left, level, (plan.chunks.len() as u64 - 1) >> level),
-            Some((mut right, mut right_level, mut index)) => {
-                while right_level < level {
-                    right = crate::hash_chunk_node(right_level as u32, index / 2, &right, &right);
-                    right_level += 1;
-                    index /= 2;
-                }
-                (
-                    crate::hash_chunk_node(level as u32, index / 2, &left, &right),
-                    level + 1,
-                    index / 2,
-                )
-            }
-        });
-    }
-    let root = crate::hash_root(
-        plan.content_length,
-        plan.chunks.len(),
-        leaf_count,
-        &carry.expect("non-empty plan has a Merkle frontier").0,
-    )?;
+    let leaf_count = builder.leaf_count();
+    let root = builder.finish().ok_or(ChunkStoreError::PorInvariant {
+        context: "streamed PoR root",
+    })?;
     let leaf_count =
         usize::try_from(leaf_count).map_err(|_| ChunkStoreError::PorCountOverflow {
             context: "streamed PoR leaf count",

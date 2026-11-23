@@ -7,13 +7,13 @@ fn fixture() -> DaProofPolicyBundle {
             lane_id: LaneId::new(3),
             dataspace_id: DataSpaceId::new(9),
             alias: "é漢🙂".into(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         },
         DaProofPolicy {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             alias: String::new(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         },
     ])
 }

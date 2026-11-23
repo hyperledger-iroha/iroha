@@ -70,6 +70,34 @@ pub(super) struct PromotedGeneratedCatalog {
     pub valid_until_unix: u64,
 }
 
+impl PromotedGeneratedCatalog {
+    /// The serving head must equal any promotion that this same turn just witnessed.
+    pub(super) fn require_writer_receipt(self, written: Option<Self>) -> Result<()> {
+        if written.is_some_and(|receipt| receipt != self) {
+            return Err(invalid(
+                "current head differs from the selected writer's promotion",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Lexical original proof held until its matching live status and filesystem exit checks.
+struct RetainedCatalogRead {
+    directory: PrivateDirectory,
+    inventory: Vec<std::ffi::OsString>,
+    chain: Vec<GatewayComplianceCatalogV1>,
+    child: PrivateDirectory,
+    acknowledgement: GatewayComplianceAcknowledgementV1,
+}
+impl RetainedCatalogRead {
+    fn selected(&self) -> Result<&GatewayComplianceCatalogV1> {
+        self.chain
+            .last()
+            .ok_or_else(|| invalid("original promoted catalog is absent"))
+    }
+}
+
 pub(super) struct ManagedGatewayCompliance {
     authority: ServiceAuthority,
     plan: RetainedGatewayCompliancePlan,
@@ -81,6 +109,37 @@ impl ManagedGatewayCompliance {
             provider,
             ProviderPurpose::GatewayCompliance,
         )?;
+        Self::from_authority(authority)
+    }
+
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        Self::from_authority(ServiceAuthority::open_provider_from_original(
+            parent,
+            provider,
+            ProviderPurpose::GatewayCompliance,
+        )?)
+    }
+
+    /// Reopen the existing private catalog writer lock to authenticate its serving head.
+    /// A missing journal cannot satisfy a maintenance read.
+    pub(super) fn read_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        let authority = ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::GatewayCompliance,
+            None,
+        )?
+        .ok_or_else(|| invalid("original gateway compliance purpose is absent"))?;
+        Self::from_authority(authority)
+    }
+
+    fn from_authority(authority: ServiceAuthority) -> Result<Self> {
         let plan = authority.gateway_compliance_plan(authority.provider_id()?)?;
         Ok(Self { authority, plan })
     }
@@ -273,45 +332,172 @@ impl ManagedGatewayCompliance {
         expected: PromotedGeneratedCatalog,
         deadline: Instant,
     ) -> Result<()> {
+        self.observe_catalog(live, expected, deadline, false)
+            .map(|_| ())
+    }
+
+    /// Recover a promotion durably selected by this same original gateway during an earlier
+    /// incomplete turn. The old signed catalog must be in the validated chain, and its latest
+    /// original must independently be acknowledged, serving and current. This grants no lease.
+    pub(super) fn recover_promoted(
+        &self,
+        live: &mut impl LiveGatewayProcess,
+        previous: PromotedGeneratedCatalog,
+        deadline: Instant,
+    ) -> Result<PromotedGeneratedCatalog> {
+        self.observe_catalog(live, previous, deadline, true)
+    }
+
+    fn observe_catalog(
+        &self,
+        live: &mut impl LiveGatewayProcess,
+        previous: PromotedGeneratedCatalog,
+        deadline: Instant,
+        allow_successor: bool,
+    ) -> Result<PromotedGeneratedCatalog> {
         self.validate(live, deadline)?;
+        let read = self.read_observation(previous, allow_successor)?;
+        self.validate(live, deadline)?;
+        let status = self.fetch_observation(&read, deadline);
+        self.validate(live, deadline)?;
+        let promoted = self.finish_observation(&read, &status?)?;
+        self.validate(live, deadline)?;
+        Ok(promoted)
+    }
+
+    fn read_observation(
+        &self,
+        previous: PromotedGeneratedCatalog,
+        allow_successor: bool,
+    ) -> Result<RetainedCatalogRead> {
         let directory = self.authority.directory.open_child("catalogs")?;
         let inventory = directory.entries(MAX_CATALOGS)?;
         let chain = self.read_chain(&directory)?;
         let selected = chain
             .last()
             .ok_or_else(|| invalid("original promoted catalog is absent"))?;
-        if report(selected)? != expected {
-            return Err(invalid("promoted catalog differs from original activation"));
+        let promoted = report(selected)?;
+        if promoted != previous {
+            let anchor = chain
+                .iter()
+                .find(|item| item.payload.sequence == previous.sequence);
+            if !allow_successor || anchor.map(report).transpose()? != Some(previous) {
+                return Err(invalid("promoted catalog differs from original activation"));
+            }
         }
         let child = directory.open_child(catalog_name(selected.payload.sequence))?;
         let acknowledgement = self
             .read_ack(&child, selected)?
             .ok_or_else(|| invalid("original promoted catalog acknowledgement is absent"))?;
-        let status = self.call_retained(
-            live,
-            deadline,
-            &child,
-            selected,
-            Some(&acknowledgement),
-            |client| {
-                client
-                    .get_sorafs_gateway_compliance_status()
-                    .map_err(|_| invalid("original gateway compliance status is unavailable"))
-            },
-        )?;
-        self.validate_status(&status)?;
-        directory.revalidate()?;
-        if directory.entries(MAX_CATALOGS)? != inventory || self.read_chain(&directory)? != chain {
+        Ok(RetainedCatalogRead {
+            directory,
+            inventory,
+            chain,
+            child,
+            acknowledgement,
+        })
+    }
+
+    fn fetch_observation(
+        &self,
+        read: &RetainedCatalogRead,
+        deadline: Instant,
+    ) -> Result<GatewayComplianceStatusResponseV1> {
+        let selected = read.selected()?;
+        self.request(deadline, |client| {
+            self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+            let result = client
+                .get_sorafs_gateway_compliance_status()
+                .map_err(|_| invalid("original gateway compliance status is unavailable"));
+            self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+            result
+        })
+    }
+
+    fn finish_observation(
+        &self,
+        read: &RetainedCatalogRead,
+        status: &GatewayComplianceStatusResponseV1,
+    ) -> Result<PromotedGeneratedCatalog> {
+        let selected = read.selected()?;
+        self.validate_status(status)?;
+        read.directory.revalidate()?;
+        if read.directory.entries(MAX_CATALOGS)? != read.inventory
+            || self.read_chain(&read.directory)? != read.chain
+        {
             return Err(invalid("retained catalog chain changed during observation"));
         }
-        self.validate_retained(&child, selected, Some(&acknowledgement))?;
-        self.require_fresh_promoted(&status, selected, now_ms()? / 1_000)?;
-        self.validate(live, deadline)
+        self.validate_retained(&read.child, selected, Some(&read.acknowledgement))?;
+        self.require_fresh_promoted(status, selected, now_ms()? / 1_000)?;
+        report(selected)
+    }
+
+    /// Only status GETs are supported in this round. All publishers keep their private
+    /// original, signed chain, ACK and request endpoint. The caller freshly binds every
+    /// supplied plan to its live original before and after dispatch.
+    pub(super) fn recover_promoted_set(
+        owners: &[Self; 3],
+        previous: [PromotedGeneratedCatalog; 3],
+        deadline: Instant,
+        mut bind: impl FnMut([&RetainedGatewayCompliancePlan; 3]) -> Result<()>,
+    ) -> Result<[PromotedGeneratedCatalog; 3]> {
+        let mut validate = || {
+            super::provider_round::run(
+                owners.each_ref(),
+                true,
+                |owner| owner.validate_catalog_read_material(deadline),
+                || invalid("catalog material validation worker failed"),
+            )?;
+            bind(owners.each_ref().map(|owner| &owner.plan))?;
+            require_deadline(deadline)
+        };
+        validate()?;
+        let read = |index: usize| owners[index].read_observation(previous[index], true);
+        let reads = super::provider_round::run([0, 1, 2], true, read, || {
+            invalid("retained catalog read worker failed")
+        })?;
+        validate()?;
+        let get = |index: usize| owners[index].fetch_observation(&reads[index], deadline);
+        let statuses = super::provider_round::run([0, 1, 2], true, get, || {
+            invalid("catalog status worker failed")
+        });
+        // Join every dispatched GET and revalidate even when one gateway refused.
+        validate()?;
+        let statuses = statuses?;
+        let finish =
+            |index: usize| owners[index].finish_observation(&reads[index], &statuses[index]);
+        let promoted = super::provider_round::run([0, 1, 2], true, finish, || {
+            invalid("catalog status verification worker failed")
+        })?;
+        validate()?;
+        Ok(promoted)
     }
 
     fn validate(&self, live: &mut impl LiveGatewayProcess, deadline: Instant) -> Result<()> {
+        self.validate_material(deadline)?;
+        live.validate(&self.authority.prepared, &self.plan)
+    }
+
+    fn validate_material(&self, deadline: Instant) -> Result<()> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
+        self.validate_original_plan()
+    }
+
+    fn validate_catalog_read_material(&self, deadline: Instant) -> Result<()> {
+        if !self.authority.shares_original_for_read() {
+            return self.validate_material(deadline);
+        }
+        require_deadline(deadline)?;
+        // Only the in-memory provider ID separates these custody checks from the
+        // resolver's full original-image check. Each joined GET fence starts afresh.
+        // A source changed and restored before that read can go unseen. The held
+        // operation lock, provider scope and plan still use their physical checks.
+        self.authority.validate_scoped_operation_custody()?;
+        self.validate_original_plan()
+    }
+
+    fn validate_original_plan(&self) -> Result<()> {
         let current = self
             .authority
             .gateway_compliance_plan(self.authority.provider_id()?)?;
@@ -321,7 +507,7 @@ impl ManagedGatewayCompliance {
         {
             return Err(invalid("original generated compliance plan changed"));
         }
-        live.validate(&self.authority.prepared, &self.plan)
+        Ok(())
     }
 
     fn call<T>(
@@ -331,6 +517,17 @@ impl ManagedGatewayCompliance {
         operation: impl FnOnce(&Client) -> Result<T>,
     ) -> Result<T> {
         self.validate(live, deadline)?;
+        let result = self.request(deadline, operation);
+        self.validate(live, deadline)?;
+        result
+    }
+
+    fn request<T>(
+        &self,
+        deadline: Instant,
+        operation: impl FnOnce(&Client) -> Result<T>,
+    ) -> Result<T> {
+        require_deadline(deadline)?;
         let client = &self
             .authority
             .peers
@@ -341,9 +538,7 @@ impl ManagedGatewayCompliance {
             .checked_add(Duration::from_secs(5))
             .ok_or_else(|| invalid("gateway request deadline overflow"))?
             .min(deadline);
-        let result = operation(&client.with_request_deadline(local_deadline));
-        self.validate(live, deadline)?;
-        result
+        operation(&client.with_request_deadline(local_deadline))
     }
 
     fn validate_retained(

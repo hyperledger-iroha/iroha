@@ -154,7 +154,7 @@ final class ToriiDaClientTests: XCTestCase {
             return (200, ["Content-Type": "application/json"], body)
         }
 
-        let client = makeHTTPClient()
+        let client = try makeHTTPClient()
         let value = try await client.getDaProofPolicies()
         XCTAssertEqual(value.version, 1)
         XCTAssertEqual(value.policyHash.literal, canonicalDaHash)
@@ -190,7 +190,7 @@ final class ToriiDaClientTests: XCTestCase {
             return (200, ["Content-Type": "application/json"], response)
         }
 
-        let client = makeHTTPClient()
+        let client = try makeHTTPClient()
         let request = ToriiDaCommitmentListRequest(
             limit: 3,
             cursor: ToriiDaCommitmentListCursor(
@@ -273,7 +273,7 @@ final class ToriiDaClientTests: XCTestCase {
             return (200, ["Content-Type": "application/json"], Data("null".utf8))
         }
 
-        let client = makeHTTPClient()
+        let client = try makeHTTPClient()
         let response = try await client.proveDaPinIntent(
             ToriiDaPinIntentQueryRequest(storageTicket: String(repeating: "2", count: 64))
         )
@@ -289,13 +289,14 @@ final class ToriiDaClientTests: XCTestCase {
             let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
             XCTAssertEqual(json?["bundle_len"] as? Int, 1)
             let commitment = try XCTUnwrap(json?["commitment"] as? [String: Any])
+            XCTAssertEqual(commitment["chunk_root"] as? [[Int]], [Array(repeating: 0x10, count: 32)])
             XCTAssertNil(commitment["kzg_commitment"])
             XCTAssertTrue(commitment["proof_digest"] is NSNull)
             let body = Data(#"{"valid":true,"error":null}"#.utf8)
             return (200, ["Content-Type": "application/json"], body)
         }
 
-        let client = makeHTTPClient()
+        let client = try makeHTTPClient()
         let proof = try sampleCommitmentProof()
         let response = try await client.verifyDaCommitment(proof: proof)
         XCTAssertTrue(response.valid)
@@ -347,19 +348,12 @@ final class ToriiDaClientTests: XCTestCase {
         let proof = try sampleCommitmentProof()
         let encodedProof = try JSONEncoder().encode(proof)
         let encodedText = try XCTUnwrap(String(data: encodedProof, encoding: .utf8))
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiDaCommitmentProof.self,
-                from: Data(
-                    encodedText
-                        .replacingOccurrences(
-                            of: "MerkleSha256",
-                            with: "KzgBls12_381"
-                        )
-                        .utf8
-                )
+        for unsupported in ["MerkleSha256", "KzgBls12_381"] {
+            let invalid = encodedText.replacingOccurrences(of: "SorafsPorBlake3", with: unsupported)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiDaCommitmentProof.self, from: Data(invalid.utf8))
             )
-        )
+        }
         XCTAssertThrowsError(
             try ToriiDaCommitmentProof(
                 commitment: proof.commitment,
@@ -498,31 +492,109 @@ final class ToriiDaClientTests: XCTestCase {
         let oversized = ToriiDaPinIntentQueryRequest(alias: String(repeating: "é", count: 129))
         XCTAssertThrowsError(try JSONEncoder().encode(oversized))
 
-        let digest = try ToriiDaDigest32(bytes: Array(repeating: 0x22, count: 32))
-        let intent = try ToriiDaPinIntent(
-            laneId: 1,
-            epoch: 2,
-            sequence: 3,
-            storageTicket: digest,
-            manifestHash: digest,
-            alias: nil,
-            owner: nil
-        )
-        let encodedIntent = try JSONEncoder().encode(intent)
-        let intentObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encodedIntent) as? [String: Any]
-        )
-        XCTAssertTrue(intentObject["alias"] is NSNull)
-        XCTAssertTrue(intentObject["owner"] is NSNull)
+    }
+
+    func testSignedPinIntentProofRetainsBothAuthorizationsWhenReposted() async throws {
+        let intent = try signedPinIntentFixture()
+        let proof: [String: Any] = ["intent": intent, "location": ["block_height": 8, "index_in_bundle": 0],
+                                    "bundle_hash": canonicalDaHash, "bundle_len": 1, "root": canonicalDaHash, "path": []]
+        let source = try JSONSerialization.data(withJSONObject: proof)
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            let body = requestBodyData(from: request)
+            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce))
+            let timestamp = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs).flatMap(UInt64.init))
+            let encoded = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            let signature = try XCTUnwrap(Data(base64Encoded: encoded))
+            let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x19, count: 32))
+            let message = try ToriiCanonicalRequest.signatureMessage(networkId: TestNetworkIds.canonical,
+                method: "POST", url: XCTUnwrap(request.url), body: body, timestampMs: timestamp, nonce: nonce)
+            XCTAssertTrue(key.publicKey.isValidSignature(signature, for: message))
+            if request.url?.path == "/v1/da/pin-intents/prove" {
+                return (200, ["Content-Type": "application/json"], source)
+            }
+            XCTAssertEqual(request.url?.path, "/v1/da/pin-intents/verify")
+            let received = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? NSDictionary)
+            XCTAssertEqual(received, proof as NSDictionary)
+            return (200, ["Content-Type": "application/json"], Data(#"{"valid":true,"error":null}"#.utf8))
+        }
+        let client = try makeHTTPClient()
+        let fetched = try await client.proveDaPinIntent(ToriiDaPinIntentQueryRequest(storageTicket: String(repeating: "2", count: 64)))
+        let result = try XCTUnwrap(fetched)
+        XCTAssertNil(result.intent.alias)
+        XCTAssertNil(result.intent.pinScopeAuthorization.scope.alias)
+        XCTAssertEqual(result.intent.authorization.signatures.count, 1)
+        XCTAssertEqual(result.intent.pinScopeAuthorization.signatures.count, 1)
+        XCTAssertNotEqual(result.intent.authorization.signatures, result.intent.pinScopeAuthorization.signatures)
+        let verified = try await client.verifyDaPinIntent(proof: result)
+        XCTAssertTrue(verified.valid)
+    }
+
+    func testProofRefusesMissingCanonicalCredentialsBeforeDispatch() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ToriiDaStubURLProtocol.self]
+        ToriiDaStubURLProtocol.handler = { _ in
+            XCTFail("unsigned proof query reached the transport")
+            return (401, [:], Data())
+        }
+        let client = ToriiClient(baseURL: URL(string: "https://example.com")!, session: URLSession(configuration: configuration))
+        do {
+            _ = try await client.proveDaPinIntent()
+            XCTFail("unsigned proof query succeeded")
+        } catch ToriiClientError.invalidPayload(let reason) {
+            XCTAssertTrue(reason.contains("canonical account credentials"))
+        }
+    }
+
+    func testPinIntentRejectsUnsignedAndMismatchedWitnessShapes() throws {
+        let signed = try signedPinIntentFixture()
+        func assertRejected(_ fields: [String: Any], line: UInt = #line) throws {
+            let body = try JSONSerialization.data(withJSONObject: fields)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaPinIntent.self, from: body), line: line)
+        }
+        var retired = signed
+        let original = try XCTUnwrap(retired.removeValue(forKey: "authorization") as? [String: Any])
+        retired.removeValue(forKey: "pin_scope_authorization")
+        retired["owner"] = original["owner"]
+        try assertRejected(retired)
+        for key in ["authorization", "pin_scope_authorization"] {
+            var intent = signed
+            var envelope = try XCTUnwrap(intent[key] as? [String: Any])
+            envelope["signatures"] = []
+            intent[key] = envelope
+            try assertRejected(intent)
+        }
+        var altered = signed
+        altered["manifest_hash"] = [Array(repeating: 0xFF, count: 32)]
+        try assertRejected(altered)
+        var scopeAuthorization = try XCTUnwrap(signed["pin_scope_authorization"] as? [String: Any])
+        var scope = try XCTUnwrap(scopeAuthorization["scope"] as? [String: Any])
+        scope.removeValue(forKey: "alias")
+        scopeAuthorization["scope"] = scope
+        altered = signed
+        altered["pin_scope_authorization"] = scopeAuthorization
+        try assertRejected(altered)
+    }
+
+    private func signedPinIntentFixture() throws -> [String: Any] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let body = try Data(contentsOf: root.appendingPathComponent("fixtures/da/ingest/pin_intent_v1.json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
     }
 
     // MARK: - Helpers
 
-    private func makeHTTPClient() -> ToriiClient {
+    private func makeHTTPClient() throws -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ToriiDaStubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return ToriiClient(baseURL: URL(string: "https://example.com")!, session: session)
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x19, count: 32))
+        let account = try AccountAddress.fromAccount(publicKey: key.publicKey.rawRepresentation).toI105(networkPrefix: 753)
+        return ToriiClient(baseURL: URL(string: "https://example.com")!, session: session,
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            canonicalRequestAuth: ToriiCanonicalRequestAuth(accountId: account, privateKey: key.rawRepresentation))
     }
 
     private func decodeManifestBundle() throws -> ToriiDaManifestBundle {
@@ -573,8 +645,8 @@ final class ToriiDaClientTests: XCTestCase {
             "sequence": 3,
             "client_blob_id": digest,
             "manifest_hash": digest,
-            "proof_scheme": ["type": "MerkleSha256", "value": NSNull()],
-            "chunk_root": canonicalDaHash,
+            "proof_scheme": ["type": "SorafsPorBlake3", "value": NSNull()],
+            "chunk_root": [Array(repeating: 0x10, count: 32)],
             "proof_digest": NSNull(),
             "retention_class": [
                 "hot_retention_secs": 10,

@@ -45,6 +45,29 @@ impl<'source> CapturedPhaseV1<'source> {
         Ok(row)
     }
 
+    pub(super) fn into_mutation(
+        self,
+        action: Action,
+    ) -> Result<MutateSorafsStreamTokenAuthority, SignerOperationErrorV1> {
+        if self.current.operator != self.source.transactions.operator() {
+            return Err(SignerOperationErrorV1::CustodyChanged);
+        }
+        let sorafs_manifest::signer::protocol::SignerPurposeBindingV1::StreamToken { provider_id } =
+            self.source.binding.purpose
+        else {
+            return Err(SignerOperationErrorV1::InvalidOperation);
+        };
+        Ok(MutateSorafsStreamTokenAuthority {
+            request: StreamTokenAuthorityRequestV1 {
+                network_id: self.source.binding.network_id,
+                provider_id: ProviderId::new(provider_id),
+                expected_control_revision: self.current.control_revision,
+                expected_control_digest: self.current.anchor.state_digest,
+                action,
+            },
+        })
+    }
+
     /// Consume the same capture into one fresh round; nothing survives for a later phase.
     pub(super) fn into_check(
         self,
@@ -73,6 +96,36 @@ impl<'source> CapturedPhaseV1<'source> {
 }
 
 impl NativeStreamTokenSourceV1 {
+    /// Select the exact reserved row and its control CAS together before signing. Consensus
+    /// rechecks the reservation, control and expiry when the signed Complete executes.
+    pub(super) fn prepare_complete(
+        &self,
+        request: &SignerOperationCommitRequestV1<'_>,
+    ) -> Result<MutateSorafsStreamTokenAuthority, SignerOperationErrorV1> {
+        let id = request.check().request().intent().operation_id;
+        let mut captured = CapturedPhaseV1::capture(self, id)?;
+        let row = captured.take_operation(
+            request.check().request(),
+            Some(request.check().reservation()),
+        )?;
+        if row.operation.reviewed.request.operation_id != id
+            || row.operation.outcome != StreamTokenOutcomeV1::Reserved
+            || row.operation.reviewed.request.original_custody != request.original_custody()
+        {
+            return Err(SignerOperationErrorV1::CustodyChanged);
+        }
+        // Preserve both original physical reads and their charges for a scoped caller.
+        if norito::core::decode_limits_active() {
+            captured = CapturedPhaseV1::capture(self, id)?;
+        }
+        captured.into_mutation(Action::Complete(StreamTokenCompleteRequestV1 {
+            reviewed: row.operation.reviewed,
+            reservation: request.check().reservation(),
+            commitment: request.commitment(),
+            signatures_digest: request.signatures_digest(),
+        }))
+    }
+
     pub(super) fn prepare_check(
         &self,
         reviewed: &StreamTokenReviewedV1,
@@ -101,12 +154,43 @@ impl NativeStreamTokenSourceV1 {
         request: &SignerOperationCommitRequestV1<'_>,
         phase: SignerCommittedObservationPhaseV1,
     ) -> Result<PreparedStreamTokenCheckV1, SignerOperationErrorV1> {
+        self.prepare_committed_transaction_check(request, phase, None)
+    }
+
+    /// After Complete, qualify the signed transaction and its exact committed row at one
+    /// newly certified cut. The subsequent challenged Check still needs its own finality.
+    pub(super) fn prepare_committed_transaction_check(
+        &self,
+        request: &SignerOperationCommitRequestV1<'_>,
+        phase: SignerCommittedObservationPhaseV1,
+        submitted: Option<[u8; 32]>,
+    ) -> Result<PreparedStreamTokenCheckV1, SignerOperationErrorV1> {
         let mut captured =
             CapturedPhaseV1::capture(self, request.check().request().intent().operation_id)?;
-        let row = captured.take_operation(
+        let mut row = captured.take_operation(
             request.check().request(),
             Some(request.check().reservation()),
         )?;
+        if let Some(submitted) = submitted {
+            if row
+                .terminal_execution
+                .as_ref()
+                .map(|execution| execution.transaction_hash)
+                != Some(submitted)
+            {
+                return Err(SignerOperationErrorV1::ReservationConflict);
+            }
+            if norito::core::decode_limits_active() {
+                captured = CapturedPhaseV1::capture(
+                    self,
+                    request.check().request().intent().operation_id,
+                )?;
+                row = captured.take_operation(
+                    request.check().request(),
+                    Some(request.check().reservation()),
+                )?;
+            }
+        }
         let StreamTokenOutcomeV1::Completed(completed) = row.operation.outcome else {
             return Err(SignerOperationErrorV1::StateUnavailable);
         };

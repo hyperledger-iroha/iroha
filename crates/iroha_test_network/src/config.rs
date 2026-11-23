@@ -3431,13 +3431,13 @@ mod tests {
             lane_id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "alpha".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let policy1 = DaProofPolicy {
             lane_id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
             dataspace_id: DataSpaceId::new(7),
             alias: "beta".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy0, policy1]);
         let nexus = super::resolve_preexec_nexus_config(None, Some(&bundle))

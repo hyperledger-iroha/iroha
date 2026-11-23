@@ -19,10 +19,11 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{blocking::Client, crypto::KeyPair};
 use iroha_data_model::{
+    da::ingest::DaIngestReceipt,
     isi::sorafs::{
-        DecideSorafsReserveMovement, RegisterCapacityDeclaration, RegisterPinManifest,
-        RegisterSorafsReserveAccount, RequestSorafsReserveMovement, SetSorafsReservePolicy,
-        SubmitSorafsRepairTask, UpsertProviderCredit,
+        AssertSorafsPublicationV1, DecideSorafsReserveMovement, RegisterCapacityDeclaration,
+        RegisterPinManifest, RegisterSorafsReserveAccount, RequestSorafsReserveMovement,
+        SetSorafsReservePolicy, SubmitSorafsRepairTask, UpsertProviderCredit,
     },
     prelude::*,
     query::sorafs::prelude::FindSorafsRepairTask,
@@ -30,12 +31,14 @@ use iroha_data_model::{
         moderation_ledger::RepairLedgerTerminalKindV1,
         pin_registry::{ManifestDigest, StorageClass},
         pricing::ProviderCreditRecord,
+        publication::{PUBLICATION_PROOF_MAX_BYTES_V1, verify_sorafs_publication_v1},
         reserve::{
             RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReserveDuration,
             ReserveMovementKindV1, ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
         },
     },
     sumeragi_finality::SumeragiFinalityCheckpoint,
+    transaction::Executable,
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
@@ -46,12 +49,13 @@ use iroha_test_network::{
     Network, NetworkBuilder, init_instruction_registry, read_on_dedicated_thread,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+use iroha_version::codec::DecodeVersioned as _;
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
     DagCodecId, ManifestBuilder, ManifestV1, PinPolicy,
     capacity::{
         CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
-        ChunkerCommitmentV1,
+        ChunkerCommitmentV1, ReplicationOrderV1,
     },
     provider_advert::StakePointer,
     repair::{
@@ -63,7 +67,7 @@ use std::{
     borrow::Cow,
     fs,
     io::{Read as _, Write as _},
-    os::unix::fs::OpenOptionsExt as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -329,13 +333,22 @@ pub async fn refresh_network_adverts(
 pub async fn create_and_publish(
     transform: impl FnOnce(NetworkBuilder) -> NetworkBuilder,
 ) -> Result<PublishedNetwork> {
+    create_publication_network(transform, |_, _, _| {}).await
+}
+
+async fn create_publication_network(
+    transform: impl FnOnce(NetworkBuilder) -> NetworkBuilder,
+    configure_peer: impl Fn(usize, &std::path::Path, &mut toml::Table),
+) -> Result<PublishedNetwork> {
     init_instruction_registry();
     let cli_binary = std::env::var_os("TEST_NETWORK_BIN_SORAFS_CLI")
         .map(PathBuf::from)
-        .ok_or_else(|| eyre!("prebuild the same-source sorafs_cli with cli-orchestrator and set TEST_NETWORK_BIN_SORAFS_CLI; publication qualification must execute the CLI"))?;
+        .ok_or_else(|| eyre!("prebuild the same-source sorafs_cli with its default features and set TEST_NETWORK_BIN_SORAFS_CLI; publication qualification must execute the CLI"))?;
     ensure!(
-        cli_binary.is_absolute() && cli_binary.is_file(),
-        "TEST_NETWORK_BIN_SORAFS_CLI must be an existing absolute same-source artifact"
+        cli_binary.is_absolute()
+            && cli_binary.is_file()
+            && fs::metadata(&cli_binary)?.permissions().mode() & 0o111 != 0,
+        "TEST_NETWORK_BIN_SORAFS_CLI must be an existing executable absolute same-source artifact"
     );
     let target = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target");
     fs::create_dir_all(&target)?;
@@ -450,9 +463,13 @@ pub async fn create_and_publish(
         false,
     );
     layers.push(validator_layer);
+    for (index, layer) in layers.iter_mut().enumerate() {
+        configure_peer(index, runtime_directory.path(), layer);
+    }
     let genesis = network.genesis();
+    let startup = network.peer_startup_timeout();
     timeout(
-        wire::DEADLINE,
+        startup,
         try_join_all(network.peers().iter().zip(&layers).map(|(peer, layer)| {
             peer.start_checked(
                 network
@@ -462,7 +479,8 @@ pub async fn create_and_publish(
             )
         })),
     )
-    .await??;
+    .await
+    .wrap_err_with(|| format!("four-validator network startup exceeded {startup:?}"))??;
     network.ensure_blocks(1).await?;
     let http = wire::http()?;
     let checkpoint = wire::genesis_checkpoint(&http, &network).await?;
@@ -477,7 +495,8 @@ pub async fn create_and_publish(
             )
             .await?;
     }
-    let capacity_expiry = fund_and_declare(&network, &providers, asset, 2).await?;
+    let capacity_expiry =
+        fund_and_declare(&network, &providers, asset, ProviderFixture::CAPACITY_GIB).await?;
     refresh_network_adverts(&http, &network, &authority).await?;
     let data = (0..128 * 1024)
         .map(|index| {
@@ -703,10 +722,34 @@ async fn check_payload(published: &PublishedNetwork, peer: usize) -> Result<()> 
 }
 
 pub async fn restart(published: &PublishedNetwork, peer: usize) -> Result<()> {
+    let prior = stop_provider(published, peer).await?;
+    start_stopped_provider(published, peer, prior).await
+}
+
+async fn stop_provider(published: &PublishedNetwork, peer: usize) -> Result<usize> {
     let node = &published.network.peers()[peer];
-    node.shutdown().await;
+    let prior = published.network.startup_snapshot()[peer]
+        .logs
+        .stderr_run_id
+        .ok_or_else(|| eyre!("provider has no original process run"))?;
+    ensure!(node.process_id().await.is_some());
+    timeout(wire::DEADLINE, node.shutdown()).await?;
+    ensure!(
+        !node.is_running() && node.process_id().await.is_none(),
+        "provider stayed live across cold restart"
+    );
+    Ok(prior)
+}
+
+async fn start_stopped_provider(
+    published: &PublishedNetwork,
+    peer: usize,
+    prior: usize,
+) -> Result<()> {
+    let node = &published.network.peers()[peer];
+    let startup = published.network.peer_startup_timeout();
     timeout(
-        wire::DEADLINE,
+        startup,
         node.start_checked(
             published
                 .network
@@ -715,7 +758,15 @@ pub async fn restart(published: &PublishedNetwork, peer: usize) -> Result<()> {
             None,
         ),
     )
-    .await??;
+    .await
+    .wrap_err_with(|| format!("provider {peer} cold startup exceeded {startup:?}"))??;
+    let current = published.network.startup_snapshot()[peer]
+        .logs
+        .stderr_run_id;
+    ensure!(
+        prior.checked_add(1) == current && node.is_running() && node.process_id().await.is_some(),
+        "cold restart did not produce the next live provider process run"
+    );
     Ok(())
 }
 
@@ -725,7 +776,7 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     }
     restart(published, 1).await?;
     check_payload(published, 1).await?;
-    published.network.peers()[0].shutdown().await;
+    let prior = stop_provider(published, 0).await?;
     let digest = ManifestDigest::from_manifest(&published.manifest)?;
     let chunk_dir = published.providers[0]
         .storage_dir
@@ -771,18 +822,7 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     file.write_all(&corrupted)?;
     file.sync_all()?;
     drop(file);
-    let node = &published.network.peers()[0];
-    timeout(
-        wire::DEADLINE,
-        node.start_checked(
-            published
-                .network
-                .config_layers_for_peer(node)
-                .chain(std::iter::once(Cow::Borrowed(&published.layers[0]))),
-            None,
-        ),
-    )
-    .await??;
+    start_stopped_provider(published, 0, prior).await?;
     let unavailable = retrieve(published, 0).await?;
     ensure!(
         unavailable.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE,
@@ -895,7 +935,7 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     check_payload(published, 0).await?;
     restart(published, 0).await?;
     check_payload(published, 0).await?;
-    qualify_cli_deploy(published).await?;
+    qualify_cli_deploy(published, None).await?;
     Ok(())
 }
 
@@ -943,15 +983,191 @@ fn cli_failure_log_is_bounded_escaped_and_survives_runtime_cleanup() {
     );
 }
 
-async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
+fn receipt_artifact(
+    directory: &std::path::Path,
+    entry: &norito::json::Value,
+    name: &str,
+    maximum: usize,
+) -> Result<Vec<u8>> {
+    ensure!(
+        entry["file"].as_str() == Some(name),
+        "unexpected artifact name"
+    );
+    let mut bytes = Vec::new();
+    fs::File::open(directory.join(name))?
+        .take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        !bytes.is_empty() && bytes.len() <= maximum,
+        "oversized or empty publication artifact"
+    );
+    ensure!(
+        entry["blake3_hex"].as_str() == Some(blake3::hash(&bytes).to_hex().as_str()),
+        "publication artifact digest mismatch"
+    );
+    Ok(bytes)
+}
+
+fn verify_retained_publication(
+    directory: &std::path::Path,
+    receipt: &norito::json::Value,
+    network: &NetworkId,
+    floor: &SumeragiFinalityCheckpoint,
+    manifest: &ManifestV1,
+) -> Result<ReplicationOrderV1> {
+    let order_bytes = receipt_artifact(
+        directory,
+        &receipt["canonical_order"],
+        "publication.order.to",
+        256 << 10,
+    )?;
+    let order: ReplicationOrderV1 = wire::decode(&order_bytes, 256 << 10)?;
+    order.validate()?;
+    let providers = order
+        .assignments
+        .iter()
+        .map(|a| norito::json::Value::from(hex::encode(a.provider_id)))
+        .collect::<Vec<_>>();
+    ensure!(
+        receipt["provider_ids_hex"].as_array() == Some(&providers)
+            && receipt["provider_count"].as_u64() == Some(providers.len() as u64)
+            && receipt["order_id_hex"].as_str() == Some(hex::encode(order.order_id).as_str())
+            && order.manifest_cid == manifest.root_cid
+            && order.manifest_digest == *manifest.digest()?.as_bytes()
+            && order.target_replicas == manifest.pin_policy.min_replicas
+    );
+    for (phase, field, complete) in [
+        ("assigned", "assignment_evidence", false),
+        ("completed", "completion_evidence", true),
+    ] {
+        let evidence = &receipt[field];
+        let assertion_bytes = receipt_artifact(
+            directory,
+            &evidence["assertion"],
+            &format!("publication.{phase}.assertion.to"),
+            1 << 20,
+        )?;
+        let assertion = SignedTransaction::decode_all_versioned(&assertion_bytes)?;
+        let proof_bytes = receipt_artifact(
+            directory,
+            &evidence["proof"],
+            &format!("publication.{phase}.proof.to"),
+            PUBLICATION_PROOF_MAX_BYTES_V1,
+        )?;
+        let proof = wire::decode(&proof_bytes, PUBLICATION_PROOF_MAX_BYTES_V1)?;
+        let verified = verify_sorafs_publication_v1(network, floor, &assertion, &proof)?;
+        ensure!(
+            verified.completed() == complete
+                && evidence["height"].as_u64() == Some(verified.height())
+        );
+        if complete {
+            ensure!(receipt["finalized_height"].as_u64() == Some(verified.height()));
+        }
+        let Executable::Instructions(instructions) = assertion.instructions() else {
+            return Err(eyre!("publication assertion omitted native instructions"));
+        };
+        let instruction = instructions[0]
+            .as_any()
+            .downcast_ref::<AssertSorafsPublicationV1>()
+            .ok_or_else(|| eyre!("publication instruction substituted"))?;
+        ensure!(
+            assertion.authority() == &cli_publisher_id()
+                && instruction.manifest_digest == ManifestDigest::from_manifest(manifest)?
+                && instruction.order_id.as_bytes() == &order.order_id
+                && instruction.canonical_order_digest == *blake3::hash(&order_bytes).as_bytes()
+                && receipt["assignment_revision"].as_u64() == Some(instruction.assignment_revision)
+        );
+    }
+    Ok(order)
+}
+
+async fn run_deploy_cli(
+    published: &PublishedNetwork,
+    input: &str,
+    config_path: &std::path::Path,
+    checkpoint: &std::path::Path,
+    out_dir: &std::path::Path,
+) -> Result<norito::json::Value> {
+    fs::create_dir(out_dir)?;
+    let receipt = out_dir.join("receipt.json");
+    let log = out_dir.join("cli.log");
+    let output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&log)?;
+    let mut command = tokio::process::Command::new(&published.cli_binary);
+    command
+        .arg("deploy")
+        .arg(input)
+        .arg(format!("--client-config={}", config_path.display()))
+        .arg(format!("--finality-checkpoint={}", checkpoint.display()))
+        .arg(format!("--out-dir={}", out_dir.display()))
+        .arg(format!("--summary-out={}", receipt.display()))
+        .arg(format!(
+            "--gateway-base-url={}",
+            published.network.peers()[0].torii_url()
+        ))
+        .arg("--name=native-cli")
+        .arg("--no-peer-discovery")
+        .stdout(output.try_clone()?)
+        .stderr(output)
+        .kill_on_drop(true);
+    for peer in published.network.peers().iter().take(3) {
+        command.arg(format!("--provider-url={}", peer.torii_url()));
+    }
+    let mut child = command.spawn()?;
+    let status = match timeout(Duration::from_secs(620), child.wait()).await {
+        Ok(status) => status?,
+        Err(error) => {
+            // Reap our own test child before its private runtime directory is removed.
+            child
+                .kill()
+                .await
+                .wrap_err("terminate and reap timed-out publication CLI")?;
+            return Err(error).wrap_err(format!(
+                "same-source publication CLI exceeded its deadline; {}",
+                bounded_cli_failure_log(&log)
+            ));
+        }
+    };
+    ensure!(
+        status.success(),
+        "same-source sorafs_cli deploy failed ({status}); {}",
+        bounded_cli_failure_log(&log)
+    );
+    ensure!(
+        fs::metadata(&receipt)?.len() <= 1024 * 1024,
+        "CLI receipt exceeded bound"
+    );
+    let receipt: norito::json::Value = norito::json::from_slice(&fs::read(receipt)?)?;
+    ensure!(
+        receipt["success"].as_bool() == Some(true)
+            && receipt["publication_verified"].as_bool() == Some(true)
+            && receipt["gateway_verification"]["success"].as_bool() == Some(true),
+        "CLI failed native finality or asset verification"
+    );
+    Ok(receipt)
+}
+
+async fn qualify_cli_deploy(
+    published: &PublishedNetwork,
+    da: Option<(
+        &std::path::Path,
+        &SumeragiFinalityCheckpoint,
+        &DaIngestReceipt,
+    )>,
+) -> Result<ManifestV1> {
     let root = published.runtime_directory.path().join("cli");
     fs::create_dir(&root)?;
     let payload = root.join("payload");
-    fs::create_dir(&payload)?;
-    fs::write(
-        payload.join("hello.txt"),
-        b"actual same-source SoraFS CLI publication\n",
-    )?;
+    if da.is_none() {
+        fs::create_dir(&payload)?;
+        fs::write(
+            payload.join("hello.txt"),
+            b"actual same-source SoraFS CLI publication\n",
+        )?;
+    }
     let publisher = cli_publisher();
     let publisher_id = cli_publisher_id();
     let governor = client(&published.network, 0, &ALICE_KEYPAIR);
@@ -1022,66 +1238,14 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     config_file.write_all(toml::to_string(&config)?.as_bytes())?;
     config_file.sync_all()?;
     let checkpoint = root.join("trusted-finality.to");
-    fs::write(&checkpoint, published.floor.encode_canonical()?)?;
+    let floor = da.map_or(&published.floor, |(_, floor, _)| floor);
+    fs::write(&checkpoint, floor.encode_canonical()?)?;
+    let input = da.map_or_else(
+        || format!("--payload={}", payload.display()),
+        |(source, _, _)| format!("--da-source={}", source.display()),
+    );
     let out_dir = root.join("output");
-    let receipt = root.join("receipt.json");
-    let log = root.join("cli.log");
-    let output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&log)?;
-    let mut command = tokio::process::Command::new(&published.cli_binary);
-    command
-        .arg("deploy")
-        .arg(format!("--payload={}", payload.display()))
-        .arg(format!("--client-config={}", config_path.display()))
-        .arg(format!("--finality-checkpoint={}", checkpoint.display()))
-        .arg(format!("--out-dir={}", out_dir.display()))
-        .arg(format!("--summary-out={}", receipt.display()))
-        .arg(format!(
-            "--gateway-base-url={}",
-            published.network.peers()[0].torii_url()
-        ))
-        .arg("--name=native-cli")
-        .arg("--no-peer-discovery")
-        .stdout(output.try_clone()?)
-        .stderr(output)
-        .kill_on_drop(true);
-    for peer in published.network.peers().iter().take(3) {
-        command.arg(format!("--provider-url={}", peer.torii_url()));
-    }
-    let mut child = command.spawn()?;
-    let status = match timeout(Duration::from_secs(620), child.wait()).await {
-        Ok(status) => status?,
-        Err(error) => {
-            // Reap our own test child before its private runtime directory is removed.
-            child
-                .kill()
-                .await
-                .wrap_err("terminate and reap timed-out publication CLI")?;
-            return Err(error).wrap_err(format!(
-                "same-source publication CLI exceeded its deadline; {}",
-                bounded_cli_failure_log(&log)
-            ));
-        }
-    };
-    ensure!(
-        status.success(),
-        "same-source sorafs_cli deploy failed ({status}); {}",
-        bounded_cli_failure_log(&log)
-    );
-    ensure!(
-        fs::metadata(&receipt)?.len() <= 1024 * 1024,
-        "CLI receipt exceeded bound"
-    );
-    let receipt: norito::json::Value = norito::json::from_slice(&fs::read(receipt)?)?;
-    ensure!(
-        receipt["success"].as_bool() == Some(true)
-            && receipt["publication_verified"].as_bool() == Some(true)
-            && receipt["gateway_verification"]["success"].as_bool() == Some(true),
-        "CLI failed native finality or asset verification"
-    );
+    let receipt = run_deploy_cli(published, &input, &config_path, &checkpoint, &out_dir).await?;
     ensure!(
         receipt["provider_ingest"]["finalized_height"]
             .as_u64()
@@ -1093,6 +1257,77 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         &fs::read(out_dir.join("native-cli.manifest.to"))?,
         4 * 1024 * 1024,
     )?;
+    ensure!(
+        receipt["cid_base32"].as_str() == Some(cid(&manifest.root_cid).as_str())
+            && receipt["cid_hex"].as_str() == Some(hex::encode(&manifest.root_cid).as_str())
+            && receipt["manifest_digest_hex"].as_str()
+                == Some(manifest.digest()?.to_hex().as_str()),
+        "publication receipt differs from its exact exported package"
+    );
+    let order = verify_retained_publication(
+        &out_dir,
+        &receipt["provider_ingest"],
+        &published.network.network_id(),
+        floor,
+        &manifest,
+    )?;
+    if let Some((source, inclusion, ingest)) = da {
+        let providers: std::collections::BTreeSet<_> = published
+            .providers
+            .iter()
+            .map(|p| *p.id.as_bytes())
+            .collect();
+        ensure!(
+            order
+                .assignments
+                .iter()
+                .map(|a| a.provider_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                == providers,
+            "completion assertion does not cover every fixture provider"
+        );
+
+        ensure!(
+            receipt["da_storage_ticket"].as_str()
+                == source.file_name().and_then(|name| name.to_str())
+                && receipt["da_manifest_hash"].as_str()
+                    == Some(hex::encode(ingest.manifest_hash.as_bytes()).as_str())
+                && receipt["da_block_height"].as_u64() == Some(inclusion.height())
+                && receipt["da_block_hash"].as_str()
+                    == Some(inclusion.block_hash().to_string().as_str()),
+            "native deploy receipt does not name the finalized DA source"
+        );
+        // A separate invocation has no local transaction record. Require the existing
+        // assigned order and fresh finality evidence from the same checkpoint.
+        let second_dir = root.join("retry");
+        let retry =
+            run_deploy_cli(published, &input, &config_path, &checkpoint, &second_dir).await?;
+        ensure!(
+            receipt["registration"]["submission_mode"].as_str() == Some("pin_register_http")
+                && retry["registration"]["submission_mode"].as_str() == Some("existing_pin")
+                && retry["registration"]["success"].as_bool() == Some(true)
+                && retry["reported_pin_fee"].is_null()
+                && retry["artifacts"].get("pin_register_response").is_none()
+                && retry["manifest_digest_hex"] == receipt["manifest_digest_hex"]
+                && retry["da_storage_ticket"] == receipt["da_storage_ticket"]
+                && retry["cid_base32"] == receipt["cid_base32"]
+                && !second_dir
+                    .join("native-cli.pin-register.response.json")
+                    .exists(),
+            "another invocation registered the certified package again or selected different data"
+        );
+        let retry_order = verify_retained_publication(
+            &second_dir,
+            &retry["provider_ingest"],
+            &published.network.network_id(),
+            inclusion,
+            &manifest,
+        )?;
+        ensure!(
+            retry_order == order,
+            "retry changed the assigned replication order"
+        );
+    }
     let row = wire::preparation(
         &published.http,
         &published.network.network_id(),
@@ -1112,7 +1347,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         true,
     )
     .await?;
-    Ok(())
+    Ok(manifest)
 }
 
 #[test]
@@ -1130,3 +1365,6 @@ fn four_peer_publication_replication_retrieval_restart_and_native_repair() -> Re
 fn cid_encoding_uses_canonical_multibase_bits() {
     assert_eq!(cid(&[0, 255]), "bad7q");
 }
+
+#[path = "sorafs_publication_da.rs"]
+mod da_lifecycle;

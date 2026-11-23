@@ -4,6 +4,11 @@
 //! manifest generation, replication metadata) described in `specs/da/ingest_plan.md`. The actual
 //! networking/storage plumbing lives outside the data model; these structures exist purely for
 //! Norito encoding, schema documentation, and cross-crate integration.
+/// Protocol geometry shared by DA manifests, transport and proof verification.
+pub use sorafs_manifest::da::{
+    MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_PAYLOAD_BYTES, MIN_CHUNK_SIZE_BYTES,
+};
+
 /// Commitment structures embedded into blocks and RPC responses.
 pub mod commitment;
 /// Confidential-compute lane policies.

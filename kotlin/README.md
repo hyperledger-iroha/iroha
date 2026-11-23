@@ -582,10 +582,11 @@ surface supports that contract.
 
 `HttpClientTransport.newDaToriiClient()` returns the typed DA client. It covers
 the proof-policy, commitment list/prove/verify, and pin-intent
-list/prove/verify routes. DA digests use `DaModels.Digest32`; proof counters use
+list/prove/verify routes for Kotlin and Java. Each pin proof carries the signed ingest authorization and the signed scope binding the exact storage ticket, manifest, commitment and alias. DA digests use `DaModels.Digest32`; proof counters use
 `BigInteger` so the full unsigned 64-bit wire range remains exact.
 
 ```kotlin
+// The transport ClientConfig supplies its LocalSigningContext and ToriiCanonicalRequestAuth.
 val da = transport.newDaToriiClient()
 var page = da.listPinIntents(
     DaModels.PinIntentListRequest(limit = BigInteger.valueOf(100)),
@@ -607,6 +608,10 @@ if (proof != null) {
     check(da.verifyPinIntent(proof).join().valid)
 }
 ```
+
+A direct `DaToriiClient.builder()` uses `.authenticatedProofs(context, auth)`
+to sign each prove and verify request over its exact network, URI, and body.
+Listings and proof policies are public.
 
 List routes use immutable, server-issued snapshot cursors and return an explicit
 nullable `nextCursor`. Proof routes use separate selector-only request types;

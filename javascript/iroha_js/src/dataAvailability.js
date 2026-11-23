@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { blake3 } from "@noble/hashes/blake3.js";
 import { AccountAddress } from "./address.js";
-import { canonicalizeMultihashHex } from "./normalizers.js";
-import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";
+import { canonicalPublicKeyMultihashHex } from "./normalizers.js";
+import { publicKeyFromPrivate, publicKeyMultihash, signEd25519 } from "./crypto.js";
 import {
   defaultNativeRuntime,
   resolveNativeRuntimeBinding,
@@ -26,7 +26,6 @@ const DEFAULT_RETENTION_POLICY = {
   storageClass: "Hot",
   governanceTag: "da.default",
 };
-const ED25519_FUNCTION_CODE = 0xed;
 const MAX_SAFE_UINT = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_UINT_BIGINT = BigInt(MAX_SAFE_UINT);
 const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1 = Buffer.from(
@@ -38,7 +37,57 @@ const DA_INGEST_REQUEST_CONTENT_DOMAIN_V1 = Buffer.from(
   "utf8",
 );
 
+const DA_PART_BYTES = 1024 * 1024;
+const DA_MAX_WIRE_BYTES = 64 * DA_PART_BYTES;
+
+// Send the same signed request through either Torii representation. A new caller
+// resumes from the acknowledged prefix, including when a prior Finish was interrupted.
+export async function postDaIngestPhase(request, wireBytes, post) {
+  if (!Buffer.isBuffer(wireBytes) || wireBytes.length === 0 || wireBytes.length > DA_MAX_WIRE_BYTES) {
+    throw new RangeError("DA transmitted payload must contain 1 byte to 64 MiB");
+  }
+  if (wireBytes.length <= DA_PART_BYTES) return post("/v1/da/ingest", request, 202);
+  const upload = {
+    network_id: request.network_id,
+    lane_id: request.lane_id,
+    epoch: request.epoch,
+    wire_bytes: wireBytes.length,
+    wire_hash: [Array.from(blake3(wireBytes))],
+  };
+  const exchange = (kind, value, status) =>
+    post("/v1/da/ingest/parts", { upload, action: { kind, value } }, status);
+  const count = Math.ceil(wireBytes.length / DA_PART_BYTES);
+  const next = async (kind, value) => {
+    const progress = await exchange(kind, value, 200);
+    if (!progress || Object.keys(progress).length !== 1 ||
+        !Number.isSafeInteger(progress.next_part) || progress.next_part < 0 || progress.next_part > count) {
+      throw new Error("Torii returned invalid DA upload progress");
+    }
+    return progress.next_part;
+  };
+  for (let index = await next("Begin", null); index < count; index += 1) {
+    const part = wireBytes.subarray(index * DA_PART_BYTES, (index + 1) * DA_PART_BYTES);
+    if (await next("Put", { index, bytes_b64: part.toString("base64") }) !== index + 1) {
+      throw new Error("Torii returned inconsistent DA part acknowledgment");
+    }
+  }
+  return exchange("Finish", { ...request, payload: "" }, 202);
+}
+
 export function buildDaIngestRequest(options = {}) {
+  const { request, artifacts } = prepareDaIngest(options, true);
+  return { request, artifacts };
+}
+
+function boundedDaBytes(value, name) {
+  const length = typeof value === "string" ? Buffer.byteLength(value) : value?.byteLength ?? value?.length;
+  if (!Number.isSafeInteger(length) || length < 1 || length > DA_MAX_WIRE_BYTES) {
+    throw new RangeError(`${name} must contain 1 byte to 64 MiB`);
+  }
+  return toBuffer(value, name);
+}
+
+export function prepareDaIngest(options, includeFullPayload) {
   networkIdBytes(options.networkId, "networkId");
   const networkId = options.networkId.toString();
   const owner = requireNonEmptyString(options.owner, "owner");
@@ -46,11 +95,16 @@ export function buildDaIngestRequest(options = {}) {
     throw new TypeError("owner must be an exact canonical I105 account id");
   }
   AccountAddress.fromI105(owner);
-  const payloadBuffer = toBuffer(options.payload, "payload");
-  if (payloadBuffer.length === 0) {
-    throw new Error("payload must contain at least one byte");
+  const payloadBuffer = boundedDaBytes(options.payload, "payload");
+  const compression = normalizeEnumLiteral(options.compression ?? "Identity", "compression", [
+    "Identity", "Gzip", "Deflate", "Zstd",
+  ]);
+  if ((compression === "Identity") !== (options.compressedPayload == null)) {
+    throw new TypeError("compressedPayload is required exactly when DA transport compression is selected");
   }
-
+  const wire = compression === "Identity" ? payloadBuffer : boundedDaBytes(options.compressedPayload, "compressedPayload");
+  // A caller may mutate a Buffer while an HTTP acknowledgment is pending.
+  const wireBytes = wire.length > DA_PART_BYTES ? Buffer.from(wire) : wire;
   const chunkSize = normalizeUnsignedInteger(
     options.chunkSize ?? DEFAULT_CHUNK_SIZE,
     "chunkSize",
@@ -84,28 +138,32 @@ export function buildDaIngestRequest(options = {}) {
     chunk_size: chunkSize,
     total_size: payloadBuffer.length,
     payload_hash: tupleWrap(encodeFixedBytes(payloadHash, 32)),
-    compression: normalizeEnumLiteral(
-      options.compression ?? "Identity",
-      "compression",
-      ["Identity", "Gzip", "Deflate", "Zstd"],
-    ),
+    compression: { kind: compression, value: null },
     norito_manifest:
       options.noritoManifest === undefined || options.noritoManifest === null
         ? null
         : toBuffer(options.noritoManifest, "noritoManifest").toString("base64"),
-    payload: payloadBuffer.toString("base64"),
+    payload: includeFullPayload || wireBytes.length <= DA_PART_BYTES ? wireBytes.toString("base64") : "",
     metadata,
   };
 
-  const signingDigest = computeDaIngestSigningDigest(request);
+  const signingDigest = daSigningDigest(request, wireBytes);
   const signatureInfo = resolveSignature(options, signingDigest);
   request.signatures = [{
     signer: signatureInfo.signerPublicKey,
     signature: signatureInfo.signatureHex,
   }];
 
+  request.pin_scope_signatures = [];
+  if (options.pinScopeSignatureHex !== undefined) {
+    const signature = canonicalizeHex(options.pinScopeSignatureHex, "pinScopeSignatureHex");
+    if (signature.length !== 128) throw new RangeError("pinScopeSignatureHex must be a 64-byte Ed25519 signature");
+    request.pin_scope_signatures.push({ signer: signatureInfo.signerPublicKey, signature });
+  }
+
   return {
     request,
+    wireBytes,
     artifacts: {
       clientBlobIdHex: digestHex,
       payloadHashHex: bufferToHex(payloadHash),
@@ -125,9 +183,14 @@ export function buildDaIngestRequest(options = {}) {
  */
 export function computeDaIngestSigningDigest(requestInput) {
   const request = ensureRecord(requestInput, "DA ingest signing request");
-  const contentParts = [DA_INGEST_REQUEST_CONTENT_DOMAIN_V1];
+  return daSigningDigest(request, Buffer.from(request.payload, "base64"));
+}
 
-  contentParts.push(
+function daSigningDigest(request, wireBytes) {
+  const content = blake3.create().update(DA_INGEST_REQUEST_CONTENT_DOMAIN_V1);
+  const append = (...pieces) => { for (const piece of pieces) content.update(piece); };
+
+  append(
     fixedDigestFromTuple(request.client_blob_id, "client_blob_id"),
   );
 
@@ -139,14 +202,14 @@ export function computeDaIngestSigningDigest(requestInput) {
     Custom: 3,
   };
   const blobClassName = requireEnumKey(blobClass.class, blobClassTags, "blob_class.class");
-  contentParts.push(
+  append(
     Buffer.of(blobClassTags[blobClassName]),
     encodeUnsignedLe(blobClassName === "Custom" ? blobClass.value : 0, 2, "blob_class.value"),
   );
-  contentParts.push(encodeLengthPrefixedUtf8(unwrapTupleString(request.codec, "codec")));
+  append(encodeLengthPrefixedUtf8(unwrapTupleString(request.codec, "codec")));
 
   const erasure = ensureRecord(request.erasure_profile, "erasure_profile");
-  contentParts.push(
+  append(
     encodeUnsignedLe(erasure.data_shards, 2, "erasure_profile.data_shards"),
     encodeUnsignedLe(erasure.parity_shards, 2, "erasure_profile.parity_shards"),
     encodeUnsignedLe(erasure.row_parity_stripes, 2, "erasure_profile.row_parity_stripes"),
@@ -155,13 +218,13 @@ export function computeDaIngestSigningDigest(requestInput) {
   const fec = ensureRecord(erasure.fec_scheme, "erasure_profile.fec_scheme");
   const fecTags = { Rs12_10: 0, RsWin14_10: 1, Rs18_14: 2, Custom: 3 };
   const fecName = requireEnumKey(fec.scheme, fecTags, "erasure_profile.fec_scheme.scheme");
-  contentParts.push(
+  append(
     Buffer.of(fecTags[fecName]),
     encodeUnsignedLe(fecName === "Custom" ? fec.value : 0, 2, "erasure_profile.fec_scheme.value"),
   );
 
   const retention = ensureRecord(request.retention_policy, "retention_policy");
-  contentParts.push(
+  append(
     encodeUnsignedLe(retention.hot_retention_secs, 8, "retention_policy.hot_retention_secs"),
     encodeUnsignedLe(retention.cold_retention_secs, 8, "retention_policy.cold_retention_secs"),
     encodeUnsignedLe(retention.required_replicas, 2, "retention_policy.required_replicas"),
@@ -173,7 +236,7 @@ export function computeDaIngestSigningDigest(requestInput) {
     storageTags,
     "retention_policy.storage_class.type",
   );
-  contentParts.push(
+  append(
     Buffer.of(storageTags[storageName]),
     encodeLengthPrefixedUtf8(unwrapTupleString(retention.governance_tag, "governance_tag")),
     encodeUnsignedLe(request.chunk_size, 4, "chunk_size"),
@@ -181,19 +244,20 @@ export function computeDaIngestSigningDigest(requestInput) {
 
   const compressionTags = { Identity: 0, Gzip: 1, Deflate: 2, Zstd: 3 };
   const compressionName = requireEnumKey(
-    request.compression,
+    request.compression?.kind,
     compressionTags,
     "compression",
   );
-  contentParts.push(Buffer.of(compressionTags[compressionName]));
+  if (request.compression.value !== null) throw new TypeError("compression requires a null tagged value");
+  append(Buffer.of(compressionTags[compressionName]));
 
   if (!Object.prototype.hasOwnProperty.call(request, "norito_manifest")) {
     throw new TypeError("norito_manifest is required and must be null or a base64 string");
   }
   if (request.norito_manifest === null) {
-    contentParts.push(Buffer.of(0));
+    append(Buffer.of(0));
   } else {
-    contentParts.push(
+    append(
       Buffer.of(1),
       encodeLengthPrefixedBytes(
         Buffer.from(request.norito_manifest, "base64"),
@@ -201,16 +265,14 @@ export function computeDaIngestSigningDigest(requestInput) {
       ),
     );
   }
-  contentParts.push(
-    encodeLengthPrefixedBytes(Buffer.from(request.payload, "base64"), "payload"),
-  );
+  append(encodeUnsignedLe(wireBytes.length, 8, "payload.length"), wireBytes);
 
   const metadata = ensureRecord(request.metadata, "metadata");
   const items = Array.isArray(metadata.items) ? metadata.items : [];
-  contentParts.push(encodeUnsignedLe(items.length, 8, "metadata.items.length"));
+  append(encodeUnsignedLe(items.length, 8, "metadata.items.length"));
   items.forEach((entryInput, index) => {
     const entry = ensureRecord(entryInput, `metadata.items[${index}]`);
-    contentParts.push(
+    append(
       encodeLengthPrefixedUtf8(entry.key),
       encodeLengthPrefixedBytes(
         Buffer.from(entry.value, "base64"),
@@ -227,21 +289,21 @@ export function computeDaIngestSigningDigest(requestInput) {
       visibilityTags,
       `metadata.items[${index}].visibility.visibility`,
     );
-    contentParts.push(Buffer.of(visibilityTags[visibilityName]));
+    append(Buffer.of(visibilityTags[visibilityName]));
 
     const encryption = ensureRecord(
       entry.encryption,
       `metadata.items[${index}].encryption`,
     );
     if (encryption.cipher === "None") {
-      contentParts.push(Buffer.of(0));
+      append(Buffer.of(0));
     } else if (encryption.cipher === "ChaCha20Poly1305") {
-      contentParts.push(Buffer.of(1));
+      append(Buffer.of(1));
       const label = encryption.params?.key_label;
       if (label === undefined || label === null) {
-        contentParts.push(Buffer.of(0));
+        append(Buffer.of(0));
       } else {
-        contentParts.push(Buffer.of(1), encodeLengthPrefixedUtf8(String(label)));
+        append(Buffer.of(1), encodeLengthPrefixedUtf8(String(label)));
       }
     } else {
       throw new TypeError(
@@ -250,7 +312,7 @@ export function computeDaIngestSigningDigest(requestInput) {
     }
   });
 
-  const contentHash = Buffer.from(blake3(Buffer.concat(contentParts)));
+  const contentHash = Buffer.from(content.digest());
   const networkId = NetworkId.parse(
     requireNonEmptyString(request.network_id, "network_id"),
   );
@@ -460,7 +522,7 @@ function resolveClientBlobId(explicit, payloadBuffer) {
 
 function resolveSignature(options, signingDigest) {
   const signer = options.signerPublicKey
-    ? canonicalizePublicKey(options.signerPublicKey, "signerPublicKey")
+    ? canonicalPublicKeyMultihashHex(options.signerPublicKey, "signerPublicKey")
     : null;
 
   if (options.signatureHex) {
@@ -471,15 +533,17 @@ function resolveSignature(options, signingDigest) {
     return {
       signatureHex,
       signerPublicKey:
-        signer ?? encodeEd25519Multihash(publicKeyFromPrivate(normalizePrivateKey(options))),
+        signer ?? publicKeyMultihash(publicKeyFromPrivate(normalizePrivateKey(options)), { algorithm: "ed25519" }),
     };
   }
 
   const privateKey = normalizePrivateKey(options);
   const signature = signEd25519(signingDigest, privateKey);
   const signatureHex = bufferToHex(signature);
-  const signerPublicKey =
-    signer ?? encodeEd25519Multihash(publicKeyFromPrivate(privateKey));
+  const signerPublicKey = publicKeyMultihash(publicKeyFromPrivate(privateKey), { algorithm: "ed25519" });
+  if (signer !== null && signer !== signerPublicKey) {
+    throw new TypeError("signerPublicKey must match the signing private key");
+  }
   return { signatureHex, signerPublicKey };
 }
 
@@ -965,34 +1029,6 @@ function requireNonEmptyString(value, name) {
     throw new TypeError(`${name} must be a non-empty string`);
   }
   return trimmed;
-}
-
-function canonicalizePublicKey(value, name) {
-  const trimmed = requireNonEmptyString(value, name);
-  if (trimmed.includes(":")) {
-    const [, body] = trimmed.split(":", 2);
-    return canonicalizeMultihashHex(body, name);
-  }
-  return canonicalizeMultihashHex(trimmed, name);
-}
-
-function encodeEd25519Multihash(publicKey) {
-  if (publicKey.length !== 32) {
-    throw new Error("publicKeyFromPrivate returned an unexpected length");
-  }
-  const bytes = [...encodeVarint(ED25519_FUNCTION_CODE), ...encodeVarint(publicKey.length), ...publicKey];
-  return bufferToHex(Buffer.from(bytes));
-}
-
-function encodeVarint(value) {
-  const bytes = [];
-  let remaining = value >>> 0;
-  while (remaining >= 0x80) {
-    bytes.push((remaining & 0x7f) | 0x80);
-    remaining >>>= 7;
-  }
-  bytes.push(remaining);
-  return bytes;
 }
 
 function bufferToHex(buffer) {

@@ -18,3 +18,9 @@ The fixtures are referenced by `streaming_chunk_ingest_matches_fixture` and
 `manifest_persistence_matches_fixture` to ensure end-to-end ingest behaviour
 remains reproducible. Update them by running the ignored test
 `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored --nocapture`.
+
+The shared Rust, JavaScript and Swift producer tests also read
+`request_signing_v1.json`. Its identity and RFC 1950 DEFLATE cases sign the
+same canonical payload using different transport bytes. Each case fixes the
+raw BLAKE3 content digest, the outer authorization digest, the canonical
+public-key literal and the Ed25519 signature. The content digests cover both values of the final bit.
