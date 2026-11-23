@@ -646,6 +646,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
     let client_config = load_deploy_client_config(&client_config_path)?;
+    // Account literals inside JSON request and response bodies (the `/v1/fees/quote` draft and
+    // its quote) use the I105 discriminant in scope. Bind this config's network for the whole
+    // deployment, or the SORA mainnet default is encoded and other networks refuse the payload.
+    let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        client_config.chain_discriminant,
+    );
     let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical SumeragiFinalityCheckpoint for the configured network and chain".to_owned())?;
     let (checkpoint, tip) = deploy_publication::load_checkpoint(
         &finality_checkpoint,

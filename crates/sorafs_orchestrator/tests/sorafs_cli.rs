@@ -185,13 +185,35 @@ fn absent_then_refused_preparation(server: &MockServer) -> httpmock::Mock<'_> {
     })
 }
 
+/// Taira's I105 account discriminant, selected by both deploy fixture client configs.
+const DEPLOY_CHAIN_DISCRIMINANT: u16 = 369;
+
 fn publication_fee_quote(server: &MockServer) -> httpmock::Mock<'_> {
+    fee_quote(server, None)
+}
+
+/// A node of the configured network only decodes account literals under its own discriminant,
+/// so the deploy fee draft must name its authority for that chain, never the SORA default.
+fn deploy_fee_quote(server: &MockServer) -> httpmock::Mock<'_> {
+    fee_quote(server, Some(DEPLOY_CHAIN_DISCRIMINANT))
+}
+
+fn fee_quote(server: &MockServer, discriminant: Option<u16>) -> httpmock::Mock<'_> {
     server.mock(|when, then| {
-        when.method(POST)
+        let when = when
+            .method(POST)
             .path("/v1/fees/quote")
             .header_exists("X-Iroha-Account")
             .header_exists("X-Iroha-Signature");
-        then.respond_with(|request: &httpmock::HttpMockRequest| {
+        if let Some(discriminant) = discriminant {
+            let authority = AccountId::new(deploy_keypair().public_key().clone())
+                .to_i105_for_discriminant(discriminant)
+                .expect("deploy authority literal");
+            when.body_includes(format!("\"{authority}\""));
+        }
+        then.respond_with(move |request: &httpmock::HttpMockRequest| {
+            let _chain =
+                discriminant.map(iroha_data_model::account::address::ChainDiscriminantGuard::enter);
             let request: iroha_torii_shared::FeeQuoteRequest =
                 from_slice(request.body().as_ref()).expect("exact publication fee draft");
             let intent = request.payload.fee_payment_intent().clone();
@@ -1520,7 +1542,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     let payload = b"sorafs deploy payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let fee_quote = publication_fee_quote(&primary);
+    let fee_quote = deploy_fee_quote(&primary);
     let preparation = absent_then_refused_preparation(&primary);
     let (client_config, private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
@@ -1660,7 +1682,7 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     let payload = b"sorafs deploy known chain payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let fee_quote = publication_fee_quote(&primary);
+    let fee_quote = deploy_fee_quote(&primary);
     let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_profile_deploy_client_config(tempdir.path(), &primary.base_url());
@@ -1711,7 +1733,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let payload = b"fallback deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let fee_quote = publication_fee_quote(&primary);
+    let fee_quote = deploy_fee_quote(&primary);
     let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
@@ -1779,7 +1801,7 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     let payload = b"fallback transaction deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let fee_quote = publication_fee_quote(&primary);
+    let fee_quote = deploy_fee_quote(&primary);
     let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
@@ -1864,7 +1886,7 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     let payload_path = tempdir.path().join("payload.bin");
     fs::write(&payload_path, b"abc").expect("write payload");
     let primary = MockServer::start();
-    let fee_quote = publication_fee_quote(&primary);
+    let fee_quote = deploy_fee_quote(&primary);
     let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
