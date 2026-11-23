@@ -114,6 +114,7 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/validator_staking/norito_v1.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/torii/list_query/vectors.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/da/ingest/pin_intent_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/kagemusha/wallet_v1_vectors.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/kagemusha/wallet_account_check_code_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/kagemusha/nearby_picture_v1.json"))
