@@ -26961,6 +26961,16 @@
         ]
       },
       {
+        "path": "crates/iroha_core_zk/src/bin/kagemusha_wallet_artifacts/inspect_spartan_bundle.rs",
+        "reason": "The offline Spartan bundle inspector and manifest tool read the public profile JSON through Original::open. The file reader accepts 4,096 bytes and rejects a larger extent before decoding the profile.",
+        "symbols": [
+          "PROFILE_MAX"
+        ],
+        "exprs": {
+          "PROFILE_MAX": "4096"
+        }
+      },
+      {
         "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/activation.rs",
         "reason": "The wallet producer imports the same claim limit as the governed Activate instruction. A compile-time assertion checks the native engine bound. The canonical claim limit is recorded under attachment.kagemusha_spartan_activation_claim_bytes.",
         "symbols": [
@@ -27010,6 +27020,16 @@
         ],
         "exprs": {
           "DESCRIPTOR_LIMIT": "1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/wallet_actions.rs",
+        "reason": "The ArchiveSent wallet action reads a length-prefixed CreditStatus original before preparing the action. It uses the native CreditStatus verifier's 10,084-byte maximum. The archive_sent_action_takes_one_send_operation_and_one_bounded_credit_status test accepts the exact ceiling and rejects one additional byte.",
+        "symbols": [
+          "ARCHIVE_SENT_STATUS_MAX_BYTES"
+        ],
+        "exprs": {
+          "ARCHIVE_SENT_STATUS_MAX_BYTES": "native::MAX_CREDIT_STATUS_ORIGINAL_BYTES"
         }
       },
       {
@@ -31152,6 +31172,17 @@
               "path": "crates/iroha_data_model/src/sumeragi_finality/keyed_schema/carrier.rs",
               "sites": {
                 "(0x20..=0x7e).contains(&byte)": 2
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Wallet action recovery accepts the seven defined operation tags before looking up retained custody. The recovered capsule must carry the requested tag.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_actions.rs",
+              "sites": {
+                "(1..=7).contains(&expected_kind)": 1
               }
             }
           ]
