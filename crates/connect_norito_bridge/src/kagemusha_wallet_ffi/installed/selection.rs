@@ -15,11 +15,6 @@ use iroha_data_model::{
 use norito::json::{Map, Value};
 use std::str::FromStr as _;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/kagemusha_wallet_runtime_trust.rs"
-));
-
 #[cfg(test)]
 const DOMAIN: &[u8] = b"cbsi.iroha-application-release.v1\0";
 const APP_FIELDS: &[&str] = &[
@@ -34,21 +29,11 @@ mod boi;
 mod boi_registry;
 mod bpng;
 mod cbsi;
+mod runtime_trust;
 mod session;
+use runtime_trust::RuntimeAuthority;
 mod universal;
 pub(crate) use session::Session;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "The immutable native build selects one configured deployment authority; unselected variants remain for other builds."
-)]
-enum RuntimeAuthority {
-    BpngTairaV7,
-    BoiTairaV1,
-    CbsiReleaseV1,
-    ApplicationReleaseV1,
-}
 
 #[derive(Clone, Copy)]
 pub(super) struct FinancialSelection {
@@ -95,10 +80,10 @@ struct RuntimeTrust {
 impl RuntimeTrust {
     fn installed() -> Result<Self> {
         let (authority, key) =
-            INSTALLED_RUNTIME_TRUST.ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
+            runtime_trust::installed().ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?;
         Ok(Self {
             authority,
-            key: PublicKey::from_bytes(Algorithm::Ed25519, &key).map_err(|_| invalid())?,
+            key: PublicKey::from_bytes(Algorithm::Ed25519, key).map_err(|_| invalid())?,
         })
     }
     #[cfg(test)]
