@@ -59,7 +59,7 @@ use sorafs_manifest::{
     deal::XorAmount,
     pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
 };
-use zstd::stream::decode_all as zstd_decode_all;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use super::persistence::{RECEIPT_SIGNATURE_PLACEHOLDER, ReceiptInsertOutcome};
 use super::rs16::build_chunk_commitments;
@@ -929,15 +929,18 @@ fn pdp_commitment_header_value(bytes: &[u8]) -> Result<HeaderValue, (StatusCode,
 }
 
 fn decompress_reader<R>(
-    mut reader: R,
+    reader: R,
     expected_len: usize,
     algorithm: &'static str,
 ) -> Result<Vec<u8>, (StatusCode, String)>
 where
     R: Read,
 {
+    // Stop one byte past the advertised `total_size` so a payload that inflates
+    // beyond it is rejected without materialising the whole expansion.
+    let limit = u64::try_from(expected_len).map_or(u64::MAX, |len| len.saturating_add(1));
     let mut buffer = Vec::with_capacity(expected_len.min(16 * 1024));
-    reader.read_to_end(&mut buffer).map_err(|err| {
+    reader.take(limit).read_to_end(&mut buffer).map_err(|err| {
         (
             StatusCode::BAD_REQUEST,
             format!("failed to decompress {algorithm} payload: {err}"),
@@ -947,13 +950,13 @@ where
 }
 
 fn decompress_zstd(payload: &[u8], expected_len: usize) -> Result<Vec<u8>, (StatusCode, String)> {
-    let bytes = zstd_decode_all(payload).map_err(|err| {
+    let decoder = ZstdDecoder::new(payload).map_err(|err| {
         (
             StatusCode::BAD_REQUEST,
             format!("failed to decompress zstd payload: {err}"),
         )
     })?;
-    verify_decompressed_len(bytes, expected_len, "zstd")
+    decompress_reader(decoder, expected_len, "zstd")
 }
 
 fn verify_decompressed_len(
@@ -961,6 +964,14 @@ fn verify_decompressed_len(
     expected_len: usize,
     algorithm: &'static str,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
+    if buffer.len() > expected_len {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{algorithm} payload decompresses to more than total_size ({expected_len} bytes)"
+            ),
+        ));
+    }
     if buffer.len() != expected_len {
         Err((
             StatusCode::BAD_REQUEST,

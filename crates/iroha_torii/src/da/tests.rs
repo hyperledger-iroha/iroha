@@ -1618,6 +1618,48 @@ fn normalize_payload_rejects_size_mismatch() {
 }
 
 #[test]
+fn normalize_payload_handles_zstd() {
+    let mut request = sample_request();
+    let canonical = request.payload.clone();
+    request.payload = zstd::stream::encode_all(canonical.as_slice(), 3).expect("zstd payload");
+    request.compression = Compression::Zstd;
+    request.total_size = canonical.len() as u64;
+
+    let normalized = normalize_payload(&request).expect("normalize zstd payload");
+    assert_eq!(normalized.as_slice(), canonical.as_slice());
+}
+
+#[test]
+fn normalize_payload_stops_inflating_past_total_size() {
+    // 64 MiB of zeros compresses to a few KiB; the request only advertises the
+    // sample payload length, so decoding must stop right after that length
+    // instead of materialising the whole expansion before comparing sizes.
+    let expanded = vec![0u8; 64 * 1024 * 1024];
+    let mut encoder = GzEncoder::new(Vec::new(), FlateCompression::default());
+    encoder.write_all(&expanded).expect("write gzip payload");
+    let gzip = encoder.finish().expect("finish gzip payload");
+    let zstd = zstd::stream::encode_all(expanded.as_slice(), 3).expect("zstd payload");
+
+    for (compression, payload) in [(Compression::Gzip, gzip), (Compression::Zstd, zstd)] {
+        let mut request = sample_request();
+        request.total_size = request.payload.len() as u64;
+        request.payload = payload;
+        request.compression = compression;
+
+        let err = match normalize_payload(&request) {
+            Ok(_) => panic!("expected {compression:?} payload to be rejected"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1.contains("decompresses to more than total_size"),
+            "unexpected error message for {compression:?}: {}",
+            err.1
+        );
+    }
+}
+
+#[test]
 fn build_receipt_includes_pdp_commitment() {
     let request = sample_request();
     let signer = KeyPair::random();

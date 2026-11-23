@@ -156,6 +156,8 @@ hashing, chunking, and verifying optional manifests.
 
 1. Verify request Norito header matches `DaIngestRequest`.
 2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
+   Decoding stops one byte past `total_size`, so a compressed payload that inflates beyond the
+   advertised length is rejected without materialising the whole expansion.
 3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
 4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
 5. `retention_policy.required_replica_count` must respect governance baseline.
