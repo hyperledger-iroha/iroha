@@ -759,7 +759,7 @@ mod tests {
             let start = Instant::now();
             let recursive = engine.incoming_candidate(wire, &params).unwrap();
             eprintln!("wallet Receive originals {originals_time:?}, recursive pair {:?}, valid {valid}", start.elapsed());
-            assert_eq!((valid, recursive.valid), (can_credit, can_credit));
+            assert_eq!((valid, recursive.valid()), (can_credit, can_credit));
             assert_eq!(input.digest, recursive.payment_digest);
             assert_eq!(input.request, recursive.originals.request);
             assert!(exact_credential(&input.payer, &recursive.originals.payer));

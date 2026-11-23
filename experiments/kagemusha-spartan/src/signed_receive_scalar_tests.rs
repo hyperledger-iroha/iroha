@@ -248,12 +248,7 @@ fn signed_receive_fixture() -> (AuthenticatedParameters, RecoveryCapsule, PathBu
     let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
     let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
     let read = |dir: &PathBuf, file: &str| std::fs::read(dir.join(file)).unwrap();
-    let parameters = crate::native::device_fixture::install(
-        &read(&bundle, "program-bundle.norito"),
-        &read(&bundle, "parameter-manifest.norito"),
-        read(&bundle, "parameter-signature.bin").try_into().unwrap(),
-    )
-    .unwrap();
+    let parameters = crate::native::device_fixture::install_test_bundle(&bundle).unwrap();
     let capsule = RecoveryCapsule::decode(
         &read(&wallet, "counterparty-receive-capsule.norito"),
         &crate::native::device_fixture::scheme().scheme_id(),
@@ -414,4 +409,181 @@ fn signed_joined_receive_encodes_all_nine_scalars_on_both_curves() {
         build(w, &signed.secondary, &entropy, b"secondary witness").unwrap(),
         &signed.secondary,
     );
+}
+
+fn same_fold<C: PastaCurve>(
+    a: &crate::generator_claim::Fold<C>,
+    b: &crate::generator_claim::Fold<C>,
+    case: &str,
+) {
+    assert_eq!(a.sources.len(), b.sources.len(), "{case}: source count");
+    for (x, y) in a.sources.iter().zip(&b.sources) {
+        assert!(x.g == y.g && x.us == y.us, "{case}: sources");
+    }
+    assert_eq!(a.masks, b.masks, "{case}: masks");
+    assert_eq!(a.d, b.d, "{case}: D");
+    assert_eq!(a.lr, b.lr, "{case}: L/R");
+    assert_eq!(a.c, b.c, "{case}: c");
+    assert_eq!(a.output.us, b.output.us, "{case}: output challenges");
+    assert_eq!(a.output.g, b.output.g, "{case}: output G");
+}
+
+fn same_fold_trace<C: PastaCurve>(
+    a: &crate::generator_claim::Trace<C>,
+    b: &crate::generator_claim::Trace<C>,
+    case: &str,
+) {
+    assert_eq!(a.relation, b.relation, "{case}: relation");
+    assert_eq!(format!("{:?}", a.layout), format!("{:?}", b.layout), "{case}: layout");
+    assert_eq!(a.shared, b.shared, "{case}: shared limbs");
+    assert_eq!(a.input_header, b.input_header, "{case}: input header");
+    assert_eq!(a.fold_header, b.fold_header, "{case}: fold header");
+    assert_eq!(a.digest, b.digest, "{case}: digest");
+    assert_eq!(a.challenges, b.challenges, "{case}: challenges");
+    assert_eq!(a.mu, b.mu, "{case}: mu");
+    assert_eq!(a.point, b.point, "{case}: point");
+    assert_eq!(a.zeta, b.zeta, "{case}: zeta");
+    assert_eq!(a.gamma, b.gamma, "{case}: gamma");
+    assert_eq!(a.value, b.value, "{case}: value");
+    assert_eq!(a.b_final, b.b_final, "{case}: b_final");
+    assert_eq!(a.commitment, b.commitment, "{case}: C-star");
+}
+
+/// Opus review: the signed counterparty Receive through the verified fold.
+/// Its native verdict binds the exact frozen Payment and proof bytes; every
+/// generator claim the verified fold reuses (own and inherited, head and
+/// incoming, both curves) is decided true exactly as traced, so the batched
+/// rounds close without a fallback; and both curves' folds and fold traces equal
+/// the stock derived folds from the same entropy. Prints wall and process CPU
+/// seconds, stock and verified alternating (stock, verified, verified, stock).
+#[test]
+#[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
+fn signed_receive_verified_folds_match_stock_on_both_curves() {
+    let (parameters, capsule, wallet) = signed_receive_fixture();
+    let record = CompletionRecord::decode(
+        &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
+        capsule.wallet(),
+    )
+    .unwrap();
+    let engine = NativeEngine::default();
+    let (prepared, _) = engine
+        .verify_released_operation(&capsule, &record, &parameters)
+        .unwrap();
+    let ExactOperationWitness::Receive {
+        incoming_payment, ..
+    } = prepared.witness.as_ref()
+    else {
+        panic!("retained Receive")
+    };
+    let incoming = prepared.receive.as_ref().unwrap();
+    assert!(incoming.can_credit);
+    let payment = incoming
+        .verified
+        .as_ref()
+        .expect("a creditable Receive carries the native verdict");
+    payment.require_parameters(&parameters).unwrap();
+    assert_eq!(payment.exact_bytes(), incoming_payment.as_ref());
+    assert_eq!(payment.exact_pair(), incoming.pair_bytes.as_slice());
+    let (_, _, _, _, pred) = decode_head(&prepared.predecessor.pair, &parameters).unwrap();
+    let p = &parameters.inner;
+    let mut pairs = [
+        full::trace_uniform(pred, &p.generators),
+        full::trace_incoming_candidate(
+            incoming.pair.clone(),
+            &p.generators,
+            incoming.pair_bytes.clone(),
+        ),
+    ];
+    assert_eq!(pairs[1].incoming_original.as_deref(), Some(payment.exact_pair()));
+    for (side, pair) in ["head", "incoming"].into_iter().zip(&pairs) {
+        let own_p = crate::ipa::Claim {
+            g: pair.proof_p.ipa.g_final,
+            us: pair.tr_p.us.clone(),
+        };
+        let inherited_p = full::inherited_generator_claim(&pair.tr_p, &p.generators.p).unwrap();
+        let own_s = crate::ipa::Claim {
+            g: pair.proof_s.ipa.g_final,
+            us: pair.tr_s.us.clone(),
+        };
+        let inherited_s = full::inherited_generator_claim(&pair.tr_s, &p.generators.s).unwrap();
+        assert!(crate::generator_claim::decide(&p.generators.p, &own_p), "{side} own P claim");
+        assert!(crate::generator_claim::decide(&p.generators.p, &inherited_p), "{side} inherited P claim");
+        assert!(crate::generator_claim::decide(&p.generators.s, &own_s), "{side} own S claim");
+        assert!(crate::generator_claim::decide(&p.generators.s, &inherited_s), "{side} inherited S claim");
+    }
+    let original = incoming_payment.as_ref();
+    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs[..1]),
+        Err(Error::Malformed("verified Receive fold proof count"))));
+    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, &original[1..], &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    let mut other_manifest = payment.clone();
+    other_manifest.manifest_digest[0] ^= 1;
+    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, &other_manifest, original, &pairs),
+        Err(Error::AuthorityMismatch("verified Payment parameter manifest"))));
+    pairs.swap(0, 1);
+    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    pairs.swap(0, 1);
+    let original_pair = pairs[1].incoming_original.take().unwrap();
+    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    pairs[1].incoming_original = Some(original_pair);
+    let entropy = ProofEntropy::fresh().unwrap();
+    let stock = || full::GeneratorFolds::prepare(&p.generators, &pairs, &entropy).unwrap();
+    let verified = || {
+        full::GeneratorFolds::prepare_verified_receive(
+            &VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs).unwrap(),
+            &entropy,
+        )
+        .unwrap()
+    };
+    let (s1, s1_wall, s1_cpu) = measured(stock);
+    let (v1, v1_wall, v1_cpu) = measured(verified);
+    let (v2, v2_wall, v2_cpu) = measured(verified);
+    let (s2, s2_wall, s2_cpu) = measured(stock);
+    for (other, label) in [(&v1, "verified 1"), (&v2, "verified 2"), (&s2, "stock 2")] {
+        same_fold(&s1.p, &other.p, &format!("primary fold, {label}"));
+        same_fold(&s1.s, &other.s, &format!("secondary fold, {label}"));
+        same_fold_trace(&s1.tp, &other.tp, &format!("primary fold trace, {label}"));
+        same_fold_trace(&s1.ts, &other.ts, &format!("secondary fold trace, {label}"));
+    }
+    eprintln!(
+        "opus-review signed Receive GeneratorFolds: stock wall {s1_wall:.3} {s2_wall:.3} s cpu {s1_cpu:.3} {s2_cpu:.3} s; verified wall {v1_wall:.3} {v2_wall:.3} s cpu {v1_cpu:.3} {v2_cpu:.3} s"
+    );
+}
+
+/// Process CPU seconds (user + system, every thread) for the review timings.
+fn process_cpu_seconds() -> f64 {
+    #[cfg(target_os = "macos")]
+    type Usec = i32;
+    #[cfg(not(target_os = "macos"))]
+    type Usec = i64;
+    #[repr(C)]
+    struct TimeVal {
+        sec: i64,
+        usec: Usec,
+    }
+    #[repr(C)]
+    struct RUsage {
+        user: TimeVal,
+        system: TimeVal,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+    let mut usage = std::mem::MaybeUninit::<RUsage>::zeroed();
+    // SAFETY: getrusage(RUSAGE_SELF) writes one complete struct rusage.
+    assert_eq!(unsafe { getrusage(0, usage.as_mut_ptr()) }, 0);
+    // SAFETY: zero-initialized and then fully written by getrusage.
+    let usage = unsafe { usage.assume_init() };
+    let seconds = |t: &TimeVal| t.sec as f64 + t.usec as f64 * 1e-6;
+    seconds(&usage.user) + seconds(&usage.system)
+}
+
+/// Wall and process CPU seconds of `f`.
+fn measured<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
+    let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
+    let out = f();
+    (out, wall.elapsed().as_secs_f64(), process_cpu_seconds() - cpu)
 }
