@@ -280,13 +280,7 @@ impl Wallet {
 fn combined_control_predecessors_and_repeated_operations() {
     let path =
         std::path::PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
-    let read = |name: &str| std::fs::read(path.join(name)).unwrap();
-    let params = install(
-        &read("program-bundle.norito"),
-        &read("parameter-manifest.norito"),
-        read("parameter-signature.bin").try_into().unwrap(),
-    )
-    .unwrap();
+    let params = install_test_bundle(&path).unwrap();
     let mut a = Wallet::enroll(
         &params,
         "Control lifecycle A",
@@ -360,13 +354,7 @@ fn retained_payment_credit_status_requires_its_exact_manifest() {
     let bundle = std::path::PathBuf::from(
         std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
     );
-    let read = |name: &str| std::fs::read(bundle.join(name)).unwrap();
-    let mut parameters = install(
-        &read("program-bundle.norito"),
-        &read("parameter-manifest.norito"),
-        read("parameter-signature.bin").try_into().unwrap(),
-    )
-    .unwrap();
+    let mut parameters = install_test_bundle(&bundle).unwrap();
     let original =
         std::fs::read(std::env::var_os("KAGEMUSHA_SPARTAN_RETAINED_PAYMENT").unwrap()).unwrap();
     let engine = NativeEngine::default();
@@ -387,13 +375,7 @@ fn retained_payment_credit_status_requires_its_exact_manifest() {
 fn refresh_around_a_joined_payment_and_immediate_send() {
     let bundle =
         std::path::PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
-    let read = |name: &str| std::fs::read(bundle.join(name)).unwrap();
-    let params = install(
-        &read("program-bundle.norito"),
-        &read("parameter-manifest.norito"),
-        read("parameter-signature.bin").try_into().unwrap(),
-    )
-    .unwrap();
+    let params = install_test_bundle(&bundle).unwrap();
     let original =
         std::fs::read(std::env::var_os("KAGEMUSHA_SPARTAN_RETAINED_PAYMENT").unwrap()).unwrap();
     let engine = NativeEngine::default();

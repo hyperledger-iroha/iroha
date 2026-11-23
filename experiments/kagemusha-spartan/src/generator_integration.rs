@@ -101,6 +101,23 @@ impl GeneratorFolds {
         pairs: &[TracedPair],
         entropy: &crate::fs::ProofEntropy,
     ) -> Result<Self, &'static str> {
+        Self::prepare_inner(gens, pairs, entropy, None)
+    }
+
+    pub(crate) fn prepare_verified_receive(
+        receipt: &crate::native::engine::VerifiedReceiveFolds<'_>,
+        entropy: &crate::fs::ProofEntropy,
+    ) -> Result<Self, &'static str> {
+        let (gens, pairs) = receipt.sources();
+        Self::prepare_inner(gens, pairs, entropy, Some(receipt))
+    }
+
+    fn prepare_inner(
+        gens: &PairGens,
+        pairs: &[TracedPair],
+        entropy: &crate::fs::ProofEntropy,
+        verified: Option<&crate::native::engine::VerifiedReceiveFolds<'_>>,
+    ) -> Result<Self, &'static str> {
         if !(1..=2).contains(&pairs.len()) {
             return Err("generator fold proof count");
         }
@@ -114,28 +131,38 @@ impl GeneratorFolds {
             }
             relation[16 * i..16 * (i + 1)].copy_from_slice(&r[..16]);
         }
-        let ps = pairs
-            .iter()
-            .map(|p| (&p.proof_p, &p.tr_p))
-            .collect::<Vec<_>>();
-        let ss = pairs
-            .iter()
-            .map(|p| (&p.proof_s, &p.tr_s))
-            .collect::<Vec<_>>();
-        let (p, tp) = prove_sources(
-            &gens.p,
-            relation,
-            &ps,
-            entropy,
-            b"primary inherited generator fold",
-        )?;
-        let (s, ts) = prove_sources(
-            &gens.s,
-            relation,
-            &ss,
-            entropy,
-            b"secondary inherited generator fold",
-        )?;
+        let ((p, tp), (s, ts)) = if let Some(receipt) = verified {
+            (
+                gc::prove_verified_predecessors(receipt.primary(), relation, entropy,
+                    b"primary inherited generator fold")?,
+                gc::prove_verified_predecessors(receipt.secondary(), relation, entropy,
+                    b"secondary inherited generator fold")?,
+            )
+        } else {
+            let ps = pairs
+                .iter()
+                .map(|p| (&p.proof_p, &p.tr_p))
+                .collect::<Vec<_>>();
+            let ss = pairs
+                .iter()
+                .map(|p| (&p.proof_s, &p.tr_s))
+                .collect::<Vec<_>>();
+            let (p, tp) = prove_sources(
+                &gens.p,
+                relation,
+                &ps,
+                entropy,
+                b"primary inherited generator fold",
+            )?;
+            let (s, ts) = prove_sources(
+                &gens.s,
+                relation,
+                &ss,
+                entropy,
+                b"secondary inherited generator fold",
+            )?;
+            ((p, tp), (s, ts))
+        };
         let mu = zeroize::Zeroizing::new(entropy.stream(b"pair binding privacy mask").scalar());
         Ok(Self { p, s, tp, ts, mu })
     }

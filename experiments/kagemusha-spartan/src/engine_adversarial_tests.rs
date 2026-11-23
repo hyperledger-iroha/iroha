@@ -5,6 +5,8 @@ use group::{Curve, Group};
 
 #[path = "archive_remove_successor_tests.rs"]
 mod archive_remove_successor_tests;
+#[path = "engine_output_reuse_tests.rs"]
+mod output_reuse_tests;
 #[path = "signed_receive_scalar_tests.rs"]
 mod signed_receive_scalar_tests;
 
@@ -281,7 +283,7 @@ pub(super) fn reject_template_artifacts(
             let result = engine.verify_payment(&payment, parameters).map(|_| ());
             refused += usize::from(verdict("Send Payment", result, *holds)?);
             // At Receive, the same bytes never credit: Native derives Burn.
-            if engine.incoming_candidate(&payment, parameters)?.valid != *holds {
+            if engine.incoming_candidate(&payment, parameters)?.valid() != *holds {
                 return Err(Error::AuthorityMismatch("template incoming verdict"));
             }
         }
@@ -793,12 +795,19 @@ fn receive_and_successors(
 
     for (label, bytes, valid_send_proof) in cases {
         let candidate = engine.incoming_candidate(&bytes, parameters)?;
-        if candidate.valid != valid_send_proof
+        if candidate.valid() != valid_send_proof
             || engine.verify_payment(&bytes, parameters).is_ok() != valid_send_proof
         {
             return Err(Error::AuthorityMismatch(
                 "corrupted Payment proof verdict differs from its test case",
             ));
+        }
+        // Opus review: a verdict binds the exact candidate bytes it was decided for.
+        if let Some(payment) = candidate.verified.as_ref()
+            && (payment.exact_bytes() != bytes.as_slice()
+                || payment.exact_pair() != candidate.pair_bytes.as_slice())
+        {
+            return Err(Error::AuthorityMismatch("verified incoming Payment exact bytes"));
         }
         let mut send = actual_send.clone();
         send.request = candidate.originals.request.clone();
