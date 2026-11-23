@@ -125,12 +125,22 @@ extension ToriiDaRetentionPolicy: Decodable {
         }
         let tag = try fields.decode([String].self, forKey: .tag)
         let replicas = try fields.decode(UInt16.self, forKey: .replicas)
-        guard tag.count == 1, let governanceTag = tag.first, !governanceTag.isEmpty, replicas > 0 else {
-            throw ToriiClientError.invalidPayload("retention_policy requires a governance tag and a positive replica count")
+        // The nominal model (iroha_data_model::da::types::RetentionPolicy, and the
+        // retention_class of a commitment record) carries any u16 count and any tag.
+        guard tag.count == 1, let governanceTag = tag.first else {
+            throw ToriiClientError.invalidPayload("retention_policy.governance_tag must be a one-element wrapper")
         }
         self.init(hotRetentionSecs: try fields.decode(UInt64.self, forKey: .hot),
                   coldRetentionSecs: try fields.decode(UInt64.self, forKey: .cold),
                   requiredReplicas: replicas, storageClass: storageClass, governanceTag: governanceTag)
+    }
+
+    /// Torii's ingestion admission: an ingest receipt carries the configured network baseline
+    /// Torii enforced, whose replica count is positive and whose governance tag is non-empty.
+    fileprivate func requireIngestionAdmission() throws {
+        guard !governanceTag.isEmpty, requiredReplicas > 0 else {
+            throw ToriiClientError.invalidPayload("retention_policy requires a governance tag and a positive replica count")
+        }
     }
 }
 
@@ -440,7 +450,9 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         }
         self.stripeLayout = try container.decode(ToriiDaStripeLayout.self, forKey: .stripeLayout)
         self.queuedAtUnix = try container.decode(UInt64.self, forKey: .queuedAtUnix)
-        self.retentionPolicy = try container.decode(ToriiDaRetentionPolicy.self, forKey: .retentionPolicy)
+        let retentionPolicy = try container.decode(ToriiDaRetentionPolicy.self, forKey: .retentionPolicy)
+        try retentionPolicy.requireIngestionAdmission()
+        self.retentionPolicy = retentionPolicy
         self.rentQuote = try container.decode(ToriiDaRentQuote.self, forKey: .rentQuote)
         let signature = try container.decode(String.self, forKey: .operatorSignature)
         self.operatorSignatureHex = try requireCanonicalDaSignature(signature, field: "DA receipt operator")

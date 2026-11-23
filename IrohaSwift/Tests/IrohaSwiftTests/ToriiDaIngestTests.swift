@@ -141,8 +141,13 @@ final class ToriiDaIngestTests: XCTestCase {
             XCTAssertEqual(artifacts.signingDigestHex, vector.authorizationDigestHex)
             XCTAssertEqual(artifacts.signerPublicKeyHex, vector.signer)
             let witnesses = try XCTUnwrap(fields["signatures"] as? [[String: String]])
-            XCTAssertEqual(witnesses, [["signer": vector.signer, "signature": vector.signatureHex]])
-            XCTAssertEqual(artifacts.signatureHex, vector.signatureHex)
+            XCTAssertEqual(witnesses, [["signer": vector.signer, "signature": artifacts.signatureHex]])
+            // CryptoKit may hedge Ed25519 signatures. Both originals must authenticate the exact Rust digest.
+            let digest = try XCTUnwrap(Data(hexString: vector.authorizationDigestHex))
+            let signature = try XCTUnwrap(Data(hexString: artifacts.signatureHex))
+            let reference = try XCTUnwrap(Data(hexString: vector.signatureHex))
+            XCTAssertTrue(privateKey.publicKey.isValidSignature(signature, for: digest))
+            XCTAssertTrue(privateKey.publicKey.isValidSignature(reference, for: digest))
             var external = submission
             external.privateKey = nil
             external.signerPublicKeyHex = vector.signer
@@ -150,6 +155,9 @@ final class ToriiDaIngestTests: XCTestCase {
             let signed = try ToriiDaIngestRequestBuilder(submission: external).makeRequestBody()
             XCTAssertEqual(signed.artifacts.signerPublicKeyHex, vector.signer)
             XCTAssertEqual(signed.artifacts.signatureHex, vector.signatureHex)
+            let externalFields = try XCTUnwrap(JSONSerialization.jsonObject(with: signed.body) as? [String: Any])
+            XCTAssertEqual(externalFields["signatures"] as? [[String: String]],
+                           [["signer": vector.signer, "signature": vector.signatureHex]])
         }
         submission.signerPublicKeyHex = "ed0120" + String(repeating: "41", count: 32)
         XCTAssertThrowsError(try ToriiDaIngestRequestBuilder(submission: submission).makeRequestBody())
@@ -164,6 +172,23 @@ final class ToriiDaIngestTests: XCTestCase {
         for malformed in ["", "00", "AA0", "ab", String(repeating: "AB", count: 4097)] {
             object["operator_signature"] = malformed
             XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: JSONSerialization.data(withJSONObject: object)))
+        }
+    }
+
+    func testReceiptRequiresPositiveReplicasAndNonemptyGovernanceTag() throws {
+        var receipt = canonicalReceiptObject()
+        var policy = try XCTUnwrap(receipt["retention_policy"] as? [String: Any])
+        for (replicas, tag) in [(0, "da.sidecar"), (1, ""), (0, "")] {
+            policy["required_replicas"] = replicas
+            policy["governance_tag"] = [tag]
+            receipt["retention_policy"] = policy
+            let data = try JSONSerialization.data(withJSONObject: receipt)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data)) { error in
+                guard case ToriiClientError.invalidPayload(let message) = error else {
+                    return XCTFail("Unexpected receipt error: \(error)")
+                }
+                XCTAssertEqual(message, "retention_policy requires a governance tag and a positive replica count")
+            }
         }
     }
 
