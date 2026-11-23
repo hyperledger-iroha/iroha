@@ -99,6 +99,32 @@ pub fn install_selected(
     Ok(parameters)
 }
 
+/// Install the signed fixture with the World selection required by its manifest.
+#[cfg(test)]
+fn install_test_bundle(path: &std::path::Path) -> Result<AuthenticatedParameters> {
+    let read = |name: &str| {
+        std::fs::read(path.join(name)).map_err(|error| Error::Rejected(format!("{name}: {error}")))
+    };
+    let manifest = read("parameter-manifest.norito")?;
+    let signature = read("parameter-signature.bin")?
+        .try_into()
+        .map_err(|_| Error::Malformed("test parameter signature"))?;
+    let world = if AuthenticatedParameters::is_five_manifest(&manifest) {
+        let bytes: [u8; 32] = read("world-manifest-digest.bin")?
+            .try_into()
+            .map_err(|_| Error::Malformed("fixture World manifest digest"))?;
+        Some(bytes)
+    } else {
+        None
+    };
+    install_selected(
+        &read("program-bundle.norito")?,
+        &manifest,
+        signature,
+        world.as_ref(),
+    )
+}
+
 /// Re-issue an authenticated device bundle whose root-signed manifest is in
 /// the retired v1 format, for its exact unchanged programs: `source` holds
 /// `program-bundle.norito`, `parameter-manifest.norito` and
@@ -547,13 +573,7 @@ mod tests {
         let path = std::path::PathBuf::from(
             std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
         );
-        let read = |name: &str| std::fs::read(path.join(name)).unwrap();
-        let parameters = install(
-            &read("program-bundle.norito"),
-            &read("parameter-manifest.norito"),
-            read("parameter-signature.bin").try_into().unwrap(),
-        )
-        .unwrap();
+        let parameters = install_test_bundle(&path).unwrap();
         for (k, program) in parameters.inner.programs.iter().enumerate() {
             check(&program.primary, &parameters.inner.generators.p, k);
             check(&program.secondary, &parameters.inner.generators.s, k);
@@ -930,17 +950,7 @@ mod tests {
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("output/full-backend-chain/native-device")
                 });
-            let read = |name: &str| {
-                std::fs::read(path.join(name)).map_err(|e| Error::Rejected(e.to_string()))
-            };
-            let signature: [u8; 64] = read("parameter-signature.bin")?
-                .try_into()
-                .map_err(|_| Error::Malformed("test parameter signature"))?;
-            let parameters = install(
-                &read("program-bundle.norito")?,
-                &read("parameter-manifest.norito")?,
-                signature,
-            )?;
+            let parameters = install_test_bundle(&path)?;
             eprintln!(
                 "two-wallet timing install: {:.3}s",
                 started.elapsed().as_secs_f64()
