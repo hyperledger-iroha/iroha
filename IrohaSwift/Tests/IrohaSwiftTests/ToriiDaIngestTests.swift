@@ -141,13 +141,30 @@ final class ToriiDaIngestTests: XCTestCase {
             XCTAssertEqual(artifacts.signingDigestHex, vector.authorizationDigestHex)
             XCTAssertEqual(artifacts.signerPublicKeyHex, vector.signer)
             let witnesses = try XCTUnwrap(fields["signatures"] as? [[String: String]])
-            XCTAssertEqual(witnesses, [["signer": vector.signer, "signature": vector.signatureHex]])
-            XCTAssertEqual(artifacts.signatureHex, vector.signatureHex)
+            XCTAssertEqual(witnesses, [["signer": vector.signer, "signature": artifacts.signatureHex]])
+
+            // CryptoKit can randomize Ed25519 signing. Both witnesses must verify over the exact Rust digest.
+            let digest = try XCTUnwrap(Data(hexString: vector.authorizationDigestHex))
+            var changedDigest = digest
+            changedDigest[changedDigest.startIndex] ^= 1
+            let publicKey = privateKey.publicKey.rawRepresentation
+            for signatureHex in [artifacts.signatureHex, vector.signatureHex] {
+                let signature = try XCTUnwrap(Data(hexString: signatureHex))
+                XCTAssertEqual(NoritoNativeBridge.shared.verifyDetached(
+                    algorithm: .ed25519, publicKey: publicKey, message: digest, signature: signature
+                ), true)
+                XCTAssertEqual(NoritoNativeBridge.shared.verifyDetached(
+                    algorithm: .ed25519, publicKey: publicKey, message: changedDigest, signature: signature
+                ), false)
+            }
             var external = submission
             external.privateKey = nil
             external.signerPublicKeyHex = vector.signer
             external.signatureHex = vector.signatureHex
             let signed = try ToriiDaIngestRequestBuilder(submission: external).makeRequestBody()
+            let externalFields = try XCTUnwrap(JSONSerialization.jsonObject(with: signed.body) as? [String: Any])
+            XCTAssertEqual(externalFields["signatures"] as? [[String: String]],
+                           [["signer": vector.signer, "signature": vector.signatureHex]])
             XCTAssertEqual(signed.artifacts.signerPublicKeyHex, vector.signer)
             XCTAssertEqual(signed.artifacts.signatureHex, vector.signatureHex)
         }
