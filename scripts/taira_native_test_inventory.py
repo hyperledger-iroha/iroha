@@ -427,6 +427,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'one_shot_admitted_push_admits_both_slots_before_a_refusal_can_release_itself',
         'one_shot_admitted_push_funds_no_owner_that_could_release_its_own_wait',
         'a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds',
+        'historical_rereads_keep_their_verified_predecessor_and_reject_a_different_cut',
+        'signer_source_capture_preserves_the_next_readers_decoder_budget',
     )),
     ('native pending original execution', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/pending_execution_tests.rs', 'pending_execution_tests', 'sumeragi::test_chain::tests::pending_execution_tests', (
         'pending_execution_retains_one_source_and_publishes_once',

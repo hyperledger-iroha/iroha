@@ -169,7 +169,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 648)
+        self.assertEqual(len(names), 650)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS
@@ -607,6 +607,8 @@ class NativeInventoryTests(unittest.TestCase):
             'one_shot_admitted_push_admits_both_slots_before_a_refusal_can_release_itself',
             'one_shot_admitted_push_funds_no_owner_that_could_release_its_own_wait',
             'a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds',
+            'historical_rereads_keep_their_verified_predecessor_and_reject_a_different_cut',
+            'signer_source_capture_preserves_the_next_readers_decoder_budget',
         ))
 
     def test_reviewed_resume_restore_and_reader_additions_require_exact_source_owners(self):
