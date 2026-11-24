@@ -416,18 +416,20 @@ forgotten while its active receipt name can still be rediscovered.
 
 ### Consensus quota admission
 
-Every accepted block charges all DA pin intents to their signed `owner` under
-two deterministic ceilings: intent count and canonical payload bytes. Windows
-are derived solely from block height as `(height - 1) /
-nexus.da.ingest_quota_window_blocks`; wall-clock time and Torii-local process
-state are not inputs. The first-release defaults are 100 blocks, 1,024 intents,
-and 64 GiB per account per window, configured by:
+Each accepted block charges each pin intent and its canonical payload bytes to
+its signed `owner`. The signed Nexus consensus policy binds the nonzero window length
+`nexus.da.ingest_quota_window_blocks`, which defaults to 100 blocks. The
+window index is `(height - 1) / nexus.da.ingest_quota_window_blocks`.
 
-- `nexus.da.ingest_quota_window_blocks`
-- `nexus.da.ingest_quota_max_count_per_account`
-- `nexus.da.ingest_quota_max_bytes_per_account`
+A root that recognizes `nexus_quota_policy_v1` reads the policy from the
+predecessor's committed state. Its `max_da_ingests_per_account` and
+`max_da_ingest_bytes_per_account` fields set the two nonzero ceilings per
+account per window. A root that has yet to activate the parameter uses the
+protocol defaults of 1,024 intents and 64 GiB. After activation, an authorized
+`SetParameter` takes effect in the block after it commits.
+[Governed quota policy](../genesis_bound_node_configuration.md#implemented-uploaded-model-and-da-ingest-quotas)
 
-All values are mandatory non-zero consensus-policy inputs. Validators aggregate
+Validators aggregate
 the complete block with checked arithmetic, reject the entire block on an
 overflow, corrupt prior record, or either exceeded ceiling, and then commit the
 canonical usage records and pin indexes through the same `WorldBlock`. The
