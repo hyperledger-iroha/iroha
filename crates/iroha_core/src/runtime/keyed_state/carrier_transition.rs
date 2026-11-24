@@ -21,11 +21,14 @@ pub(super) fn validate(
     // The physical wrapper is excluded from the carrier commitment's virtual leaves. Installing
     // it under another profile would produce State that the exact snapshot owner cannot restore.
     // Artifact staging has a separate native owner and does not require this backing table.
+    // The selection names its commitment profile; the carrier profile names the commitment it
+    // requires. They are compared across differently named fields on purpose.
+    let selects_carrier_commitment = next.commitment_profile == profile.commitment;
     if next
         .installed_storage
         .binary_search(&profile.backing)
         .is_ok()
-        && (next.kernel != profile.kernel || next.commitment_profile != profile.commitment)
+        && (next.kernel != profile.kernel || !selects_carrier_commitment)
     {
         return Err("installed carrier backing requires its exact kernel and commitment".into());
     }

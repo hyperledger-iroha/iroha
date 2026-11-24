@@ -144,7 +144,8 @@ mod tests {
 
     #[test]
     fn checked_sortition_score_retains_original_encoder_scratch_refusal() {
-        let accounts = std::collections::HashMap::from([(1_u64, 2_u64)]);
+        // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+        let accounts = std::collections::BinaryHeap::from([(1_u64, 2_u64)]);
         let error = norito::core::with_decode_limits_scope(
             norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
             || score(&[3; 64], b"original-input", &accounts),

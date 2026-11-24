@@ -44,8 +44,8 @@ fn source(scope: SumeragiRootScope, recipes: &[ChildRuntimeFoundationV1]) -> Sig
     // original-genesis route. Structural metadata alone cannot grant execution scope.
     let registrations = crate::sumeragi::test_chain::fixture_validators()
         .into_iter()
-        .map(|(peer, pop)| RegisterPeerWithPop::new(peer, pop).into());
-    let instructions: Vec<InstructionBox> = registrations
+        .map(|(peer, pop)| -> InstructionBox { RegisterPeerWithPop::new(peer, pop).into() });
+    let transactions = registrations
         .chain(std::iter::once(
             SetParameter::new(crate::sumeragi::lanes::routing::test_support::metadata(
                 scope,
@@ -55,9 +55,6 @@ fn source(scope: SumeragiRootScope, recipes: &[ChildRuntimeFoundationV1]) -> Sig
         .chain(recipes.iter().map(|recipe| {
             SetParameter::new(Parameter::Custom(recipe.to_custom_parameter().unwrap())).into()
         }))
-        .collect();
-    let transactions = instructions
-        .into_iter()
         .map(|instruction| {
             TransactionBuilder::new_genesis(
                 SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -373,7 +370,8 @@ fn selection_identity_streams_original_frame_without_output_or_scratch_allocatio
 
 #[test]
 fn selection_codec_error_adapter_retains_an_actual_serializer_scratch_refusal() {
-    let payload = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
+    // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+    let payload = std::collections::BinaryHeap::from([(3_u64, 7_u64), (1, 9)]);
     let limit = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
         usize::MAX,
         usize::MAX,

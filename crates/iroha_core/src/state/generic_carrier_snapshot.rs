@@ -28,8 +28,11 @@ pub(super) fn validate_world(
             .binary_search(&profile.backing)
             .is_ok();
         if installed {
+            // The selection names its commitment profile; the carrier profile names the
+            // commitment it requires.
+            let selects_carrier_commitment = selection.commitment_profile == profile.commitment;
             if selection.kernel != profile.kernel
-                || selection.commitment_profile != profile.commitment
+                || !selects_carrier_commitment
                 || cut.runtime_definitions().get(&profile.backing)
                     != catalog.definitions.get(&profile.backing)
             {

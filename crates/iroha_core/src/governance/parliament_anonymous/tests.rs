@@ -91,7 +91,8 @@ fn runtime_proposal_binding_refusal_retains_local_authority_and_no_outcome() {
 
 #[test]
 fn checked_identity_error_conversion_retains_the_exact_original_refusal() {
-    let payload = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
+    // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+    let payload = std::collections::BinaryHeap::from([(3_u64, 7_u64), (1, 9)]);
     let error = norito::core::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
         || iroha_data_model::governance::checked_fingerprint(b"test.identity", &payload),
