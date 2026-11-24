@@ -471,10 +471,6 @@ pub struct UniformCircuit<F> {
     row_base: Vec<Vec<usize>>,
     blocks: Vec<Vec<Block>>,
     bounds: Vec<usize>,
-    /// Every witness position a present cell occupies (bit `x % 64` of word
-    /// `x / 64`): public layout, from the build's placement. Empty for an
-    /// imported program, which has no prover witness.
-    present: Vec<u64>,
     /// Trailing fixed rows and their values (row major).
     fixed_rows: usize,
     fixed_values: FixedValues<F>,
@@ -2761,14 +2757,11 @@ impl<F: Scalar> UniformCircuit<F> {
                 release(&mut arr.values);
             }
         }
-        // `taken` is the public placement of every present cell; the row
-        // commitments read only these positions.
-        let present = taken;
         if crate::prof::memory_enabled() {
             // Measurement: how much of the dense witness a present cell
             // touches, by 16 KiB page (public layout only).
             let per_page = (16 << 10) / size_of::<F>().max(1);
-            let cells: usize = present.iter().map(|w| w.count_ones() as usize).sum();
+            let cells: usize = taken.iter().map(|w| w.count_ones() as usize).sum();
             let pages = (shape.rows() * cols).div_ceil(per_page);
             let touched = (0..pages)
                 .filter(|&page| {
@@ -2777,7 +2770,7 @@ impl<F: Scalar> UniformCircuit<F> {
                         ((page + 1) * per_page).min(shape.rows() * cols),
                     );
                     (lo..hi).step_by(64).any(|x| {
-                        let word = present[x / 64];
+                        let word = taken[x / 64];
                         let bits = (hi - x).min(64);
                         let mask = if bits == 64 {
                             u64::MAX
@@ -2793,6 +2786,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 shape.rows() * cols
             );
         }
+        drop(taken);
         if std::env::var("ZKS_PLACE").is_ok() {
             // Per row: present cells and the row's bound.
             let mut per_row = vec![0usize; shape.rows()];
@@ -2876,7 +2870,6 @@ impl<F: Scalar> UniformCircuit<F> {
             row_base,
             blocks,
             bounds,
-            present,
             fixed_rows,
             fixed_values,
             wallet_rows,
@@ -3154,8 +3147,8 @@ impl<F: Scalar> UniformCircuit<F> {
     /// commit input, measurement only): first-phase rows count their nonzero
     /// values at the row's bound, second-phase rows their present helper
     /// cells at full width; constant rows are the key's. It reads witness
-    /// values; the prover never calls it, and its constant-time commit reads
-    /// every entry of a committed row, zero or not.
+    /// values; the prover never calls it. Its Pippenger commit skips zero
+    /// digits, so zero entries cost no additions.
     pub fn width_classes(&self, w: &[F]) -> BTreeMap<u16, usize> {
         let (cols, active) = (self.shape.cols(), self.shape.active_cols());
         let mut out: BTreeMap<u16, usize> = BTreeMap::new();
@@ -7219,9 +7212,6 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn row_bounds(&self, _shape: &Shape) -> Option<Vec<usize>> {
         Some(self.bounds.clone())
-    }
-    fn row_support(&self, _shape: &Shape) -> Option<&[u64]> {
-        (!self.present.is_empty()).then_some(self.present.as_slice())
     }
     fn phase1_rows(&self, _shape: &Shape) -> usize {
         self.p1_rows

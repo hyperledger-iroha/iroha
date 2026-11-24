@@ -474,7 +474,6 @@ impl<F: Scalar> UniformCircuit<F> {
             row_base: vec![],
             blocks: vec![],
             bounds: vec![],
-            present: vec![],
             fixed_rows,
             fixed_values,
             wallet_rows,

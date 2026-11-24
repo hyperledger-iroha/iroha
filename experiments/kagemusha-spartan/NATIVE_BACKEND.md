@@ -201,6 +201,10 @@ custody. The wallet sends no list entries to a counterparty.
 
 ## Proof and custody boundaries
 
+The prover's private commitments use variable-time secret Pippenger MSMs, so the
+proving device's timing and memory accesses depend on witness values. The owner
+accepted this exposure on 2026-11-24 ([TODO G8](TODO.md)); it changes no proof byte.
+
 Each complete pair verifies both scalar/point proofs, both accumulated matrix
 claims, and both own and inherited generator claims. Native receives no trusted
 "proof valid" flag from the application. Receive binds the original complete

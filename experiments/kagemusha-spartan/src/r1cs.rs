@@ -327,14 +327,6 @@ pub trait Circuit<F: Scalar>: Sync {
     fn row_bounds(&self, _shape: &Shape) -> Option<Vec<usize>> {
         None
     }
-    /// The public layout's present witness positions: bit `x` (bit `x % 64`
-    /// of word `x / 64`) is set when witness position `x` may ever hold a
-    /// nonzero value (a placed cell, masks, link and second-phase cells
-    /// included). Row commitments skip the other positions, which hold zero
-    /// by structure. None: every position may hold anything.
-    fn row_support(&self, _shape: &Shape) -> Option<&[u64]> {
-        None
-    }
     /// Trailing Hyrax rows that hold public constant columns. Their
     /// commitments belong to the verification key (unblinded, computed once
     /// by `spartan::fixed_commitments`), so proofs omit them and the verifier

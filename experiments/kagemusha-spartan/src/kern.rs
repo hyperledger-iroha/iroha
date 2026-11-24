@@ -32,6 +32,7 @@
 //! tested for zero (a witness run that happens to be zero is evaluated like
 //! any other), and the outer tables `Az, Bz, Cz` are always dense. The field
 //! arithmetic itself is the Pasta implementation's constant-time arithmetic.
+//! (The commitment MSMs are not constant time in the witness: TODO.md G8.)
 
 use ff::Field;
 use rayon::prelude::*;

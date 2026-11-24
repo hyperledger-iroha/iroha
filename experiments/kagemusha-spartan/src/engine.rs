@@ -1813,8 +1813,9 @@ impl NativeEngine {
 
     /// Admits a proving stage: its accounted `workspace` plus the process MSM
     /// scratch ceiling must fit the memory now available. Private commitments
-    /// use the constant-time secret MSMs, whose scratch lies within that
-    /// ceiling; no commitment table is built, so none is charged.
+    /// use the secret Pippenger MSMs, whose digit and bucket scratch is
+    /// admitted within that ceiling; no commitment table is built, so none is
+    /// charged.
     fn require_stage_memory(&self, workspace: u64) -> Result<()> {
         if let Some(source) = &self.time {
             let required = workspace
@@ -2962,8 +2963,8 @@ impl Engine for NativeEngine {
         // The secondary's wiring and build read only the folds, the traced
         // pairs and the public generators, never the primary witness, and
         // draw from their own entropy stream. They run alongside the
-        // commitments, whose constant-time kernel keeps the pool busy: the
-        // build is mostly single-threaded. The secondary's arrays then coexist
+        // commitments, whose MSM kernel keeps the pool busy: the build is
+        // mostly single-threaded. The secondary's arrays then coexist
         // with the primary's first phase, below the later proof peaks, where
         // both circuits are resident anyway.
         self.require_stage_memory(cp.first_phase_memory_bytes())?;

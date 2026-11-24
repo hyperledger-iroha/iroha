@@ -46,6 +46,11 @@ against a manifest signed by the root-certified Artifact key. Manifest v4 select
 two full-width LogUp challenges and the bounded program encoding. Its source and
 conditional security budget are described in the [Control soundness review](research/CONTROL-SOUNDNESS.md).
 
+Private commitments (witness rows, sumcheck round values, the IPA opening's L/R
+vectors and the generator-claim folds) use iroha_pasta's variable-time secret
+Pippenger MSMs. The owner accepted on 2026-11-24 that their timing and memory
+accesses follow the private values; proof bytes are unchanged ([TODO G8](TODO.md)).
+
 ## Payment and SDK integration
 
 `payment_wire.rs` encodes and strictly decodes the complete IPM1 Payment, including

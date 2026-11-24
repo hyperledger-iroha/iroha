@@ -13,7 +13,7 @@
 use ff::Field;
 use iroha_pasta::PastaCurve;
 use iroha_pasta::fold::{fold_generators_vartime, folded_generators_vartime};
-use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_secret_ct_cancellable};
+use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_secret_cancellable};
 use rayon::prelude::*;
 use zeroize::Zeroizing;
 
@@ -27,8 +27,8 @@ pub type Aff<C> = <C as PastaCurve>::AffineExt;
 pub const GENERATOR_DOMAIN: &str = "kagemusha-zks-spike/gens";
 
 /// The public commitment bases. Private commitments sum them through the
-/// constant-time secret MSM ([`secret_msm`], `spartan::column_sums`), which
-/// keeps no per-shape table, so a generator set holds the bases alone.
+/// secret Pippenger MSM ([`secret_msm`], `spartan::column_sums`), which keeps
+/// no per-shape table, so a generator set holds the bases alone.
 pub struct Gens<C: PastaCurve> {
     pub g: Vec<Aff<C>>,
     pub h: Aff<C>,
@@ -42,25 +42,30 @@ pub fn old_kernels() -> bool {
 }
 
 /// `sum_i scalars[i] * bases[i]` for private scalars over public bases,
-/// through iroha_pasta's constant-time kernel (`msm::spartan_ct`): fixed
-/// windows at full public width, whole-table constant-time selection, no
-/// digit-indexed bucket and no value-based skip. Its scratch stays within the
-/// default per-kernel budget and the process MSM ceiling; contention runs it
-/// without heap scratch. The group element is the one every other MSM gives.
+/// through iroha_pasta's secret Pippenger kernel (`msm_secret_cancellable`).
+///
+/// The kernel is variable time in the scalars: buckets are chosen by digit
+/// and zero digits are skipped, so timing and memory accesses follow the
+/// private values. The owner accepted that exposure for witness rows, round
+/// values, the opening's L/R vectors and the generator-claim folds (TODO.md
+/// G8, 2026-11-24). Its plan assumes full-width scalars, its bucket inversion
+/// is constant time and its digit and bucket scratch is wiped. Scratch stays
+/// within the default per-kernel budget and the process MSM ceiling. The group
+/// element is the one every other MSM gives, so proofs are unchanged.
 ///
 /// # Panics
 /// Only on a caller error the kernel reports instead of a sum: unequal
 /// lengths, more than `u32::MAX` bases, or one base exceeding the 256 MiB
 /// default budget. No identity or partial sum is ever substituted.
 pub(crate) fn secret_msm<C: PastaCurve>(scalars: &[F<C>], bases: &[Aff<C>]) -> C {
-    msm_secret_ct_cancellable::<C>(
+    msm_secret_cancellable::<C>(
         scalars,
         bases,
         MemoryBudget::DEFAULT,
         &SharedMemoryBudget::process_default(),
         None,
     )
-    .expect("constant-time secret MSM")
+    .expect("secret MSM")
 }
 
 impl<C: PastaCurve> Gens<C> {
@@ -233,8 +238,8 @@ pub fn prove<C: PastaCurve>(
         let lr_clock = std::time::Instant::now();
         let (l, r) = {
             // Each side adds the same two private terms to its vector
-            // commitment. The constant-time kernel accepts both slices
-            // directly, so neither secret scalars nor bases are copied.
+            // commitment. The secret kernel accepts both slices directly, so
+            // neither secret scalars nor bases are copied.
             let (x_lo, x_hi) = x.split_at(half);
             let (b_lo, b_hi) = b.split_at(half);
             let (g_lo, g_hi) = g[..len].split_at(half);

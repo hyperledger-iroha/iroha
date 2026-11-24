@@ -22,8 +22,8 @@ sha2 = "0.10"
 
 # The device staticlib/cdylib links the whole prover. Fat LTO and one codegen
 # unit let LLVM inline the Pasta field and curve kernels across crates; on an
-# M4 this made the constant-time witness MSM about 5% faster per window step
-# (target-cpu made no difference). It lengthens the release link.
+# M4 this made the field and curve kernels behind the witness MSMs about 5%
+# faster (target-cpu made no difference). It lengthens the release link.
 [profile.release]
 lto = "fat"
 codegen-units = 1

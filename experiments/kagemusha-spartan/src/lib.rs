@@ -630,12 +630,12 @@ fn run_census() {
 }
 
 /// Pixel 6 commitment cost per witness entry (microseconds, 8 threads) by
-/// width class and row length, as measured for the retired variable-time
-/// Pippenger commits (zero entries free, digits bucketed). The prover's
-/// constant-time column MSM reads every entry of a committed row at its
-/// row's bound, zero or not, and is not calibrated on the phone; these
-/// figures do not describe it. Anchors: b04a57's 2^18 single-MSM kernel
-/// (1-bit 0.118, 8-bit 0.187, 16-bit 0.29 us) scaled by a row-length factor
+/// width class and row length, as measured for the 11-10 variable-time
+/// Pippenger commits (zero entries free, digits bucketed). The current
+/// prover's column MSM is also variable-time Pippenger, but these figures
+/// predate its batched column kernel and are not recalibrated. Anchors:
+/// b04a57's 2^18 single-MSM kernel (1-bit 0.118, 8-bit 0.187, 16-bit
+/// 0.29 us) scaled by a row-length factor
 /// fitted to the spike's measured mix (64/16/80/1-bit rows: 0.72 us at
 /// 65,536 columns, 1.13 us at 8,192); full width 2.04 us at 65,536 (measured),
 /// scaled to shorter rows by iroha_pasta's MSM planner model; widths between
@@ -913,9 +913,9 @@ fn pixel_breakdown(
 ///   8,192, against 0.342 and 0.226).
 ///
 /// These are the variable-time kernels of 11-10. The current prover commits
-/// rows, rounds and the opening through constant-time MSMs without tables,
-/// and its inner support skips public structure only (never a witness run
-/// that is zero by value); neither is calibrated on the phone here.
+/// rows, rounds and the opening through variable-time Pippenger MSMs without
+/// tables, skipping every zero digit (structural or by value); it is not
+/// calibrated on the phone here.
 ///
 /// Returns the breakdown and the total, and the total if at most half the
 /// rows held cells.
@@ -4820,8 +4820,8 @@ fn run_real_receive() {
         println!("{name}: {}", sparse::describe(g, shape));
         let (cols, active) = (shape.cols(), shape.active_cols());
         // Row-granular width classes for the variable-time Pixel model: every
-        // nonzero entry of a row at the row's bound (the constant-time commit
-        // reads zeros too). Second-phase helpers are full width: h is never
+        // nonzero entry of a row at the row's bound (zero entries cost no
+        // additions). Second-phase helpers are full width: h is never
         // zero, g is zero exactly when its table entry's multiplicity is.
         let lookups = g.asm.lookups.len();
         let used: Vec<bool> = g

@@ -765,13 +765,15 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 - an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
   is the checklist), and the open items in SOUNDNESS.md §9 and §11 (imported degree declarations, generator-profile
   binding, LogUp phase invariants, a frozen candidate equal to HEAD);
-- side channels: private commitments use constant-time secret MSMs without tables, and the inner sumcheck's
+- side channels: by the owner's 2026-11-24 decision (TODO G8) private commitments (witness rows, round values, the
+  IPA L/R vectors and the generator-claim folds) use variable-time secret Pippenger MSMs without tables, so their
+  timing and memory accesses depend on the private values; proof bytes are unchanged. The inner sumcheck's
   support reads only public structure (rows the build never wrote, the io, the public `M(r_x, ·)`), never a
   private zero. LogUp multiplicity counting and link-table recount use data-oblivious lookup schedules.
   The installed prover's row hooks take rows by position; only the non-uniform benchmark and test circuits'
   default hooks compare rows by value. The build's copy and absent-instance checks use constant-time field
   equality and branch only on a malformed witness, whose refusal still stops at the first failing slot. Witness
-  construction has value-dependent paths, and the constant-time kernels still need physical measurements (TODO G8);
+  construction has value-dependent paths;
 - the deterministic `SpikeRng` is for tests only.
 
 ## 12. Status

@@ -9,7 +9,8 @@
 //! Each private source is a tensor, `s(u) = s(u[..D]) (x) s(u[D..])`.
 //! The general producer derives exact per-source block points before folding.
 //! A native Receive with two previously verified parents can instead compute
-//! the same leading rounds by a constant-time MSM on each coefficient half.
+//! the same leading rounds by a secret MSM on each coefficient half. The
+//! secret MSMs are variable time in the private coefficients (TODO.md G8).
 use crate::{
     fs::{ProofEntropy, Scalar, SpikeRng, Transcript},
     ipa::{Aff, Claim, F, Gens, s_vector},
@@ -226,7 +227,7 @@ fn inner<S: Field>(a: &[S], b: &[S]) -> S {
     a.iter().zip(b).map(|(a, b)| *a * b).sum()
 }
 /// The private coefficients' sum over the installed generators, through the
-/// constant-time secret MSM (`ipa::secret_msm`).
+/// variable-time secret MSM (`ipa::secret_msm`).
 fn msm<C: PastaCurve>(s: &[F<C>], g: &[Aff<C>]) -> C {
     crate::ipa::secret_msm::<C>(s, g)
 }
@@ -247,7 +248,7 @@ pub fn decide<C: PastaCurve>(gens: &Gens<C>, claim: &Claim<C>) -> bool {
 type Blocks<C> = Zeroizing<Vec<Aff<C>>>;
 
 /// Evaluate a private lineage challenge vector's tail on every public generator
-/// block, one constant-time secret MSM of the same private weights per block.
+/// block, one variable-time secret MSM of the same private weights per block.
 fn source_blocks<C: PastaCurve>(
     gens: &Gens<C>,
     us: &[F<C>],
@@ -264,7 +265,7 @@ fn source_blocks<C: PastaCurve>(
     let mut sums = Zeroizing::new(Vec::with_capacity(1 << depth));
     for block in bases.chunks_exact(weights.len()) {
         sums.push(
-            iroha_pasta::msm::msm_secret_ct_cancellable::<C>(
+            iroha_pasta::msm::msm_secret_cancellable::<C>(
                 &weights,
                 block,
                 MemoryBudget::DEFAULT,
@@ -734,7 +735,7 @@ where
             b[j] = b[j] + challenge * b[j + h];
         }
         // Only the installed generators and the exported output.us challenges
-        // enter this fold. Private coefficients stay on the constant-time
+        // enter this fold. Private coefficients go through the (variable-time)
         // secret MSM and the H masks use constant-time scalar multiplication.
         iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
         coeff.truncate(h);

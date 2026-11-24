@@ -16,7 +16,7 @@ use ff::{Field, PrimeField};
 use group::GroupEncoding;
 use iroha_pasta::msm::{
     BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public,
-    msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
+    msm_secret_bounded_cancellable, msm_secret_bounded_columns_cancellable,
 };
 use iroha_pasta::{CancellationToken, PastaCurve};
 use rayon::prelude::*;
@@ -648,9 +648,9 @@ fn round_values<S: Field>(
 }
 
 /// A round's grid values committed at its slot's base-4 positions, with the
-/// blind on `H`: one constant-time secret MSM over the slot's grid generators
-/// then `H`. The round values and the blind are private, so no digit-bucketed
-/// table MSM.
+/// blind on `H`: one secret MSM over the slot's grid generators then `H`.
+/// The round values and the blind are private; the secret MSM is variable
+/// time in them (TODO.md G8).
 fn commit_values<C: PastaCurve>(gens: &Gens<C>, offset: usize, values: &[F<C>], blind: F<C>) -> C {
     let mut bases: Vec<Aff<C>> = slot_positions(grid_vars(values.len()))
         .iter()
@@ -672,18 +672,18 @@ fn commit_row<C: PastaCurve>(
 ) -> C {
     let split = values.len() - shape.row_full_tail(row);
     // The public width class bounds the head; the masking tail is full width.
-    // Both go through the constant-time secret MSM (see `bounded_row` for a
-    // head outside its class). The unblinded sum is wiped once blinded.
+    // Both go through the secret MSM (see `bounded_row` for a head outside its
+    // class). The unblinded sum is wiped once blinded.
     let head = bounded_row::<C>(&values[..split], shape.row_bits_class(row));
     let mut sum = Zeroizing::new(
-        msm_secret_ct_bounded_cancellable::<C>(
+        msm_secret_bounded_cancellable::<C>(
             &head,
             &gens.g[..split],
             MemoryBudget::DEFAULT,
             &SharedMemoryBudget::process_default(),
             None,
         )
-        .expect("constant-time row commitment"),
+        .expect("row commitment"),
     );
     if split < values.len() {
         *sum += ipa::secret_msm::<C>(&values[split..], &gens.g[split..values.len()]);
@@ -698,46 +698,37 @@ pub static COMMIT_SPLIT: std::sync::Mutex<[f64; 3]> = std::sync::Mutex::new([0.0
 
 /// The prover's private commitment kernels, for measurement lines. Every
 /// private commitment (witness rows, round values, the opening's L and R)
-/// runs a constant-time secret MSM over public bases; no fixed-base table is
-/// built or read, so a shape has no commitment setup to warm or account.
-pub const COMMIT_KERNELS: &str = "commits: constant-time secret MSMs (bounded columns for rows, full width for rounds and the opening), no fixed-base table";
+/// runs the secret Pippenger MSM over public bases, variable time in the
+/// private scalars (TODO.md G8); no fixed-base table is built or read, so a
+/// shape has no commitment setup to warm or account.
+pub const COMMIT_KERNELS: &str = "commits: variable-time secret Pippenger MSMs (bounded columns for rows, full width for rounds and the opening), no fixed-base table";
 
-/// `sum_j col[j] G_j` per bounded column through the constant-time secret
-/// column MSM: one window plan from the columns' public bounds, tables of
-/// public generator multiples shared by every column, whole-table
-/// constant-time selection, and no digit-indexed bucket or value-based skip.
+/// `sum_j col[j] G_j` per bounded column through the secret column MSM: each
+/// column is planned for its public bound and the columns share admitted
+/// batches within the default per-kernel budget. Bucket choice and zero-digit
+/// skips follow the private digits, so zero cells (structural holes included)
+/// cost no additions.
 pub(crate) fn column_sums<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
     columns: &[BoundedSecretScalars<F<C>>],
 ) -> Vec<C> {
     column_sums_with_budget(gens, active, columns, MemoryBudget::DEFAULT, None)
-        .expect("constant-time bounded row commitment")
+        .expect("bounded row commitment")
 }
 
-/// [`column_sums`] where column `c` reads only the bases its public support
-/// `supports[c]` names (positions outside it are zero by layout).
-fn supported_column_sums<C: PastaCurve>(
-    gens: &Gens<C>,
-    active: usize,
-    columns: &[BoundedSecretScalars<F<C>>],
-    supports: &[&[u64]],
-) -> Vec<C> {
-    iroha_pasta::msm::msm_secret_ct_bounded_columns_supported_cancellable::<C>(
-        columns,
-        supports,
-        &gens.g[..active],
-        MemoryBudget::DEFAULT,
-        &SharedMemoryBudget::process_default(),
-        None,
-    )
-    .expect("constant-time supported row commitment")
-}
+/// Caller ceiling on one call's row-commitment scratch, inside the process
+/// MSM allowance (`PROCESS_MSM_SCRATCH_BYTES`, which stage admission
+/// charges). The column kernel batches columns by the shared budget's free
+/// bytes, so without it a batch of full-width rows holds most of the 64 MiB
+/// in recoded digits at once.
+const ROW_COMMIT_SCRATCH_BYTES: usize = 16 << 20;
 
 /// [`column_sums`] within an explicit per-kernel `budget`, cancellable.
 ///
 /// A budget below the kernel's single-base plan is [`MsmError::Budget`];
-/// shared contention only changes the plan.
+/// shared contention (the process allowance under
+/// [`ROW_COMMIT_SCRATCH_BYTES`]) only changes the plan.
 fn column_sums_with_budget<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
@@ -745,20 +736,20 @@ fn column_sums_with_budget<C: PastaCurve>(
     budget: MemoryBudget,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<C>, MsmError> {
-    msm_secret_ct_bounded_columns_cancellable::<C>(
+    msm_secret_bounded_columns_cancellable::<C>(
         columns,
         &gens.g[..active],
         budget,
-        &SharedMemoryBudget::process_default(),
+        &SharedMemoryBudget::new(ROW_COMMIT_SCRATCH_BYTES),
         cancellation,
     )
 }
 
-/// A row at its public bit bound, checked in constant time without a
+/// A row at its public bit bound, checked without branches and without a
 /// value-derived width. The bound is a prover-side speedup: a row outside it
-/// (a cheating prover in the refusal tests) commits at full width. That
-/// whole-row validity bit is the only value-derived decision; an honest
-/// witness always passes, so it reveals nothing about an honest row.
+/// (a cheating prover in the refusal tests) commits at full width; an honest
+/// witness always passes. The commitment MSM that follows is variable time in
+/// the row's digits (TODO.md G8).
 fn bounded_row<'a, C: PastaCurve>(row: &'a [F<C>], bits: usize) -> BoundedSecretScalars<'a, F<C>> {
     BoundedSecretScalars::new(row, bits.clamp(1, 255), None)
         .or_else(|_| BoundedSecretScalars::new(row, 255, None))
@@ -775,24 +766,16 @@ pub(crate) fn commit_rows_lanes<C: PastaCurve>(
     helpers: bool,
 ) -> Vec<Aff<C>> {
     let rows: Vec<&[F<C>]> = w.chunks_exact(shape.cols()).collect();
-    commit_row_slices(gens, shape, &rows, range, bounds, None, blinds, helpers)
+    commit_row_slices(gens, shape, &rows, range, bounds, blinds, helpers)
 }
 
 /// [`commit_rows_lanes`] of the witness given as its rows.
-///
-/// With the circuit's public `support` ([`Circuit::row_support`]), each row's
-/// constant-time column reads only the positions the layout places a cell
-/// at; every other position is zero by structure, so the commitment is the
-/// same group element. Which positions are read is public layout, never a
-/// value.
-#[allow(clippy::too_many_arguments)]
 fn commit_row_slices<C: PastaCurve>(
     gens: &Gens<C>,
     shape: &Shape,
     w: &[&[F<C>]],
     range: std::ops::Range<usize>,
     bounds: &[usize],
-    support: Option<&[u64]>,
     blinds: &[F<C>],
     _helpers: bool,
 ) -> Vec<Aff<C>> {
@@ -800,7 +783,7 @@ fn commit_row_slices<C: PastaCurve>(
     let clock = Instant::now();
     // A row given empty is one the caller never wrote (`kern::Rows`, public
     // build structure): zero, its sum the identity. Every other row, LogUp
-    // helper rows included, is a constant-time bounded secret column.
+    // helper rows included, is a bounded secret column.
     let lanes: Vec<(usize, &[F<C>])> = range
         .clone()
         .filter(|&r| !w[r].is_empty())
@@ -822,35 +805,8 @@ fn commit_row_slices<C: PastaCurve>(
             .collect()
     };
     let checked = clock.elapsed().as_secs_f64();
-    // Row r's support: its words of the flat witness bitmap (a row of `cols`
-    // positions starts on a word boundary, since `cols` is a power of two of
-    // at least 64).
-    let cols = shape.cols();
-    let supports: Option<Vec<&[u64]>> = support.map(|bits| {
-        assert!(cols % 64 == 0, "rows start on bitmap words");
-        lanes
-            .iter()
-            .map(|(r, _)| &bits[r * cols / 64..(r * cols + active).div_ceil(64)])
-            .collect()
-    });
-    #[cfg(test)]
-    if let Some(supports) = &supports {
-        // The layout's contract, checked in test builds only (a value test):
-        // no position outside a row's support holds anything.
-        for ((r, row), bits) in lanes.iter().zip(supports) {
-            for (c, value) in row.iter().enumerate() {
-                assert!(
-                    bits[c / 64] >> (c % 64) & 1 == 1 || bool::from(value.is_zero()),
-                    "row {r} column {c}: a value outside the public support"
-                );
-            }
-        }
-    }
     // Unblinded sums are private until blinded: wiped on every exit.
-    let lane_sums = Zeroizing::new(match &supports {
-        Some(supports) => supported_column_sums(gens, active, &columns, supports),
-        None => column_sums(gens, active, &columns),
-    });
+    let lane_sums = Zeroizing::new(column_sums(gens, active, &columns));
     assert_eq!(lane_sums.len(), lanes.len(), "one sum per committed row");
     let mut lane_sum = lane_sums.iter();
     let sums: Zeroizing<Vec<C>> = Zeroizing::new(
@@ -1320,16 +1276,7 @@ fn commit_first_phase<C: PastaCurve>(
     let p1 = circuit.phase1_rows(shape);
     assert!(p1 <= rows_c, "first-phase rows precede the fixed tail");
     let rows = match &bounds {
-        Some(b) => commit_row_slices(
-            gens,
-            shape,
-            w,
-            0..p1,
-            b,
-            circuit.row_support(shape),
-            &blinds,
-            false,
-        ),
+        Some(b) => commit_row_slices(gens, shape, w, 0..p1, b, &blinds, false),
         None => (0..p1)
             .map(|r| {
                 commit_row(gens, shape, r, &w[r][..shape.active_cols()], blinds[r]).to_affine()
@@ -1681,16 +1628,7 @@ fn prove_rows<C: PastaCurve>(
     mark("phase1");
     let commit = |w: &[&[F<C>]], range: std::ops::Range<usize>, helpers: bool| -> Vec<Aff<C>> {
         match &bounds {
-            Some(b) => commit_row_slices(
-                gens,
-                shape,
-                w,
-                range,
-                b,
-                circuit.row_support(shape),
-                &row_blinds,
-                helpers,
-            ),
+            Some(b) => commit_row_slices(gens, shape, w, range, b, &row_blinds, helpers),
             None => range
                 .map(|r| commit_row(gens, shape, r, &w[r][..active], row_blinds[r]).to_affine())
                 .collect(),
@@ -2683,7 +2621,7 @@ mod table_tests {
         if p { 14 } else { 13 }
     }
 
-    /// Constant-time column sums equal the public MSM and the bucket table
+    /// Secret column sums equal the public MSM and the bucket table
     /// they replaced, on rows of every width class, including full-width and
     /// all-zero rows.
     fn same<C: PastaCurve>(cols: usize, label: &[u8]) {
@@ -2732,7 +2670,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_column_sums_equal_public_and_table_sums() {
+    fn secret_column_sums_equal_public_and_table_sums() {
         same::<Vesta>(1 << 12, b"table vesta");
         same::<Pallas>(1 << 11, b"table pallas");
     }
@@ -2741,7 +2679,7 @@ mod table_tests {
     /// retired round-slot table's public MSM (window 9) and the plain public
     /// MSM over the same bases.
     fn rounds<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time rounds");
+        let shape = small_shape("secret rounds");
         let gens = Gens::<C>::new(shape.cols());
         let mut rng = SpikeRng::new(label);
         for slot in slots(&shape) {
@@ -2773,7 +2711,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_round_commitments_equal_the_table_algebra() {
+    fn secret_round_commitments_equal_the_table_algebra() {
         rounds::<Vesta>(b"rounds vesta");
         rounds::<Pallas>(b"rounds pallas");
     }
@@ -2782,7 +2720,7 @@ mod table_tests {
     /// head, the full-width masking tail and the blind, for honest rows and for
     /// a row with a value outside its class, which commits at full width.
     fn rows_without_bounds<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time single rows");
+        let shape = small_shape("secret single rows");
         let gens = Gens::<C>::new(shape.cols());
         let active = shape.active_cols();
         let mut rng = SpikeRng::new(label);
@@ -2806,7 +2744,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_single_row_commitments_on_both_curves() {
+    fn secret_single_row_commitments_on_both_curves() {
         rows_without_bounds::<Vesta>(b"single rows vesta");
         rows_without_bounds::<Pallas>(b"single rows pallas");
     }
@@ -2814,7 +2752,7 @@ mod table_tests {
     /// Bounded row lanes: every written row gets exactly its own sum and an
     /// unwritten row the blinded identity.
     fn lanes<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time lanes");
+        let shape = small_shape("secret lanes");
         let gens = Gens::<C>::new(shape.cols());
         let (cols, active) = (shape.cols(), shape.active_cols());
         let mut rng = SpikeRng::new(label);
@@ -2846,7 +2784,6 @@ mod table_tests {
             &rows,
             0..shape.rows(),
             &bounds,
-            None,
             &blinds,
             false,
         );
@@ -2871,85 +2808,16 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_row_lanes_on_both_curves() {
+    fn secret_row_lanes_on_both_curves() {
         lanes::<Vesta>(b"lanes vesta");
         lanes::<Pallas>(b"lanes pallas");
     }
 
-    /// A public row support skips only positions that are zero: the row
-    /// commitments equal the full-row commitments of the same rows, for
-    /// sparse, run-shaped, empty and full supports.
-    fn supported_lanes<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time supported lanes");
-        let gens = Gens::<C>::new(shape.cols());
-        let (rows_n, cols, active) = (shape.rows(), shape.cols(), shape.active_cols());
-        let mut rng = SpikeRng::new(label);
-        let bounds: Vec<usize> = (0..rows_n).map(|r| shape.row_bits_class(r)).collect();
-        let mut support = vec![0u64; (rows_n * cols).div_ceil(64)];
-        for r in 0..rows_n {
-            for c in 0..active {
-                let set = match r % 4 {
-                    0 => c % 3 != 2,
-                    1 => (c / 40) % 2 == 0,
-                    2 => false,
-                    _ => true,
-                };
-                if set {
-                    let x = r * cols + c;
-                    support[x / 64] |= 1 << (x % 64);
-                }
-            }
-        }
-        let written: Vec<Vec<F<C>>> = (0..rows_n)
-            .map(|r| {
-                (0..cols)
-                    .map(|c| {
-                        let x = r * cols + c;
-                        if c < active && support[x / 64] >> (x % 64) & 1 == 1 {
-                            rng.below::<F<C>>(bounds[r] as u32)
-                        } else {
-                            F::<C>::ZERO
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        let rows: Vec<&[F<C>]> = written.iter().map(Vec::as_slice).collect();
-        let blinds: Vec<F<C>> = (0..rows_n).map(|_| rng.scalar()).collect();
-        let full = commit_row_slices(
-            &gens,
-            &shape,
-            &rows,
-            0..rows_n,
-            &bounds,
-            None,
-            &blinds,
-            false,
-        );
-        let supported = commit_row_slices(
-            &gens,
-            &shape,
-            &rows,
-            0..rows_n,
-            &bounds,
-            Some(&support),
-            &blinds,
-            false,
-        );
-        assert_eq!(supported, full);
-    }
-
-    #[test]
-    fn supported_row_lanes_equal_full_rows_on_both_curves() {
-        supported_lanes::<Vesta>(b"supported lanes vesta");
-        supported_lanes::<Pallas>(b"supported lanes pallas");
-    }
-
     /// The opening's private sums equal the public MSM.
     #[test]
-    fn constant_time_opening_sums_equal_the_public_msm() {
+    fn secret_opening_sums_equal_the_public_msm() {
         let gens = Gens::<Vesta>::new(64);
-        let mut rng = SpikeRng::new(b"constant-time opening");
+        let mut rng = SpikeRng::new(b"secret opening");
         let scalars: Vec<F<Vesta>> = (0..64).map(|_| rng.scalar()).collect();
         assert_eq!(
             ipa::secret_msm::<Vesta>(&scalars, &gens.g),
@@ -2991,7 +2859,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_commitment_refusals_on_both_curves() {
+    fn secret_commitment_refusals_on_both_curves() {
         refusals::<Vesta>();
         refusals::<Pallas>();
     }
