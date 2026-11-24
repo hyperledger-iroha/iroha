@@ -194,7 +194,9 @@ mod written_witness_tests {
             let cells = [const { Cell::new(0) }; 6];
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _witness = WrittenWitness::new(
-                    Witness { w: cells.iter().map(ObserveWipe).collect() },
+                    Witness {
+                        w: cells.iter().map(ObserveWipe).collect(),
+                    },
                     vec![RowFill::Values, RowFill::Zero, RowFill::Unit],
                 );
                 if unwind {

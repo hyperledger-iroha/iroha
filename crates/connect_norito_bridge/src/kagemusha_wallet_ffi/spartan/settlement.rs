@@ -9,7 +9,12 @@ use iroha_data_model::{
 pub(super) fn outcome_bytes(outcome: &UnloadSettlement) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(83);
     bytes.extend_from_slice(&outcome.entrypoint);
-    bytes.extend_from_slice(&outcome.required_height.unwrap_or(outcome.height).to_le_bytes());
+    bytes.extend_from_slice(
+        &outcome
+            .required_height
+            .unwrap_or(outcome.height)
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(&outcome.block);
     bytes.extend_from_slice(&[
         u8::from(outcome.accepted),

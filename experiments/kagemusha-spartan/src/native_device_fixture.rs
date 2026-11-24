@@ -82,10 +82,17 @@ pub fn install_selected(
         .map_err(|e| Error::Rejected(e.to_string()))?;
     let parameters = match selected {
         Some(digest) => AuthenticatedParameters::install_governed(
-            bundle, manifest, signature, digest, &scheme(), finality,
+            bundle,
+            manifest,
+            signature,
+            digest,
+            &scheme(),
+            finality,
         )?,
         None if AuthenticatedParameters::is_five_manifest(manifest) => {
-            return Err(Error::AuthorityMismatch("missing fixture World manifest selection"));
+            return Err(Error::AuthorityMismatch(
+                "missing fixture World manifest selection",
+            ));
         }
         None => AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?,
     };
@@ -565,8 +572,13 @@ mod tests {
                     (time(&dense), time(&prefix))
                 };
                 assert_eq!(reference.0, actual.0);
-                eprintln!("signed fixed rows {} kind={kind} rows={count} cols={} active={active} prefix_lengths={lengths:?} prefix_first={prefix_first} dense_us={} prefix_us={}",
-                    shape.label, shape.cols(), reference.1, actual.1);
+                eprintln!(
+                    "signed fixed rows {} kind={kind} rows={count} cols={} active={active} prefix_lengths={lengths:?} prefix_first={prefix_first} dense_us={} prefix_us={}",
+                    shape.label,
+                    shape.cols(),
+                    reference.1,
+                    actual.1
+                );
             }
         }
 
@@ -894,8 +906,10 @@ mod tests {
         let held = software
             .verify_staged_completion(&peer_received, &record, &counterparty.parameters)
             .unwrap();
-        let origin = SendOrigin::after_receive(&peer_received.witness, held.head().profile()).unwrap();
-        let back = send10_with_request(&origin, outgoing.payer(), incoming.request().clone()).unwrap();
+        let origin =
+            SendOrigin::after_receive(&peer_received.witness, held.head().profile()).unwrap();
+        let back =
+            send10_with_request(&origin, outgoing.payer(), incoming.request().clone()).unwrap();
         let peer_send = software
             .prepare(&back, held.head(), &counterparty.parameters)
             .unwrap();
@@ -916,10 +930,14 @@ mod tests {
             ))
         ));
         let receipt = counterparty.sign(&selected).unwrap();
-        let peer_review = software.resume(selected.capsule(), &counterparty.parameters).unwrap();
+        let peer_review = software
+            .resume(selected.capsule(), &counterparty.parameters)
+            .unwrap();
         assert!(matches!(
             device.finalize(peer_review, &receipt, &params),
-            Err(Error::AuthorityMismatch("protected Send review confirmation unavailable"))
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
         ));
         let completed = counterparty
             .finalize(&software, selected, &receipt)
@@ -1884,7 +1902,9 @@ impl Counterparty {
             || prepared.capsule().payment_key() != &own.body[130..195]
             || prepared.manifest_digest != self.parameters.manifest_digest
         {
-            return Err(Error::AuthorityMismatch("software fixture counterparty preparation"));
+            return Err(Error::AuthorityMismatch(
+                "software fixture counterparty preparation",
+            ));
         }
         Ok(())
     }

@@ -204,7 +204,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             return Err(invalid("future debit confirmation kind"));
         }
         self.require_account_wallet(capsule.wallet())?;
-        let prepared = self.engine.resume(capsule, &self.parameters).map_err(provider_error)?;
+        let prepared = self
+            .engine
+            .resume(capsule, &self.parameters)
+            .map_err(provider_error)?;
         self.require_account(slot, Some(prepared.credential()))?;
         let review = prepared.review_bytes().map_err(provider_error)?;
         Ok((

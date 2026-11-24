@@ -160,7 +160,10 @@ fn digit(group: usize, slot: &Slot, d: usize) -> Digit {
 }
 
 fn lin<S: Field>(src: Src, coef: Vec<S>) -> Lin<S> {
-    vec![Term { src, coef: coef.into() }]
+    vec![Term {
+        src,
+        coef: coef.into(),
+    }]
 }
 
 fn lk<S: Field>(array: usize, cell: usize, map: Vec<Option<usize>>, coef: Vec<S>) -> Lin<S> {
@@ -335,7 +338,7 @@ pub fn scalar_side_with<C: PastaCurve>(
             && matches!(digit(sl, d), Digit::Var(_))
             && matches!(digit(sl, d + 1), Digit::Var(_))
     };
-    for d in 0..group-1 {
+    for d in 0..group - 1 {
         let c = ps(&|s| chain(d, s));
         rows_s.push([
             own_s(SQ[d], c.clone()),
@@ -366,11 +369,11 @@ pub fn scalar_side_with<C: PastaCurve>(
     for d in 0..group {
         let (cs, cc) = (ps(&|s| same(d, s)), ps(&|s| cross(d, s)));
         let src = if d == 0 {
-            lk(a(S_SLOT), TAU[group-1], slot_down.clone(), cc.clone())
+            lk(a(S_SLOT), TAU[group - 1], slot_down.clone(), cc.clone())
         } else {
             sum(&[
                 own_s(TAU[d - 1], cs.clone()),
-                lk(a(S_SLOT), TAU[group-1], slot_down.clone(), cc.clone()),
+                lk(a(S_SLOT), TAU[group - 1], slot_down.clone(), cc.clone()),
             ])
         };
         let on: Vec<F<C>> = cs.iter().zip(&cc).map(|(x, y)| *x + y).collect();
@@ -453,7 +456,11 @@ pub fn scalar_side_with<C: PastaCurve>(
         own_s(prefix_012, all_s.clone()),
     ]);
     if group == 4 {
-        rows_s.push([own_s(prefix_012, all_s.clone()), pre_f(3), own_s(PP, all_s.clone())]);
+        rows_s.push([
+            own_s(prefix_012, all_s.clone()),
+            pre_f(3),
+            own_s(PP, all_s.clone()),
+        ]);
     }
     rows_s.push([
         sum(&[
@@ -680,9 +687,17 @@ pub fn scalar_side_with<C: PastaCurve>(
     }
     rows_t.push([bf(0), bf(1), own_t(B01, all_t.clone())]);
     let bf_012 = if group == 4 { BOOLEAN_012 } else { BB };
-    rows_t.push([own_t(B01, all_t.clone()), bf(2), own_t(bf_012, all_t.clone())]);
+    rows_t.push([
+        own_t(B01, all_t.clone()),
+        bf(2),
+        own_t(bf_012, all_t.clone()),
+    ]);
     if group == 4 {
-        rows_t.push([own_t(bf_012, all_t.clone()), bf(3), own_t(BB, all_t.clone())]);
+        rows_t.push([
+            own_t(bf_012, all_t.clone()),
+            bf(3),
+            own_t(BB, all_t.clone()),
+        ]);
     }
     for d in 0..group {
         let l1 = sum(&[sd(T[d], cst(F::<C>::from(2))), sd(SQ[d], cst(-one))]);
@@ -692,9 +707,17 @@ pub fn scalar_side_with<C: PastaCurve>(
     }
     rows_t.push([gf(0), gf(1), own_t(G01, all_t.clone())]);
     let gf_012 = if group == 4 { LAGRANGE_012 } else { GG };
-    rows_t.push([own_t(G01, all_t.clone()), gf(2), own_t(gf_012, all_t.clone())]);
+    rows_t.push([
+        own_t(G01, all_t.clone()),
+        gf(2),
+        own_t(gf_012, all_t.clone()),
+    ]);
     if group == 4 {
-        rows_t.push([own_t(gf_012, all_t.clone()), gf(3), own_t(GG, all_t.clone())]);
+        rows_t.push([
+            own_t(gf_012, all_t.clone()),
+            gf(3),
+            own_t(GG, all_t.clone()),
+        ]);
     }
     rows_t.push([
         sd(FB, all_t.clone()),
@@ -1219,7 +1242,10 @@ mod tests {
         let side = scalar_side::<Vesta>(0, 0, &shape, lean, &inst, &proof, &claims, &tr);
         if group == 4 {
             for (name, array, cell, instance, native) in &side.expected {
-                assert_eq!(side.arrays[*array].values[*cell][*instance], *native, "{name}");
+                assert_eq!(
+                    side.arrays[*array].values[*cell][*instance], *native,
+                    "{name}"
+                );
             }
         }
         let n = side.arrays.len();
@@ -1324,8 +1350,24 @@ mod tests {
             let last = xs - 1;
             assert!(refused(&c, &uinst, &uwit, &ugens, S_SLOT, T[3], last));
             assert!(refused(&c, &uinst, &uwit, &ugens, S_SLOT, PREFIX_012, last));
-            assert!(refused(&c, &uinst, &uwit, &ugens, S_TERMS, P[3], last * side.q_pad));
-            assert!(refused(&c, &uinst, &uwit, &ugens, S_TERMS, LU[3], last * side.q_pad));
+            assert!(refused(
+                &c,
+                &uinst,
+                &uwit,
+                &ugens,
+                S_TERMS,
+                P[3],
+                last * side.q_pad
+            ));
+            assert!(refused(
+                &c,
+                &uinst,
+                &uwit,
+                &ugens,
+                S_TERMS,
+                LU[3],
+                last * side.q_pad
+            ));
         }
         assert_eq!(n, S_IO + 1, "seven arrays");
     }

@@ -57,8 +57,7 @@ impl Verifier {
             statement: send.statement,
             statement_digest: crate::statement::digest(&send.statement),
         };
-        let (circuit, _, _) =
-            Case::credited().build_for_receipt(Some([Fp::ZERO; 2]), Some(&shape));
+        let (circuit, _, _) = Case::credited().build_for_receipt(Some([Fp::ZERO; 2]), Some(&shape));
         Self(circuit.into_verifier_program())
     }
 }
@@ -88,7 +87,13 @@ fn receiver_receipt(
     payment: &native::VerifiedIncomingPayment,
     outcome: native::VerifiedCreditStatus,
 ) -> Result<super::receiver_signature::ReceiverReceipt> {
-    receiver_receipt_fields(evidence, payment.statement(), payment.request(), payment.digest(), outcome)
+    receiver_receipt_fields(
+        evidence,
+        payment.statement(),
+        payment.request(),
+        payment.digest(),
+        outcome,
+    )
 }
 
 use crate::native::engine::transfers::archive_sent::relation::receiver_receipt_fields;
@@ -414,7 +419,10 @@ fn successor_archive_authenticated_delivery_proves_at_later_selected_payer_head(
         );
         drop(joined);
         let io = later_inputs.public_io(nonce, circuit.0.io_len).unwrap();
-        assert_eq!(io, instance.io, "the verifier recomputes the exact public input");
+        assert_eq!(
+            io, instance.io,
+            "the verifier recomputes the exact public input"
+        );
         later_inputs.verify(&circuit, nonce, &proof).unwrap();
         // Credential digest, folded receipt, head and statement, original Payment, receipt
         // digest, receiver wallet and key, form bit, subject, exact statement digest, open and

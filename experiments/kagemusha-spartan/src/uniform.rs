@@ -1729,7 +1729,17 @@ impl<F: Scalar> UniformCircuit<F> {
         release: impl Fn(&mut Vec<Vec<F>>),
     ) -> (Self, Instance<F>, Witness<F>, Vec<RowFill>) {
         Self::build_rows_grouped_with_release::<3>(
-            label, arrays, pi, counts, table_specs, copies, col_bits, io_len, seed, target, release,
+            label,
+            arrays,
+            pi,
+            counts,
+            table_specs,
+            copies,
+            col_bits,
+            io_len,
+            seed,
+            target,
+            release,
         )
     }
 
@@ -1826,7 +1836,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 assert_eq!(mask.widths[k], 255);
                 let lin = &mask.rows[0][k];
                 assert!(
-                    lin.len() == 1 && lin[0].src == Src::Own(k) && lin[0].coef[..] == vec![F::ONE; n],
+                    lin.len() == 1
+                        && lin[0].src == Src::Own(k)
+                        && lin[0].coef[..] == vec![F::ONE; n],
                     "exact private product gate"
                 );
             }
@@ -2016,7 +2028,10 @@ impl<F: Scalar> UniformCircuit<F> {
                 }
             });
             if let Some(g) = found.missing.iter().position(|m| *m) {
-                panic!("{}: a looked-up tuple is in table {tid}", arrays[readers[g]].name);
+                panic!(
+                    "{}: a looked-up tuple is in table {tid}",
+                    arrays[readers[g]].name
+                );
             }
             let mut mult = vec![0u64; slots];
             for (&i, &m) in entries.iter().zip(&found.counts) {
@@ -4211,7 +4226,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 for (mat, lin) in row.into_iter().enumerate() {
                     let pieces = lin.into_iter().flat_map(|(term, factor)| {
                         let (base, rest) = self.pieces(self.masked(term, a), a);
-                        std::iter::once(base).chain(rest).map(move |piece| (piece, factor))
+                        std::iter::once(base)
+                            .chain(rest)
+                            .map(move |piece| (piece, factor))
                     });
                     for (term, fac) in pieces {
                         let (a2, map): (Option<(usize, usize)>, Option<&Vec<Option<usize>>>) =
@@ -4552,8 +4569,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                 *e = *e + fx * s * high * sc;
                             }
                             Some((a2, k2)) => {
-                                let e =
-                                    grouped.entry((mat, a2, k2, fac, s.s)).or_insert((s, zero));
+                                let e = grouped.entry((mat, a2, k2, fac, s.s)).or_insert((s, zero));
                                 e.1 = e.1 + high * sc;
                             }
                         }
@@ -4625,7 +4641,8 @@ impl<F: Scalar> UniformCircuit<F> {
                     .keys()
                     .map(|key| key.heap_bytes() + size_of::<(PatternKey, Option<V<'_, F>>)>())
                     .sum::<usize>()
-                    + factors.keys()
+                    + factors
+                        .keys()
                         .map(|key| key.heap_bytes() + size_of::<(FactorKey, V<'_, F>)>())
                         .sum::<usize>();
                 let memo = memo_tx.nodes.capacity() * 17;
@@ -4969,7 +4986,10 @@ impl PatternKey {
     /// Heap bytes (the memory profile).
     fn heap_bytes(&self) -> usize {
         size_of::<usize>() * (self.wb.capacity() + self.active.capacity())
-            + self.map.as_ref().map_or(0, |m| size_of::<Option<usize>>() * m.capacity())
+            + self
+                .map
+                .as_ref()
+                .map_or(0, |m| size_of::<Option<usize>>() * m.capacity())
     }
 }
 
@@ -4987,7 +5007,9 @@ impl FactorKey {
     /// Heap bytes (the memory profile).
     fn heap_bytes(&self) -> usize {
         match self {
-            FactorKey::Step(_, wb, _, ls) => size_of::<usize>() * wb.capacity() + size_of::<Option<usize>>() * ls.capacity(),
+            FactorKey::Step(_, wb, _, ls) => {
+                size_of::<usize>() * wb.capacity() + size_of::<Option<usize>>() * ls.capacity()
+            }
             FactorKey::Slot(_, wb, _, hs, cs) => {
                 size_of::<usize>() * wb.capacity()
                     + size_of::<Option<usize>>() * hs.capacity()
@@ -5727,18 +5749,26 @@ impl RegisterInstructions {
     const BITS: u32 = 20;
     const MASK: u32 = (1 << Self::BITS) - 1;
 
-    fn new(instructions: impl ExactSizeIterator<Item = (Op, Slot)>, count: u32, max_constant: u32) -> Self {
+    fn new(
+        instructions: impl ExactSizeIterator<Item = (Op, Slot)>,
+        count: u32,
+        max_constant: u32,
+    ) -> Self {
         if count > Self::MASK + 1 || max_constant > Self::MASK {
             return Self::Wide(instructions.collect());
         }
-        Self::Packed(instructions.map(|(op, dest)| {
-            let [tag, a, b] = program_artifact::op_words(op);
-            assert!(tag < 16 && a <= Self::MASK && b <= Self::MASK && dest <= Self::MASK);
-            u64::from(tag) << (3 * Self::BITS)
-                | u64::from(dest) << (2 * Self::BITS)
-                | u64::from(a) << Self::BITS
-                | u64::from(b)
-        }).collect())
+        Self::Packed(
+            instructions
+                .map(|(op, dest)| {
+                    let [tag, a, b] = program_artifact::op_words(op);
+                    assert!(tag < 16 && a <= Self::MASK && b <= Self::MASK && dest <= Self::MASK);
+                    u64::from(tag) << (3 * Self::BITS)
+                        | u64::from(dest) << (2 * Self::BITS)
+                        | u64::from(a) << Self::BITS
+                        | u64::from(b)
+                })
+                .collect(),
+        )
     }
 
     fn len(&self) -> usize {
@@ -5847,9 +5877,9 @@ impl Regs {
         drop(last);
         drop(free);
         let rops = RegisterInstructions::new(
-            ops.iter().enumerate().map(|(i, op)| {
-                (op.map_slots(|s| reg[s as usize]), reg[inputs + i])
-            }),
+            ops.iter()
+                .enumerate()
+                .map(|(i, op)| (op.map_slots(|s| reg[s as usize]), reg[inputs + i])),
             count,
             max_constant,
         );
@@ -6774,11 +6804,10 @@ impl<F: Scalar> UniformRel<'_, F> {
         let mut dense = crate::kern::zeroed::<F>(half);
         // The dense runs written: the inner round reads no other (their
         // pages stay unallocated).
-        let written: Vec<std::sync::atomic::AtomicU64> = (0..half
-            .div_ceil(crate::kern::SEGMENT)
-            .div_ceil(64))
-            .map(|_| std::sync::atomic::AtomicU64::new(0))
-            .collect();
+        let written: Vec<std::sync::atomic::AtomicU64> =
+            (0..half.div_ceil(crate::kern::SEGMENT).div_ceil(64))
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect();
         let sink = SplitDense {
             dense: OutPtr(dense.as_mut_ptr()),
             half,
@@ -7145,7 +7174,8 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<F> {
         let start = k * shape.cols();
-        self.fixed_values.nonzero_prefix(start..start + shape.active_cols())
+        self.fixed_values
+            .nonzero_prefix(start..start + shape.active_cols())
     }
     fn wallet_rows(&self) -> usize {
         self.wallet_rows
@@ -8289,7 +8319,9 @@ pub(crate) mod tests {
                 rows: Vec::new(),
                 values: vec![
                     (0..16u64).map(|a| Fv::from(square(a))).collect(),
-                    (0..16u64).map(|a| Fv::from(square(a) * square(a))).collect(),
+                    (0..16u64)
+                        .map(|a| Fv::from(square(a) * square(a)))
+                        .collect(),
                 ],
             },
         ];
@@ -8384,7 +8416,10 @@ pub(crate) mod tests {
         assert!(owned > 0, "the hooks write rows");
         let (again, refilled) = run(&filled[..]);
         assert_eq!(refilled, filled, "the hooks are deterministic");
-        assert_eq!(again, owned, "rows taken by position, never by comparing values");
+        assert_eq!(
+            again, owned,
+            "rows taken by position, never by comparing values"
+        );
     }
 
     /// The build refuses a copy read unequal to the entry it names, comparing
@@ -9056,7 +9091,9 @@ pub(crate) mod tests {
             )
         }
         fn check_helpers<C: iroha_pasta::PastaCurve>()
-        where F<C>: Scalar {
+        where
+            F<C>: Scalar,
+        {
             let (c, i, w, fill) = lookup_test_rows::<F<C>>();
             let start = c.p1_rows + c.pl_rows;
             let mut helpers = start..start + c.p2_rows;
@@ -9112,20 +9149,37 @@ pub(crate) mod tests {
             let (mut shared, _, _) = build();
             let template_bytes = shared.construction_breakdown()[2];
             shared.share_template_coefficients();
-            assert!(shared.construction_breakdown()[2] < template_bytes, "{}", shared.label);
+            assert!(
+                shared.construction_breakdown()[2] < template_bytes,
+                "{}",
+                shared.label
+            );
             assert_eq!(ordinary.program_digest(), shared.program_digest());
             let generators = crate::ipa::Gens::<Vesta>::new(shared.shape.cols());
             let prove = |c: &UniformCircuit<Fv>| {
                 crate::spartan::prove_circuit(
-                    &c.shape, &generators, &instance, &witness,
-                    &mut SpikeRng::new(b"shared coefficient parity"), c,
-                ).0.to_bytes()
+                    &c.shape,
+                    &generators,
+                    &instance,
+                    &witness,
+                    &mut SpikeRng::new(b"shared coefficient parity"),
+                    c,
+                )
+                .0
+                .to_bytes()
             };
             let proof = prove(&ordinary);
             assert_eq!(prove(&shared), proof);
-            assert!(crate::spartan::verify_circuit(
-                &shared.shape, &generators, &instance, &proof, &shared,
-            ).is_ok());
+            assert!(
+                crate::spartan::verify_circuit(
+                    &shared.shape,
+                    &generators,
+                    &instance,
+                    &proof,
+                    &shared,
+                )
+                .is_ok()
+            );
         }
     }
 
@@ -9160,8 +9214,16 @@ pub(crate) mod tests {
             }
             let counts = pi.iter().map(|p| 1 << p).collect();
             let (c, _, w, fill) = UniformCircuit::build_rows(
-                "occupancy", arrays, pi, counts, vec![], Copies::default(), 11, 4,
-                b"occupied rows", None,
+                "occupancy",
+                arrays,
+                pi,
+                counts,
+                vec![],
+                Copies::default(),
+                11,
+                4,
+                b"occupied rows",
+                None,
             );
             (c.program_digest(), w.w, fill)
         };

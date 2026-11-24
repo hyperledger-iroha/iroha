@@ -679,15 +679,7 @@ impl<F: PoseidonField> SigmaCircuit<F> {
         let witness = self.witness.as_ref().zip(self.native.as_ref());
         let output = layouter.assign_region(
             || "sigma step",
-            |mut region| {
-                relation::assign(
-                    &mut chips,
-                    &mut region,
-                    relation,
-                    &plan,
-                    witness,
-                )
-            },
+            |mut region| relation::assign(&mut chips, &mut region, relation, &plan, witness),
         )?;
         for (row, word) in output.public.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.instance, row)?;

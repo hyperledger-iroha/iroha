@@ -35,7 +35,8 @@ impl Wallet {
         let account = AccountId::new(account.parse().unwrap());
         let digest = kagemusha_wallet_account_digest_v1(&account).unwrap();
         let (bootstrap, marker) =
-            software_bootstrap(parameters, &key, vector_asset().asset_digest(), digest, id).unwrap();
+            software_bootstrap(parameters, &key, vector_asset().asset_digest(), digest, id)
+                .unwrap();
         bootstrap.credential().enrollment_fields().unwrap();
         let ExactOperationWitness::Bootstrap(b) = &bootstrap else {
             unreachable!()
@@ -351,9 +352,8 @@ fn combined_control_predecessors_and_repeated_operations() {
 #[test]
 #[ignore = "requires the signed device bundle and a complete retained Payment"]
 fn retained_payment_credit_status_requires_its_exact_manifest() {
-    let bundle = std::path::PathBuf::from(
-        std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
-    );
+    let bundle =
+        std::path::PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
     let mut parameters = install_test_bundle(&bundle).unwrap();
     let original =
         std::fs::read(std::env::var_os("KAGEMUSHA_SPARTAN_RETAINED_PAYMENT").unwrap()).unwrap();
@@ -364,7 +364,9 @@ fn retained_payment_credit_status_requires_its_exact_manifest() {
     assert_eq!(parameters.id(), payment.parameters_id());
     assert!(matches!(
         engine.verify_credit_status_peer(&[], &[], &payment, &parameters),
-        Err(Error::AuthorityMismatch("verified Payment parameter manifest"))
+        Err(Error::AuthorityMismatch(
+            "verified Payment parameter manifest"
+        ))
     ));
 }
 

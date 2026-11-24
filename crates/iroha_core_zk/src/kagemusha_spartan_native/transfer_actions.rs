@@ -251,17 +251,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                             } if *predecessor_capsule_digest == predecessor => Some(current),
                             _ => None,
                         },
-                        std::cmp::Ordering::Greater => self.provider.with_archive(slot, |archive| {
-                            IndexRoot(checkpoint.transfer_actions)
-                                .get(&mut Objects(archive), &selected_child_key(&predecessor))
-                                .map_err(storage_error)?
-                                .map(|value| {
-                                    value
-                                        .try_into()
-                                        .map_err(|_| lost("transfer selected child record"))
-                                })
-                                .transpose()
-                        })?,
+                        std::cmp::Ordering::Greater => {
+                            self.provider.with_archive(slot, |archive| {
+                                IndexRoot(checkpoint.transfer_actions)
+                                    .get(&mut Objects(archive), &selected_child_key(&predecessor))
+                                    .map_err(storage_error)?
+                                    .map(|value| {
+                                        value
+                                            .try_into()
+                                            .map_err(|_| lost("transfer selected child record"))
+                                    })
+                                    .transpose()
+                            })?
+                        }
                         std::cmp::Ordering::Less => None,
                     };
                     match selected {

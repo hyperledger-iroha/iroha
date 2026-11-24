@@ -672,12 +672,20 @@ pub fn decode(profile: &Profile<'_>, bytes: &[u8]) -> Result<Decoded, String> {
 }
 
 /// The account named by the canonical Payment companion and restored signed Request.
-pub(crate) fn payer_policy_accounts(profile: &Profile<'_>, bytes: &[u8]) -> Result<[[u8;32];2],String> {
+pub(crate) fn payer_policy_accounts(
+    profile: &Profile<'_>,
+    bytes: &[u8],
+) -> Result<[[u8; 32]; 2], String> {
     let (envelope, companion) = peer_decode(bytes)?;
     let envelope = read_envelope(envelope)?;
     let (payer, _) = companion_restore(profile, &read_companion(companion)?)?;
     let (_, request) = statement_restore(profile, &payer, &envelope.statement, &envelope.request)?;
-    Ok([request.body[98..130].try_into().expect("fixed Request account"),payer.body[98..130].try_into().expect("fixed payer account")])
+    Ok([
+        request.body[98..130]
+            .try_into()
+            .expect("fixed Request account"),
+        payer.body[98..130].try_into().expect("fixed payer account"),
+    ])
 }
 
 pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate, String> {

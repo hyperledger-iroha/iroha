@@ -206,7 +206,12 @@ fn check_built_program<S: Scalar>(built: &UniformCircuit<S>, signed: &UniformCir
 // Compare the old immutable input and the guarded mutable input at the exact
 // issued dimensions. Only row counts and their storage requirements are printed.
 fn check_owned_writes<S: Scalar + zeroize::Zeroize>(
-    result: (UniformCircuit<S>, Instance<S>, Witness<S>, Vec<crate::r1cs::RowFill>),
+    result: (
+        UniformCircuit<S>,
+        Instance<S>,
+        Witness<S>,
+        Vec<crate::r1cs::RowFill>,
+    ),
     signed: &UniformCircuit<S>,
 ) {
     use crate::{fs::SpikeRng, kern::Rows, r1cs::Circuit as _};
@@ -219,7 +224,9 @@ fn check_owned_writes<S: Scalar + zeroize::Zeroize>(
         if built.link_rows(&built.shape) > 0 {
             built.fill_link_rows(&[0x17; 32], rows);
         }
-        let challenges: Vec<S> = (0..built.phase2_challenges()).map(|_| rng.scalar()).collect();
+        let challenges: Vec<S> = (0..built.phase2_challenges())
+            .map(|_| rng.scalar())
+            .collect();
         drop(built.instantiate_rows(&built.shape, &challenges, rows));
         let mut digest = blake3::Hasher::new();
         for row in rows.slices() {
@@ -237,10 +244,16 @@ fn check_owned_writes<S: Scalar + zeroize::Zeroize>(
     let (witness, fill) = witness.parts_mut();
     let (allocated, current) = mutate(&mut Rows::with_mutable_values(&mut witness.w, cols, fill));
     assert_eq!(prior, current);
-    assert!(allocated < copied, "at least one authored row must be reused");
+    assert!(
+        allocated < copied,
+        "at least one authored row must be reused"
+    );
     eprintln!(
         "signed Receive {} copied {} rows, mutable {} rows, avoided {} bytes",
-        built.label, copied, allocated, (copied - allocated) * cols * std::mem::size_of::<S>()
+        built.label,
+        copied,
+        allocated,
+        (copied - allocated) * cols * std::mem::size_of::<S>()
     );
 }
 
@@ -434,7 +447,11 @@ fn same_fold_trace<C: PastaCurve>(
     case: &str,
 ) {
     assert_eq!(a.relation, b.relation, "{case}: relation");
-    assert_eq!(format!("{:?}", a.layout), format!("{:?}", b.layout), "{case}: layout");
+    assert_eq!(
+        format!("{:?}", a.layout),
+        format!("{:?}", b.layout),
+        "{case}: layout"
+    );
     assert_eq!(a.shared, b.shared, "{case}: shared limbs");
     assert_eq!(a.input_header, b.input_header, "{case}: input header");
     assert_eq!(a.fold_header, b.fold_header, "{case}: fold header");
@@ -494,7 +511,10 @@ fn signed_receive_verified_folds_match_stock_on_both_curves() {
             incoming.pair_bytes.clone(),
         ),
     ];
-    assert_eq!(pairs[1].incoming_original.as_deref(), Some(payment.exact_pair()));
+    assert_eq!(
+        pairs[1].incoming_original.as_deref(),
+        Some(payment.exact_pair())
+    );
     for (side, pair) in ["head", "incoming"].into_iter().zip(&pairs) {
         let own_p = crate::ipa::Claim {
             g: pair.proof_p.ipa.g_final,
@@ -506,27 +526,51 @@ fn signed_receive_verified_folds_match_stock_on_both_curves() {
             us: pair.tr_s.us.clone(),
         };
         let inherited_s = full::inherited_generator_claim(&pair.tr_s, &p.generators.s).unwrap();
-        assert!(crate::generator_claim::decide(&p.generators.p, &own_p), "{side} own P claim");
-        assert!(crate::generator_claim::decide(&p.generators.p, &inherited_p), "{side} inherited P claim");
-        assert!(crate::generator_claim::decide(&p.generators.s, &own_s), "{side} own S claim");
-        assert!(crate::generator_claim::decide(&p.generators.s, &inherited_s), "{side} inherited S claim");
+        assert!(
+            crate::generator_claim::decide(&p.generators.p, &own_p),
+            "{side} own P claim"
+        );
+        assert!(
+            crate::generator_claim::decide(&p.generators.p, &inherited_p),
+            "{side} inherited P claim"
+        );
+        assert!(
+            crate::generator_claim::decide(&p.generators.s, &own_s),
+            "{side} own S claim"
+        );
+        assert!(
+            crate::generator_claim::decide(&p.generators.s, &inherited_s),
+            "{side} inherited S claim"
+        );
     }
     let original = incoming_payment.as_ref();
-    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs[..1]),
-        Err(Error::Malformed("verified Receive fold proof count"))));
-    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, &original[1..], &pairs),
-        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    assert!(matches!(
+        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs[..1]),
+        Err(Error::Malformed("verified Receive fold proof count"))
+    ));
+    assert!(matches!(
+        VerifiedReceiveFolds::bind(&parameters, payment, &original[1..], &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))
+    ));
     let mut other_manifest = payment.clone();
     other_manifest.manifest_digest[0] ^= 1;
-    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, &other_manifest, original, &pairs),
-        Err(Error::AuthorityMismatch("verified Payment parameter manifest"))));
+    assert!(matches!(
+        VerifiedReceiveFolds::bind(&parameters, &other_manifest, original, &pairs),
+        Err(Error::AuthorityMismatch(
+            "verified Payment parameter manifest"
+        ))
+    ));
     pairs.swap(0, 1);
-    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
-        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    assert!(matches!(
+        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))
+    ));
     pairs.swap(0, 1);
     let original_pair = pairs[1].incoming_original.take().unwrap();
-    assert!(matches!(VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
-        Err(Error::AuthorityMismatch("verified Receive fold sources"))));
+    assert!(matches!(
+        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        Err(Error::AuthorityMismatch("verified Receive fold sources"))
+    ));
     pairs[1].incoming_original = Some(original_pair);
     let entropy = ProofEntropy::fresh().unwrap();
     let stock = || full::GeneratorFolds::prepare(&p.generators, &pairs, &entropy).unwrap();
@@ -585,5 +629,9 @@ fn process_cpu_seconds() -> f64 {
 fn measured<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
     let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
     let out = f();
-    (out, wall.elapsed().as_secs_f64(), process_cpu_seconds() - cpu)
+    (
+        out,
+        wall.elapsed().as_secs_f64(),
+        process_cpu_seconds() - cpu,
+    )
 }

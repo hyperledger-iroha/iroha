@@ -49,13 +49,19 @@ pub(super) fn same_pair(a: &full::UniformPair, b: &full::UniformPair) -> bool {
 
 /// The payer's released head after its Send, rebuilt exactly from the Payment:
 /// the same pair, credential and certificate finalization encodes.
-pub(super) fn payer_head(payment: &[u8], parameters: &AuthenticatedParameters) -> (Vec<u8>, Credential) {
+pub(super) fn payer_head(
+    payment: &[u8],
+    parameters: &AuthenticatedParameters,
+) -> (Vec<u8>, Credential) {
     let (trusted, d) = NativeEngine::payment_candidate(payment, parameters).unwrap();
     let decoded = carrier::decode_projected_pair(&trusted, &d.pair_bytes, &d.projection).unwrap();
     let u = assemble_pair(&parameters.inner, full::SEND, decoded).unwrap();
     let head = encode_head(parameters, &u, &d.originals.payer, &d.originals.certificate).unwrap();
     let (frame, ..) = decode_head(&head, parameters).unwrap();
-    assert_eq!(frame.pair, d.pair_bytes, "the head carries the Payment's exact pair");
+    assert_eq!(
+        frame.pair, d.pair_bytes,
+        "the head carries the Payment's exact pair"
+    );
     assert_eq!(usize::from(frame.kind), full::SEND);
     (head, d.originals.payer.clone())
 }
@@ -78,60 +84,142 @@ pub(super) fn selected_payments() -> (PathBuf, Vec<Vec<u8>>) {
 fn predecessor_pair_reuse_is_exact_and_bound() {
     let (bundle, payments) = selected_payments();
     let parameters = install(&bundle);
-    let heads: Vec<(Vec<u8>, Credential)> = payments.iter().map(|p| payer_head(p, &parameters)).collect();
+    let heads: Vec<(Vec<u8>, Credential)> = payments
+        .iter()
+        .map(|p| payer_head(p, &parameters))
+        .collect();
     assert!(!exact_credential(&heads[0].1, &heads[1].1), "two wallets");
     for (i, (head, credential)) in heads.iter().enumerate() {
         let case = format!("payer head {i}");
         let engine = NativeEngine::default();
         let start = decodes(&parameters);
-        let (head1, pair1) = engine.verified_head_and_pair(head, credential, &parameters).unwrap();
-        assert_eq!(decodes(&parameters) - start, 1, "{case}: first verification is full");
-        let (head2, pair2) = engine.verified_head_and_pair(head, credential, &parameters).unwrap();
-        assert_eq!(decodes(&parameters) - start, 1, "{case}: second verification is reused");
-        assert!(same_head(&head1, &head2) && same_pair(&pair1, &pair2), "{case}: reuse");
+        let (head1, pair1) = engine
+            .verified_head_and_pair(head, credential, &parameters)
+            .unwrap();
+        assert_eq!(
+            decodes(&parameters) - start,
+            1,
+            "{case}: first verification is full"
+        );
+        let (head2, pair2) = engine
+            .verified_head_and_pair(head, credential, &parameters)
+            .unwrap();
+        assert_eq!(
+            decodes(&parameters) - start,
+            1,
+            "{case}: second verification is reused"
+        );
+        assert!(
+            same_head(&head1, &head2) && same_pair(&pair1, &pair2),
+            "{case}: reuse"
+        );
         let (_, profile, c, cert, independent) = decode_head(head, &parameters).unwrap();
         assert!(same_pair(&pair2, &independent), "{case}: independent pair");
         assert!(head2.profile == profile && exact_credential(&head2.credential, &c));
-        assert_eq!(certificate_bytes(&head2.certificate), certificate_bytes(&cert));
+        assert_eq!(
+            certificate_bytes(&head2.certificate),
+            certificate_bytes(&cert)
+        );
         let head3 = engine.verify_head(head, credential, &parameters).unwrap();
-        assert!(same_head(&head1, &head3) && decodes(&parameters) - start == 1, "{case}: verify_head");
+        assert!(
+            same_head(&head1, &head3) && decodes(&parameters) - start == 1,
+            "{case}: verify_head"
+        );
         // Credential binding: refused as a fresh engine refuses it, after a full verification.
         let other = &heads[1 - i].1;
         let before = decodes(&parameters);
         for e in [&engine, &NativeEngine::default()] {
             assert!(
-                matches!(e.verified_head_and_pair(head, other, &parameters),
-                    Err(Error::AuthorityMismatch("requested head credential"))),
+                matches!(
+                    e.verified_head_and_pair(head, other, &parameters),
+                    Err(Error::AuthorityMismatch("requested head credential"))
+                ),
                 "{case}: credential"
             );
         }
-        assert_eq!(decodes(&parameters) - before, 2, "{case}: a different credential never hits");
+        assert_eq!(
+            decodes(&parameters) - before,
+            2,
+            "{case}: a different credential never hits"
+        );
         // Byte binding: a changed head gets the fresh engine's refusal.
         let mut changed = head.clone();
         *changed.last_mut().unwrap() ^= 1;
-        let warm = format!("{:?}", engine.verified_head_and_pair(&changed, credential, &parameters).err());
-        let cold = format!("{:?}", NativeEngine::default().verified_head_and_pair(&changed, credential, &parameters).err());
-        assert!(warm != "None" && warm == cold, "{case}: changed bytes {warm} {cold}");
+        let warm = format!(
+            "{:?}",
+            engine
+                .verified_head_and_pair(&changed, credential, &parameters)
+                .err()
+        );
+        let cold = format!(
+            "{:?}",
+            NativeEngine::default()
+                .verified_head_and_pair(&changed, credential, &parameters)
+                .err()
+        );
+        assert!(
+            warm != "None" && warm == cold,
+            "{case}: changed bytes {warm} {cold}"
+        );
         // A refusal never replaced the accepted head.
         let before = decodes(&parameters);
-        engine.verified_head_and_pair(head, credential, &parameters).unwrap();
-        assert_eq!(decodes(&parameters), before, "{case}: refusals keep the entry");
+        engine
+            .verified_head_and_pair(head, credential, &parameters)
+            .unwrap();
+        assert_eq!(
+            decodes(&parameters),
+            before,
+            "{case}: refusals keep the entry"
+        );
         // Instance binding: another installation of the same bundle has its own cache.
         let reinstalled = install(&bundle);
-        engine.verified_head_and_pair(head, credential, &reinstalled).unwrap();
-        assert_eq!(decodes(&reinstalled), 1, "{case}: another instance verifies in full");
-        engine.verified_head_and_pair(head, credential, &reinstalled).unwrap();
-        assert_eq!(decodes(&reinstalled), 1, "{case}: and then reuses under itself");
-        assert_eq!(decodes(&parameters), before, "{case}: without touching the first instance");
+        engine
+            .verified_head_and_pair(head, credential, &reinstalled)
+            .unwrap();
+        assert_eq!(
+            decodes(&reinstalled),
+            1,
+            "{case}: another instance verifies in full"
+        );
+        engine
+            .verified_head_and_pair(head, credential, &reinstalled)
+            .unwrap();
+        assert_eq!(
+            decodes(&reinstalled),
+            1,
+            "{case}: and then reuses under itself"
+        );
+        assert_eq!(
+            decodes(&parameters),
+            before,
+            "{case}: without touching the first instance"
+        );
         // Owner binding: an epoch-selected owner verifies in full.
-        let owner = NativeEngine { selection_owner: Arc::new(()), ..engine.clone() };
-        owner.verified_head_and_pair(head, credential, &parameters).unwrap();
-        assert_eq!(decodes(&parameters) - before, 1, "{case}: another owner verifies in full");
+        let owner = NativeEngine {
+            selection_owner: Arc::new(()),
+            ..engine.clone()
+        };
+        owner
+            .verified_head_and_pair(head, credential, &parameters)
+            .unwrap();
+        assert_eq!(
+            decodes(&parameters) - before,
+            1,
+            "{case}: another owner verifies in full"
+        );
         // A restart is a fresh engine: full verification, same result.
-        let (fresh, fresh_pair) =
-            NativeEngine::default().verified_head_and_pair(head, credential, &parameters).unwrap();
-        assert_eq!(decodes(&parameters) - before, 2, "{case}: a restart verifies in full");
-        assert!(same_head(&head1, &fresh) && same_pair(&pair1, &fresh_pair), "{case}: restart");
+        let (fresh, fresh_pair) = NativeEngine::default()
+            .verified_head_and_pair(head, credential, &parameters)
+            .unwrap();
+        assert_eq!(
+            decodes(&parameters) - before,
+            2,
+            "{case}: a restart verifies in full"
+        );
+        assert!(
+            same_head(&head1, &fresh) && same_pair(&pair1, &fresh_pair),
+            "{case}: restart"
+        );
     }
 }
 
@@ -146,27 +234,58 @@ fn reinstallation_drops_the_old_circuits() {
     let old = install(&bundle);
     let (head, credential) = payer_head(&payments[0], &old);
     for _ in 0..2 {
-        engine.verified_head_and_pair(&head, &credential, &old).map(drop).unwrap();
+        engine
+            .verified_head_and_pair(&head, &credential, &old)
+            .map(drop)
+            .unwrap();
     }
-    engine.verify_head(&head, &credential, &old).map(drop).unwrap();
-    assert_eq!(decodes(&old), 1, "the old instance verified once and then reused");
+    engine
+        .verify_head(&head, &credential, &old)
+        .map(drop)
+        .unwrap();
+    assert_eq!(
+        decodes(&old),
+        1,
+        "the old instance verified once and then reused"
+    );
     let set: Weak<ParameterSet> = Arc::downgrade(&old.inner);
-    let primary: Vec<Weak<UniformCircuit<Fp>>> =
-        old.inner.programs.iter().map(|x| Arc::downgrade(&x.primary)).collect();
-    let secondary: Vec<Weak<UniformCircuit<Fq>>> =
-        old.inner.programs.iter().map(|x| Arc::downgrade(&x.secondary)).collect();
+    let primary: Vec<Weak<UniformCircuit<Fp>>> = old
+        .inner
+        .programs
+        .iter()
+        .map(|x| Arc::downgrade(&x.primary))
+        .collect();
+    let secondary: Vec<Weak<UniformCircuit<Fq>>> = old
+        .inner
+        .programs
+        .iter()
+        .map(|x| Arc::downgrade(&x.secondary))
+        .collect();
     // Reinstall and drop the old instance while the engine lives on, before it
     // verifies anything under the new one.
     let fresh = install(&bundle);
     drop(old);
     assert!(set.upgrade().is_none(), "the old parameter set is freed");
-    assert!(primary.iter().all(|w| w.upgrade().is_none()), "every old primary circuit is freed");
-    assert!(secondary.iter().all(|w| w.upgrade().is_none()), "every old secondary circuit is freed");
+    assert!(
+        primary.iter().all(|w| w.upgrade().is_none()),
+        "every old primary circuit is freed"
+    );
+    assert!(
+        secondary.iter().all(|w| w.upgrade().is_none()),
+        "every old secondary circuit is freed"
+    );
     // The same engine verifies once under the new instance and then reuses.
     for _ in 0..2 {
-        engine.verified_head_and_pair(&head, &credential, &fresh).map(drop).unwrap();
+        engine
+            .verified_head_and_pair(&head, &credential, &fresh)
+            .map(drop)
+            .unwrap();
     }
-    assert_eq!(decodes(&fresh), 1, "the new instance verifies once and then reuses");
+    assert_eq!(
+        decodes(&fresh),
+        1,
+        "the new instance verifies once and then reuses"
+    );
 }
 
 /// On a retained signed Receive capsule: a resume that reuses the predecessor
@@ -189,24 +308,61 @@ fn resume_with_reused_predecessor_rebuilds_the_same_preparation() {
     // Stock execute: the owner already verified the Payment, not the head.
     *parameters.verified_head.entry.lock().unwrap() = None;
     let stock = engine.resume(&capsule, &parameters).unwrap();
-    assert_eq!(decodes(&parameters), 2, "without an accepted head the resume verifies it");
+    assert_eq!(
+        decodes(&parameters),
+        2,
+        "without an accepted head the resume verifies it"
+    );
     let reused = engine.resume(&capsule, &parameters).unwrap();
     assert_eq!(decodes(&parameters), 2, "the accepted head is reused");
     let restart = NativeEngine::default();
     let fresh = restart.resume(&capsule, &parameters).unwrap();
     assert_eq!(decodes(&parameters), 3, "a restart verifies the head");
     let expected = capsule.encode().unwrap();
-    for (label, p, owner) in [("stock", &stock, &engine), ("reused", &reused, &engine), ("restart", &fresh, &restart)] {
+    for (label, p, owner) in [
+        ("stock", &stock, &engine),
+        ("reused", &reused, &engine),
+        ("restart", &fresh, &restart),
+    ] {
         assert_eq!(p.capsule.encode().unwrap(), expected, "{label}: capsule");
-        assert_eq!(p.witness.encode().unwrap(), cold.witness.encode().unwrap(), "{label}: witness");
-        assert!(same_head(&p.predecessor, &cold.predecessor), "{label}: predecessor head");
-        let (a, b) = (p.resumed_under.as_ref().unwrap(), cold.resumed_under.as_ref().unwrap());
-        assert!(same_pair(a.predecessor.as_ref().unwrap(), b.predecessor.as_ref().unwrap()), "{label}: pair");
-        assert!(Arc::ptr_eq(&a.original, &p.predecessor.pair), "{label}: finalize takes this pair");
-        assert!(owner.resumed_here(p, &parameters), "{label}: resumed under its owner");
-        let receive = |q: &PreparedOperation| q.receive.as_ref().map(|r| (r.can_credit, r.pair_bytes.clone(), r.verified.is_some()));
+        assert_eq!(
+            p.witness.encode().unwrap(),
+            cold.witness.encode().unwrap(),
+            "{label}: witness"
+        );
+        assert!(
+            same_head(&p.predecessor, &cold.predecessor),
+            "{label}: predecessor head"
+        );
+        let (a, b) = (
+            p.resumed_under.as_ref().unwrap(),
+            cold.resumed_under.as_ref().unwrap(),
+        );
+        assert!(
+            same_pair(
+                a.predecessor.as_ref().unwrap(),
+                b.predecessor.as_ref().unwrap()
+            ),
+            "{label}: pair"
+        );
+        assert!(
+            Arc::ptr_eq(&a.original, &p.predecessor.pair),
+            "{label}: finalize takes this pair"
+        );
+        assert!(
+            owner.resumed_here(p, &parameters),
+            "{label}: resumed under its owner"
+        );
+        let receive = |q: &PreparedOperation| {
+            q.receive
+                .as_ref()
+                .map(|r| (r.can_credit, r.pair_bytes.clone(), r.verified.is_some()))
+        };
         assert_eq!(receive(p), receive(&cold), "{label}: Receive candidate");
-        assert_eq!(p.receipt_body, cold.receipt_body, "{label}: receipt template");
+        assert_eq!(
+            p.receipt_body, cold.receipt_body,
+            "{label}: receipt template"
+        );
     }
 }
 
@@ -246,26 +402,60 @@ fn reused_resume_keeps_hardware_consent() {
     let reused = engine.resume(&capsule, &parameters).unwrap();
     let restart = NativeEngine::default();
     let fresh = restart.resume(&capsule, &parameters).unwrap();
-    assert_eq!(decodes(&parameters), 3, "cold, stock and restart verify; the reused resume does not");
+    assert_eq!(
+        decodes(&parameters),
+        3,
+        "cold, stock and restart verify; the reused resume does not"
+    );
     let consent = |p: &PreparedOperation| {
         let accepted = HardwareAdvanceReceipt::verify_selected(p, body, signature).unwrap();
-        (accepted.operation_id, accepted.capsule_digest, accepted.receipt.body, accepted.receipt.signature)
+        (
+            accepted.operation_id,
+            accepted.capsule_digest,
+            accepted.receipt.body,
+            accepted.receipt.signature,
+        )
     };
-    let refusal = |p: &PreparedOperation| format!("{:?}", HardwareAdvanceReceipt::verify_selected(p, body, forged).err());
-    assert_eq!(consent(&reused), consent(&stock), "the signed receipt binds the reused preparation");
+    let refusal = |p: &PreparedOperation| {
+        format!(
+            "{:?}",
+            HardwareAdvanceReceipt::verify_selected(p, body, forged).err()
+        )
+    };
+    assert_eq!(
+        consent(&reused),
+        consent(&stock),
+        "the signed receipt binds the reused preparation"
+    );
     assert_eq!(consent(&fresh), consent(&stock), "and the restarted one");
-    assert!(refusal(&stock) != "None" && refusal(&reused) == refusal(&stock) && refusal(&fresh) == refusal(&stock));
+    assert!(
+        refusal(&stock) != "None"
+            && refusal(&reused) == refusal(&stock)
+            && refusal(&fresh) == refusal(&stock)
+    );
     let accepted = HardwareAdvanceReceipt::verify_selected(&stock, body, signature).unwrap();
     let tampered = HardwareAdvanceReceipt {
-        receipt: bootstrap::Receipt { body: accepted.receipt.body, signature: forged },
+        receipt: bootstrap::Receipt {
+            body: accepted.receipt.body,
+            signature: forged,
+        },
         operation_id: accepted.operation_id,
         capsule_digest: accepted.capsule_digest,
     };
     let start = std::time::Instant::now();
-    let refused_reused = format!("{:?}", engine.finalize(reused, &tampered, &parameters).err());
+    let refused_reused = format!(
+        "{:?}",
+        engine.finalize(reused, &tampered, &parameters).err()
+    );
     let refused_stock = format!("{:?}", engine.finalize(stock, &tampered, &parameters).err());
-    assert!(refused_reused != "None" && refused_reused == refused_stock, "{refused_reused} {refused_stock}");
-    assert!(start.elapsed() < std::time::Duration::from_secs(30), "refused before proving");
+    assert!(
+        refused_reused != "None" && refused_reused == refused_stock,
+        "{refused_reused} {refused_stock}"
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(30),
+        "refused before proving"
+    );
 }
 
 /// The public wallet path end to end on the reused preparation: finalize with
@@ -282,7 +472,16 @@ fn reused_resume_finalizes_with_the_signed_receipt() {
     engine.resume(&capsule, &parameters).map(drop).unwrap();
     let reused = engine.resume(&capsule, &parameters).unwrap();
     assert_eq!(decodes(&parameters), 1, "the second resume reused the head");
-    let receipt = HardwareAdvanceReceipt::verify_selected(&reused, &signed[..338], signed[338..].try_into().unwrap()).unwrap();
+    let receipt = HardwareAdvanceReceipt::verify_selected(
+        &reused,
+        &signed[..338],
+        signed[338..].try_into().unwrap(),
+    )
+    .unwrap();
     let completed = engine.finalize(reused, &receipt, &parameters).unwrap();
-    assert_eq!(completed.completion().exact_receipt(), signed, "the completion carries the signed receipt");
+    assert_eq!(
+        completed.completion().exact_receipt(),
+        signed,
+        "the completion carries the signed receipt"
+    );
 }

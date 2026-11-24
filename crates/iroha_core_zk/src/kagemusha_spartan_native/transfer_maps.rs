@@ -435,7 +435,6 @@ mod tests {
         );
     }
 
-
     /// Three pending-outgoing descriptors, each inserted from the previous root as Send does.
     const HISTORY: [(u8, u8); 3] = [(4, 40), (9, 90), (27, 70)];
 
@@ -532,7 +531,11 @@ mod tests {
                 let adjusted = maps.remove(Role::Pending, full, word(9)).unwrap();
                 assert_eq!(core, adjusted);
                 let (held, _) = maps.member_or_low(Role::Pending, full, word(9)).unwrap();
-                assert_eq!(held.value, word(90), "the selected source root is unchanged");
+                assert_eq!(
+                    held.value,
+                    word(90),
+                    "the selected source root is unchanged"
+                );
                 assert!(maps.failure.is_none());
                 Ok((core, maps.root))
             })
@@ -554,7 +557,11 @@ mod tests {
         assert_eq!(removed.predecessor.key, word(4));
         let mut tree = stock(&HISTORY);
         assert_eq!(tree.root(), full);
-        assert_eq!(tree.remove(&word(9)).unwrap(), removed, "stock indexed tree agrees");
+        assert_eq!(
+            tree.remove(&word(9)).unwrap(),
+            removed,
+            "stock indexed tree agrees"
+        );
         assert_eq!(tree.root(), after);
         // A retry after a lost draft derives the identical witness, index and objects.
         let ((retried, retried_index), again) = stage(&mut store);
@@ -566,7 +573,11 @@ mod tests {
         assert_eq!(names(&again[..]), names(&objects[..]));
         materialize(&mut store, objects);
         for (key, bytes) in &source {
-            assert_eq!(store.0.get(key), Some(bytes), "retained bytes are never rewritten");
+            assert_eq!(
+                store.0.get(key),
+                Some(bytes),
+                "retained bytes are never rewritten"
+            );
         }
         // Reopen the published index.
         let mut reopened = Maps {
@@ -574,7 +585,9 @@ mod tests {
             root: successor,
             failure: None,
         };
-        let (low, path) = reopened.member_or_low(Role::Pending, after, word(9)).unwrap();
+        let (low, path) = reopened
+            .member_or_low(Role::Pending, after, word(9))
+            .unwrap();
         assert_eq!((low.key, low.next_key), (word(4), word(27)));
         absent(&after, &word(9), &low, &path).unwrap();
         assert_eq!(
@@ -673,7 +686,11 @@ mod tests {
                 ),
             }
         }
-        eprintln!("removal reads {} of {} retained objects", read.len(), store.0.len());
+        eprintln!(
+            "removal reads {} of {} retained objects",
+            read.len(),
+            store.0.len()
+        );
     }
 
     #[test]
@@ -682,15 +699,23 @@ mod tests {
         let (roots, index) = pending_history(&mut store, &HISTORY);
         let source = roots[3];
         let ((plan, next_index), objects) = state::with_transfer_draft(&mut store, |draft| {
-            let mut maps = Maps { store: draft, root: index, failure: None };
+            let mut maps = Maps {
+                store: draft,
+                root: index,
+                failure: None,
+            };
             let plan = maps.remove(Role::Pending, source, word(9)).unwrap();
             Ok((plan, maps.root))
         })
         .unwrap();
         materialize(&mut store, objects);
         let after = plan.verify(&source, &word(9)).unwrap();
-        let address: [u8; 32] = next_index.get(&mut store, &key(Role::Pending, after))
-            .unwrap().unwrap().try_into().unwrap();
+        let address: [u8; 32] = next_index
+            .get(&mut store, &key(Role::Pending, after))
+            .unwrap()
+            .unwrap()
+            .try_into()
+            .unwrap();
         let (retried, failure, changed) =
             attempt(&mut store, next_index, Role::Pending, source, word(9));
         assert_eq!(retried.unwrap(), plan);
@@ -720,7 +745,9 @@ mod tests {
                 let removed = maps.remove(Role::Pending, roots[2], word(9)).unwrap();
                 let restored = maps.root;
                 // A later Send from the restored root opens its retained descriptor.
-                let plan = maps.insert(Role::Pending, roots[1], word(27), word(70)).unwrap();
+                let plan = maps
+                    .insert(Role::Pending, roots[1], word(27), word(70))
+                    .unwrap();
                 let inserted = plan.verify(&roots[1], &word(27), &word(70)).unwrap();
                 assert!(maps.failure.is_none());
                 Ok((removed, restored, (inserted, maps.root)))
@@ -750,8 +777,12 @@ mod tests {
         // Removing the only descriptor reaches the implicit empty root; nothing is retained.
         let mut single = Memory::default();
         let (roots, index) = pending_history(&mut single, &HISTORY[..1]);
-        let (result, failure, changed) = attempt(&mut single, index, Role::Pending, roots[1], word(4));
-        assert_eq!(result.unwrap().verify(&roots[1], &word(4)).unwrap(), roots[0]);
+        let (result, failure, changed) =
+            attempt(&mut single, index, Role::Pending, roots[1], word(4));
+        assert_eq!(
+            result.unwrap().verify(&roots[1], &word(4)).unwrap(),
+            roots[0]
+        );
         assert!(failure.is_none() && !changed);
     }
 
@@ -859,7 +890,10 @@ mod tests {
         })
         .unwrap();
         let full = roots[3];
-        assert_ne!(selected(&mut provider, &slot, parameters, wallet).0, expected);
+        assert_ne!(
+            selected(&mut provider, &slot, parameters, wallet).0,
+            expected
+        );
         drop(provider);
 
         // Cold reopen. Every refusal leaves every durable byte and the selection unchanged.
@@ -901,7 +935,10 @@ mod tests {
         });
         assert!(matches!(other, Err(ProviderError::Invalid { .. })));
         assert_eq!(snapshot(&root), source, "refused staging writes nothing");
-        assert_eq!(selected(&mut provider, &slot, parameters, wallet).0, expected);
+        assert_eq!(
+            selected(&mut provider, &slot, parameters, wallet).0,
+            expected
+        );
 
         // Staging: the committed and lineage-adjusted removals from the same retained root.
         let (expected, checkpoint) = selected(&mut provider, &slot, parameters, wallet);
@@ -914,13 +951,22 @@ mod tests {
         .unwrap();
         let after = removed.verify(&full, &word(9)).unwrap();
         let mut tree = stock(&HISTORY);
-        assert_eq!(tree.remove(&word(9)).unwrap(), removed, "stock indexed tree agrees");
+        assert_eq!(
+            tree.remove(&word(9)).unwrap(),
+            removed,
+            "stock indexed tree agrees"
+        );
         assert_eq!(tree.root(), after);
         let (published, _) = selected(&mut provider, &slot, parameters, wallet);
         assert_ne!(published, expected, "the successor descriptor is published");
         let staged = snapshot(&root);
         for (path, bytes) in source.iter().filter(|(path, _)| is_original(path)) {
-            assert_eq!(staged.get(path), Some(bytes), "{} unchanged", path.display());
+            assert_eq!(
+                staged.get(path),
+                Some(bytes),
+                "{} unchanged",
+                path.display()
+            );
         }
         let added = staged
             .keys()
@@ -935,7 +981,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(retried, removed);
-        assert_eq!(selected(&mut provider, &slot, parameters, wallet).0, published);
+        assert_eq!(
+            selected(&mut provider, &slot, parameters, wallet).0,
+            published
+        );
         assert_eq!(snapshot(&root), staged);
         drop(provider);
 
@@ -947,7 +996,10 @@ mod tests {
             let (low, path) = maps.member_or_low(Role::Pending, after, word(9))?;
             assert_eq!((low.key, low.next_key), (word(4), word(27)));
             absent(&after, &word(9), &low, &path).unwrap();
-            assert_eq!(maps.member_or_low(Role::Pending, full, word(9))?.0.value, word(90));
+            assert_eq!(
+                maps.member_or_low(Role::Pending, full, word(9))?.0.value,
+                word(90)
+            );
             let again = maps.remove(Role::Pending, after, word(9));
             assert!(
                 matches!(again, Err(native::Error::AuthorityMismatch(m)) if m == REMOVAL_ABSENT)
@@ -979,7 +1031,10 @@ mod tests {
                 deleted += 1;
             }
         }
-        assert_eq!(deleted, 2, "both durable copies of the successor descriptor");
+        assert_eq!(
+            deleted, 2,
+            "both durable copies of the successor descriptor"
+        );
         let damaged = snapshot(&root);
         let mut provider = reopen(&platform);
         let (expected, checkpoint) = selected(&mut provider, &slot, parameters, wallet);
@@ -990,13 +1045,18 @@ mod tests {
             matches!(lost, Err(ProviderError::UnavailableCustodyData { .. })),
             "{lost:?}"
         );
-        assert_eq!(snapshot(&root), damaged, "a lost-custody refusal writes nothing");
+        assert_eq!(
+            snapshot(&root),
+            damaged,
+            "a lost-custody refusal writes nothing"
+        );
         // The source root reads only its own retained objects.
         let (expected, checkpoint) = selected(&mut provider, &slot, parameters, wallet);
-        let source_again = stage_transfer_maps(&mut provider, &slot, expected, checkpoint, |maps| {
-            maps.remove(Role::Pending, full, word(9))
-        })
-        .unwrap();
+        let source_again =
+            stage_transfer_maps(&mut provider, &slot, expected, checkpoint, |maps| {
+                maps.remove(Role::Pending, full, word(9))
+            })
+            .unwrap();
         assert_eq!(source_again, removed);
     }
 
@@ -1057,7 +1117,8 @@ mod tests {
 
         // The public fixture scheme (root secret 0x11.., relation 0x33..). Installation
         // authenticates it against the signed bundle; a different scheme cannot install.
-        let chain = NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
+        let chain =
+            NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
         let root_key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
         let scheme = KagemushaWalletSchemeV1 {
             version: 1,
@@ -1076,7 +1137,9 @@ mod tests {
         let parameters = AuthenticatedParameters::install(
             &read(bundle.join("program-bundle.norito")),
             &read(bundle.join("parameter-manifest.norito")),
-            read(bundle.join("parameter-signature.bin")).try_into().unwrap(),
+            read(bundle.join("parameter-signature.bin"))
+                .try_into()
+                .unwrap(),
             &scheme,
             finality,
         )
@@ -1181,8 +1244,12 @@ mod tests {
         assert_eq!(receive.capsule().wallet(), &wallet);
         eprintln!(
             "retained head {:?}, Receive capsule {}",
-            marker.head().map(|(sequence, _, capsule)| (sequence, hex::encode(capsule))),
-            hex::encode(RecoveryCapsule::frame_digest(&receive_frame.encode().unwrap()))
+            marker
+                .head()
+                .map(|(sequence, _, capsule)| (sequence, hex::encode(capsule))),
+            hex::encode(RecoveryCapsule::frame_digest(
+                &receive_frame.encode().unwrap()
+            ))
         );
         // The exact Send originals are this custody's own retained Send.
         let Lookup::Retained(row) = provider
@@ -1191,7 +1258,10 @@ mod tests {
         else {
             panic!("missing real input: the custody no longer retains the Send completion");
         };
-        assert_eq!(row.capsule_digest, RecoveryCapsule::frame_digest(send_capsule));
+        assert_eq!(
+            row.capsule_digest,
+            RecoveryCapsule::frame_digest(send_capsule)
+        );
         assert_eq!(&row.frame, send_completion);
         let manifest = *parameters.manifest_digest();
 
@@ -1199,9 +1269,13 @@ mod tests {
         let (expected, checkpoint) = selected(&mut provider, &slot, manifest, wallet);
         let retained = stage_transfer_maps(&mut provider, &slot, expected, checkpoint, |maps| {
             let refused = maps.remove(Role::Credit, pending, credit);
-            assert!(matches!(refused, Err(native::Error::AuthorityMismatch(m)) if m == REMOVAL_ROLE));
+            assert!(
+                matches!(refused, Err(native::Error::AuthorityMismatch(m)) if m == REMOVAL_ROLE)
+            );
             let refused = maps.remove(Role::Pending, empty, credit);
-            assert!(matches!(refused, Err(native::Error::AuthorityMismatch(m)) if m == REMOVAL_ABSENT));
+            assert!(
+                matches!(refused, Err(native::Error::AuthorityMismatch(m)) if m == REMOVAL_ABSENT)
+            );
             maps.member_or_low(Role::Pending, pending, credit)
         });
         match &retained {
@@ -1220,10 +1294,11 @@ mod tests {
                 );
                 // Seed only the scratch copy through the Send's own production insertion.
                 let (expected, checkpoint) = selected(&mut provider, &slot, manifest, wallet);
-                let plan = stage_transfer_maps(&mut provider, &slot, expected, checkpoint, |maps| {
-                    maps.insert(Role::Pending, empty, credit, descriptor)
-                })
-                .unwrap();
+                let plan =
+                    stage_transfer_maps(&mut provider, &slot, expected, checkpoint, |maps| {
+                        maps.insert(Role::Pending, empty, credit, descriptor)
+                    })
+                    .unwrap();
                 assert_eq!(plan.verify(&empty, &credit, &descriptor).unwrap(), pending);
                 eprintln!("seeded the scratch copy with the Send's pending insertion");
             }
@@ -1272,10 +1347,16 @@ mod tests {
         else {
             panic!("ArchiveSent witness");
         };
-        assert_eq!(step.core_removal, stock_removal, "stock indexed tree agrees");
+        assert_eq!(
+            step.core_removal, stock_removal,
+            "stock indexed tree agrees"
+        );
         assert_eq!(step.adjusted_removal, stock_removal);
         assert_eq!(step.core_removal.verify(&pending, &credit).unwrap(), empty);
-        assert_eq!(step.core_removal.leaf.value, descriptor, "the exact Send descriptor");
+        assert_eq!(
+            step.core_removal.leaf.value, descriptor,
+            "the exact Send descriptor"
+        );
         assert_eq!(&kept_capsule[..], &send_capsule[..]);
         assert_eq!(&kept_completion[..], &send_completion[..]);
         assert_eq!(&kept_open[..], &open_request[..]);
@@ -1324,7 +1405,10 @@ mod tests {
         assert_eq!(again.receipt.body[114..146], step.receipt.body[114..146]);
         assert_eq!(again.statement[14], step.statement[14]);
         assert_eq!(again.statement[17..19], step.statement[17..19]);
-        assert_ne!(again.after_core[29], step.after_core[29], "a fresh state nonce");
+        assert_ne!(
+            again.after_core[29], step.after_core[29],
+            "a fresh state nonce"
+        );
         assert_eq!(snapshot(&custody), source);
         eprintln!(
             "ArchiveSent operation {} credit {}",

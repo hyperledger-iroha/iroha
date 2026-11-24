@@ -253,9 +253,15 @@ pub(crate) fn validate_snapshot(world: &impl WorldReadOnly) -> Result<()> {
         let registration: Registration = super::storage::decode(bytes, bytes.len())?;
         registration.require(scheme, &installation.asset)?;
         let manifest = AuthenticatedParameters::governed_manifest(
-            &installation.manifest, &installation.signature, &installation.manifest_digest, &registration.scheme,
-        ).map_err(native_error)?;
-        manifest.verify_program_originals(&installation.programs).map_err(native_error)?;
+            &installation.manifest,
+            &installation.signature,
+            &installation.manifest_digest,
+            &registration.scheme,
+        )
+        .map_err(native_error)?;
+        manifest
+            .verify_program_originals(&installation.programs)
+            .map_err(native_error)?;
     }
     Ok(())
 }
@@ -361,8 +367,12 @@ fn mounted(
     original_bounds(installation)?;
     let pin = installation.manifest_digest;
     let manifest = AuthenticatedParameters::governed_manifest(
-        &installation.manifest, &installation.signature, &pin, &registration.scheme,
-    ).map_err(native_error)?;
+        &installation.manifest,
+        &installation.signature,
+        &pin,
+        &registration.scheme,
+    )
+    .map_err(native_error)?;
     let (network, chain) = manifest.finality_identity();
     if chain != state.chain_id().as_str() || network != state.network_id().to_string() {
         return Err(Error::Binding);

@@ -135,12 +135,21 @@ pub fn common_requirements(requirements: &[Requirements]) -> Layout {
 /// field limit. A wallet's omitted row is outside that field count. Constant
 /// blocks retain their alignment and every genuine fixed row must fit.
 pub fn common_export_layout(
-    requirements: &[Requirements], max_ordinary_fixed_rows: usize,
+    requirements: &[Requirements],
+    max_ordinary_fixed_rows: usize,
 ) -> Result<Layout, &'static str> {
     let mut layout = common_requirements(requirements);
     let wallet = requirements[0].wallet_rows;
-    let alignment = requirements.iter().map(|r| r.fixed_alignment).max().unwrap();
-    let natural = requirements.iter().map(|r| r.layout.fixed - wallet).max().unwrap();
+    let alignment = requirements
+        .iter()
+        .map(|r| r.fixed_alignment)
+        .max()
+        .unwrap();
+    let natural = requirements
+        .iter()
+        .map(|r| r.layout.fixed - wallet)
+        .max()
+        .unwrap();
     let minimum = natural.div_ceil(alignment) * alignment;
     let permitted = max_ordinary_fixed_rows / alignment * alignment;
     if minimum > permitted {
@@ -185,7 +194,12 @@ mod tests {
         let ordinary = req(12, 1, 6, 9, 2);
         let largest = req(12, 1, 6, 17, 2);
         assert!(common_requirements(&[ordinary, largest]).fixed > 17);
-        assert_eq!(common_export_layout(&[ordinary, largest], 16).unwrap().fixed, 17);
+        assert_eq!(
+            common_export_layout(&[ordinary, largest], 16)
+                .unwrap()
+                .fixed,
+            17
+        );
         assert!(common_export_layout(&[ordinary, largest], 15).is_err());
     }
 

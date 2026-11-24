@@ -126,7 +126,9 @@ impl<F: Scalar> FixedValues<F> {
                 let end = row.iter().rposition(|value| *value != F::ZERO);
                 end.map_or_else(Vec::new, |at| row[..=at].to_vec())
             }
-            Self::Runs { spans, literals, .. } => {
+            Self::Runs {
+                spans, literals, ..
+            } => {
                 let first = spans.partition_point(|s| s.start + s.len <= range.start);
                 let past = spans.partition_point(|s| s.start < range.end);
                 let Some(last) = spans[first..past].last() else {

@@ -43,7 +43,10 @@ use std::cell::RefCell;
 
 type ReceiverReceipt = super::super::receiver_signature::ReceiverReceipt;
 
-use crate::native::engine::transfers::archive_sent::relation::{Projection,Composed,ORIGINALS_IO,FORM,SUBJECT,OPEN,COMPLETED,EXACT,STATEMENT_DIGEST,PAIR_DIGEST,PROFILE_DIGEST,P_IO,S_IO};
+use crate::native::engine::transfers::archive_sent::relation::{
+    COMPLETED, Composed, EXACT, FORM, OPEN, ORIGINALS_IO, P_IO, PAIR_DIGEST, PROFILE_DIGEST,
+    Projection, S_IO, STATEMENT_DIGEST, SUBJECT,
+};
 
 type BuiltS = (UniformCircuit<Fq>, Instance<Fq>, Witness<Fq>);
 
@@ -222,8 +225,21 @@ fn primary_with_projection(
     receiver: &ReceiverReceipt,
     wallet_projection: bool,
 ) -> Lambda {
-    let projection = if wallet_projection { Projection::Wallet } else { Projection::Diagnostics };
-    primary_at(payer, &params.inner.generators, slots, folds, case, receiver, projection, None)
+    let projection = if wallet_projection {
+        Projection::Wallet
+    } else {
+        Projection::Diagnostics
+    };
+    primary_at(
+        payer,
+        &params.inner.generators,
+        slots,
+        folds,
+        case,
+        receiver,
+        projection,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -438,7 +454,10 @@ fn public_fields(payer: &Inputs<'_>, case: &Case, status: [u8; 32]) -> [Fp; 26] 
 /// Each fresh compiler Receive signs the exact Payment of its originating
 /// Send. Its digest is also an operand of the resulting payer statement.
 fn public_payment_fields(
-    payer: &Inputs<'_>, case: &Case, payment: Fp, status: [u8; 32],
+    payer: &Inputs<'_>,
+    case: &Case,
+    payment: Fp,
+    status: [u8; 32],
 ) -> [Fp; 26] {
     use crate::native::engine::transfers::archive_sent::{archive_statement, credited_digest};
     let credit = payer.delivery.payment().statement()[17];
@@ -1530,10 +1549,10 @@ fn native_archive_builder_matches_compiler_for_both_receiver_forms() {
 
 #[path = "archive_program_compiler.rs"]
 mod compiler;
-#[path = "archive_compiler_receiver.rs"]
-mod compiler_receiver;
 #[path = "archive_compiler_predecessors.rs"]
 mod compiler_predecessors;
+#[path = "archive_compiler_receiver.rs"]
+mod compiler_receiver;
 
 #[path = "archive_compiler_history.rs"]
 mod compiler_history;

@@ -1802,9 +1802,16 @@ mod tests {
         fn holds<S: Scalar>(set: KindSet, installed: usize, bits: [u64; 3]) -> bool {
             let stride = kind_stride(installed);
             let words: Vec<_> = (0..stride).map(|b| own(b, 1)).collect();
-            let mut rows: Vec<_> = words.iter().map(|word| {
-                [word.clone(), plus(&constant(vec![S::ONE]), &scaled(word, -S::ONE)), Vec::new()]
-            }).collect();
+            let mut rows: Vec<_> = words
+                .iter()
+                .map(|word| {
+                    [
+                        word.clone(),
+                        plus(&constant(vec![S::ONE]), &scaled(word, -S::ONE)),
+                        Vec::new(),
+                    ]
+                })
+                .collect();
             set.append_domain_rows(&mut rows, installed, &words);
             let mut w = Wiring::default();
             let family = w.family(0, 1);
@@ -1821,12 +1828,21 @@ mod tests {
             });
             let (arrays, pi, counts, tables, copies) = w.finish();
             let (circuit, instance, witness) = UniformCircuit::build_with_copies(
-                "receiver kind subset", arrays, pi, counts, tables, copies, 10, 16,
+                "receiver kind subset",
+                arrays,
+                pi,
+                counts,
+                tables,
+                copies,
+                10,
+                16,
                 b"archive receiver kind subset",
             );
             let mut values = witness.w;
             let relation = circuit.instantiate(
-                &circuit.shape, &[S::from(31), S::from(47)], Some(&mut values),
+                &circuit.shape,
+                &[S::from(31), S::from(47)],
+                Some(&mut values),
             );
             let z = crate::r1cs::z_vector(&circuit.shape, &instance, &Witness { w: values });
             let (a, b, c) = relation.abc(&circuit.shape, &z);
@@ -1841,8 +1857,16 @@ mod tests {
                         KindSet::ReceiveOrSend => corner < 2,
                         KindSet::Fixed => unreachable!(),
                     };
-                    assert_eq!(holds::<Fp>(set, installed, bits), admitted, "{set:?} {bits:?}");
-                    assert_eq!(holds::<Fq>(set, installed, bits), admitted, "{set:?} {bits:?}");
+                    assert_eq!(
+                        holds::<Fp>(set, installed, bits),
+                        admitted,
+                        "{set:?} {bits:?}"
+                    );
+                    assert_eq!(
+                        holds::<Fq>(set, installed, bits),
+                        admitted,
+                        "{set:?} {bits:?}"
+                    );
                 }
             }
         }
@@ -2124,8 +2148,12 @@ mod tests {
         let gfam = w.family(0, 1);
         let shared = p_binding(&mut w, gfam, &binding_mu(&values), &values);
         let a = &w.arrays[shared];
-        let range = w.tables.iter().find(|(_, id)| *id == nonnative::RANGE_TABLE)
-            .expect("fixed range table").0;
+        let range = w
+            .tables
+            .iter()
+            .find(|(_, id)| *id == nonnative::RANGE_TABLE)
+            .expect("fixed range table")
+            .0;
         let table = &w.arrays[range];
         assert!(table.fixed && !w.link.arrays.contains(&shared));
         assert_eq!(
@@ -2137,14 +2165,16 @@ mod tests {
         // Width declarations alone cannot reject an out-of-range field element.
         let check = |r: usize, cells: &[Fp]| {
             let eval = |lin: &Lin<Fp>| -> Fp {
-                lin.iter().map(|term| {
-                    let cell = match &term.src {
-                        Src::One => Fp::ONE,
-                        Src::Own(k) => cells[*k],
-                        src => panic!("unexpected shared-limb source {src:?}"),
-                    };
-                    cell * term.coef[r]
-                }).sum()
+                lin.iter()
+                    .map(|term| {
+                        let cell = match &term.src {
+                            Src::One => Fp::ONE,
+                            Src::Own(k) => cells[*k],
+                            src => panic!("unexpected shared-limb source {src:?}"),
+                        };
+                        cell * term.coef[r]
+                    })
+                    .sum()
             };
             let recomposes = a.rows.iter().all(|[x, y, z]| eval(x) * eval(y) == eval(z));
             let in_table = a.lookups.iter().all(|(id, tuple)| {
@@ -2176,7 +2206,9 @@ mod tests {
         let gfam = s.family(0, 1);
         let shared_s = native_binding(&mut s, gfam, Fq::ONE, &values);
         let (ends, _) = s.link.binding.as_ref().unwrap();
-        let [(acc, 0, last)] = ends.as_slice() else { panic!("S binding endpoint") };
+        let [(acc, 0, last)] = ends.as_slice() else {
+            panic!("S binding endpoint")
+        };
         assert_eq!(*last, values.len() - 1);
         assert!(s.link.arrays.contains(acc) && !s.link.arrays.contains(&shared_s));
         let step = &s.arrays[*acc].rows[0][2];
@@ -2869,13 +2901,15 @@ where
     } else {
         for s in 0..mo {
             for v in 0..slots[s].k {
-                tau_feed[x_of(s)][shape.k - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+                tau_feed[x_of(s)][shape.k - slots[s].k + v] =
+                    Some(Feed::Raw(shared_at[take(Kind::Raw)]));
             }
         }
     }
     for s in 0..mo {
         for v in 0..if lean { 1 } else { slots[s].k } {
-            slot_feed[x_of(s)][shape.k - slots[s].k + v] = Some(Feed::Raw(shared_at[take(Kind::Raw)]));
+            slot_feed[x_of(s)][shape.k - slots[s].k + v] =
+                Some(Feed::Raw(shared_at[take(Kind::Raw)]));
         }
     }
     for k in 0..if lean { 1 } else { 3 } {
@@ -3362,7 +3396,11 @@ fn kind_values(kinds: &[SlotKind], installed: usize) -> Vec<u128> {
 
 /// Shared kind words per pair: c0 and c1, and c2 with five installed kinds.
 pub(crate) fn kind_stride(installed: usize) -> usize {
-    if installed == crate::deferral::MAX_KINDS { 3 } else { 2 }
+    if installed == crate::deferral::MAX_KINDS {
+        3
+    } else {
+        2
+    }
 }
 
 /// The circuit's own kind as public io, its two selector bits at `KIND_IO`
@@ -3874,7 +3912,13 @@ pub fn next_gens_with_archive_at(
 ) -> PairGens {
     assert_eq!(archive.kind, ARCHIVE_SENT, "pair of kind ArchiveSent");
     next_gens_with_archive_programs_at(
-        recv, send, boot, control, &archive.cp, &archive.cs, dimensions,
+        recv,
+        send,
+        boot,
+        control,
+        &archive.cp,
+        &archive.cs,
+        dimensions,
     )
 }
 
@@ -3890,8 +3934,10 @@ pub(crate) fn next_gens_with_archive_programs_at(
     dimensions: ((usize, usize), (usize, usize)),
 ) -> PairGens {
     for (kind, p, s) in [
-        (SEND, &send.cp, &send.cs), (BOOTSTRAP, &boot.cp, &boot.cs),
-        (CONTROL, &control.cp, &control.cs), (ARCHIVE_SENT, archive_p, archive_s),
+        (SEND, &send.cp, &send.cs),
+        (BOOTSTRAP, &boot.cp, &boot.cs),
+        (CONTROL, &control.cp, &control.cs),
+        (ARCHIVE_SENT, archive_p, archive_s),
     ] {
         assert!(
             p.layout() == recv.cp.layout()
@@ -3911,14 +3957,25 @@ pub(crate) fn next_gens_with_archive_programs_at(
     gens.defer_p = crate::deferral::MatPoly::with_min_vec(p_kinds, dp.0, dp.1);
     gens.defer_s = crate::deferral::MatPoly::with_min_vec(s_kinds, ds.0, ds.1);
     assert_eq!(
-        (gens.defer_p.x, gens.defer_p.y, gens.defer_s.x, gens.defer_s.y),
+        (
+            gens.defer_p.x,
+            gens.defer_p.y,
+            gens.defer_s.x,
+            gens.defer_s.y
+        ),
         (dp.0, dp.1, ds.0, ds.1),
         "ArchiveSent has the accumulators' dimensions"
     );
     let key_p = crate::spartan::fixed_commitments(&archive_p.shape, &gens.p, archive_p.as_ref());
     let key_s = crate::spartan::fixed_commitments(&archive_s.shape, &gens.s, archive_s.as_ref());
-    gens.keys_p.as_mut().expect("the four kinds' keys").push(key_p);
-    gens.keys_s.as_mut().expect("the four kinds' keys").push(key_s);
+    gens.keys_p
+        .as_mut()
+        .expect("the four kinds' keys")
+        .push(key_p);
+    gens.keys_s
+        .as_mut()
+        .expect("the four kinds' keys")
+        .push(key_s);
     gens
 }
 
@@ -4400,9 +4457,7 @@ fn p_circuit_impl(
 ) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
     use crate::points::{PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
-    let archive = operation
-        .as_ref()
-        .is_some_and(OperationWitness::is_archive);
+    let archive = operation.as_ref().is_some_and(OperationWitness::is_archive);
     let total_incoming = archive || matches!(&operation, Some(OperationWitness::Receive(_)));
     let mode = match &operation {
         Some(OperationWitness::Control { witness, .. }) => Some(witness.mode),
@@ -4756,44 +4811,43 @@ fn p_circuit_impl(
     };
     let monetary = if let Some(operation) = operation {
         let predecessor = VerifiedPredecessor::from_verified_slot(&w, scalars[0].io);
-        let complete = match operation {
-            OperationWitness::Send(witness) => Some(CompleteOperation::Send(crate::send::append(
-                &mut w,
-                gfam,
-                witness,
-                &predecessor,
-            )?)),
-            OperationWitness::Control { root, witness } => Some(CompleteOperation::Control(
-                crate::control::append(&mut w, gfam, root, witness, &predecessor)?,
-            )),
-            OperationWitness::Receive(witness) => {
-                Some(CompleteOperation::Receive(crate::receive::append(
-                    &mut w,
-                    gfam,
-                    witness,
-                    &predecessor,
-                    &incoming.as_ref().expect("total incoming owner").0,
-                )?))
-            }
-            // The receiver verdict, kind, profile digest and corrections come only from
-            // this circuit's total verifier; the relation exposes its own successor profile.
-            OperationWitness::ArchiveSent(relation) => {
-                let (facts, exact_pair_bytes) = incoming.as_ref().expect("total incoming owner");
-                let corrections = correction_conjunction(&mut w, gfam, shared, verdict_at);
-                relation.append(
-                    &mut w,
-                    gfam,
-                    &predecessor,
-                    &ArchiveIncoming {
-                        facts,
-                        exact_pair_bytes,
-                        io_digest: incoming_io_digest.expect("receiver profile digest"),
-                        corrections,
-                    },
-                )?;
-                None
-            }
-        };
+        let complete =
+            match operation {
+                OperationWitness::Send(witness) => Some(CompleteOperation::Send(
+                    crate::send::append(&mut w, gfam, witness, &predecessor)?,
+                )),
+                OperationWitness::Control { root, witness } => Some(CompleteOperation::Control(
+                    crate::control::append(&mut w, gfam, root, witness, &predecessor)?,
+                )),
+                OperationWitness::Receive(witness) => {
+                    Some(CompleteOperation::Receive(crate::receive::append(
+                        &mut w,
+                        gfam,
+                        witness,
+                        &predecessor,
+                        &incoming.as_ref().expect("total incoming owner").0,
+                    )?))
+                }
+                // The receiver verdict, kind, profile digest and corrections come only from
+                // this circuit's total verifier; the relation exposes its own successor profile.
+                OperationWitness::ArchiveSent(relation) => {
+                    let (facts, exact_pair_bytes) =
+                        incoming.as_ref().expect("total incoming owner");
+                    let corrections = correction_conjunction(&mut w, gfam, shared, verdict_at);
+                    relation.append(
+                        &mut w,
+                        gfam,
+                        &predecessor,
+                        &ArchiveIncoming {
+                            facts,
+                            exact_pair_bytes,
+                            io_digest: incoming_io_digest.expect("receiver profile digest"),
+                            corrections,
+                        },
+                    )?;
+                    None
+                }
+            };
         if let Some(complete) = &complete {
             expose_operation(
                 &mut w,
@@ -5493,8 +5547,12 @@ where
         if s == i {
             let corner = deferral::kind_corner(installed, kind).expect("an installed kind");
             for (b, kb) in corner[..stride].iter().copied().enumerate() {
-                let shared_bit =
-                    link(kind_shared.0, 0, vec![Some(kind_shared.1 + stride * i + b)], one);
+                let shared_bit = link(
+                    kind_shared.0,
+                    0,
+                    vec![Some(kind_shared.1 + stride * i + b)],
+                    one,
+                );
                 let bit = if from_io {
                     bit_io(b)
                 } else {
@@ -6170,7 +6228,9 @@ fn s_circuit_impl(
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fq::ZERO]]);
     let mut pool = Pool::new(Fq::from(NODE_DOMAIN));
     let installed = gens.defer_s.kinds.len();
-    if let Some(kind) = own_kind.or((installed == crate::deferral::MAX_KINDS).then_some(ARCHIVE_SENT)) {
+    if let Some(kind) =
+        own_kind.or((installed == crate::deferral::MAX_KINDS).then_some(ARCHIVE_SENT))
+    {
         kind_pin_in(&mut w, gfam, installed, kind);
     }
     let (mut values, offsets) = binding_values(pairs);

@@ -207,11 +207,7 @@ pub(crate) struct CtPlan {
 /// Four-bit digits range from -8 through 8. Narrower unsigned digits
 /// retain their original tables and public window schedule.
 const fn table_entries(window: usize) -> usize {
-    if window == 4 {
-        9
-    } else {
-        1 << window
-    }
+    if window == 4 { 9 } else { 1 << window }
 }
 
 /// Heap scratch of one claiming loop: a chunk's tables and canonical limbs,
@@ -360,7 +356,8 @@ fn run_plan<C: PastaCurve>(
     let chunks = n.div_ceil(plan.chunk);
     let next = AtomicUsize::new(0);
     let claim = || -> Result<Zeroizing<Vec<C>>, Cancelled> {
-        let mut tables = Zeroizing::new(vec![C::identity(); plan.chunk * table_entries(plan.window)]);
+        let mut tables =
+            Zeroizing::new(vec![C::identity(); plan.chunk * table_entries(plan.window)]);
         let mut limbs = Zeroizing::new(vec![[0_u64; 4]; plan.chunk]);
         let mut partial = Zeroizing::new(vec![C::identity(); columns.len()]);
         loop {
@@ -484,10 +481,7 @@ fn add_chunk<C: PastaCurve>(
         }
         let windows = (bits + usize::from(signed)).div_ceil(window);
         CancellationToken::checkpoint(cancellation)?;
-        for (limb, scalar) in limbs
-            .iter_mut()
-            .zip(&scalars[start..start + bases.len()])
-        {
+        for (limb, scalar) in limbs.iter_mut().zip(&scalars[start..start + bases.len()]) {
             *limb = PastaField::to_canonical_limbs(scalar);
         }
         let mut column = Zeroizing::new(C::identity());

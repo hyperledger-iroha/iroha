@@ -141,7 +141,10 @@ impl Arithmetic {
             // With no outgoing carry on the top limb, x + difference = m - 1.
             self.c.eq(lhs, rhs);
         }
-        N { value: v, limbs: cells }
+        N {
+            value: v,
+            limbs: cells,
+        }
     }
     fn check(&mut self, a: &N, b: &N, lin: Vec<(i64, N)>, constant: i64, modulus: usize) {
         self.checks.push(Check {

@@ -263,7 +263,9 @@ fn seed_secondary(gens: &PairGens, kind: usize) -> Wiring<Fq> {
 }
 
 fn seed_secondary_with_claim(
-    gens: &PairGens, kind: usize, claim: Option<&crate::ipa::Claim<Ep>>,
+    gens: &PairGens,
+    kind: usize,
+    claim: Option<&crate::ipa::Claim<Ep>>,
 ) -> Wiring<Fq> {
     let mut w = Wiring::default();
     let f = w.family(0, 1);
@@ -373,7 +375,11 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
 }
 
 fn finish_seed(
-    mut w: Wiring<Fp>, f: usize, gens: &PairGens, complete: CompleteOperation, kind: usize,
+    mut w: Wiring<Fp>,
+    f: usize,
+    gens: &PairGens,
+    complete: CompleteOperation,
+    kind: usize,
     claim: Option<&crate::ipa::Claim<Eq>>,
 ) -> Wiring<Fp> {
     kind_pin_in(&mut w, f, gens.defer_p.kinds.len(), kind);
@@ -527,7 +533,10 @@ fn layouts(
     previous: Option<&Generation>,
 ) -> (Layout, Layout) {
     let (p, s) = ordinary_requirements(config, chain, gens, previous);
-    (bootstrap_layout::common_requirements(&p), bootstrap_layout::common_requirements(&s))
+    (
+        bootstrap_layout::common_requirements(&p),
+        bootstrap_layout::common_requirements(&s),
+    )
 }
 
 fn ordinary_requirements(
@@ -552,7 +561,7 @@ fn ordinary_requirements(
         let (c, _, _) = build(config, secondary(gens, plan.as_ref(), step), false, None);
         s.push(Requirements::of(&c));
     }
-    (p,s)
+    (p, s)
 }
 
 /// A completed proof needs only its public verifier program. Dropping the
@@ -689,8 +698,12 @@ fn generation(
 }
 
 fn generation_at(
-    config: &RunConfig, chain: &Chain, gens: &PairGens, previous: Option<&Generation>,
-    generation: usize, layout: (Layout,Layout),
+    config: &RunConfig,
+    chain: &Chain,
+    gens: &PairGens,
+    previous: Option<&Generation>,
+    generation: usize,
+    layout: (Layout, Layout),
 ) -> Generation {
     eprintln!(
         "full backend generation {generation}: P {:#?}, S {:#?}",
@@ -1071,7 +1084,6 @@ fn compile_wallet_program_bundle() {
     run_recursive_chain(ChainRun::Compile);
 }
 
-
 /// Construct the ordinary monetary seed predecessors with the proposed three-coordinate
 /// selector and both complete folded claims. The recursive compiler consumes these
 /// private sizing witnesses on its first iteration. It cannot publish any seed tape.
@@ -1092,8 +1104,14 @@ fn build_five_kind_monetary_seed_predecessors() {
         }
         assert_eq!(p.cp.wallet_io(), Some(TABLE_IO));
         assert_eq!(p.cs.wallet_io(), None);
-        assert!(p.cp.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_p.n()+1).collect::<Vec<_>>()));
-        assert!(p.cs.late_slots().starts_with(&(LATE_IO..LATE_IO+gens.defer_s.n()+1).collect::<Vec<_>>()));
+        assert!(
+            p.cp.late_slots()
+                .starts_with(&(LATE_IO..LATE_IO + gens.defer_p.n() + 1).collect::<Vec<_>>())
+        );
+        assert!(
+            p.cs.late_slots()
+                .starts_with(&(LATE_IO..LATE_IO + gens.defer_s.n() + 1).collect::<Vec<_>>())
+        );
         let traced = trace_uniform(p.clone(), &gens);
         assert_eq!(traced.acc_p, gens.defer_p.empty_claim());
         assert_eq!(traced.acc_s, gens.defer_s.empty_claim());
@@ -1175,8 +1193,16 @@ fn run_recursive_chain(mode: ChainRun) {
                 hop - 1
             );
             if let Some((primary, secondary)) = crate::native::built_in_producer_programs() {
-                assert_eq!(after.map(|pair| pair[0]), primary, "published primary producer pins");
-                assert_eq!(after.map(|pair| pair[1]), secondary, "published secondary producer pins");
+                assert_eq!(
+                    after.map(|pair| pair[0]),
+                    primary,
+                    "published primary producer pins"
+                );
+                assert_eq!(
+                    after.map(|pair| pair[1]),
+                    secondary,
+                    "published secondary producer pins"
+                );
             }
             if matches!(mode, ChainRun::Compile) {
                 let bundle = crate::native::ProgramBundle {
@@ -1782,7 +1808,14 @@ fn archive_seed_primary(generators: &PairGens, seed: ArchiveTransferSeed<'_>) ->
         ),
         _ => panic!("compiler transfer seeds are signed Send and Receive originals"),
     };
-    finish_seed(wiring, family, generators, complete, kind, Some(&primary_opening))
+    finish_seed(
+        wiring,
+        family,
+        generators,
+        complete,
+        kind,
+        Some(&primary_opening),
+    )
 }
 
 pub(crate) fn archive_seed_transfer(
@@ -1926,16 +1959,16 @@ impl Generation {
             (Step::Load, None),
         ] {
             let secondary = seed_secondary_with_claim(
-                &empty, step.kind(), exact.as_ref().map(|seed| &seed.secondary_opening),
+                &empty,
+                step.kind(),
+                exact.as_ref().map(|seed| &seed.secondary_opening),
             );
             let wire = match exact {
                 Some(seed) => archive_seed_primary(&empty, seed),
                 None => seed_primary(chain, &empty, step),
             };
             p.push(Requirements::of(&build(&config, wire, true, None).0));
-            s.push(Requirements::of(
-                &build(&config, secondary, false, None).0,
-            ));
+            s.push(Requirements::of(&build(&config, secondary, false, None).0));
         }
         (p, s)
     }

@@ -22,7 +22,11 @@ fn project(kind: usize, bits: [Fp; 2]) -> std::result::Result<carrier::Projected
 }
 
 fn words(io: &[Fp]) -> [Fp; 3] {
-    [io[full::KIND_IO], io[full::KIND_IO + 1], io[full::KIND_C2_IO]]
+    [
+        io[full::KIND_IO],
+        io[full::KIND_IO + 1],
+        io[full::KIND_C2_IO],
+    ]
 }
 
 #[test]
@@ -44,13 +48,22 @@ fn archive_sent_projection_and_mode_name_only_its_own_corner() {
         [Fq::ZERO, Fq::ZERO]
     );
     assert_eq!(archive.secondary().io[full::KIND_C2_IO], Fq::ONE);
-    assert_eq!(io[crate::control::MODE_IO..crate::control::MODE_IO + 2], zero);
+    assert_eq!(
+        io[crate::control::MODE_IO..crate::control::MODE_IO + 2],
+        zero
+    );
     assert_eq!(corner_kind(5, words(&io)), Ok(full::ARCHIVE_SENT));
     // Uninstalled under the signed four-kind generation.
     assert_eq!(corner_kind(4, words(&io)), Err(SelectorError::Uninstalled));
-    assert_eq!(kind_corner(4, full::ARCHIVE_SENT), Err(SelectorError::Uninstalled));
+    assert_eq!(
+        kind_corner(4, full::ARCHIVE_SENT),
+        Err(SelectorError::Uninstalled)
+    );
     // No ordinary mode word selects ArchiveSent, and it has no mode.
-    assert_eq!(crate::control::Mode::for_program(full::ARCHIVE_SENT, zero), Ok(None));
+    assert_eq!(
+        crate::control::Mode::for_program(full::ARCHIVE_SENT, zero),
+        Ok(None)
+    );
     for bits in [[Fp::ONE, Fp::ZERO], [Fp::ZERO, Fp::ONE], [Fp::ONE, Fp::ONE]] {
         assert!(project(full::ARCHIVE_SENT, bits).is_err());
         assert!(crate::control::Mode::for_program(full::ARCHIVE_SENT, bits).is_err());
@@ -82,16 +95,32 @@ fn archive_sent_cannot_fold_into_an_existing_program_mode() {
         .into_iter()
         .filter(|&(u, r)| Mode::for_program(full::CONTROL, words(u, r)).is_ok())
         .collect();
-    assert_eq!(admitted, vec![(0, 0), (0, 1), (1, 0)], "Control's mode space is full");
+    assert_eq!(
+        admitted,
+        vec![(0, 0), (0, 1), (1, 0)],
+        "Control's mode space is full"
+    );
     for mode in [Mode::Load, Mode::RefreshTimeAnchor, Mode::Unload] {
         let [u, r] = mode.bits();
-        assert_eq!(2 + 5 * r + 4 * u, mode.tag(), "Control's tag is linear in its words");
+        assert_eq!(
+            2 + 5 * r + 4 * u,
+            mode.tag(),
+            "Control's tag is linear in its words"
+        );
     }
     assert_eq!(u64::from(Operation::ArchiveSent.tag()), 5);
     assert_ne!(2 + 5 + 4, u64::from(Operation::ArchiveSent.tag()));
-    for kind in [full::RECEIVE, full::SEND, full::BOOTSTRAP, full::ARCHIVE_SENT] {
+    for kind in [
+        full::RECEIVE,
+        full::SEND,
+        full::BOOTSTRAP,
+        full::ARCHIVE_SENT,
+    ] {
         for (u, r) in [(0, 1), (1, 0), (1, 1)] {
-            assert!(Mode::for_program(kind, words(u, r)).is_err(), "kind {kind} has no mode words");
+            assert!(
+                Mode::for_program(kind, words(u, r)).is_err(),
+                "kind {kind} has no mode words"
+            );
         }
     }
 }
@@ -114,7 +143,10 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
     // The signed generation is the four-kind profile, unchanged.
     assert_eq!(inner.programs.len(), 4);
     assert_eq!((g.defer_p.kinds.len(), g.defer_s.kinds.len()), (4, 4));
-    assert_eq!((g.defer_p.x, g.defer_p.y, g.defer_s.x, g.defer_s.y), (24, 25, 24, 24));
+    assert_eq!(
+        (g.defer_p.x, g.defer_p.y, g.defer_s.x, g.defer_s.y),
+        (24, 25, 24, 24)
+    );
     assert_eq!((g.defer_p.n(), g.defer_s.n()), (54, 53));
     assert_eq!((g.defer_p.degree(), g.defer_s.degree()), (186, 174));
     assert_eq!((g.defer_p.c1_at(), g.defer_p.c2_at()), (Some(53), None));
@@ -122,7 +154,10 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
     assert_eq!(g.keys_p.as_ref().map(Vec::len), Some(4));
     assert_eq!(g.keys_s.as_ref().map(Vec::len), Some(4));
     let empty = g.defer_p.empty_claim();
-    assert_eq!((empty.point[0], empty.point[1], empty.point[53]), (Fp::ONE, Fp::ZERO, Fp::ONE));
+    assert_eq!(
+        (empty.point[0], empty.point[1], empty.point[53]),
+        (Fp::ONE, Fp::ZERO, Fp::ONE)
+    );
     for kind in 0..4 {
         let (b0, b1) = deferral::kind_bits(kind);
         assert_eq!(kind_corner(4, kind), Ok([b0, b1, 0]));
@@ -132,7 +167,10 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
     // trusted profile, no head of that kind (the bound is the installed
     // program count, so kind 3 passes the kind check and fails later).
     assert!(inner.profile(full::ARCHIVE_SENT).is_err());
-    assert_eq!(kind_corner(g.defer_p.kinds.len(), full::ARCHIVE_SENT), Err(SelectorError::Uninstalled));
+    assert_eq!(
+        kind_corner(g.defer_p.kinds.len(), full::ARCHIVE_SENT),
+        Err(SelectorError::Uninstalled)
+    );
     let head = |kind: u8| {
         super::super::encode(&HeadFrame {
             version: 1,
@@ -160,7 +198,9 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
             .programs
             .iter()
             .map(|x| full::uniform_kind(x.primary.clone()))
-            .chain([full::uniform_kind(inner.programs[full::RECEIVE].primary.clone())])
+            .chain([full::uniform_kind(
+                inner.programs[full::RECEIVE].primary.clone(),
+            )])
             .collect(),
         24,
         25,
@@ -170,13 +210,18 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
             .programs
             .iter()
             .map(|x| full::uniform_kind(x.secondary.clone()))
-            .chain([full::uniform_kind(inner.programs[full::RECEIVE].secondary.clone())])
+            .chain([full::uniform_kind(
+                inner.programs[full::RECEIVE].secondary.clone(),
+            )])
             .collect(),
         24,
         24,
     );
     assert_eq!(
-        (inner.programs[full::RECEIVE].primary.shape.sx, inner.programs[full::RECEIVE].primary.shape.sz()),
+        (
+            inner.programs[full::RECEIVE].primary.shape.sx,
+            inner.programs[full::RECEIVE].primary.shape.sz()
+        ),
         (22, 24)
     );
     assert_eq!((five_p.n(), five_s.n()), (55, 54));
@@ -191,8 +236,15 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
     // their power-of-two sizes.
     for (four, five) in [(g.defer_p.n(), five_p.n()), (g.defer_s.n(), five_s.n())] {
         let late = five + 1;
-        assert!(full::LATE_IO + late <= full::LINK_RHO_IO, "late io {late} fits");
-        assert_eq!(full::LATE_IO % late.next_power_of_two(), 0, "late io aligned");
+        assert!(
+            full::LATE_IO + late <= full::LINK_RHO_IO,
+            "late io {late} fits"
+        );
+        assert_eq!(
+            full::LATE_IO % late.next_power_of_two(),
+            0,
+            "late io aligned"
+        );
         assert_eq!(five.next_power_of_two(), four.next_power_of_two());
         eprintln!(
             "five-kind late io {}..{} (four-kind ..{}), link at {}",
@@ -226,5 +278,8 @@ fn signed_v4_is_the_fixed_four_kind_control_and_five_kind_geometry_fits() {
         v4.pair, grown.pair, v4.envelope, grown.envelope, v4.peer, grown.peer
     );
     assert_eq!(grown.envelope, v4.envelope + 64);
-    assert!(grown.envelope <= 10_034, "the grown Send still fits the envelope");
+    assert!(
+        grown.envelope <= 10_034,
+        "the grown Send still fits the envelope"
+    );
 }

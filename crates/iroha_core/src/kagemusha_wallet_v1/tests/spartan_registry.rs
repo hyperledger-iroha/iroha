@@ -658,7 +658,9 @@ fn governed_spartan_activates_an_enrolled_wallet_before_its_first_load() {
             .execute(&account, tx)
             .map_err(Error::Execution)?;
         let ledger = wsv::WsvLedger::new(tx, &account)?;
-        let issuance = ledger.issuance(&install.scheme, &fields.wallet_id, &[0x88; 32])?.unwrap();
+        let issuance = ledger
+            .issuance(&install.scheme, &fields.wallet_id, &[0x88; 32])?
+            .unwrap();
         assert_eq!(issuance.payer, account);
         assert_eq!((issuance.command.ordinal, issuance.command.amount), (0, 4));
         assert_eq!(issuance.body.wallet_id, fields.wallet_id);
@@ -681,5 +683,8 @@ fn governed_spartan_activates_an_enrolled_wallet_before_its_first_load() {
     };
     assert_eq!(balance(&state, &memory, &account), amount(5));
     let reserve = &memory.registration.reserve;
-    assert_eq!(balance(&state, &memory, reserve), amount(memory.balances[reserve] + 4));
+    assert_eq!(
+        balance(&state, &memory, reserve),
+        amount(memory.balances[reserve] + 4)
+    );
 }

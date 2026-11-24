@@ -681,7 +681,11 @@ pub(crate) mod tests {
             .unwrap();
         let (gross, burned, spendable) = restored.balance(&opening).unwrap();
         assert_eq!(Fp::from_u128(gross), control.after_core[9]);
-        assert_eq!(Fp::from_u128(burned), restored.head().profile()[crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL]);
+        assert_eq!(
+            Fp::from_u128(burned),
+            restored.head().profile()
+                [crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL]
+        );
         assert_eq!(gross - burned, spendable);
         assert_eq!(restored.completion().output_part(3).unwrap(), bytes);
         assert!(restored.completion().output_part(1).unwrap().is_empty());
@@ -757,7 +761,11 @@ pub(crate) mod tests {
             let path = std::path::PathBuf::from(directory);
             std::fs::create_dir_all(&path).unwrap();
             std::fs::write(path.join("signed-unload-claim.norito"), &bytes).unwrap();
-            std::fs::write(path.join("charged-enrollment-credential.bin"), credential_bytes(&control.credential)).unwrap();
+            std::fs::write(
+                path.join("charged-enrollment-credential.bin"),
+                credential_bytes(&control.credential),
+            )
+            .unwrap();
             std::fs::write(path.join("charged-unload-review.bin"), &review).unwrap();
         }
         let pair = decode_head(head.exact_pair(), parameters).unwrap().4;

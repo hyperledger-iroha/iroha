@@ -307,7 +307,10 @@ fn accepted_invalid_proof_and_invalid_request_signature_share_full_receive_matri
             &candidate.0,
         );
         let proof_bytes = proof.to_bytes();
-        eprintln!("full Receive case {i} unlinked proof bytes {}", proof_bytes.len());
+        eprintln!(
+            "full Receive case {i} unlinked proof bytes {}",
+            proof_bytes.len()
+        );
         assert!(
             spartan::verify_circuit(
                 &candidate.0.shape,

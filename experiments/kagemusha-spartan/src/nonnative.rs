@@ -1589,7 +1589,8 @@ pub fn comb_with_key_table(
                         Fp::from(0u64),
                         Fp::from(0u64),
                         fp_u(&nlimbs[k]),
-                    ].into(),
+                    ]
+                    .into(),
                 }],
             );
             let c = plus(

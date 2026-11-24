@@ -72,7 +72,9 @@ impl<F: Clone + Eq + Hash> Coefficients<F> {
         const MAX_ENTRIES: usize = 4096;
         if let Some(existing) = pool.get(&self[..]) {
             *self = Self::Shared(Arc::clone(existing));
-        } else if pool.len() < MAX_ENTRIES && let Self::Owned(values) = self {
+        } else if pool.len() < MAX_ENTRIES
+            && let Self::Owned(values) = self
+        {
             let shared: Arc<[F]> = std::mem::take(values).into();
             pool.insert(Arc::clone(&shared));
             *self = Self::Shared(shared);

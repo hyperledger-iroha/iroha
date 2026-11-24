@@ -409,14 +409,15 @@ async fn ledger_read(
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     // An occupied slot prevents this pass from obtaining a finality original. Both wallet
     // readers already recognize the route's typed 503 and retain the exact signed attempt.
-    let admission = acquire_query_admission(app.as_ref(), true)
-        .await
-        .map_err(|error| match error {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )) => ledger_finality_unavailable(),
-            other => other,
-        })?;
+    let admission =
+        acquire_query_admission(app.as_ref(), true)
+            .await
+            .map_err(|error| match error {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                )) => ledger_finality_unavailable(),
+                other => other,
+            })?;
     let bytes = app.query_fanout_working_set_bytes;
     let memory = crate::acquire_query_pool_credit(&app, bytes)
         .await
@@ -1172,7 +1173,10 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-            assert_eq!(headers["x-iroha-reject-code"], "kagemusha_ledger_finality_unavailable");
+            assert_eq!(
+                headers["x-iroha-reject-code"],
+                "kagemusha_ledger_finality_unavailable"
+            );
             let envelope: ErrorEnvelope = norito::decode_canonical_with_limits(
                 &body,
                 norito::canonical_decode_limits(body.len()),

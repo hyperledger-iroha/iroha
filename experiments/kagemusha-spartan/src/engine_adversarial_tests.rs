@@ -15,9 +15,8 @@ mod signed_receive_scalar_tests;
 #[test]
 #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS with signed programs"]
 fn mounted_program_digests_bind_each_kind_and_curve() {
-    let dir = std::path::PathBuf::from(
-        std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
-    );
+    let dir =
+        std::path::PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
     let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
     let digest: [u8; 32] = read("world-manifest-digest.bin").try_into().unwrap();
     let mounted = super::super::device_fixture::install_selected(
@@ -39,7 +38,10 @@ fn mounted_program_digests_bind_each_kind_and_curve() {
             same_program(&program.primary, &program.primary, secondary),
             same_program(&program.secondary, &program.secondary, primary),
         ] {
-            assert!(matches!(wrong, Err(Error::AuthorityMismatch("operation compiled program"))));
+            assert!(matches!(
+                wrong,
+                Err(Error::AuthorityMismatch("operation compiled program"))
+            ));
         }
     }
 }
@@ -65,12 +67,19 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
 
     // Receive never needs a time observation, but its available memory may
     // change between receipt-body validation and irreversible selection.
-    use iroha_data_model::kagemusha::{KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1};
+    use iroha_data_model::kagemusha::{
+        KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
     struct Memory(AtomicU64);
-    type TimeReading = (KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1);
+    type TimeReading = (
+        KagemushaWalletAnchoredTimeV1,
+        KagemushaWalletMonotonicReadingV1,
+    );
     impl TimeSource for Memory {
-        fn available_memory_bytes(&self) -> Result<u64> { Ok(self.0.load(Ordering::Relaxed)) }
+        fn available_memory_bytes(&self) -> Result<u64> {
+            Ok(self.0.load(Ordering::Relaxed))
+        }
         fn prepared(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
             Err(Error::Unavailable("no Send clock in Receive fixture"))
         }
@@ -119,10 +128,15 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
     let prepared = engine.resume(&capsule, &parameters).unwrap();
     let reconstruction = started.elapsed();
     let started = Instant::now();
-    engine.clone().recheck_selection(&prepared, &parameters).unwrap();
+    engine
+        .clone()
+        .recheck_selection(&prepared, &parameters)
+        .unwrap();
     let live_recheck = started.elapsed();
     let prepared = engine.retain_reconstruction(prepared, &parameters).unwrap();
-    eprintln!("signed Receive reconstruction {reconstruction:?}, same-owner live controls {live_recheck:?}");
+    eprintln!(
+        "signed Receive reconstruction {reconstruction:?}, same-owner live controls {live_recheck:?}"
+    );
     memory.0.store(1, Ordering::Relaxed);
     assert!(matches!(
         engine.recheck_selection(&prepared, &parameters),
@@ -134,8 +148,12 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
         Err(Error::AuthorityMismatch("resumed selection authority"))
     ));
     let genesis = parameters.genesis_commit_verifier();
-    let checkpoint = genesis.export_epoch_checkpoint(genesis.initial_commit_epoch()).unwrap();
-    let reselected = engine.with_protected_epoch(&parameters, &checkpoint).unwrap();
+    let checkpoint = genesis
+        .export_epoch_checkpoint(genesis.initial_commit_epoch())
+        .unwrap();
+    let reselected = engine
+        .with_protected_epoch(&parameters, &checkpoint)
+        .unwrap();
     assert!(matches!(
         reselected.recheck_selection(&prepared, &parameters),
         Err(Error::AuthorityMismatch("resumed selection authority"))
@@ -175,7 +193,11 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
         engine.recheck_selection(&prepared, &next_installation),
         Err(Error::AuthorityMismatch("resumed selection authority"))
     ));
-    assert!(engine.retain_reconstruction(prepared, &next_installation).is_none());
+    assert!(
+        engine
+            .retain_reconstruction(prepared, &next_installation)
+            .is_none()
+    );
     let reinstalled = engine.verify_payment(&first, &next_installation).unwrap();
     assert!(!Arc::ptr_eq(&replaced.bytes, &reinstalled.bytes));
     eprintln!(
@@ -807,7 +829,9 @@ fn receive_and_successors(
             && (payment.exact_bytes() != bytes.as_slice()
                 || payment.exact_pair() != candidate.pair_bytes.as_slice())
         {
-            return Err(Error::AuthorityMismatch("verified incoming Payment exact bytes"));
+            return Err(Error::AuthorityMismatch(
+                "verified incoming Payment exact bytes",
+            ));
         }
         let mut send = actual_send.clone();
         send.request = candidate.originals.request.clone();
@@ -827,14 +851,24 @@ fn receive_and_successors(
             incoming_payment: bytes.into(),
         };
         let started = std::time::Instant::now();
-        if !matches!(engine.prepare(&invalid, loaded.head(), parameters), Err(Error::Rejected(_))) {
-            return Err(Error::AuthorityMismatch("fresh Receive admission must refuse Burn"));
+        if !matches!(
+            engine.prepare(&invalid, loaded.head(), parameters),
+            Err(Error::Rejected(_))
+        ) {
+            return Err(Error::AuthorityMismatch(
+                "fresh Receive admission must refuse Burn",
+            ));
         }
         // Only a historical selection reaches defensive Burn recovery. The
         // wallet must also refuse to select an unselected restored capsule.
         let historical = engine.prepare_retained(&invalid, loaded.head(), parameters)?;
-        if !matches!(engine.prepare_selection(historical.capsule(), parameters), Err(Error::Rejected(_))) {
-            return Err(Error::AuthorityMismatch("restored Receive admission must refuse Burn"));
+        if !matches!(
+            engine.prepare_selection(historical.capsule(), parameters),
+            Err(Error::Rejected(_))
+        ) {
+            return Err(Error::AuthorityMismatch(
+                "restored Receive admission must refuse Burn",
+            ));
         }
         let burned = finish_prepared(
             label,

@@ -12,6 +12,8 @@ mod zk_components;
 
 #[path = "../fx_routing_review.rs"]
 mod fx_routing_review;
+#[path = "../kagemusha_spartan_release.rs"]
+mod kagemusha_spartan_release;
 #[path = "../../src/manifest_signing_test_support.rs"]
 mod manifest_signing_test_support;
 #[path = "../common/native_genesis.rs"]
@@ -26,8 +28,6 @@ mod query_active_abi;
 mod queue_regressions;
 #[path = "../queue_stress.rs"]
 mod queue_stress;
-#[path = "../kagemusha_spartan_release.rs"]
-mod kagemusha_spartan_release;
 
 #[path = "../runtime_change_sets.rs"]
 mod runtime_change_sets;

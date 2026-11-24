@@ -2,9 +2,7 @@
 //! secret MSM.
 
 use super::*;
-use crate::msm::{
-    BudgetExceeded, msm_naive, msm_public, msm_secret_bounded_columns_cancellable,
-};
+use crate::msm::{BudgetExceeded, msm_naive, msm_public, msm_secret_bounded_columns_cancellable};
 use crate::{Ep, Eq, Fq};
 use ff::Field;
 use group::{Curve, Group};
@@ -199,11 +197,13 @@ fn signed_window_bounds<C: PastaCurve>(seed: u64) {
     let g = C::generator();
     let bases = [g.to_affine(), (-g).to_affine(), g.double().to_affine()];
     let rows: Vec<_> = (0..=FULL_BITS)
-        .map(|bits| [
-            largest::<C::ScalarExt>(bits),
-            below::<C::ScalarExt>(&mut rng, bits),
-            largest::<C::ScalarExt>(bits.saturating_sub(1)),
-        ])
+        .map(|bits| {
+            [
+                largest::<C::ScalarExt>(bits),
+                below::<C::ScalarExt>(&mut rng, bits),
+                largest::<C::ScalarExt>(bits.saturating_sub(1)),
+            ]
+        })
         .collect();
     let columns: Vec<_> = rows
         .iter()
@@ -232,7 +232,11 @@ fn plans_agree<C: PastaCurve>(seed: u64) {
     let bounds = [1_usize, 64, 255];
     let rows: Vec<Vec<C::ScalarExt>> = bounds
         .iter()
-        .map(|&bits| (0..n).map(|_| below::<C::ScalarExt>(&mut rng, bits)).collect())
+        .map(|&bits| {
+            (0..n)
+                .map(|_| below::<C::ScalarExt>(&mut rng, bits))
+                .collect()
+        })
         .collect();
     let checked: Vec<BoundedSecretScalars<'_, C::ScalarExt>> = rows
         .iter()

@@ -9,16 +9,17 @@ use crate::{
 };
 use iroha_pasta::poseidon;
 use std::sync::LazyLock;
+#[path = "credit_status_later_send.rs"]
+pub(super) mod later_send;
 #[path = "credit_proof_codec.rs"]
 mod proof_codec;
 #[path = "credit_status_identity.rs"]
 mod status_identity;
-#[path = "credit_status_later_send.rs"]
-pub(super) mod later_send;
 
 const MAGIC: &[u8; 8] = b"KGSCST3\0";
 /// Wire v1 sections 2 and 6 allow 10,034 canonical bytes and 10,084 including IPM1 on NFC.
-const MAX_PAYLOAD: usize = super::super::MAX_CREDIT_STATUS_ORIGINAL_BYTES - payment_wire::HEADER_BYTES;
+const MAX_PAYLOAD: usize =
+    super::super::MAX_CREDIT_STATUS_ORIGINAL_BYTES - payment_wire::HEADER_BYTES;
 const DYNAMIC: [usize; 9] = [7, 8, 9, 10, 11, 12, 13, 14, 15];
 // Statement and folded lineage bounds from the authenticated Receive relation. Each minimal field
 // also carries its one-byte width. The opening's next key may use all 32 bytes.
@@ -26,12 +27,25 @@ const STATEMENT_WIDTHS: [usize; 9] = [32, 1, 16, 16, 1, 0, 0, 32, 32];
 const LINEAGE_WIDTHS: [usize; 5] = [1, 8, 1, 16, 32];
 
 fn worst_payload(pair: usize) -> usize {
-    MAGIC.len() + 1 + STATEMENT_WIDTHS.len() + STATEMENT_WIDTHS.iter().sum::<usize>() + 160
-        + LINEAGE_WIDTHS.len() + LINEAGE_WIDTHS.iter().sum::<usize>() + 33 + 4 + 4 + 32 * 32 + pair
+    MAGIC.len()
+        + 1
+        + STATEMENT_WIDTHS.len()
+        + STATEMENT_WIDTHS.iter().sum::<usize>()
+        + 160
+        + LINEAGE_WIDTHS.len()
+        + LINEAGE_WIDTHS.iter().sum::<usize>()
+        + 33
+        + 4
+        + 4
+        + 32 * 32
+        + pair
 }
 
 /// Qualify all thirty-two populated siblings and maximum legal terms under the installed geometry.
-pub(super) fn admit_profile(profile: &carrier::TrustedProfile, gens: &full::PairGens) -> std::result::Result<usize, String> {
+pub(super) fn admit_profile(
+    profile: &carrier::TrustedProfile,
+    gens: &full::PairGens,
+) -> std::result::Result<usize, String> {
     let pair = proof_codec::Codec::new(profile, gens)?.encoded_len()?;
     admit_pair_size(pair)
 }
@@ -43,7 +57,8 @@ pub(in crate::native) fn admit_common_program_geometry(
     let [primary, secondary] = matrices;
     let codec = proof_codec::Codec::from_matrix_layouts(profile, primary, secondary)
         .map_err(Error::Rejected)?;
-    let receive = worst_payload(codec.encoded_len().map_err(Error::Rejected)?) + payment_wire::HEADER_BYTES;
+    let receive =
+        worst_payload(codec.encoded_len().map_err(Error::Rejected)?) + payment_wire::HEADER_BYTES;
     let later_send = later_send::maximum_for_codec(profile, &codec)?;
     let limit = super::super::MAX_CREDIT_STATUS_ORIGINAL_BYTES;
     if receive > limit || later_send > limit {
@@ -58,7 +73,11 @@ pub(in crate::native) use proof_codec::MatrixQueryLayout;
 
 fn admit_pair_size(pair: usize) -> std::result::Result<usize, String> {
     let maximum = worst_payload(pair);
-    if maximum > MAX_PAYLOAD { return Err(format!("installed Receive needs {maximum} canonical credit-status bytes")); }
+    if maximum > MAX_PAYLOAD {
+        return Err(format!(
+            "installed Receive needs {maximum} canonical credit-status bytes"
+        ));
+    }
     Ok(maximum)
 }
 
@@ -126,9 +145,16 @@ impl Opening {
             burned: status == VerifiedCreditStatus::Burned,
             next_key: self.next.to_repr(),
             slot: self.path.index,
-            siblings: self.path.siblings.iter().flat_map(|s| s.to_repr()).collect(),
+            siblings: self
+                .path
+                .siblings
+                .iter()
+                .flat_map(|s| s.to_repr())
+                .collect(),
         };
-        let root = opening.root().map_err(|_| Error::Malformed("credit status membership opening"))?;
+        let root = opening
+            .root()
+            .map_err(|_| Error::Malformed("credit status membership opening"))?;
         field(&root)
     }
     fn write(&self, out: &mut Vec<u8>) {
@@ -244,7 +270,10 @@ fn restore_receipt(
 }
 
 pub(in crate::native) fn receive_opening(
-    maps: &crate::receive_lineage::ReceiveMapWitness, credit: Fp, payment: Fp, root: Fp,
+    maps: &crate::receive_lineage::ReceiveMapWitness,
+    credit: Fp,
+    payment: Fp,
+    root: Fp,
 ) -> Result<(VerifiedCreditStatus, Fp, Path<32>)> {
     let opening = if maps.credit_search.leaf.key == credit {
         Opening {
@@ -260,7 +289,9 @@ pub(in crate::native) fn receive_opening(
     let status = [VerifiedCreditStatus::Credited, VerifiedCreditStatus::Burned]
         .into_iter()
         .find(|status| {
-            opening.root(credit, payment, *status).is_ok_and(|calculated| calculated == root)
+            opening
+                .root(credit, payment, *status)
+                .is_ok_and(|calculated| calculated == root)
         })
         .ok_or(Error::AuthorityMismatch("exact retained credit membership"))?;
     Ok((status, opening.next, opening.path))
@@ -360,8 +391,11 @@ impl NativeEngine {
         lineage[bc::CREDIT_ROOT] = opening.root(s[17], payment.digest(), status)?;
         let projection = projected(&receiver, &s, &receipt, lineage)?;
         let trusted = parameters.inner.profile(full::RECEIVE)?;
-        let codec = proof_codec::Codec::new(&trusted, &parameters.inner.generators).map_err(Error::Rejected)?;
-        let exact = codec.unpack(bytes, &parameters.inner.generators).map_err(Error::Rejected)?;
+        let codec = proof_codec::Codec::new(&trusted, &parameters.inner.generators)
+            .map_err(Error::Rejected)?;
+        let exact = codec
+            .unpack(bytes, &parameters.inner.generators)
+            .map_err(Error::Rejected)?;
         let decoded = carrier::decode_projected_pair(&trusted, &exact, &projection)
             .map_err(Error::Rejected)?;
         let pair = verify_pair(&parameters.inner, full::RECEIVE, decoded)?;
@@ -431,7 +465,8 @@ impl NativeEngine {
             return Err(Error::AuthorityMismatch("credit status Receive required"));
         }
         let quote = self.authenticate_open_request_peer(open_request, parameters)?;
-        let (prepared, released) = self.verify_released_operation(capsule, completion, parameters)?;
+        let (prepared, released) =
+            self.verify_released_operation(capsule, completion, parameters)?;
         let head = released.head();
         let ExactOperationWitness::Receive {
             step,
@@ -474,7 +509,10 @@ impl NativeEngine {
             .try_into()
             .unwrap();
         let (status, next, path) = receive_opening(
-            &step.maps, s[17], payment.digest(), lineage[bc::CREDIT_ROOT],
+            &step.maps,
+            s[17],
+            payment.digest(),
+            lineage[bc::CREDIT_ROOT],
         )?;
         let opening = Opening { next, path };
         let projection = projected(&receiver, &s, &receipt, lineage)?;
@@ -484,17 +522,26 @@ impl NativeEngine {
             ));
         }
         let trusted = parameters.inner.profile(full::RECEIVE)?;
-        let codec = proof_codec::Codec::new(&trusted, &parameters.inner.generators).map_err(Error::Rejected)?;
+        let codec = proof_codec::Codec::new(&trusted, &parameters.inner.generators)
+            .map_err(Error::Rejected)?;
         // A released head retains the whole canonical HeadFrame (including its credential and
         // 64 public words). Only its inner projected pair is reconstructed from the peer's scoped originals.
         let folded: HeadFrame = super::super::decode(head.exact_pair())?;
         if usize::from(folded.kind) != full::RECEIVE || folded.parameters != parameters.id {
-            return Err(Error::Malformed("credit status folded pair scope or length"));
+            return Err(Error::Malformed(
+                "credit status folded pair scope or length",
+            ));
         }
         let pair = codec.pack(&folded.pair).map_err(Error::Rejected)?;
         #[cfg(any(test, feature = "device-fixture"))]
-        if codec.unpack(&pair, &parameters.inner.generators).map_err(Error::Rejected)? != folded.pair {
-            return Err(Error::Malformed("nonidentical Receive pair after projection"));
+        if codec
+            .unpack(&pair, &parameters.inner.generators)
+            .map_err(Error::Rejected)?
+            != folded.pair
+        {
+            return Err(Error::Malformed(
+                "nonidentical Receive pair after projection",
+            ));
         }
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
@@ -542,16 +589,29 @@ mod tests {
         let sequence = Fp::from_u128(u128::MAX);
         let mut out = MAGIC.to_vec();
         out.push(VerifiedCreditStatus::Burned.bit());
-        for value in [full, Fp::from(2), sequence, sequence, Fp::from(3), Fp::ZERO, Fp::ZERO, full, full] {
+        for value in [
+            full,
+            Fp::from(2),
+            sequence,
+            sequence,
+            Fp::from(3),
+            Fp::ZERO,
+            Fp::ZERO,
+            full,
+            full,
+        ] {
             put_field(&mut out, value);
         }
-        out.extend_from_slice(&[0xff;160]);
+        out.extend_from_slice(&[0xff; 160]);
         for value in [Fp::from(2), Fp::from(u64::MAX), Fp::from(3), sequence, full] {
             put_field(&mut out, value);
         }
         let opening = Opening {
             next: full,
-            path: Path {index: u32::MAX, siblings: std::array::from_fn(|i| EMPTY[i] + Fp::ONE)},
+            path: Path {
+                index: u32::MAX,
+                siblings: std::array::from_fn(|i| EMPTY[i] + Fp::ONE),
+            },
         };
         opening.write(&mut out);
         // Real p18-s17: 9,642 raw pair bytes, 35 endoscalars encoded under five bitmap bytes.
@@ -562,20 +622,30 @@ mod tests {
         assert_eq!(out.len(), 9937);
         let wire = payment_wire::encode_peer_payload(4, &out);
         assert_eq!(wire.len(), 10021);
-        assert_eq!(payment_wire::decode_peer_payload(4, &wire, MAX_PAYLOAD).unwrap(), out);
+        assert_eq!(
+            payment_wire::decode_peer_payload(4, &wire, MAX_PAYLOAD).unwrap(),
+            out
+        );
     }
 
     #[test]
     #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS with the signed p18-s17 programs"]
     fn signed_programs_qualify_the_full_depth_credit_status_bound() {
-        let directory = std::path::PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+        );
         let read = |name: &str| std::fs::read(directory.join(name)).unwrap();
         let parameters = crate::native::device_fixture::install(
-            &read("program-bundle.norito"), &read("parameter-manifest.norito"),
+            &read("program-bundle.norito"),
+            &read("parameter-manifest.norito"),
             read("parameter-signature.bin").try_into().unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let profile = parameters.inner.profile(full::RECEIVE).unwrap();
-        assert_eq!(admit_profile(&profile, &parameters.inner.generators).unwrap(), 9937);
+        assert_eq!(
+            admit_profile(&profile, &parameters.inner.generators).unwrap(),
+            9937
+        );
     }
     #[test]
     fn credit_status_sparse_membership_opens_only_the_exact_payment_and_burn_flag() {
@@ -599,17 +669,22 @@ mod tests {
             let decoded = Opening::read(&mut view).unwrap();
             assert!(view.is_empty());
             assert_eq!(decoded.root(credit, payment, status).unwrap(), root);
-            assert_ne!(decoded.root(credit, payment + Fp::ONE, status).unwrap(), root);
             assert_ne!(
-                decoded.root(
-                    credit,
-                    payment,
-                    if status == VerifiedCreditStatus::Credited {
-                        VerifiedCreditStatus::Burned
-                    } else {
-                        VerifiedCreditStatus::Credited
-                    }
-                ).unwrap(),
+                decoded.root(credit, payment + Fp::ONE, status).unwrap(),
+                root
+            );
+            assert_ne!(
+                decoded
+                    .root(
+                        credit,
+                        payment,
+                        if status == VerifiedCreditStatus::Credited {
+                            VerifiedCreditStatus::Burned
+                        } else {
+                            VerifiedCreditStatus::Credited
+                        }
+                    )
+                    .unwrap(),
                 root
             );
             // Explicitly serializing the default sibling has a second encoding of the same opening.

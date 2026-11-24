@@ -506,11 +506,11 @@ where
         self.require_storage()?;
         let answer = (|| {
             self.require_output_marker(slot, record)?;
-            let retained =
-                self.enrollment_record(slot)?
-                    .ok_or(Error::UnavailableCustodyData {
-                        object: "enrollment request",
-                    })?;
+            let retained = self
+                .enrollment_record(slot)?
+                .ok_or(Error::UnavailableCustodyData {
+                    object: "enrollment request",
+                })?;
             if retained.request.as_slice() != request {
                 return Err(Error::Invalid {
                     field: "enrollment result request",

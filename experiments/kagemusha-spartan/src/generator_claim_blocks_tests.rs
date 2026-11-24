@@ -221,7 +221,6 @@ fn block_source_checks_refuse_every_wrong_claim() {
     check::<Vesta>();
 }
 
-
 #[test]
 fn verified_predecessors_match_the_derived_fold_exactly() {
     fn check<C: PastaCurve>()
@@ -351,7 +350,6 @@ fn verified_fold_handles_each_false_claim_like_stock() {
     check::<Vesta>();
 }
 
-
 /// Process CPU seconds (user + system, every thread) for the review timings.
 fn process_cpu_seconds() -> f64 {
     #[cfg(target_os = "macos")]
@@ -385,7 +383,11 @@ fn process_cpu_seconds() -> f64 {
 fn measured<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
     let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
     let out = f();
-    (out, wall.elapsed().as_secs_f64(), process_cpu_seconds() - cpu)
+    (
+        out,
+        wall.elapsed().as_secs_f64(),
+        process_cpu_seconds() - cpu,
+    )
 }
 
 /// Opus review: the production widths (2^18 on the primary curve, 2^17 on the
@@ -418,8 +420,15 @@ fn verified_fold_matches_stock_at_production_width() {
             .unwrap()
         };
         let verified = || {
-            fold_verified_points(&gens, relation, parents.clone(), incoming.clone(), &entropy, purpose)
-                .unwrap()
+            fold_verified_points(
+                &gens,
+                relation,
+                parents.clone(),
+                incoming.clone(),
+                &entropy,
+                purpose,
+            )
+            .unwrap()
         };
         let case = format!("{curve} 2^{k}");
         let (s1, s1_wall, s1_cpu) = measured(stock);
@@ -435,7 +444,12 @@ fn verified_fold_matches_stock_at_production_width() {
             &mut entropy.stream(purpose),
         )
         .expect("true claims close the batched rounds");
-        for (other, label) in [(&v1, "verified 1"), (&v2, "verified 2"), (&s2, "stock 2"), (&batched, "batched")] {
+        for (other, label) in [
+            (&v1, "verified 1"),
+            (&v2, "verified 2"),
+            (&s2, "stock 2"),
+            (&batched, "batched"),
+        ] {
             assert_same(&s1, other, &format!("{case} {label}"));
         }
         eprintln!(
@@ -454,7 +468,10 @@ fn verified_fold_matches_stock_at_production_width() {
 #[test]
 fn fold_round_challenges_are_nonzero_endoscalars() {
     fn field<S: PrimeField + ff::WithSmallOrderMulGroup<3>>() {
-        assert!(S::ZETA != S::ONE && S::ZETA * S::ZETA + S::ZETA + S::ONE == S::ZERO, "order 3");
+        assert!(
+            S::ZETA != S::ONE && S::ZETA * S::ZETA + S::ZETA + S::ONE == S::ZERO,
+            "order 3"
+        );
         assert!(S::NUM_BITS >= 254, "Pasta modulus width");
         let (lo, hi) = ((1u128 << 63) + 1, 3 * (1u128 << 63) - 1);
         let mut state = 0x9e37_79b9_7f4a_7c15u64;
@@ -479,7 +496,10 @@ fn fold_round_challenges_are_nonzero_endoscalars() {
         for bits in &patterns {
             let (a, b, sa, sb) = crate::fs::endo_coefficients(bits);
             assert!(sa == 1 && sb == 1, "positive coefficients");
-            assert!((lo..=hi).contains(&a) && (lo..=hi).contains(&b), "coefficient range");
+            assert!(
+                (lo..=hi).contains(&a) && (lo..=hi).contains(&b),
+                "coefficient range"
+            );
             // a^2 - ab + b^2 <= max(a, b)^2 < 9 2^126 < 2^130.
             assert!(a.max(b) < 3 * (1u128 << 63));
             assert!(crate::fs::endo_scalar::<S>(bits) != S::ZERO);

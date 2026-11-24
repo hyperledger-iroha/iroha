@@ -375,11 +375,21 @@ where
 {
     let (gens, [head, incoming]) = verified.into_parts();
     let claims = |(proof, trace): (&crate::spartan::Proof<C>, &crate::verifier::Trace<C>)| {
-        let own = Claim { g: proof.ipa.g_final, us: trace.us.clone() };
+        let own = Claim {
+            g: proof.ipa.g_final,
+            us: trace.us.clone(),
+        };
         let inherited = crate::full::inherited_generator_claim(trace, gens)?;
         Ok::<_, &'static str>([own, inherited])
     };
-    fold_verified_points(gens, relation, claims(head)?, claims(incoming)?, entropy, purpose)
+    fold_verified_points(
+        gens,
+        relation,
+        claims(head)?,
+        claims(incoming)?,
+        entropy,
+        purpose,
+    )
 }
 
 fn fold_verified_points<C: PastaCurve>(
@@ -397,18 +407,33 @@ where
         return Err("generator source dimension");
     }
     let k = gens.g.len().ilog2() as usize;
-    if parents.iter().chain(&incoming).any(|claim| claim.us.len() != k) {
+    if parents
+        .iter()
+        .chain(&incoming)
+        .any(|claim| claim.us.len() != k)
+    {
         return Err("verified generator source dimension");
     }
     let sources = parents.iter().chain(&incoming).cloned().collect();
     if let Some(proved) = prove_rounds(
-        gens, relation, sources, None, BLOCK_DEPTH.min(k), &mut entropy.stream(purpose),
+        gens,
+        relation,
+        sources,
+        None,
+        BLOCK_DEPTH.min(k),
+        &mut entropy.stream(purpose),
     ) {
         return Ok(proved);
     }
     crate::prof::time("verified generator fold exact recovery", || {
-        prove_predecessors(gens, relation, parents,
-            Some([&incoming[0].us, &incoming[1].us]), entropy, purpose)
+        prove_predecessors(
+            gens,
+            relation,
+            parents,
+            Some([&incoming[0].us, &incoming[1].us]),
+            entropy,
+            purpose,
+        )
     })
 }
 

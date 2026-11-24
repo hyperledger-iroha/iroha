@@ -594,7 +594,7 @@ fn selected_signature_cannot_move_to_another_frozen_capsule() {
         witness: Arc::new(ExactOperationWitness::Send(Box::new(chain.send.clone()))),
         receipt_body: body,
         receive: None,
-            archive: None,
+        archive: None,
         predecessor: head,
     };
     let signature = bootstrap::sign(
@@ -858,38 +858,61 @@ fn issue_genesis_bound_fixture_from_closed_public_programs() {
         use iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1;
         use iroha_data_model::kagemusha::{
             KagemushaDevicePublicKeyV1, KagemushaWalletSignerCertificateBodyV1,
-            KagemushaWalletSignerCertificateV1, KagemushaWalletSignerOutputV1, KagemushaWalletSignerRoleV1,
+            KagemushaWalletSignerCertificateV1, KagemushaWalletSignerOutputV1,
+            KagemushaWalletSignerRoleV1,
         };
         use std::io::Write as _;
         let path = std::path::PathBuf::from(path);
         fs::create_dir(&path).unwrap();
         let fixture = crate::bootstrap::fixture_vector("credential_body_468");
         let install = InstallKagemushaSpartanProgramsV1 {
-            scheme: scheme.scheme_id(), asset: fixture[34..66].try_into().unwrap(),
-            manifest_digest: *parameters.manifest_digest(), manifest: bytes.clone(),
-            signature, programs: bundle.clone(),
+            scheme: scheme.scheme_id(),
+            asset: fixture[34..66].try_into().unwrap(),
+            manifest_digest: *parameters.manifest_digest(),
+            manifest: bytes.clone(),
+            signature,
+            programs: bundle.clone(),
         };
         let _layout = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Fixed);
-        let certificate_frame = |raw: &crate::certificate::Certificate, role: KagemushaWalletSignerRoleV1| {
-            let body = KagemushaWalletSignerCertificateBodyV1 {
-                version: 1,
-                scheme_id: scheme.scheme_id(),
-                role,
-                key: KagemushaDevicePublicKeyV1::from_sec1_bytes(&raw.body[35..100]).unwrap(),
-                serial: u64::from_le_bytes(raw.body[100..108].try_into().unwrap()),
+        let certificate_frame =
+            |raw: &crate::certificate::Certificate, role: KagemushaWalletSignerRoleV1| {
+                let body = KagemushaWalletSignerCertificateBodyV1 {
+                    version: 1,
+                    scheme_id: scheme.scheme_id(),
+                    role,
+                    key: KagemushaDevicePublicKeyV1::from_sec1_bytes(&raw.body[35..100]).unwrap(),
+                    serial: u64::from_le_bytes(raw.body[100..108].try_into().unwrap()),
+                };
+                assert_eq!(body.transcript(), raw.body);
+                let certificate = KagemushaWalletSignerCertificateV1::sign(
+                    body,
+                    &scheme,
+                    KagemushaWalletSignerOutputV1::Raw(raw.signature),
+                )
+                .unwrap();
+                assert_eq!(certificate.signature.as_ref(), raw.signature);
+                certificate.to_canonical_bytes().unwrap()
             };
-            assert_eq!(body.transcript(), raw.body);
-            let certificate = KagemushaWalletSignerCertificateV1::sign(
-                body, &scheme, KagemushaWalletSignerOutputV1::Raw(raw.signature),
-            ).unwrap();
-            assert_eq!(certificate.signature.as_ref(), raw.signature);
-            certificate.to_canonical_bytes().unwrap()
-        };
         for (name, original) in [
-            ("registered-scheme.norito", scheme.to_canonical_bytes().unwrap()),
-            ("selected-world-install.norito", norito::to_bytes(&install).unwrap()),
-            ("artifact-certificate.norito", certificate_frame(&cert, KagemushaWalletSignerRoleV1::Artifact)),
-            ("enrollment-certificate.norito", certificate_frame(&device_fixture::enrollment_certificate(), KagemushaWalletSignerRoleV1::Enrollment)),
+            (
+                "registered-scheme.norito",
+                scheme.to_canonical_bytes().unwrap(),
+            ),
+            (
+                "selected-world-install.norito",
+                norito::to_bytes(&install).unwrap(),
+            ),
+            (
+                "artifact-certificate.norito",
+                certificate_frame(&cert, KagemushaWalletSignerRoleV1::Artifact),
+            ),
+            (
+                "enrollment-certificate.norito",
+                certificate_frame(
+                    &device_fixture::enrollment_certificate(),
+                    KagemushaWalletSignerRoleV1::Enrollment,
+                ),
+            ),
         ] {
             let mut f = fs::File::create_new(path.join(name)).unwrap();
             f.write_all(&original).unwrap();

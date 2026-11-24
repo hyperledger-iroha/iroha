@@ -18,9 +18,9 @@ use iroha_pasta::msm::{
     BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public,
     msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
 };
-use zeroize::Zeroizing;
 use iroha_pasta::{CancellationToken, PastaCurve};
 use rayon::prelude::*;
+use zeroize::Zeroizing;
 
 use crate::fs::{Scalar, SpikeRng, Transcript};
 use crate::grid::{
@@ -1000,13 +1000,9 @@ pub fn fixed_commitments<C: PastaCurve>(
             if row.len() == 1 && row[0] == F::<C>::ONE {
                 return gens.g[0];
             }
-            iroha_pasta::msm::msm_public::<C>(
-                &row,
-                &gens.g[..row.len()],
-                MemoryBudget::DEFAULT,
-            )
-            .expect("msm")
-            .to_affine()
+            iroha_pasta::msm::msm_public::<C>(&row, &gens.g[..row.len()], MemoryBudget::DEFAULT)
+                .expect("msm")
+                .to_affine()
         })
         .collect()
 }
@@ -1416,7 +1412,12 @@ pub fn prepare_linked_phase1_retained<'a, C: PastaCurve>(
     circuit: &'a dyn Circuit<F<C>>,
 ) -> LinkedPhase1<'a, C> {
     retain_linked_witness(
-        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, circuit,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, fill),
+        rng,
+        circuit,
     )
 }
 
@@ -1510,8 +1511,18 @@ fn prove_inner<C: PastaCurve>(
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     let rows = vec![r1cs::RowFill::Values; shape.rows()];
     prove_rows(
-        shape, gens, inst, ProverWitness::Borrowed(wit, &rows), rng, cheat, separated, claims,
-        link, circuit, fixed, None,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, &rows),
+        rng,
+        cheat,
+        separated,
+        claims,
+        link,
+        circuit,
+        fixed,
+        None,
     )
 }
 
@@ -1872,7 +1883,13 @@ fn prove_rows<C: PastaCurve>(
                 advance_inner_round(&basis, k, &mut m, &folded, &mut round)
             } else {
                 let live = z_live.as_ref().expect("the folded witness's live runs");
-                advance_inner_round(&basis, k, &mut m, &crate::kern::Masked::new(&z, live), &mut round)
+                advance_inner_round(
+                    &basis,
+                    k,
+                    &mut m,
+                    &crate::kern::Masked::new(&z, live),
+                    &mut round,
+                )
             };
             z = next_z;
             support
@@ -2116,7 +2133,13 @@ pub fn prove_linked_built<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, [u8; 32], [u8; 32]) {
     prove_linked_witness(
-        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, link, circuit,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, fill),
+        rng,
+        link,
+        circuit,
     )
 }
 
@@ -2660,9 +2683,12 @@ mod table_tests {
                 .map(|p| gens.g[slot.offset + p])
                 .collect();
             bases.push(gens.h);
-            let table =
-                iroha_pasta::msm::FixedBaseTable::<C>::with_window(&bases, 9, MemoryBudget::DEFAULT)
-                    .unwrap();
+            let table = iroha_pasta::msm::FixedBaseTable::<C>::with_window(
+                &bases,
+                9,
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
             assert_eq!(
                 actual,
                 table.msm_public(&scalars, MemoryBudget::DEFAULT).unwrap()
@@ -2720,9 +2746,7 @@ mod table_tests {
         let gens = Gens::<C>::new(shape.cols());
         let (cols, active) = (shape.cols(), shape.active_cols());
         let mut rng = SpikeRng::new(label);
-        let bounds: Vec<usize> = (0..shape.rows())
-            .map(|r| shape.row_bits_class(r))
-            .collect();
+        let bounds: Vec<usize> = (0..shape.rows()).map(|r| shape.row_bits_class(r)).collect();
         let written: Vec<Vec<F<C>>> = bounds
             .iter()
             .map(|&bits| {
@@ -2744,14 +2768,26 @@ mod table_tests {
             .map(|(r, row)| if r == 1 { unwritten } else { row.as_slice() })
             .collect();
         let blinds: Vec<F<C>> = (0..shape.rows()).map(|_| rng.scalar()).collect();
-        let actual = commit_row_slices(&gens, &shape, &rows, 0..shape.rows(), &bounds, &blinds, false);
+        let actual = commit_row_slices(
+            &gens,
+            &shape,
+            &rows,
+            0..shape.rows(),
+            &bounds,
+            &blinds,
+            false,
+        );
         assert_eq!(actual.len(), shape.rows());
         for (r, point) in actual.iter().enumerate() {
             let sum = if r == 1 {
                 C::identity()
             } else {
-                msm_public::<C>(&written[r][..active], &gens.g[..active], MemoryBudget::DEFAULT)
-                    .unwrap()
+                msm_public::<C>(
+                    &written[r][..active],
+                    &gens.g[..active],
+                    MemoryBudget::DEFAULT,
+                )
+                .unwrap()
             };
             assert_eq!(
                 *point,
@@ -2897,14 +2933,20 @@ mod retained_phase1_tests {
         );
         let owned = || {
             ProverWitness::Owned(r1cs::WrittenWitness::new(
-                Witness { w: original.clone() },
+                Witness {
+                    w: original.clone(),
+                },
                 fill.clone(),
             ))
         };
         let (owned_secondary, owned_rho, owned_r) = prove_linked_witness(
-            &shape, &gens, &inst, owned(),
+            &shape,
+            &gens,
+            &inst,
+            owned(),
             &mut SpikeRng::new(b"retained first phase, secondary"),
-            &Link::Second { d, rlc: &fallback }, &c,
+            &Link::Second { d, rlc: &fallback },
+            &c,
         );
         assert_eq!(owned_secondary.to_bytes(), secondary.to_bytes());
         assert_eq!((owned_rho, owned_r), (rho, r));
@@ -2924,13 +2966,16 @@ mod retained_phase1_tests {
         let (proof, actual_d, actual_r) = retained.prove_first(rho, r);
         let bytes = proof.to_bytes();
         assert_eq!(bytes, reference.to_bytes(), "byte-identical proof");
-        let first = retain_linked_witness(
-            &shape, &gens, &inst, owned(), &mut SpikeRng::new(seed), &c,
-        );
+        let first =
+            retain_linked_witness(&shape, &gens, &inst, owned(), &mut SpikeRng::new(seed), &c);
         assert_eq!(first.digest(), d);
         assert!(first.retained_bytes() >= original.len() * std::mem::size_of::<F<C>>());
         let (owned_first, owned_d, owned_r) = first.prove_first(rho, r);
-        assert_eq!(owned_first.to_bytes(), bytes, "consuming the witness preserves the opening");
+        assert_eq!(
+            owned_first.to_bytes(),
+            bytes,
+            "consuming the witness preserves the opening"
+        );
         assert_eq!((owned_d, owned_r), (actual_d, actual_r));
         assert_eq!((actual_d, actual_r), (reference_d, reference_r));
         assert_eq!((actual_d, actual_r), (d, r), "the prepared digest and R");
@@ -3153,9 +3198,16 @@ mod streamed_first_inner_tests {
             let (streamed, sd, sr) = prove(&c);
             let (split, dd, dr) = prove(&dense);
             let bytes = streamed.to_bytes();
-            assert_eq!(bytes, split.to_bytes(), "byte-identical linked proof (account {account})");
+            assert_eq!(
+                bytes,
+                split.to_bytes(),
+                "byte-identical linked proof (account {account})"
+            );
             assert_eq!((sd, sr), (dd, dr));
-            assert_eq!(verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(), d);
+            assert_eq!(
+                verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(),
+                d
+            );
         }
 
         let (arrays, pi, _) = rp57::<F<C>>(2, b"streamed first inner circuit");
@@ -3181,7 +3233,11 @@ mod streamed_first_inner_tests {
             prove_circuit(&shape, &gens, &inst, &wit, &mut rng, circuit).0
         };
         let bytes = prove(&c).to_bytes();
-        assert_eq!(bytes, prove(&Dense(&c)).to_bytes(), "byte-identical proof with a support");
+        assert_eq!(
+            bytes,
+            prove(&Dense(&c)).to_bytes(),
+            "byte-identical proof with a support"
+        );
         verify_circuit(&shape, &gens, &inst, &bytes, &c).unwrap();
     }
 

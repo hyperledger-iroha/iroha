@@ -56,7 +56,9 @@ mod index;
 mod lifecycle;
 mod maintenance;
 mod manifest;
-pub(crate) use capacity::{blacklist_storage_required, open_request_storage_required, transfer_storage_required};
+pub(crate) use capacity::{
+    blacklist_storage_required, open_request_storage_required, transfer_storage_required,
+};
 pub(crate) use manifest::{LocalBlacklistV1, authenticate_local_blacklist};
 mod map_custody;
 mod map_tree;
@@ -118,7 +120,6 @@ pub use payout_state::{
     FinalizedPayoutStateV1, PAYOUT_SELECTION_MAX_BYTES_V1, fee_payout_state_keys_v1,
 };
 mod object_workspace;
-pub(crate) use object_workspace::with_transfer_draft;
 pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{
     BoundRequestStatusV1, ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation,
@@ -130,6 +131,7 @@ pub use map_custody::{PreparationMapV1, PreparationMapsV1};
 #[cfg(test)]
 pub(crate) use native_worker::{FoldRetentionCountsV1, perturb_retained_key_for_test};
 pub(crate) use native_worker::{NativeFoldWorkerV1, suffix_receive_burns};
+pub(crate) use object_workspace::with_transfer_draft;
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 #[cfg(any(test, feature = "test-utils"))]
 pub use scheduling::PublicationForTest;

@@ -20,7 +20,10 @@ impl StatusOpening {
     // This fixture reads only an already authenticated representation. The two program
     // inputs are the opening carried by that exact original and the receiver's folded root.
     #[cfg(test)]
-    pub(in crate::native::engine) fn from_verified(delivery: &VerifiedSentDelivery<'_>, root: Fp) -> Result<Self> {
+    pub(in crate::native::engine) fn from_verified(
+        delivery: &VerifiedSentDelivery<'_>,
+        root: Fp,
+    ) -> Result<Self> {
         fn take<'a>(bytes: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
             let (head, tail) = bytes
                 .split_at_checked(n)

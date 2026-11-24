@@ -6,10 +6,9 @@ use super::{credit_opening::StatusOpening, *};
 use crate::native::{ArchiveSentWitness, ExactOperationWitness, engine::ARCHIVE_SENT_UNSIGNED};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1,
-    KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1,
-    KagemushaWalletIndexedInsertV1 as PublicInsert, KagemushaWalletIndexedLeafV1 as PublicLeaf,
-    KagemushaWalletIndexedOpeningV1 as PublicPath, kagemusha_wallet_operation_id_v1,
-    kagemusha_wallet_poseidon_bytes_v1,
+    KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1, KagemushaWalletIndexedInsertV1 as PublicInsert,
+    KagemushaWalletIndexedLeafV1 as PublicLeaf, KagemushaWalletIndexedOpeningV1 as PublicPath,
+    kagemusha_wallet_operation_id_v1, kagemusha_wallet_poseidon_bytes_v1,
 };
 use std::{sync::Arc, time::Instant};
 use zeroize::Zeroizing;
@@ -137,8 +136,16 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         let key = descriptor[0].to_repr();
         let pending = pending_tree(&descriptor);
         let lineage_root = head.profile()[bc::LINEAGE_IO + bc::PENDING_ROOT];
-        assert_eq!(pending.root(), before[PENDING].to_repr(), "committed core root");
-        assert_eq!(pending.root(), lineage_root.to_repr(), "lineage-adjusted root");
+        assert_eq!(
+            pending.root(),
+            before[PENDING].to_repr(),
+            "committed core root"
+        );
+        assert_eq!(
+            pending.root(),
+            lineage_root.to_repr(),
+            "lineage-adjusted root"
+        );
         let mut store = Store::new(&pending);
 
         // Production witness from custody, the exact peer originals and the store.
@@ -160,7 +167,11 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
             started.elapsed().as_secs_f64()
         );
         assert_eq!(store.staged, 2, "committed and lineage-adjusted removals");
-        assert_eq!(store.pending.root(), pending.root(), "staging selects nothing");
+        assert_eq!(
+            store.pending.root(),
+            pending.root(),
+            "staging selects nothing"
+        );
         let ExactOperationWitness::ArchiveSent {
             step,
             send_capsule: kept_capsule,
@@ -191,7 +202,11 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         assert_eq!(s[7], before[7]);
         assert_eq!(s[8], before[0]);
         assert_eq!(s[9], before[SEQUENCE] + Fp::ONE);
-        assert_eq!((s[12], s[13]), (Fp::ZERO, Fp::ZERO), "no Ω(pred) lineage fields");
+        assert_eq!(
+            (s[12], s[13]),
+            (Fp::ZERO, Fp::ZERO),
+            "no Ω(pred) lineage fields"
+        );
         assert_eq!(s[14], head.profile()[crate::full::HEAD_IO]);
         assert_eq!(
             s[15],
@@ -204,10 +219,21 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         assert_eq!(s[17], descriptor[0]);
         assert_eq!(&s[19..], &[Fp::ZERO; 7]);
         // Independent Credited transcript and wallet wire operation identity.
-        let evidence = delivery.wire_status().unwrap().credit_status_digest().unwrap();
+        let evidence = delivery
+            .wire_status()
+            .unwrap()
+            .credit_status_digest()
+            .unwrap();
         assert_eq!(evidence, delivery.status_digest().unwrap());
-        assert_ne!(evidence, kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, status));
-        eprintln!("Receive status {} credited {}", blake3::Hash::from(evidence).to_hex(), blake3::Hash::from(credited.to_repr()).to_hex());
+        assert_ne!(
+            evidence,
+            kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, status)
+        );
+        eprintln!(
+            "Receive status {} credited {}",
+            blake3::Hash::from(evidence).to_hex(),
+            blake3::Hash::from(credited.to_repr()).to_hex()
+        );
         let transcript = [
             &1u16.to_le_bytes()[..],
             &[2],
@@ -216,7 +242,10 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
             &evidence,
         ]
         .concat();
-        assert_eq!(transcript.len(), KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1);
+        assert_eq!(
+            transcript.len(),
+            KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1
+        );
         assert_eq!(
             credited.to_repr(),
             kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1, &transcript)
@@ -233,7 +262,10 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         assert_eq!(&r[146..178], &s[14].to_repr());
         assert_eq!(&r[178..210], &s[15].to_repr());
         assert_eq!(&r[210..242], &crate::statement::digest(s).to_repr());
-        assert!(r[242..].iter().all(|b| *b == 0), "no proof, capsule or Payment digest");
+        assert!(
+            r[242..].iter().all(|b| *b == 0),
+            "no proof, capsule or Payment digest"
+        );
         assert_eq!(step.receipt.signature, [0; 64], "never signed");
         // Every value and fee claim is carried; only sequence, pending root and nonce change.
         for i in 0..30 {
@@ -245,7 +277,9 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         assert_ne!(step.after_core[NONCE], before[NONCE]);
         assert_eq!(
             step.after_core[PENDING].to_repr(),
-            step.core_removal.verify(&before[PENDING].to_repr(), &key).unwrap()
+            step.core_removal
+                .verify(&before[PENDING].to_repr(), &key)
+                .unwrap()
         );
         let adjusted = step
             .adjusted_removal
@@ -268,7 +302,10 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
         let case = joined.case(step.after_core[NONCE]).unwrap();
         assert!(case.before.core == *before && case.before.rest == *rest);
         assert!(case.after.core == step.after_core && case.after.rest == step.after_rest);
-        assert_eq!(case.after.lineage[bc::PENDING_ROOT], field(&adjusted).unwrap());
+        assert_eq!(
+            case.after.lineage[bc::PENDING_ROOT],
+            field(&adjusted).unwrap()
+        );
         assert_eq!((case.tag, case.credit), (s[16], s[17]));
         assert_eq!(case.descriptor, descriptor);
 
@@ -342,7 +379,10 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
             head,
             params,
         );
-        assert!(refused.is_err() && !gate(refused), "changed Credited original");
+        assert!(
+            refused.is_err() && !gate(refused),
+            "changed Credited original"
+        );
         let originals = std::path::PathBuf::from(
             std::env::var_os("KAGEMUSHA_SPARTAN_ARCHIVE_RAW_ORIGINALS").unwrap(),
         );
@@ -353,9 +393,15 @@ fn payer_archive_sent_rechecks_retained_custody_and_refuses_without_a_signed_pro
             .map(|p| std::fs::read(p).unwrap())
             .find(|bytes| bytes != open)
             .unwrap();
-        let refused =
-            engine.prepare(&with_originals(&reopened, None, Some(&other), None), head, params);
-        assert!(refused.is_err() && !gate(refused), "another signed open Request");
+        let refused = engine.prepare(
+            &with_originals(&reopened, None, Some(&other), None),
+            head,
+            params,
+        );
+        assert!(
+            refused.is_err() && !gate(refused),
+            "another signed open Request"
+        );
 
         // Both generations share the structural frame. Authorization at selection,
         // resume and release uses the installed producer and its signed kind count.

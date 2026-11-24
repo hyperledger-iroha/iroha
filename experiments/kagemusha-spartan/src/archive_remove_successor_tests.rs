@@ -8,8 +8,7 @@ use crate::{
     uniform::Array,
 };
 use iroha_data_model::kagemusha::{
-    KagemushaWalletIndexedTreeV1,
-    kagemusha_wallet_indexed_verify_membership_v1,
+    KagemushaWalletIndexedTreeV1, kagemusha_wallet_indexed_verify_membership_v1,
     kagemusha_wallet_indexed_verify_non_membership_v1,
 };
 use iroha_pasta::poseidon;

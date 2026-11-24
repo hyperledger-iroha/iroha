@@ -346,18 +346,35 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpart
     })
 }
 
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_unloadSettlement(
-    env:jni::EnvUnowned<'_>, _class:JClass<'_>, handle:jlong, slot:JByteArray<'_>, operation:JByteArray<'_>, signed:JByteArray<'_>, proof:JByteArray<'_>
+    env: jni::EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    slot: JByteArray<'_>,
+    operation: JByteArray<'_>,
+    signed: JByteArray<'_>,
+    proof: JByteArray<'_>,
 ) -> jobject {
     crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             let slot = fixed(env, &slot)?;
             let operation = fixed(env, &operation)?;
-            let signed = read(env, &signed, 64*1024)?;
-            let proof = read(env, &proof, iroha_data_model::kagemusha::KAGEMUSHA_WALLET_LEDGER_FINALITY_MAX_BYTES_V1)?;
-            spartan::call(handle as u64, Action::UnloadSettlement { slot, operation, signed:&signed, proof:&proof })
+            let signed = read(env, &signed, 64 * 1024)?;
+            let proof = read(
+                env,
+                &proof,
+                iroha_data_model::kagemusha::KAGEMUSHA_WALLET_LEDGER_FINALITY_MAX_BYTES_V1,
+            )?;
+            spartan::call(
+                handle as u64,
+                Action::UnloadSettlement {
+                    slot,
+                    operation,
+                    signed: &signed,
+                    proof: &proof,
+                },
+            )
         });
         reply(env, result)
     })
@@ -380,7 +397,11 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpart
             let proof = read(env, &proof, KAGEMUSHA_WALLET_LEDGER_FINALITY_MAX_BYTES_V1)?;
             spartan::call(
                 handle as u64,
-                Action::ActivationSettlement { slot, signed: &signed, proof: &proof },
+                Action::ActivationSettlement {
+                    slot,
+                    signed: &signed,
+                    proof: &proof,
+                },
             )
         });
         reply(env, result)
@@ -389,13 +410,29 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpart
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_epoch(
-    env:jni::EnvUnowned<'_>, _class:JClass<'_>, handle:jlong, slot:JByteArray<'_>, expected:jlong, boundary:JByteArray<'_>
+    env: jni::EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    slot: JByteArray<'_>,
+    expected: jlong,
+    boundary: JByteArray<'_>,
 ) -> jobject {
     crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             let slot = fixed(env, &slot)?;
-            let boundary = read(env, &boundary, iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1)?;
-            spartan::call(handle as u64, Action::Epoch { slot, expected:expected as u64, boundary:&boundary })
+            let boundary = read(
+                env,
+                &boundary,
+                iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1,
+            )?;
+            spartan::call(
+                handle as u64,
+                Action::Epoch {
+                    slot,
+                    expected: expected as u64,
+                    boundary: &boundary,
+                },
+            )
         });
         reply(env, result)
     })

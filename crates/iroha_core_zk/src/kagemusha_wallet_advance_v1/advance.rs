@@ -222,7 +222,13 @@ pub trait KagemushaWalletTransitionOwnerV1<C, R> {
     ///
     /// # Errors
     /// Refuses an owner whose protected evidence cannot authenticate this selected capsule.
-    fn require_selected(&self, _capsule: &C, _marker: &KagemushaWalletMarkerRecordV1) -> Result<(), KagemushaWalletProviderErrorV1> { Ok(()) }
+    fn require_selected(
+        &self,
+        _capsule: &C,
+        _marker: &KagemushaWalletMarkerRecordV1,
+    ) -> Result<(), KagemushaWalletProviderErrorV1> {
+        Ok(())
+    }
 
     /// Exact `receipt-body` transcript for `capsule` whose frame digest is `capsule_digest`.
     ///

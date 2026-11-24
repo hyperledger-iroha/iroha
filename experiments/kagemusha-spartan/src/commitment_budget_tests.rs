@@ -29,8 +29,7 @@ fn check<C: PastaCurve>() {
         .map(|(row, bits)| BoundedSecretScalars::new(row, bits, None).unwrap())
         .collect();
     let bounded = column_sums_with_budget(&gens, n, &columns, small, None).unwrap();
-    let default =
-        column_sums_with_budget(&gens, n, &columns, MemoryBudget::DEFAULT, None).unwrap();
+    let default = column_sums_with_budget(&gens, n, &columns, MemoryBudget::DEFAULT, None).unwrap();
     assert_eq!(bounded, default, "the budget changes the plan only");
     for (actual, scalars) in bounded.iter().zip(&rows) {
         let reference = scalars

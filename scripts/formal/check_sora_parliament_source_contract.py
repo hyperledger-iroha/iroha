@@ -5897,7 +5897,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "4b9974d3930ed01fce14630a8bcda376a63204aab8e8f2867917762549843f15":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "fa9b3d69ccbdec58af9c70cfd757d7b5a6a55583417d6c387cf11ea88db71c87":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):

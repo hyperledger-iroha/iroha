@@ -1,12 +1,16 @@
 //! Local wallet projections from protected custody and the verified recursive head.
 use super::*;
-use iroha_data_model::sumeragi_finality::SumeragiCommitCheckpointV1;
 use crate::kagemusha_wallet_advance_v1::{
     KagemushaWalletLookupV1 as Lookup, KagemushaWalletMarkerRecordV1 as Marker,
-    KagemushaWalletRetainedV1, KagemushaWalletSlotIdV1 as Slot, KagemushaWalletSlotStatusV1 as Status,
+    KagemushaWalletRetainedV1, KagemushaWalletSlotIdV1 as Slot,
+    KagemushaWalletSlotStatusV1 as Status,
 };
+use iroha_data_model::sumeragi_finality::SumeragiCommitCheckpointV1;
 
-pub(super) type ReleasedPair = (Arc<native::PreparedOperation>, Arc<native::CompletedOperation>);
+pub(super) type ReleasedPair = (
+    Arc<native::PreparedOperation>,
+    Arc<native::CompletedOperation>,
+);
 
 /// A proof result lives only on the owner that authenticated its parameters.
 /// Each read still has to obtain the capsule and completion from protected custody.
@@ -26,7 +30,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
     ) -> Result<ReleasedPair, ProviderError> {
         // This reads the selected, protected finality checkpoint even for a repeated Load.
         let (engine, epoch) = self.engine_with_epoch_checkpoint(
-            slot, *capsule.wallet(), capsule.load_epoch_selector().map_err(provider_error)?,
+            slot,
+            *capsule.wallet(),
+            capsule.load_epoch_selector().map_err(provider_error)?,
         )?;
         if let Some(held) = &self.verified_release
             && held.slot == *slot

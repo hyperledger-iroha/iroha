@@ -201,7 +201,10 @@ pub(super) fn check_matching_steps(
     );
     incoming
         .part
-        .decide(&crate::common::vesta_params(16), iroha_pasta::msm::MemoryBudget::DEFAULT)
+        .decide(
+            &crate::common::vesta_params(16),
+            iroha_pasta::msm::MemoryBudget::DEFAULT,
+        )
         .unwrap();
     println!(
         "CORE30_PAIRED_REQUEST amount={amount} fee={fee} signed_request_bytes={} credit={:?} inline_receive_strict_ms={:.3} sender_omega=false advance=false",

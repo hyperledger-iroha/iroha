@@ -112,8 +112,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         asset: &[u8],
         selected_issuer: &KagemushaWalletSignerCertificateV1,
     ) -> Result<[u8; 32], ProviderError> {
-        let decoded = ResultV1::decode(result)
-            .map_err(|_| rejected("future account enrollment result"))?;
+        let decoded =
+            ResultV1::decode(result).map_err(|_| rejected("future account enrollment result"))?;
         if decoded.credential.len() != SPARTAN_CREDENTIAL_BYTES_V1 {
             return Err(rejected("future account enrollment credential"));
         }
@@ -344,10 +344,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         self.account_asset_scale(slot, capsule.asset())
     }
 
-    pub(super) fn account_asset_scale(&self, slot: &Slot, asset: &[u8; 32]) -> Result<u8, ProviderError> {
+    pub(super) fn account_asset_scale(
+        &self,
+        slot: &Slot,
+        asset: &[u8; 32],
+    ) -> Result<u8, ProviderError> {
         let held = self.admitted_account(slot)?;
-        let scope =
-            intake::asset_scope(&held.originals[3], asset).map_err(original_error)?;
+        let scope = intake::asset_scope(&held.originals[3], asset).map_err(original_error)?;
         u8::try_from(scope.scale).map_err(|_| rejected("future reviewed asset scale"))
     }
     pub(super) fn authorized_wallet_id(&self, slot: &Slot) -> Result<[u8; 32], ProviderError> {
@@ -367,7 +370,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
     }
     pub(super) fn bootstrap_operation_id(&self, slot: &Slot) -> Result<[u8; 32], ProviderError> {
         self.require_account(slot, None)?;
-        Ok(self.admitted_account(slot)?.credential.bootstrap_operation_id())
+        Ok(self
+            .admitted_account(slot)?
+            .credential
+            .bootstrap_operation_id())
     }
     pub(super) fn request_account_originals(
         &self,
@@ -388,8 +394,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         ])
     }
     pub(super) fn admitted_wallet_slot(&self, wallet: &[u8; 32]) -> Result<Slot, ProviderError> {
-        self.account.as_ref()
-            .filter(|held| held.authorized && held.access == Access::Monetary && held.credential.body[66..98] == *wallet)
+        self.account
+            .as_ref()
+            .filter(|held| {
+                held.authorized
+                    && held.access == Access::Monetary
+                    && held.credential.body[66..98] == *wallet
+            })
             .map(|held| held.slot.clone())
             .ok_or_else(|| rejected("future account wallet authorization required"))
     }
@@ -431,7 +442,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let window = intent.dates.issued_at_ms..intent.dates.expires_at_ms;
         if request.body.challenge != intent.challenge
             || request.body.account != *account
-            || norito::encode_canonical(&request.body.asset).ok().as_deref() != Some(asset)
+            || norito::encode_canonical(&request.body.asset)
+                .ok()
+                .as_deref()
+                != Some(asset)
             || !window.contains(&fields.issued_at_ms)
             || !window.contains(&fields.enrollment_evidence.time_ms)
         {
@@ -557,20 +571,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             };
             let prepared = match (lookup, access) {
                 (Lookup::Retained(retained), _) => {
-                    let (prepared, completed) = self.verify_retained_release(slot, &capsule, &retained)?;
+                    let (prepared, completed) =
+                        self.verify_retained_release(slot, &capsule, &retained)?;
                     if !same_credential(completed.head().credential(), credential) {
                         return Err(rejected("future completed source credential"));
                     }
                     prepared
                 }
                 (Lookup::SelectedUnsigned { .. }, Access::Monetary)
-                | (Lookup::DeliveryDataLoss, Access::HistoricalOutput) => {
-                    Arc::new(
-                        self.engine_for_capsule(slot, &capsule)?
-                            .resume(&capsule, &self.parameters)
-                            .map_err(provider_error)?,
-                    )
-                }
+                | (Lookup::DeliveryDataLoss, Access::HistoricalOutput) => Arc::new(
+                    self.engine_for_capsule(slot, &capsule)?
+                        .resume(&capsule, &self.parameters)
+                        .map_err(provider_error)?,
+                ),
                 _ => return Err(rejected("future selected source unavailable")),
             };
             if !same_credential(prepared.credential(), credential) {

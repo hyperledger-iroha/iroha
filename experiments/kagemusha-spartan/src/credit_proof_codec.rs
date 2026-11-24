@@ -39,10 +39,7 @@ struct Side {
 }
 
 impl Side {
-    fn new(
-        layout: (usize, &[usize], usize),
-        matrix: MatrixQueryLayout,
-    ) -> Result<Self, String> {
+    fn new(layout: (usize, &[usize], usize), matrix: MatrixQueryLayout) -> Result<Self, String> {
         let (start, slots, columns) = layout;
         let offset = |slot: usize| {
             slots

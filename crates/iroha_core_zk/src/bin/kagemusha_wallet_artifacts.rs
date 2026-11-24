@@ -631,30 +631,34 @@ fn verify_spartan_sources(
     let manifest = digest(manifest)?;
     let pack = root.read("verifier-pack.norito", spartan::MAX_PACK_BYTES)?;
     let (claims, selected) = spartan::authenticated_pack_selection_any(&pack, &scheme, asset)?;
-    if selected != manifest { return Err(invalid("selected Spartan manifest differs")); }
-    let compiler = claims.built_in_producer()
+    if selected != manifest {
+        return Err(invalid("selected Spartan manifest differs"));
+    }
+    let compiler = claims
+        .built_in_producer()
         .ok_or_else(|| invalid("native compiler registry unavailable"))?;
     let Some(compiled) = compiled else {
         let kinds = match (&claims, &compiler) {
-            (spartan::AuthenticatedPackManifest::Four(header), spartan::CompiledPrograms::Four(pins))
-                if header.primary == pins.primary && header.secondary == pins.secondary => 4,
-            (spartan::AuthenticatedPackManifest::Five(header), spartan::CompiledPrograms::Five(pins))
-                if &header.programs == pins => 5,
-            _ => return Err(invalid("selected Spartan manifest differs from compiler registry")),
+            (
+                spartan::AuthenticatedPackManifest::Four(header),
+                spartan::CompiledPrograms::Four(pins),
+            ) if header.primary == pins.primary && header.secondary == pins.secondary => 4,
+            (
+                spartan::AuthenticatedPackManifest::Five(header),
+                spartan::CompiledPrograms::Five(pins),
+            ) if &header.programs == pins => 5,
+            _ => {
+                return Err(invalid(
+                    "selected Spartan manifest differs from compiler registry",
+                ));
+            }
         };
         original.recheck()?;
         println!("SPARTAN_SOURCE_COMPILER kinds={kinds}");
         return Ok(());
     };
     let compiled = Original::open(compiled, zk_spartan::native::MAX_PROGRAM_BUNDLE_BYTES, None)?;
-    spartan::verify_compiled_bundle(
-        &root,
-        &scheme,
-        asset,
-        manifest,
-        &compiler,
-        &compiled.bytes,
-    )?;
+    spartan::verify_compiled_bundle(&root, &scheme, asset, manifest, &compiler, &compiled.bytes)?;
     compiled.recheck()?;
     original.recheck()?;
     println!("SPARTAN_PROFILE_COMPLETE mode=source_verification");
@@ -800,14 +804,22 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [help] if help == "--help" => {
-            println!("--prepare-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_ARTIFACT_CERTIFICATE");
-            println!("--verify-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_MANIFEST ABSOLUTE_SIGNATURE MANIFEST_DIGEST_HEX");
+            println!(
+                "--prepare-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_ARTIFACT_CERTIFICATE"
+            );
+            println!(
+                "--verify-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_MANIFEST ABSOLUTE_SIGNATURE MANIFEST_DIGEST_HEX"
+            );
             println!("--inspect-spartan-v2-bundle ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON");
             println!(
                 "--encode-spartan-carrier ABSOLUTE_WORLD_INSTALL ABSOLUTE_SCHEME ABSOLUTE_PRIVATE_OUTPUT"
             );
-            println!("--spartan-source-compiler ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST");
-            println!("--verify-spartan-sources ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST ABSOLUTE_FRESH_PROGRAM_BUNDLE");
+            println!(
+                "--spartan-source-compiler ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST"
+            );
+            println!(
+                "--verify-spartan-sources ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST ABSOLUTE_FRESH_PROGRAM_BUNDLE"
+            );
             println!(
                 "Direct time response: --issue-time-anchor ABSOLUTE_IMMUTABLE_PRIVATE_JSON. Signs the selected live wallet nonce with the delegated TimeAnchor key and current issuer UTC; Native still enforces same-boot response age and the subsequent Refresh."
             );
@@ -847,18 +859,38 @@ fn main() {
             )
         }
         [flag, bundle, profile, scope, certificate] if flag == "--prepare-spartan-v2-manifest" => {
-            spartan_manifest::manifest(bundle, profile, scope, spartan_manifest::ManifestAction::Prepare { certificate })
+            spartan_manifest::manifest(
+                bundle,
+                profile,
+                scope,
+                spartan_manifest::ManifestAction::Prepare { certificate },
+            )
         }
-        [flag, bundle, profile, scope, manifest, signature, digest] if flag == "--verify-spartan-v2-manifest" => {
-            spartan_manifest::manifest(bundle, profile, scope, spartan_manifest::ManifestAction::Verify { manifest, signature, digest })
+        [flag, bundle, profile, scope, manifest, signature, digest]
+            if flag == "--verify-spartan-v2-manifest" =>
+        {
+            spartan_manifest::manifest(
+                bundle,
+                profile,
+                scope,
+                spartan_manifest::ManifestAction::Verify {
+                    manifest,
+                    signature,
+                    digest,
+                },
+            )
         }
         [flag, bundle, profile] if flag == "--inspect-spartan-v2-bundle" => {
             inspect_spartan_bundle::run(bundle, profile)
         }
-        [flag, carrier, scheme, scheme_id, asset, manifest] if flag == "--spartan-source-compiler" => {
+        [flag, carrier, scheme, scheme_id, asset, manifest]
+            if flag == "--spartan-source-compiler" =>
+        {
             verify_spartan_sources(carrier, scheme, scheme_id, asset, manifest, None)
         }
-        [flag, carrier, scheme, scheme_id, asset, manifest, compiled] if flag == "--verify-spartan-sources" => {
+        [flag, carrier, scheme, scheme_id, asset, manifest, compiled]
+            if flag == "--verify-spartan-sources" =>
+        {
             verify_spartan_sources(carrier, scheme, scheme_id, asset, manifest, Some(compiled))
         }
         [flag, world, scheme, destination] if flag == "--encode-spartan-carrier" => {

@@ -38,17 +38,23 @@ pub(crate) fn dispatch_spartan_ledger(
     let original = instruction
         .as_any()
         .downcast_ref::<KagemushaWalletLedgerV1>()?;
-    if matches!(original.action, Action::InstallVerifierPack { .. } | Action::Activate(_) | Action::Unload(_))
+    if matches!(
+        original.action,
+        Action::InstallVerifierPack { .. } | Action::Activate(_) | Action::Unload(_)
+    ) && state
+        .world
+        .kagemusha_spartan_programs
+        .get(&original.scheme)
+        .is_some()
+    {
+        return Some(Err(error(wallet::Error::Conflict)));
+    }
+    if matches!(original.action, Action::IssueLoad { .. })
         && state
             .world
             .kagemusha_spartan_programs
             .get(&original.scheme)
             .is_some()
-    {
-        return Some(Err(error(wallet::Error::Conflict)));
-    }
-    if matches!(original.action, Action::IssueLoad { .. })
-        && state.world.kagemusha_spartan_programs.get(&original.scheme).is_some()
         && !wallet::spartan::redemption_available(&*state.world)
     {
         return Some(Err(error(wallet::Error::Lifecycle)));
@@ -136,13 +142,23 @@ impl Execute for iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemus
     }
 }
 
-impl SpartanDispatch for iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1 {
-    fn execute_spartan(&self, authority: &AccountId, state: &mut StateTransaction<'_, '_>) -> wallet::Result<()> {
+impl SpartanDispatch
+    for iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1
+{
+    fn execute_spartan(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> wallet::Result<()> {
         wallet::spartan::activate(state, authority, self)
     }
 }
 impl Execute for iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1 {
-    fn execute(self, authority: &AccountId, state: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
         let result = self.execute_spartan(authority, state);
         spartan_result(result, state)
     }

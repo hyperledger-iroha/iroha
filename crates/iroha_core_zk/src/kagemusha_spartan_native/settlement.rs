@@ -46,7 +46,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 .map_err(|_| invalid("installed genesis epoch"));
         }
         if epoch < initial {
-            return Err(invalid("Load or settlement epoch predates installed genesis"));
+            return Err(invalid(
+                "Load or settlement epoch predates installed genesis",
+            ));
         }
         let (_, marker) = self.custody_checkpoint(slot, wallet)?;
         if marker.epoch_tip.is_none_or(|tip| epoch > tip) {
@@ -120,7 +122,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 object: "certified Load epoch",
             },
         )?;
-        let engine = self.engine
+        let engine = self
+            .engine
             .with_protected_epoch(&self.parameters, &checkpoint)
             .map_err(provider_error)?;
         Ok((engine, Some(checkpoint)))

@@ -541,13 +541,21 @@ fn rederive_four_variable_fixed_point_public_profile() {
             let tape = CompilerGroup::Four.import::<F>(bytes, primary).unwrap();
             let digest = tape.program_digest();
             assert_eq!(tape.check_declared_degrees(), Ok(()));
-            assert!(tape.export_program().unwrap() == *bytes, "exact {side} tape {kind}");
+            assert!(
+                tape.export_program().unwrap() == *bytes,
+                "exact {side} tape {kind}"
+            );
             eprintln!(
                 "five-kind census: side={side} kind={kind} digest={} sx={} sz={} k={} constraints={} challenges={} degrees={:?} outer={:?} inner={:?}",
                 blake3::Hash::from(digest),
-                tape.shape.sx, tape.shape.sz(), tape.shape.k, tape.constraints,
-                tape.phase2_challenges(), tape.challenge_degrees(),
-                tape.shape.outer_blocks(), tape.shape.inner_blocks(),
+                tape.shape.sx,
+                tape.shape.sz(),
+                tape.shape.k,
+                tape.constraints,
+                tape.phase2_challenges(),
+                tape.challenge_degrees(),
+                tape.shape.outer_blocks(),
+                tape.shape.inner_blocks(),
             );
             digest
         })
