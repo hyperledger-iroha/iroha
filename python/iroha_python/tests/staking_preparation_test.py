@@ -13,6 +13,7 @@ from norito.errors import (
     ChecksumMismatchError,
     LengthMismatchError,
     SchemaMismatchError,
+    UnsupportedFeatureError,
     UnsupportedVersionError,
 )
 
@@ -146,17 +147,18 @@ def test_preparation_frames_reject_bad_identity_layout_padding_crc_truncation_an
     for end in range(len(response_bytes)):
         with pytest.raises(LengthMismatchError):
             decode(StakingPreparationV1, response_bytes[:end])
-    for index, error in (
-        (4, UnsupportedVersionError),
-        (5, UnsupportedVersionError),
-        (6, SchemaMismatchError),
-        (22, ValueError),
-        (23, LengthMismatchError),
-        (31, ChecksumMismatchError),
-        (39, SchemaMismatchError),
+    for index, mask, error in (
+        (4, 1, UnsupportedVersionError),
+        (5, 1, UnsupportedFeatureError),
+        (5, 2, UnsupportedVersionError),
+        (6, 1, SchemaMismatchError),
+        (22, 1, ValueError),
+        (23, 1, LengthMismatchError),
+        (31, 1, ChecksumMismatchError),
+        (39, 1, SchemaMismatchError),
     ):
         changed = bytearray(response_bytes)
-        changed[index] ^= 1
+        changed[index] ^= mask
         with pytest.raises(error):
             decode(StakingPreparationV1, bytes(changed))
     for bad, error in (
