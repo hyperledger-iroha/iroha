@@ -859,7 +859,7 @@ private func decodeDaProducerSignatures<Key: CodingKey>(
     return witnesses
 }
 
-/// Producer-signed quota and replay identity, with the exact content digest of the original request.
+/// Producer-signed quota and replay identity, with the content commitment of the original request.
 public struct ToriiDaIngestAuthorization: Codable, Sendable, Equatable {
     public let networkId: NetworkId
     public let owner: String
@@ -868,7 +868,8 @@ public struct ToriiDaIngestAuthorization: Codable, Sendable, Equatable {
     public let sequence: UInt64
     public let payloadHash: ToriiDaDigest32
     public let payloadBytes: UInt64
-    public let requestContentHash: ToriiDaDigest32
+    /// BLAKE3 content commitment as an Iroha hash literal (its final bit is set).
+    public let requestContentHash: ToriiDaHash
     public let signatures: [ToriiDaProducerSignature]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -888,14 +889,66 @@ public struct ToriiDaIngestAuthorization: Codable, Sendable, Equatable {
         sequence = try fields.decode(UInt64.self, forKey: .sequence)
         payloadHash = try fields.decode(ToriiDaDigest32.self, forKey: .payloadHash)
         payloadBytes = try fields.decode(UInt64.self, forKey: .payloadBytes)
-        requestContentHash = try fields.decode(ToriiDaDigest32.self, forKey: .requestContentHash)
+        requestContentHash = try fields.decode(ToriiDaHash.self, forKey: .requestContentHash)
         signatures = try decodeDaProducerSignatures(from: fields, key: .signatures)
     }
 }
 
-/// Producer witnesses binding the accepted receipt and commitment to the requested alias.
+/// Exact ticket, manifest and alias stored in a pin intent.
+///
+/// The producer's witnesses also sign the digest of the paired commitment record, which the
+/// stored scope does not carry; Torii offers it to producers in ``ToriiDaPinScope``.
+public struct ToriiDaStoredPinScope: Codable, Equatable, Sendable {
+    public let networkId: NetworkId
+    public let owner: String
+    public let requestAuthorizationDigest: Data
+    public let laneId: UInt32
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let storageTicket: Data
+    public let manifestHash: Data
+    public let alias: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case networkId = "network_id", owner, laneId = "lane_id", epoch, sequence, alias
+        case requestAuthorizationDigest = "request_authorization_digest", storageTicket = "storage_ticket"
+        case manifestHash = "manifest_hash"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA stored pin scope")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        networkId = try fields.decode(NetworkId.self, forKey: .networkId)
+        owner = try fields.decode(String.self, forKey: .owner)
+        _ = try exactCanonicalToriiAccountAddress(owner)
+        requestAuthorizationDigest = Data(try fields.decode(ToriiDaDigest32.self, forKey: .requestAuthorizationDigest).bytes)
+        laneId = try fields.decode(UInt32.self, forKey: .laneId)
+        epoch = try fields.decode(UInt64.self, forKey: .epoch)
+        sequence = try fields.decode(UInt64.self, forKey: .sequence)
+        storageTicket = Data(try fields.decode(ToriiDaDigest32.self, forKey: .storageTicket).bytes)
+        manifestHash = Data(try fields.decode(ToriiDaDigest32.self, forKey: .manifestHash).bytes)
+        alias = try fields.decodeIfPresent(String.self, forKey: .alias).map {
+            try requireDaPinIntentAlias($0, field: "DA pin alias")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(networkId, forKey: .networkId)
+        try fields.encode(owner, forKey: .owner)
+        try fields.encode([Array(requestAuthorizationDigest)], forKey: .requestAuthorizationDigest)
+        try fields.encode(laneId, forKey: .laneId)
+        try fields.encode(epoch, forKey: .epoch)
+        try fields.encode(sequence, forKey: .sequence)
+        try fields.encode([Array(storageTicket)], forKey: .storageTicket)
+        try fields.encode([Array(manifestHash)], forKey: .manifestHash)
+        try fields.encode(alias, forKey: .alias)
+    }
+}
+
+/// Producer witnesses binding the stored scope, and the digest of its paired commitment, to the requested alias.
 public struct ToriiDaPinScopeAuthorization: Codable, Sendable, Equatable {
-    public let scope: ToriiDaPinScope
+    public let scope: ToriiDaStoredPinScope
     public let signatures: [ToriiDaProducerSignature]
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case scope, signatures }
@@ -903,7 +956,7 @@ public struct ToriiDaPinScopeAuthorization: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA pin scope authorization")
         let fields = try decoder.container(keyedBy: CodingKeys.self)
-        scope = try fields.decode(ToriiDaPinScope.self, forKey: .scope)
+        scope = try fields.decode(ToriiDaStoredPinScope.self, forKey: .scope)
         signatures = try decodeDaProducerSignatures(from: fields, key: .signatures)
     }
 }

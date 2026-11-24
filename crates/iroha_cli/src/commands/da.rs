@@ -19,7 +19,7 @@ use iroha::data_model::{
     asset::AssetDefinitionId,
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
-        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1},
         manifest::DaManifestV1,
         pin_intent::DaPinIntentProof,
         types::{
@@ -213,7 +213,7 @@ struct SubmitReceiptOutput {
     status: String,
     duplicate: bool,
     receipt: DaIngestReceipt,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
     receipt_path: String,
     receipt_json_path: String,
     pdp_commitment_header: Option<String>,
@@ -2128,14 +2128,16 @@ mod tests {
         };
         sign_receipt(&mut receipt);
         let scope_for = |receipt: &DaIngestReceipt| {
-            DaPinScopeV1::new(
-                &request.authorization(),
-                receipt.storage_ticket,
-                ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            DaPinScopeProposalV1::new(
+                DaPinScopeV1::new(
+                    &request.authorization(),
+                    receipt.storage_ticket,
+                    ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+                    Some("public/blob".into()),
+                ),
                 receipt
                     .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
                     .pin_scope_digest(),
-                Some("public/blob".into()),
             )
         };
         let scope = scope_for(&receipt);
@@ -2143,7 +2145,7 @@ mod tests {
         let request_path = dir.path().join("da_request.json");
         let response_path = dir.path().join("da_response.json");
         fs::write(&request_path, json::to_vec(&request).unwrap()).unwrap();
-        let write_response = |receipt: &DaIngestReceipt, scope: &DaPinScopeV1| {
+        let write_response = |receipt: &DaIngestReceipt, scope: &DaPinScopeProposalV1| {
             let response = norito::json!({ "status": "pending_pin_authorization", "duplicate": false,
                 "receipt": receipt, "pin_scope": scope });
             fs::write(&response_path, json::to_vec(&response).unwrap()).unwrap();
@@ -2270,12 +2272,14 @@ mod tests {
             None,
         )
         .expect("build DA submit persistence fixture");
-        let scope = DaPinScopeV1::new(
-            &request.authorization(),
-            StorageTicketId::new([0x54; 32]),
-            ManifestDigest::new([0x55; 32]),
-            Default::default(),
-            None,
+        let scope = DaPinScopeProposalV1::new(
+            DaPinScopeV1::new(
+                &request.authorization(),
+                StorageTicketId::new([0x54; 32]),
+                ManifestDigest::new([0x55; 32]),
+                None,
+            ),
+            BlobDigest::default(),
         );
         let mut authorized = request.clone();
         authorized
@@ -2384,7 +2388,7 @@ mod tests {
             sequence: 3,
             payload_hash: BlobDigest::new([0xEB; 32]),
             payload_bytes: 1,
-            request_content_hash: BlobDigest::new([0xEC; 32]),
+            request_content_hash: iroha_crypto::Hash::prehashed([0xEC; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -2399,11 +2403,11 @@ mod tests {
             &authorization,
             StorageTicketId::new([0x44; 32]),
             ManifestDigest::new([0x55; 32]),
-            Default::default(),
             None,
         );
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-            .expect("sign deterministic CLI DA pin scope");
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+                .expect("sign deterministic CLI DA pin scope");
         let intent = DaPinIntent::new(authorization, scope_authorization);
         let proof = DaPinIntentProof {
             intent,

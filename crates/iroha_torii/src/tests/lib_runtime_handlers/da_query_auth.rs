@@ -240,7 +240,7 @@ mod da_query_auth {
             sequence: 1,
             payload_hash: BlobDigest::new([0xBA; 32]),
             payload_bytes: 1,
-            request_content_hash: BlobDigest::new([0xBB; 32]),
+            request_content_hash: iroha_crypto::Hash::prehashed([0xBB; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -252,11 +252,11 @@ mod da_query_auth {
             &authorization,
             StorageTicketId::new([0xBC; 32]),
             ManifestDigest::new([0xBD; 32]),
-            Default::default(),
             None,
         );
         let scope_authorization =
-            DaPinScopeAuthorizationV1::try_sign(scope, &signer).expect("fixture pin authorization");
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &signer)
+                .expect("fixture pin authorization");
         let bundle =
             DaPinIntentBundle::new(vec![DaPinIntent::new(authorization, scope_authorization)]);
         let proof = iroha_core::da::build_da_pin_intent_proof(&bundle, 2, 0)

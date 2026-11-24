@@ -193,9 +193,9 @@ async fn finalized_inclusion(
             ensure!(
                 pin == &pin_proof.intent
                     && pin.authorization.owner == cli_publisher_id()
-                    && pin.pin_scope_authorization.scope.commitment_digest
-                        == expected.pin_scope_digest()
-                    && pin.pin_scope_authorization.has_valid_canonical_signatures()
+                    && pin
+                        .pin_scope_authorization
+                        .has_valid_canonical_signatures(&expected.pin_scope_digest())
                     && pin.authorization.has_valid_canonical_signatures()
             );
             // A different in-flight ordinary publication transaction can win the proposer race.

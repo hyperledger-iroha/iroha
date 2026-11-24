@@ -912,7 +912,10 @@ their original interface. Explicit registration and deployed execution resolve t
 ABI and check its selected definition and restrictions.
 
 The approved certified block schema has wire identity
-`f06b6d0e1ecc75fb87e31314c24061cc74f85405a19346068a05642aee322d3f`.
+`6dd75f608b5935ee4de7fb9c72b1c192c6c906b0963b52cbc83a9865184727b1`. The November 18 C10
+identity `f06b6d0e…` gained the DA proof scheme's corrected label and the exact BLAKE3
+commitment `chunk_root` under the same coordinated decoder rollout; Taira has committed no DA
+records, and the stored pin-intent types keep the frozen baseline layout.
 A C10 output carries its own typed result. Native proof consumers bind an observation to the
 signed input and its certified output position. The coordinated rollout includes account-signed
 C10 manifest reads, negotiated C10 event delivery and the mixed-output proof fixture in

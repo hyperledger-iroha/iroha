@@ -1633,17 +1633,15 @@ fn signed_pin_intent(
 ) -> DaPinIntent {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let authorization = request.authorization();
-    let scope = DaPinScopeV1::new(
-        &authorization,
-        storage_ticket,
-        manifest_hash,
-        Default::default(),
-        alias,
-    );
-    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &keypair)
-        .expect("sign canonical DA pin-scope fixture");
+    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
+    let scope_authorization =
+        DaPinScopeAuthorizationV1::try_sign(scope, &FIXTURE_COMMITMENT_DIGEST, &keypair)
+            .expect("sign canonical DA pin-scope fixture");
     DaPinIntent::new(authorization, scope_authorization)
 }
+
+/// Paired commitment digest that `signed_pin_intent` fixtures sign.
+const FIXTURE_COMMITMENT_DIGEST: BlobDigest = BlobDigest::new([0; 32]);
 
 fn signed_pin_intent_for_manifest(
     request: &DaIngestRequest,
@@ -1651,15 +1649,10 @@ fn signed_pin_intent_for_manifest(
     digest: BlobDigest,
 ) -> DaPinIntent {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
-    let scope = build_da_pin_scope(
-        request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        digest,
-    )
-    .expect("build canonical DA pin scope");
-    let scope_authorization =
-        DaPinScopeAuthorizationV1::try_sign(scope, &keypair).expect("sign canonical DA pin scope");
+    let scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build canonical DA pin scope");
+    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &digest, &keypair)
+        .expect("sign canonical DA pin scope");
     build_da_pin_intent(request, scope_authorization)
 }
 
@@ -2099,11 +2092,11 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
         &request.authorization(),
         storage_ticket,
         manifest_hash,
-        Default::default(),
         None,
     );
+    let proposal = DaPinScopeProposalV1::new(scope.clone(), FIXTURE_COMMITMENT_DIGEST);
     request
-        .try_add_pin_scope_signature(&scope, &pin_signer)
+        .try_add_pin_scope_signature(&proposal, &pin_signer)
         .expect("sign initial pin scope");
     let first = build_da_pin_intent(&request, request.pin_scope_authorization(scope.clone()));
     let mut retry = request.clone();
@@ -2111,7 +2104,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
     retry.signatures[0].signature = checked_signature(primary.private_key(), &retry_digest);
     retry.pin_scope_signatures.clear();
     retry
-        .try_add_pin_scope_signature(&scope, &pin_signer)
+        .try_add_pin_scope_signature(&proposal, &pin_signer)
         .expect("re-sign retry pin scope");
     let second = build_da_pin_intent(&retry, retry.pin_scope_authorization(scope.clone()));
     assert_ne!(to_bytes(&first).unwrap(), to_bytes(&second).unwrap());
@@ -2119,6 +2112,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
     persistence::persist_da_pin_intent(
         spool.path(),
         &first,
+        &FIXTURE_COMMITMENT_DIGEST,
         request.lane_id,
         request.epoch,
         request.sequence,
@@ -2129,6 +2123,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
     persistence::persist_da_pin_intent(
         spool.path(),
         &second,
+        &FIXTURE_COMMITMENT_DIGEST,
         retry.lane_id,
         retry.epoch,
         retry.sequence,
@@ -2143,15 +2138,29 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
         request.sequence,
         &storage_ticket,
         &fingerprint,
+        &FIXTURE_COMMITMENT_DIGEST,
     )
     .expect("reload frozen pin intent");
     assert_eq!(frozen, first);
+    // The stored witnesses cover the paired commitment digest the receipt derives.
+    assert!(
+        persistence::load_da_pin_intent(
+            spool.path(),
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &storage_ticket,
+            &fingerprint,
+            &BlobDigest::new([0x01; 32]),
+        )
+        .is_err()
+    );
 
     let different_pin_signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
     let mut conflicting_retry = request.clone();
     conflicting_retry.pin_scope_signatures.clear();
     conflicting_retry
-        .try_add_pin_scope_signature(&scope, &different_pin_signer)
+        .try_add_pin_scope_signature(&proposal, &different_pin_signer)
         .expect("sign conflicting retry pin scope");
     let conflicting = build_da_pin_intent(
         &conflicting_retry,
@@ -2160,6 +2169,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
     let error = persistence::select_da_pin_intent_for_persistence(
         spool.path(),
         &conflicting,
+        &FIXTURE_COMMITMENT_DIGEST,
         request.lane_id,
         request.epoch,
         request.sequence,
@@ -3128,20 +3138,16 @@ fn da_ingest_openapi_matches_signed_request_and_receipt_json() {
     );
     let signer = checked_fixture_ed25519_keypair(0x42);
     let receipt = test_receipt(&signer, request.lane_id, request.epoch, request.sequence, 7);
-    let scope = build_da_pin_scope(
-        &request,
-        receipt.storage_ticket,
-        receipt.manifest_hash,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    )
-    .expect("scope");
+    let commitment_digest = receipt
+        .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+        .pin_scope_digest();
+    let scope =
+        build_da_pin_scope(&request, receipt.storage_ticket, receipt.manifest_hash).expect("scope");
     let response = DaIngestResponse {
         status: "pending_pin_authorization",
         duplicate: false,
         receipt: Some(receipt),
-        pin_scope: Some(scope),
+        pin_scope: Some(DaPinScopeProposalV1::new(scope, commitment_digest)),
     };
     let wire = json::to_value(&response).expect("encode prepared response");
     let response_schema = &schemas["DaIngestResponse"];
@@ -3152,7 +3158,7 @@ fn da_ingest_openapi_matches_signed_request_and_receipt_json() {
         &wire["receipt"]["stripe_layout"],
     );
     assert_fields(&schemas["DaRentQuote"], &wire["receipt"]["rent_quote"]);
-    assert_fields(&schemas["DaPinScopeV1"], &wire["pin_scope"]);
+    assert_fields(&schemas["DaPinScopeProposalV1"], &wire["pin_scope"]);
     let result = &response_schema["properties"];
     assert_eq!(
         result["status"]["enum"],
@@ -3164,9 +3170,10 @@ fn da_ingest_openapi_matches_signed_request_and_receipt_json() {
     );
     assert_eq!(
         result["pin_scope"]["$ref"].as_str(),
-        Some("#/components/schemas/DaPinScopeV1")
+        Some("#/components/schemas/DaPinScopeProposalV1")
     );
     assert!(wire["pin_scope"]["alias"].is_null());
+    assert!(wire["pin_scope"]["commitment_digest"].is_array());
     let receipt = &schemas["DaIngestReceipt"]["properties"];
     let pdp = wire["receipt"]["pdp_commitment"]
         .as_str()

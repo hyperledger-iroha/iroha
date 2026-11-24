@@ -312,7 +312,9 @@ function daSigningDigest(request, wireBytes) {
     }
   });
 
+  // The signed content commitment is an Iroha hash: BLAKE3 with its final bit set.
   const contentHash = Buffer.from(content.digest());
+  contentHash[contentHash.length - 1] |= 1;
   const networkId = NetworkId.parse(
     requireNonEmptyString(request.network_id, "network_id"),
   );

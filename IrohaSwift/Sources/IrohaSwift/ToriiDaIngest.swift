@@ -817,7 +817,7 @@ struct ToriiDaIngestRequestBuilder {
             }
         }
 
-        guard let contentHash = NoritoNativeBridge.shared.blake3Hash(data: preimage),
+        guard var contentHash = NoritoNativeBridge.shared.blake3Hash(data: preimage),
               contentHash.count == 32 else {
             throw ToriiClientError.invalidPayload(
                 NoritoNativeBridge.bridgeUnavailableMessage(
@@ -825,6 +825,8 @@ struct ToriiDaIngestRequestBuilder {
                 )
             )
         }
+        // The signed content commitment is an Iroha hash: BLAKE3 with its final bit set.
+        contentHash[contentHash.index(before: contentHash.endIndex)] |= 1
         var authorization = ToriiDaIngestSigningDomainV1
         authorization.append(submission.networkId.bytes)
         try appendLengthPrefixed(ownerAddress.canonicalBytes(), to: &authorization)

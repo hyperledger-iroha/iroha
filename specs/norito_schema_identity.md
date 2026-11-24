@@ -700,6 +700,15 @@ ambient layout. The exact-module qualification is
 These tests and the byte-identical original fixture are integrated. The combined
 build and 53-test model DA suite above qualify their actual model test executable.
 
+The durable receipt record is now version 2, whose receipt carries
+`retention_policy`. Its nominal identity
+`iroha_torii::da::persistence::StoredDaReceiptV2` (root hash
+`6c93dad8b91acba86cf6f16f126a68db`) makes the header declare that layout, and
+`fixtures/da/stored_receipt_frames.v2.json` pins the version-2 writer's ten
+root/Option/Vec frames. The ten original version-1 frames above remain
+byte-identical as refusal vectors: `StoredDaReceipt::decode_frame` refuses the
+retired `f4b055d4…` owner with a typed error and never decodes its body.
+
 All 16 feature-resolved normal/build dependency-boundary selections and 45 guard
 tests pass on this full source. Manifest dependency budgets remain failed. The
 reviewed original baseline attributes all 24 changed metric cells to four

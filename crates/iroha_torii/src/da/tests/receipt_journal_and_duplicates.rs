@@ -250,6 +250,37 @@ fn load_da_receipts_rejects_unsupported_versions() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 #[test]
+fn receipt_restart_refuses_retired_version_1_frames_by_header_owner() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = checked_random_keypair();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAD);
+    let mut bytes = encoded_stored_receipt(&receipt, 7, StoredDaReceipt::VERSION);
+    bytes[6..22].copy_from_slice(&norito::core::schema_hash_for_name(
+        StoredDaReceipt::RETIRED_V1_FRAME_NAME,
+    ));
+    fs::write(
+        canonical_receipt_spool_path(manifest_dir, &receipt, 7),
+        bytes,
+    )
+    .expect("write retired receipt");
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("a retired version-1 receipt must reject the receipt load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        format!("{err:#}").contains("retired version-1 DA receipt frame"),
+        "{err:#}"
+    );
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let Err(error) = open_receipt_log(manifest_dir, &cursor_store, &signer) else {
+        panic!("Torii restart must refuse a retained version-1 receipt");
+    };
+    assert!(
+        format!("{error:#}").contains("retired version-1 DA receipt frame"),
+        "{error:#}"
+    );
+}
+#[test]
 fn load_da_receipts_rejects_filename_body_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
@@ -971,15 +1002,12 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
-    let durable_scope = build_da_pin_scope(
-        &request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    )
-    .expect("build durable pin scope");
+    let commitment_digest = receipt
+        .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+        .pin_scope_digest();
+    let durable_scope =
+        build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+            .expect("build durable pin scope");
     persistence::persist_da_pin_scope(
         spool_dir,
         &durable_scope,
@@ -991,16 +1019,11 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     )
     .expect("persist pin scope")
     .expect("pin-scope path");
-    let durable_pin_intent = signed_pin_intent_for_manifest(
-        &request,
-        &manifest,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    );
+    let durable_pin_intent = signed_pin_intent_for_manifest(&request, &manifest, commitment_digest);
     persistence::persist_da_pin_intent(
         spool_dir,
         &durable_pin_intent,
+        &commitment_digest,
         request.lane_id,
         request.epoch,
         request.sequence,
@@ -1105,15 +1128,11 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
         manifest.manifest.retention_policy.clone(),
     )
     .expect("build pending receipt fixture");
-    let scope = build_da_pin_scope(
-        &request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    )
-    .expect("build exact pin scope");
+    let commitment_digest = receipt
+        .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+        .pin_scope_digest();
+    let scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact pin scope");
 
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     // Readiness requires the envelope to have been staged by the earlier ingest phase.
@@ -1176,7 +1195,7 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
 
     request
         .try_add_pin_scope_signature(
-            &scope,
+            &DaPinScopeProposalV1::new(scope.clone(), commitment_digest),
             &checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519),
         )
         .expect("authorize exact durable pin scope");
@@ -1203,7 +1222,8 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
             request.epoch,
             sequence,
             &manifest.storage_ticket,
-            &manifest.fingerprint
+            &manifest.fingerprint,
+            &commitment_digest,
         )
         .unwrap_err()
         .kind(),
@@ -1229,6 +1249,7 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
         request.sequence,
         &manifest.storage_ticket,
         &manifest.fingerprint,
+        &commitment_digest,
     )
     .expect("producer-authorized pin intent must be durable");
 }
@@ -1238,14 +1259,25 @@ fn submitted_pin_scope_witness_cannot_authorize_a_different_durable_scope() {
     let context = zero_sequence_manifest_context_for(BlobClass::NexusLaneSidecar);
     let request = context.request;
     let manifest = context.artifacts;
-    let exact_scope = build_da_pin_scope(
-        &request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        BlobDigest::new([0x32; 32]),
-    )
-    .expect("build exact durable pin scope");
+    let commitment_digest = BlobDigest::new([0x32; 32]);
+    let exact_scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact durable pin scope");
     let signer = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    // A witness over the exact scope but another commitment digest is refused too.
+    let mut other_commitment = request.clone();
+    other_commitment
+        .try_add_pin_scope_signature(
+            &DaPinScopeProposalV1::new(exact_scope.clone(), BlobDigest::new([0x33; 32])),
+            &signer,
+        )
+        .expect("sign scope over another commitment");
+    let error = submitted_pin_scope_authorization(
+        &other_commitment,
+        exact_scope.clone(),
+        &commitment_digest,
+    )
+    .expect_err("a witness over another commitment must reject");
+    assert_eq!(error.0, StatusCode::UNAUTHORIZED);
 
     for forged_scope in [
         DaPinScopeV1 {
@@ -1263,10 +1295,17 @@ fn submitted_pin_scope_witness_cannot_authorize_a_different_durable_scope() {
     ] {
         let mut forged_request = request.clone();
         forged_request
-            .try_add_pin_scope_signature(&forged_scope, &signer)
+            .try_add_pin_scope_signature(
+                &DaPinScopeProposalV1::new(forged_scope, commitment_digest),
+                &signer,
+            )
             .expect("sign forged pin scope fixture");
-        let error = submitted_pin_scope_authorization(&forged_request, exact_scope.clone())
-            .expect_err("a witness over another scope must reject");
+        let error = submitted_pin_scope_authorization(
+            &forged_request,
+            exact_scope.clone(),
+            &commitment_digest,
+        )
+        .expect_err("a witness over another scope must reject");
         assert_eq!(error.0, StatusCode::UNAUTHORIZED);
     }
 }
@@ -1339,15 +1378,11 @@ fn persist_completed_duplicate_fixture(
         manifest.manifest.retention_policy.clone(),
     )
     .expect("build duplicate fixture receipt");
-    let pin_scope = build_da_pin_scope(
-        request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    )
-    .expect("build duplicate fixture pin scope");
+    let commitment_digest = receipt
+        .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+        .pin_scope_digest();
+    let pin_scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build duplicate fixture pin scope");
     persistence::persist_da_pin_scope(
         spool_dir,
         &pin_scope,
@@ -1359,16 +1394,11 @@ fn persist_completed_duplicate_fixture(
     )
     .expect("persist duplicate fixture pin scope")
     .expect("duplicate fixture pin-scope path");
-    let pin_intent = signed_pin_intent_for_manifest(
-        request,
-        manifest,
-        receipt
-            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
-            .pin_scope_digest(),
-    );
+    let pin_intent = signed_pin_intent_for_manifest(request, manifest, commitment_digest);
     persistence::persist_da_pin_intent(
         spool_dir,
         &pin_intent,
+        &commitment_digest,
         request.lane_id,
         request.epoch,
         request.sequence,

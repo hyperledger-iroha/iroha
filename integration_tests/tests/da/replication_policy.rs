@@ -8,7 +8,7 @@ use iroha_config::parameters::actual::DaReplicationPolicy;
 use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1, DaPinScopeProposalV1},
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentPolicyV1, DaRentQuote,
@@ -134,7 +134,7 @@ struct DaIngestHttpResponse {
     status: String,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
 }
 
 async fn ingest_and_fetch_manifest(

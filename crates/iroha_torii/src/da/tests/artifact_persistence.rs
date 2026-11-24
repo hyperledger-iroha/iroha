@@ -313,6 +313,7 @@ fn persist_da_pin_intent_writes_file() {
     let path = persistence::persist_da_pin_intent(
         manifest_dir,
         &intent,
+        &FIXTURE_COMMITMENT_DIGEST,
         request.lane_id,
         request.epoch,
         request.sequence,
@@ -334,6 +335,7 @@ fn persist_da_pin_intent_writes_file() {
         request.sequence,
         &manifest.storage_ticket,
         &manifest.fingerprint,
+        &FIXTURE_COMMITMENT_DIGEST,
     )
     .expect("load exact pin intent");
     assert_eq!(loaded, intent);
@@ -346,13 +348,8 @@ fn persist_da_pin_scope_roundtrips_and_rejects_replacement() {
     let (fixture, manifest) =
         resolved_manifest_fixture(sample_request(), 1_701_700_124, "manifest");
     let request = &fixture.request;
-    let scope = build_da_pin_scope(
-        request,
-        manifest.storage_ticket,
-        manifest.manifest_hash,
-        BlobDigest::new([0x32; 32]),
-    )
-    .expect("build exact pin scope");
+    let scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact pin scope");
     let path = persistence::persist_da_pin_scope(
         manifest_dir,
         &scope,
@@ -417,6 +414,7 @@ fn load_da_pin_intent_rejects_filename_body_tuple_mismatch() {
         wrong_sequence,
         &manifest.storage_ticket,
         &manifest.fingerprint,
+        &BlobDigest::new([0x32; 32]),
     )
     .expect_err("pin-intent filename/body mismatch must reject");
     assert_eq!(err.kind(), ErrorKind::InvalidData);
@@ -557,6 +555,7 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         persistence::persist_da_pin_intent(
             manifest_dir,
             &intent,
+            &FIXTURE_COMMITMENT_DIGEST,
             request.lane_id,
             request.epoch,
             request.sequence.saturating_add(1),
@@ -719,6 +718,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         persistence::persist_da_pin_intent(
             manifest_dir,
             &intent,
+            &FIXTURE_COMMITMENT_DIGEST,
             request.lane_id,
             request.epoch,
             request.sequence,

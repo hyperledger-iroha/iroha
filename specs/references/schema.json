@@ -6976,7 +6976,7 @@
       },
       {
         "name": "request_content_hash",
-        "type": "BlobDigest"
+        "type": "Hash"
       },
       {
         "name": "signatures",
@@ -7169,10 +7169,6 @@
       {
         "name": "manifest_hash",
         "type": "ManifestDigest"
-      },
-      {
-        "name": "commitment_digest",
-        "type": "BlobDigest"
       },
       {
         "name": "alias",

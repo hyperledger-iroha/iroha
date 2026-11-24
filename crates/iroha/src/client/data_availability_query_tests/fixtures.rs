@@ -71,7 +71,7 @@ pub(super) fn sample_da_pin_intent_with_location(network: NetworkId) -> DaPinInt
         sequence: 8,
         payload_hash: BlobDigest::new([0xE7; 32]),
         payload_bytes: 1,
-        request_content_hash: BlobDigest::new([0xE8; 32]),
+        request_content_hash: iroha_crypto::Hash::prehashed([0xE8; 32]),
         signatures: Vec::new(),
     };
     authorization.signatures.push(DaIngestSignatureV1 {
@@ -83,12 +83,14 @@ pub(super) fn sample_da_pin_intent_with_location(network: NetworkId) -> DaPinInt
         &authorization,
         StorageTicketId::new([0x70; 32]),
         ManifestDigest::new([0x71; 32]),
-        Default::default(),
         None,
     );
-    let scope_authorization =
-        iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-            .expect("sign deterministic client DA pin scope");
+    let scope_authorization = iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(
+        scope,
+        &BlobDigest::default(),
+        &key_pair,
+    )
+    .expect("sign deterministic client DA pin scope");
     DaPinIntentWithLocation {
         intent: DaPinIntent::new(authorization, scope_authorization),
         location: DaCommitmentLocation {

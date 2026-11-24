@@ -22,5 +22,13 @@ remains reproducible. Update them by running the ignored test
 The shared Rust, JavaScript and Swift producer tests also read
 `request_signing_v1.json`. Its identity and RFC 1950 DEFLATE cases sign the
 same canonical payload using different transport bytes. Each case fixes the
-raw BLAKE3 content digest, the outer authorization digest, the canonical
-public-key literal and the Ed25519 signature. The content digests cover both values of the final bit.
+request-content commitment (the BLAKE3 content digest as an Iroha hash, with
+its final bit set), the outer authorization digest, the canonical public-key
+literal and the Ed25519 signature.
+
+`pin_intent_v1.json` is a signed stored `DaPinIntent` in the frozen baseline
+layout: its scope carries no commitment digest, and `request_content_hash` is a
+hash literal. The producer's scope witness signs the scope together with the
+digest of its paired commitment record, `BlobDigest([0x44; 32])` for this
+fixture; `signed_pin_intent_fixture_authenticates_both_domains_and_round_trips`
+verifies it against that digest.

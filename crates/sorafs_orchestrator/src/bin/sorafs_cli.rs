@@ -720,7 +720,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &pack_summary_path,
             &manifest_path,
             &manifest_json_path,
-            da_package.as_ref().map(|package| package.policy.clone()),
+            da_package.as_ref().map(|package| package.policy),
         )
     };
     let mut receipt = Map::new();

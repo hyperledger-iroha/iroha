@@ -10138,7 +10138,12 @@
             "$ref": "#/components/schemas/DaDigest32"
           },
           "request_content_hash": {
-            "$ref": "#/components/schemas/DaDigest32"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              }
+            ],
+            "description": "Commitment to every remaining signed request field: the BLAKE3 content digest as an Iroha hash, whose final bit is set."
           },
           "sequence": {
             "format": "uint64",
@@ -10417,7 +10422,7 @@
             "type": "boolean"
           },
           "pin_scope": {
-            "$ref": "#/components/schemas/DaPinScopeV1"
+            "$ref": "#/components/schemas/DaPinScopeProposalV1"
           },
           "receipt": {
             "$ref": "#/components/schemas/DaIngestReceipt"
@@ -10948,8 +10953,9 @@
         ],
         "type": "object"
       },
-      "DaPinScopeV1": {
+      "DaPinScopeProposalV1": {
         "additionalProperties": false,
+        "description": "Pin scope returned to a producer for approval. Producer witnesses sign the scope together with commitment_digest, the digest of the complete proposed commitment; stored pin intents carry only the DaPinScopeV1 projection.",
         "properties": {
           "alias": {
             "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
@@ -11001,6 +11007,59 @@
           "storage_ticket",
           "manifest_hash",
           "commitment_digest",
+          "alias"
+        ],
+        "type": "object"
+      },
+      "DaPinScopeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "request_authorization_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "request_authorization_digest",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "storage_ticket",
+          "manifest_hash",
           "alias"
         ],
         "type": "object"

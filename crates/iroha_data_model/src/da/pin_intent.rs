@@ -311,7 +311,7 @@ mod tests {
             sequence,
             payload_hash: BlobDigest::new([0xDB; 32]),
             payload_bytes: 1,
-            request_content_hash: BlobDigest::new([0xDC; 32]),
+            request_content_hash: Hash::prehashed([0xDC; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -330,15 +330,10 @@ mod tests {
         alias: Option<String>,
     ) -> DaPinIntent {
         let authorization = test_authorization(lane, epoch, sequence);
-        let scope = DaPinScopeV1::new(
-            &authorization,
-            storage_ticket,
-            manifest_hash,
-            Default::default(),
-            alias,
-        );
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &test_key_pair())
-            .expect("sign deterministic pin scope");
+        let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &test_key_pair())
+                .expect("sign deterministic pin scope");
         DaPinIntent::new(authorization, scope_authorization)
     }
 

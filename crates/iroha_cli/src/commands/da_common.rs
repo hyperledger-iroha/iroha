@@ -14,7 +14,7 @@ use iroha::{
 use iroha_data_model::{
     NetworkId,
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeSignatureV1, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1, DaPinScopeSignatureV1},
         types::{
             BlobClass, ExtraMetadata, FecScheme, MetadataEncryption, MetadataEntry,
             MetadataVisibility,
@@ -65,7 +65,7 @@ pub(super) struct DaPublisherReceipt {
     pub(super) bytes: Vec<u8>,
     pub(super) json: String,
     pub(super) receipt: DaIngestReceipt,
-    pub(super) pin_scope: Option<DaPinScopeV1>,
+    pub(super) pin_scope: Option<DaPinScopeProposalV1>,
     pub(super) submitted_request: DaIngestRequest,
     pub(super) pdp_commitment_header: Option<String>,
 }
@@ -75,7 +75,7 @@ struct DaIngestResponsePayload {
     status: String,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
 }
 /// Blocking manifest adapter using the SDK's shared asynchronous transport.
 pub(super) struct DaManifestFetcher {
@@ -326,13 +326,13 @@ struct DaIngestResponse {
     status: String,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
     pdp_commitment_header: Option<String>,
 }
 fn validate_da_ingest_response<'a>(
     request: &DaIngestRequest,
     response: &'a DaIngestResponse,
-) -> Result<(&'a DaIngestReceipt, &'a DaPinScopeV1)> {
+) -> Result<(&'a DaIngestReceipt, &'a DaPinScopeProposalV1)> {
     if response.status != "accepted" && response.status != "pending_pin_authorization" {
         return Err(eyre!(
             "Torii returned unexpected DA ingest status `{}`",
@@ -758,17 +758,14 @@ mod tests {
     fn publisher_uses_json_and_authorizes_pin_scope_once() {
         let (key_pair, request) = publisher_request_fixture();
         let receipt = receipt_for_request(&request);
-        let scope = DaPinScopeV1::new(
-            &request.authorization(),
-            receipt.storage_ticket,
-            ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-            receipt
-                .commitment_record(
-                    request.sequence,
-                    iroha_data_model::da::commitment::DaProofScheme::SorafsPorBlake3,
-                )
-                .pin_scope_digest(),
-            None,
+        let scope = DaPinScopeProposalV1::new(
+            iroha_data_model::da::ingest::DaPinScopeV1::new(
+                &request.authorization(),
+                receipt.storage_ticket,
+                ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+                None,
+            ),
+            receipt.pin_scope_commitment_digest(request.sequence),
         );
         let pending = norito::json::to_vec(&DaIngestResponsePayload {
             status: "pending_pin_authorization".to_owned(),

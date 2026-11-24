@@ -2318,9 +2318,22 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         pin_properties["pin_scope_authorization"]["$ref"].as_str(),
         Some("#/components/schemas/DaPinScopeAuthorizationV1")
     );
+    // Stored pin scopes keep their frozen layout; the commitment digest is offered to
+    // producers in the proposal and verified from the paired record.
+    assert!(
+        schemas["DaPinScopeV1"]["properties"]
+            .get("commitment_digest")
+            .is_none()
+    );
     assert_eq!(
-        schemas["DaPinScopeV1"]["properties"]["commitment_digest"]["$ref"].as_str(),
+        schemas["DaPinScopeProposalV1"]["properties"]["commitment_digest"]["$ref"].as_str(),
         Some("#/components/schemas/DaDigest32")
+    );
+    assert_eq!(
+        schemas["DaIngestAuthorizationV1"]["properties"]["request_content_hash"]["allOf"][0]
+            ["$ref"]
+            .as_str(),
+        Some("#/components/schemas/Hash")
     );
     let direction = schemas
         .get("MerkleDirection")
