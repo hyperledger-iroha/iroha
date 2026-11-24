@@ -47,7 +47,7 @@ pub use budget::{
 pub use fixed_base::FixedBaseTable;
 pub use spartan_ct::{
     msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
-    msm_secret_ct_cancellable,
+    msm_secret_ct_bounded_columns_supported_cancellable, msm_secret_ct_cancellable,
 };
 
 use crate::{CancellationToken, Cancelled};
