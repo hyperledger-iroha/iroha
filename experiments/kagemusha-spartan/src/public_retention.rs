@@ -84,6 +84,7 @@ impl<F: Scalar> UniformCircuit<F> {
             row_base: vec![],
             blocks: vec![],
             bounds: vec![],
+            present: vec![],
             fixed_rows: self.fixed_rows,
             fixed_values: self.fixed_values.compact(),
             wallet_rows: self.wallet_rows,

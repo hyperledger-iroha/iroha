@@ -1576,6 +1576,11 @@ type PrivateRows<S> = (
     Vec<crate::r1cs::RowFill>,
 );
 
+/// Builds the private circuit and witness of `wiring`. `prepare` runs on the
+/// wiring's arrays first: the primary shares equal public template
+/// coefficients there ([`share_wiring_coefficients`]); others pass
+/// [`keep_wiring`]. The circuit is the same either way.
+#[allow(clippy::too_many_arguments)]
 fn build_private_rows<S: Scalar + zeroize::Zeroize>(
     wiring: full::Wiring<S>,
     label: &'static str,
@@ -1584,13 +1589,15 @@ fn build_private_rows<S: Scalar + zeroize::Zeroize>(
     io_len: usize,
     seed: &[u8],
     layout: Option<crate::uniform::Layout>,
+    prepare: fn(&'static str, &mut [crate::uniform::Array<S>]),
 ) -> Result<PrivateRows<S>> {
     let build = match group {
         3 => UniformCircuit::<S>::build_rows_grouped_with_release::<3>,
         4 => UniformCircuit::<S>::build_rows_grouped_with_release::<4>,
         _ => return Err(Error::Malformed("selected sumcheck grouping")),
     };
-    let (arrays, pi, counts, tables, copies) = wiring.finish();
+    let (mut arrays, pi, counts, tables, copies) = wiring.finish();
+    prepare(label, &mut arrays);
     Ok(build(
         label,
         arrays,
@@ -1606,11 +1613,45 @@ fn build_private_rows<S: Scalar + zeroize::Zeroize>(
     ))
 }
 
+/// A wiring left as it is before its build.
+fn keep_wiring<S>(_label: &'static str, _arrays: &mut [crate::uniform::Array<S>]) {}
+
+/// Let the wiring's equal public template coefficients share one allocation
+/// before the build. The build is a native operation's heap peak: the arrays'
+/// private values, the placed witness and the new circuit's structures are
+/// live together, and the duplicate buffers were otherwise shared only after
+/// it ([`UniformCircuit::share_template_coefficients`]).
+fn share_wiring_coefficients<S: Scalar + std::hash::Hash>(
+    label: &'static str,
+    arrays: &mut [crate::uniform::Array<S>],
+) {
+    let before = crate::prof::memory_enabled().then(crate::prof::heap_in_use);
+    crate::uniform::share_array_coefficients(arrays);
+    if let Some(before) = before {
+        println!(
+            "wiring coefficient sharing {label}: heap in use {:.0} -> {:.0} MB",
+            before as f64 / 1e6,
+            crate::prof::heap_in_use() as f64 / 1e6
+        );
+    }
+}
+
 fn build<S: Scalar + zeroize::Zeroize>(
     w: full::Wiring<S>,
     target: &UniformCircuit<S>,
     entropy: &ProofEntropy,
     purpose: &[u8],
+) -> Result<PrivateRows<S>> {
+    build_prepared(w, target, entropy, purpose, keep_wiring)
+}
+
+/// [`build`] with a step on the wiring's arrays before the build.
+fn build_prepared<S: Scalar + zeroize::Zeroize>(
+    w: full::Wiring<S>,
+    target: &UniformCircuit<S>,
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+    prepare: fn(&'static str, &mut [crate::uniform::Array<S>]),
 ) -> Result<PrivateRows<S>> {
     let seed = zeroize::Zeroizing::new(entropy.stream(purpose).scalar::<Fp>().to_repr());
     build_private_rows(
@@ -1621,6 +1662,7 @@ fn build<S: Scalar + zeroize::Zeroize>(
         target.io_len,
         seed.as_ref(),
         Some(target.layout()),
+        prepare,
     )
 }
 struct PrivateCircuit<S: Scalar + zeroize::Zeroize>(UniformCircuit<S>);
@@ -1686,6 +1728,7 @@ fn check_constraints(
         192,
         seed.as_ref(),
         None,
+        keep_wiring,
     )?;
     let c = PrivateCircuit::new(c);
     let wit = WrittenWitness::new(wit, rows);
@@ -2881,13 +2924,27 @@ impl Engine for NativeEngine {
             ),
         };
         stage.mark("primary wiring");
-        let (mut cp, ip, wp, rows_p) = build(
+        // The primary's templates are shared before its build (its build was
+        // this operation's heap peak) and again after it, for the rows the
+        // build adds. The secondary's are shared the same way below.
+        let (mut cp, ip, wp, rows_p) = build_prepared(
             wp,
             p.programs[k].primary.as_ref(),
             &entropy,
             b"primary witness",
+            share_wiring_coefficients,
         )?;
         cp.share_template_coefficients();
+        // TODO: build the primary's constraint templates after the secondary
+        // proof. The first-phase commitments need only the witness, the row
+        // bounds and the public support; the templates (about 97 MB for the
+        // Receive primary) are first read by `instantiate_rows` in the primary
+        // proof. The installed program cannot lend them: an imported program
+        // holds only its compact tape. Splitting `build_rows_grouped_with_release`
+        // into a layout and witness pass and a later template pass (from the
+        // wiring's structure, retained without its private values) would take
+        // them out of the first phase and the secondary proof; the primary
+        // build's own peak falls only if the template pass leaves it too.
         if crate::prof::enabled() {
             println!(
                 "native circuits {} P: {}",
@@ -2897,36 +2954,57 @@ impl Engine for NativeEngine {
         }
         let cp = PrivateCircuit::new(cp);
         let wp = WrittenWitness::new(wp, rows_p);
-        // Take the primary prefix before allocating the secondary wiring and
-        // witness. Its first-phase row commitments are kept for the primary
-        // proof below, which regenerates the masks and blinds from the same
-        // stream and does not commit those rows again.
+        stage.mark("primary build");
+        // Take the primary prefix: its first-phase row commitments are kept
+        // for the primary proof below, which regenerates the masks and blinds
+        // from the same stream and does not commit those rows again.
+        //
+        // The secondary's wiring and build read only the folds, the traced
+        // pairs and the public generators, never the primary witness, and
+        // draw from their own entropy stream. They run alongside the
+        // commitments, whose constant-time kernel keeps the pool busy: the
+        // build is mostly single-threaded. The secondary's arrays then coexist
+        // with the primary's first phase, below the later proof peaks, where
+        // both circuits are resident anyway.
         self.require_stage_memory(cp.first_phase_memory_bytes())?;
-        let primary = spartan::retain_linked_witness(
-            &cp.shape,
-            &p.generators.p,
-            &ip,
-            spartan::ProverWitness::Owned(wp),
-            &mut entropy.stream(b"primary"),
-            &*cp,
+        let (primary, secondary) = rayon::join(
+            || {
+                spartan::retain_linked_witness(
+                    &cp.shape,
+                    &p.generators.p,
+                    &ip,
+                    spartan::ProverWitness::Owned(wp),
+                    &mut entropy.stream(b"primary"),
+                    &*cp,
+                )
+            },
+            || {
+                let ws = match folds.as_ref() {
+                    Some(folds) if k == full::ARCHIVE_SENT => {
+                        full::s_archive_operation(&p.generators, &pairs, folds).0
+                    }
+                    Some(folds) => {
+                        full::s_operation(k, control_mode, &p.generators, &pairs, folds).0
+                    }
+                    None => full::s_boot(&p.generators).0,
+                };
+                build_prepared(
+                    ws,
+                    p.programs[k].secondary.as_ref(),
+                    &entropy,
+                    b"secondary witness",
+                    share_wiring_coefficients,
+                )
+            },
         );
         let d = primary.digest();
         stage.mark("phase1");
-        let ws = match folds.as_ref() {
-            Some(folds) if k == full::ARCHIVE_SENT => {
-                full::s_archive_operation(&p.generators, &pairs, folds).0
-            }
-            Some(folds) => full::s_operation(k, control_mode, &p.generators, &pairs, folds).0,
-            None => full::s_boot(&p.generators).0,
-        };
         drop(folds);
         drop(pairs);
-        let (cs, is, ws, rows_s) = build(
-            ws,
-            p.programs[k].secondary.as_ref(),
-            &entropy,
-            b"secondary witness",
-        )?;
+        let (mut cs, is, ws, rows_s) = secondary?;
+        // Both circuits are live through the secondary proof: share the
+        // secondary's equal template coefficients too.
+        cs.share_template_coefficients();
         let cs = PrivateCircuit::new(cs);
         let ws = WrittenWitness::new(ws, rows_s);
         stage.mark("build");
@@ -2935,6 +3013,9 @@ impl Engine for NativeEngine {
         // once its proof is made and its witness and prover tables are gone,
         // before anything is verified or released.
         same_program(&cs, &p.programs[k].secondary, &p.program_digests[k][1])?;
+        // The primary wiring and both builds are freed: return their pages
+        // before the secondary proof's peak (Apple; a no-op elsewhere).
+        crate::prof::release_free_memory();
         stage.mark("digest");
         let rlc = |_: &[u8; 32]| [0; 32];
         self.require_stage_memory(cs.phase_memory_accounting().additional_peak_bytes)?;
@@ -2951,6 +3032,7 @@ impl Engine for NativeEngine {
         // Retaining the secondary's private arrays/plans through the primary
         // proof only increased memory; the completion needs its proof and IO.
         drop(cs);
+        crate::prof::release_free_memory();
         stage.mark("s-proof");
         self.require_stage_memory(cp.phase_memory_accounting().additional_peak_bytes)?;
         let (pp, d2, _) = primary.prove_first(rho, r);
@@ -2958,8 +3040,13 @@ impl Engine for NativeEngine {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
         stage.mark("p-proof");
+        // The primary's witness and prover tables are gone: return their pages
+        // before the program compile allocates its own (Apple; a no-op
+        // elsewhere).
+        crate::prof::release_free_memory();
         same_program(&cp, &p.programs[k].primary, &p.program_digests[k][0])?;
         drop(cp);
+        crate::prof::release_free_memory();
         stage.mark("p-digest");
         if crate::prof::enabled() {
             println!(

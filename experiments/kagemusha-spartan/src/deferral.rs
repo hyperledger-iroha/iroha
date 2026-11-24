@@ -300,12 +300,19 @@ impl<F: PrimeField> MatPoly<F> {
             value: F::ZERO,
         }
     }
+    /// The combined polynomial at `point`. Each kind's matrix tape is an
+    /// independent public evaluation, so the kinds run in parallel; the sum
+    /// is exact and independent of the order.
     pub fn eval(&self, point: &[F]) -> F {
+        use rayon::prelude::*;
         (0..self.kinds.len())
+            .into_par_iter()
             .map(|k| {
                 let (ch, rx, ry) = self.kind_inputs(k, point);
                 self.kind_term(k, point, (self.kinds[k].eval)(ch, rx, ry))
             })
+            .collect::<Vec<F>>()
+            .into_iter()
             .sum()
     }
     /// The degree of kind `k`'s matrices along a cubic curve: 3 per variable

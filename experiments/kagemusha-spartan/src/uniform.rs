@@ -221,6 +221,7 @@ pub struct Term<F> {
 #[path = "coefficients.rs"]
 mod coefficients;
 pub use coefficients::Coefficients;
+pub(crate) use coefficients::share_array_coefficients;
 
 pub type Lin<F> = Vec<Term<F>>;
 
@@ -470,6 +471,10 @@ pub struct UniformCircuit<F> {
     row_base: Vec<Vec<usize>>,
     blocks: Vec<Vec<Block>>,
     bounds: Vec<usize>,
+    /// Every witness position a present cell occupies (bit `x % 64` of word
+    /// `x / 64`): public layout, from the build's placement. Empty for an
+    /// imported program, which has no prover witness.
+    present: Vec<u64>,
     /// Trailing fixed rows and their values (row major).
     fixed_rows: usize,
     fixed_values: FixedValues<F>,
@@ -2692,6 +2697,17 @@ impl<F: Scalar> UniformCircuit<F> {
         // Only the public layout decides which pages to touch and which rows
         // the prover may skip. A present private zero is written just like any
         // other scalar. Structural holes can keep their demand-zero pages.
+        // TODO: store only the present cells if the allocator count matters.
+        // The Receive primary's dense witness is 2^22 field elements (134 MB
+        // counted as in use), but its zero-on-demand pages are touched only
+        // where a cell is present: 3,946 of 8,192 16 KiB pages (65 MB) for
+        // 1.81M present cells (58 MB); the secondary touches 1,603 of 4,096
+        // pages (26 MB) for 0.78M cells (25 MB). Packing would therefore save
+        // about 8 MB resident, not the 77 MB the in-use count suggests. A
+        // packed witness would keep, per row, the present runs' offsets
+        // (public) and their values, and serve `kern::Rows::cell`, the row
+        // commitments (already support-driven), the outer gather and the
+        // inner first fold through that index.
         let mut w = crate::kern::zeroed(shape.rows() * cols);
         let mut written = vec![false; shape.rows()];
         // Every present cell has a position of its own.
@@ -2745,7 +2761,38 @@ impl<F: Scalar> UniformCircuit<F> {
                 release(&mut arr.values);
             }
         }
-        drop(taken);
+        // `taken` is the public placement of every present cell; the row
+        // commitments read only these positions.
+        let present = taken;
+        if crate::prof::memory_enabled() {
+            // Measurement: how much of the dense witness a present cell
+            // touches, by 16 KiB page (public layout only).
+            let per_page = (16 << 10) / size_of::<F>().max(1);
+            let cells: usize = present.iter().map(|w| w.count_ones() as usize).sum();
+            let pages = (shape.rows() * cols).div_ceil(per_page);
+            let touched = (0..pages)
+                .filter(|&page| {
+                    let (lo, hi) = (
+                        page * per_page,
+                        ((page + 1) * per_page).min(shape.rows() * cols),
+                    );
+                    (lo..hi).step_by(64).any(|x| {
+                        let word = present[x / 64];
+                        let bits = (hi - x).min(64);
+                        let mask = if bits == 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        word & mask != 0
+                    })
+                })
+                .count();
+            println!(
+                "witness layout {label}: {cells} present of {} positions; {touched} of {pages} 16 KiB pages hold a present cell",
+                shape.rows() * cols
+            );
+        }
         if std::env::var("ZKS_PLACE").is_ok() {
             // Per row: present cells and the row's bound.
             let mut per_row = vec![0usize; shape.rows()];
@@ -2829,6 +2876,7 @@ impl<F: Scalar> UniformCircuit<F> {
             row_base,
             blocks,
             bounds,
+            present,
             fixed_rows,
             fixed_values,
             wallet_rows,
@@ -5987,27 +6035,43 @@ impl<F: Scalar> Tape<F> {
             .collect()
     }
 
-    /// Keep one register file per parallel job and reuse it for that job's
-    /// consecutive lane groups. Only outputs from occupied lanes are read.
+    /// Keep one register file per worker and reuse it for every lane group
+    /// that worker claims. Workers claim the next group from a shared
+    /// counter, so cores of unequal speed (a phone's performance and
+    /// efficiency cores) share the groups by speed instead of a fixed split.
+    /// At most `max_concurrent_lanes / L` register files exist at once. The
+    /// tape and points are public; the outputs are put back in point order.
+    /// Only outputs from occupied lanes are read.
     fn run_groups<const L: usize>(
         &self,
         points: &[Vec<F>],
         max_concurrent_lanes: usize,
     ) -> Vec<(F, F, F)> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let groups = points.len().div_ceil(L);
         let workers = (max_concurrent_lanes / L)
             .max(1)
-            .min(rayon::current_num_threads());
-        let chunk_size = groups.div_ceil(workers).max(1) * L;
-        points
-            .par_chunks(chunk_size)
-            .flat_map_iter(|chunk| {
+            .min(rayon::current_num_threads())
+            .min(groups.max(1));
+        let next = AtomicUsize::new(0);
+        let mut claimed: Vec<(usize, Vec<(F, F, F)>)> = (0..workers)
+            .into_par_iter()
+            .flat_map_iter(|_| {
                 let mut registers = vec![[F::ZERO; L]; self.registers()];
-                chunk
-                    .chunks(L)
-                    .flat_map(move |group| self.run_lanes_with(group, &mut registers))
+                let mut out = Vec::new();
+                loop {
+                    let group = next.fetch_add(1, Ordering::Relaxed);
+                    if group >= groups {
+                        break;
+                    }
+                    let lanes = &points[group * L..((group + 1) * L).min(points.len())];
+                    out.push((group, self.run_lanes_with(lanes, &mut registers)));
+                }
+                out
             })
-            .collect()
+            .collect();
+        claimed.sort_unstable_by_key(|(group, _)| *group);
+        claimed.into_iter().flat_map(|(_, values)| values).collect()
     }
 
     /// Evaluate in order. Bound the simultaneous register files independently
@@ -7155,6 +7219,9 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn row_bounds(&self, _shape: &Shape) -> Option<Vec<usize>> {
         Some(self.bounds.clone())
+    }
+    fn row_support(&self, _shape: &Shape) -> Option<&[u64]> {
+        (!self.present.is_empty()).then_some(self.present.as_slice())
     }
     fn phase1_rows(&self, _shape: &Shape) -> usize {
         self.p1_rows
