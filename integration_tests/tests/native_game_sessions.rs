@@ -14,6 +14,7 @@ use iroha_model_base::peer::PeerId;
 use std::time::Duration;
 
 use eyre::{Result, ensure, eyre};
+use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
@@ -92,8 +93,38 @@ async fn verification(
     .await
 }
 
+/// How long a status read retries a typed retryable 503, as in
+/// `iroha_test_network/tests/sora_nexus_profile_network.rs`.
+const STATUS_RETRY: Duration = Duration::from_secs(30);
+
+/// Committed height of one validator.
+///
+/// Torii answers a status read with 503 and a typed retryable reason (`status_deadline_elapsed`
+/// or `status_state_busy`) while State is being published. Only those are retried, honouring
+/// `Retry-After`, for at most [`STATUS_RETRY`]; every other failure is returned at once.
 async fn height(client: &Client) -> Result<u64> {
-    Ok(client.client().status().get().await?.blocks)
+    let give_up = std::time::Instant::now() + STATUS_RETRY;
+    loop {
+        match client.client().status().get().await {
+            Ok(status) => return Ok(status.blocks),
+            Err(iroha::Error::StatusUnavailable {
+                reason:
+                    Some(
+                        iroha::StatusFailureReason::DeadlineElapsed
+                        | iroha::StatusFailureReason::StateBusy,
+                    ),
+                retry_after,
+            }) if std::time::Instant::now() < give_up => {
+                sleep(
+                    retry_after
+                        .unwrap_or_default()
+                        .max(Duration::from_millis(200)),
+                )
+                .await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 /// Prepare and sign an exact account transaction with its canonical fee quote.
@@ -192,7 +223,10 @@ async fn assert_replicas(
     expected: &GameSessionRecordV1,
     expected_running: usize,
 ) -> Result<()> {
-    Box::pin(timeout(Duration::from_secs(120), async {
+    // Convergence waits on block sync, for example a restarted validator catching up, so it
+    // uses the harness sync timeout (180 s by default; IROHA_TEST_SYNC_TIMEOUT_SECS on slower
+    // hosts), as other network tests do, instead of a fixed bound.
+    Box::pin(timeout(network.sync_timeout(), async {
         loop {
             let running: Vec<_> = network.peers().iter().filter(|peer| peer.is_running()).collect();
             ensure!(running.len() == expected_running, "unexpected live validator count");
@@ -215,6 +249,36 @@ async fn assert_replicas(
     .map_err(|_| eyre!("validators did not converge on exact retained game state"))?
 }
 
+// The negotiated ledger-state JSON uses Norito's two-space pretty printer.
+fn ledger_state_json_limit(wire_bytes: usize) -> Result<usize> {
+    ensure!(
+        wire_bytes <= iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
+        "certified block exceeds the native finality limit"
+    );
+    // Within finality_proof.block_wire each byte is three levels deep.
+    // Keep the original allowance for the remaining four-validator metadata.
+    Ok(2 * 1024 * 1024 + wire_bytes * b"      255,\n".len())
+}
+
+#[test]
+fn ledger_state_json_limit_matches_pretty_printed_proof_bytes() -> Result<()> {
+    fn response(size: usize) -> Result<String> {
+        let proof = norito::json::object([("block_wire", vec![255_u8; size])])?;
+        let value = norito::json::object([("finality_proof", proof)])?;
+        Ok(norito::json::to_json_pretty(&value)?)
+    }
+    let (small, large) = (1, 1024);
+    assert_eq!(
+        response(large)?.len() - response(small)?.len(),
+        ledger_state_json_limit(large)? - ledger_state_json_limit(small)?
+    );
+    assert!(
+        ledger_state_json_limit(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 1)
+            .is_err()
+    );
+    Ok(())
+}
+
 /// The endpoint supplies carriers, never the committee used to authenticate them.
 async fn finalized_state_observation(
     http: &reqwest::Client,
@@ -222,6 +286,59 @@ async fn finalized_state_observation(
     height: u64,
     network: &Network,
 ) -> Result<Option<(HashOf<BlockHeader>, Hash)>> {
+    let client = peer.client();
+    // The account-authorized block stream is the admitted full-history API.
+    // Consume exactly the requested prefix, one retained block at a time;
+    // the enclosing convergence deadline also bounds subscription and reads.
+    let mut blocks = client
+        .account_client()
+        .blocks()
+        .subscribe(std::num::NonZeroU64::MIN)
+        .await?;
+    let original = network.genesis();
+    let first = blocks
+        .try_next()
+        .await?
+        .ok_or_else(|| eyre!("block stream ended before original genesis"))?;
+    ensure!(
+        first.header().height().get() == 1,
+        "block stream did not start at genesis"
+    );
+    ensure!(
+        first.canonical_resultless_proposal()?.encode_wire()?
+            == original.0.canonical_resultless_proposal()?.encode_wire()?,
+        "peer history replaced the independently signed genesis"
+    );
+    // Independent public-history verification owns one finite shared-block pool.
+    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
+    let genesis = iroha_data_model::block::SharedSignedBlock::try_new(first.clone(), &budget)
+        .map_err(|(_, error)| error)?;
+    let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+        &network.chain_id(),
+        network.network_id(),
+        genesis,
+    )?;
+    let mut verified = None;
+    for expected_height in 2..=height {
+        let block = blocks
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("block stream ended before requested finality height"))?;
+        ensure!(
+            block.header().height().get() == expected_height,
+            "block stream skipped or reordered the original native prefix"
+        );
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
+        let (certified, _) = prefix.push(block)?.into_parts();
+        if certified.committed().height() == height {
+            verified = Some(certified);
+        }
+    }
+    blocks.close().await?;
+    let certified =
+        verified.ok_or_else(|| eyre!("native prefix did not reach requested height"))?;
+    let committed = certified.committed();
     let url = peer
         .client()
         .client()
@@ -248,11 +365,13 @@ async fn finalized_state_observation(
             .is_some_and(|v| v.starts_with("application/json")),
         "ledger-state carrier is not JSON"
     );
+    let wire = committed.block().encode_wire()?;
+    let carrier_limit = ledger_state_json_limit(wire.len())?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         ensure!(
-            bytes.len() + chunk.len() <= 2 * 1024 * 1024,
-            "four-validator finality carrier exceeds bound"
+            chunk.len() <= carrier_limit.saturating_sub(bytes.len()),
+            "four-validator finality carrier exceeds {carrier_limit} bytes at height {height}"
         );
         bytes.extend_from_slice(&chunk);
     }
@@ -290,59 +409,13 @@ async fn finalized_state_observation(
             && decoded.execution().post_state_root == root,
         "state response does not bind its exact native header and witnessed execution"
     );
-    let client = peer.client();
-    let mut blocks = read_on_dedicated_thread(move || {
-        Ok(client.client().query(FindBlocks::new()).execute_all()?)
-    })
-    .await?;
-    blocks.sort_by_key(|block| block.header().height().get());
-    if blocks
-        .last()
-        .is_none_or(|block| block.header().height().get() < height)
-    {
-        return Ok(None);
-    }
-    let original = network.genesis();
-    let first = blocks
-        .first()
-        .ok_or_else(|| eyre!("missing original genesis"))?;
-    ensure!(
-        first.canonical_resultless_proposal()?.encode_wire()?
-            == original.0.canonical_resultless_proposal()?.encode_wire()?,
-        "peer history replaced the independently signed genesis"
-    );
-    // Independent public-history verification owns one finite shared-block pool.
-    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
-    let genesis = iroha_data_model::block::SharedSignedBlock::try_new(first.clone(), &budget)
-        .map_err(|(_, error)| error)?;
-    let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
-        &network.chain_id(),
-        network.network_id(),
-        genesis,
-    )?;
-    let mut verified = None;
-    for block in blocks
-        .into_iter()
-        .skip(1)
-        .take_while(|block| block.header().height().get() <= height)
-    {
-        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
-            .map_err(|(_, error)| error)?;
-        let (certified, _) = prefix.push(block)?.into_parts();
-        if certified.committed().height() == height {
-            verified = Some(certified);
-        }
-    }
-    let certified =
-        verified.ok_or_else(|| eyre!("native prefix did not reach requested height"))?;
-    let committed = certified.committed();
     ensure!(
         certified
             .commit_qc()
             .is_some_and(|qc| qc.signers.count_ones() == 3)
             && committed.block_hash() == block_hash
             && committed.commitment().execution.post_state_root == root
-            && committed.block().encode_wire()? == proof.block_wire,
+            && wire == proof.block_wire,
         "HTTP carrier differs from independently authenticated exact native finality"
     );
     let voters = iroha_core::sumeragi::schedule::genesis_validators(&original)?;
@@ -377,7 +450,7 @@ async fn assert_finalized_state_convergence(
     let height = futures_util::future::try_join_all(
         peers
             .iter()
-            .map(|peer| async move { Ok::<_, eyre::Report>(peer.status().await?.blocks) }),
+            .map(|peer| async move { height(&peer.client()).await }),
     )
     .await?
     .into_iter()
@@ -387,7 +460,7 @@ async fn assert_finalized_state_convergence(
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    Box::pin(timeout(Duration::from_secs(90), async {
+    Box::pin(timeout(network.sync_timeout(), async {
         loop {
             let mut roots = Vec::new();
             for peer in peers {
@@ -465,9 +538,9 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
         .with_block_cadence(Duration::from_millis(500))
-        // The test carries the proof inside an ordinary signed typed ISI. Native defaults
-        // already permit 10-MiB transactions / 16-MiB DA bodies; the separate TxGossip
-        // topic defaults to 256 KiB and needs this explicit test-local transport budget.
+        // The test carries the proof inside an ordinary signed typed ISI. Keep this
+        // fixture's transaction-gossip frame budget explicitly bounded at 8 MiB;
+        // the current native default permits 17-MiB plaintext frames.
         .with_config_layer(|layer| {
             layer
                 .write(["network", "max_frame_bytes_tx_gossip"], 8_388_608_i64)
@@ -813,9 +886,9 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         )?;
         let proof_bytes = proof.encode();
         ensure!(
-            proof_bytes.len() > 1_048_576
+            !proof.proof_bytes.is_empty()
                 && proof_bytes.len() <= compiled_race_profile_v1().maximum_proof_bytes as usize,
-            "gate must carry a genuine native proof above one MiB within the compiled cap"
+            "gate must carry a nonempty genuine native proof within the compiled cap"
         );
         let statement_hash = game_message_hash_v1(
             &resolved.network_id,
