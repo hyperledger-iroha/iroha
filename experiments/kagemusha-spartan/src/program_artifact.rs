@@ -434,6 +434,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let tape = Tape {
             inputs: p.inputs as usize,
             pool,
+            word_scales: OnceLock::new(),
             out: p.outputs,
             muls,
             scales,

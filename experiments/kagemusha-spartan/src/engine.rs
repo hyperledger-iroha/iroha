@@ -1004,7 +1004,9 @@ impl ParameterSet {
         let defer_p = deferral::MatPoly::with_min_vec(
             programs
                 .iter()
-                .map(|x| full::uniform_kind(x.primary.clone()))
+                .map(|x| {
+                    full::uniform_kind_with(x.primary.clone(), UniformCircuit::evals_many_pasta)
+                })
                 .collect(),
             dp.0,
             dp.1,
@@ -1012,7 +1014,9 @@ impl ParameterSet {
         let defer_s = deferral::MatPoly::with_min_vec(
             programs
                 .iter()
-                .map(|x| full::uniform_kind(x.secondary.clone()))
+                .map(|x| {
+                    full::uniform_kind_with(x.secondary.clone(), UniformCircuit::evals_many_pasta)
+                })
                 .collect(),
             ds.0,
             ds.1,

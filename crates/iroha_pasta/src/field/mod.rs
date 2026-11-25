@@ -97,6 +97,10 @@ pub trait PastaField:
     /// order.
     fn from_raw_reduced(limbs: [u64; 4]) -> Self;
 
+    /// Multiplies by an ordinary unsigned integer in constant time.
+    #[must_use]
+    fn mul_u64(&self, word: u64) -> Self;
+
     /// Variable-time inversion for public data; `None` for zero.
     ///
     /// Uses the Bernstein-Yang safegcd algorithm. The result equals
@@ -609,6 +613,11 @@ macro_rules! impl_pasta_field {
 
             fn from_raw_reduced(limbs: [u64; 4]) -> Self {
                 Self::from_raw(limbs)
+            }
+
+            #[inline(always)]
+            fn mul_u64(&self, word: u64) -> Self {
+                Self(cios::mul_u64(&self.0, word, &MODULUS))
             }
 
             fn invert_vartime(&self) -> Option<Self> {

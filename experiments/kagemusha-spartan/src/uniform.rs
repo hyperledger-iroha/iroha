@@ -21,6 +21,7 @@ use std::ops::{Add, Mul, Sub};
 use std::sync::OnceLock;
 
 use ff::Field;
+use iroha_pasta::PastaField;
 use iroha_pasta::poseidon::{PoseidonField, permute_with};
 use rayon::prelude::*;
 
@@ -4219,12 +4220,24 @@ impl<F: Scalar> UniformCircuit<F> {
     /// `evals` at many points `(ch, r_x, r_y)`: the compiled program over
     /// groups of lanes, in parallel (native q's evaluations).
     pub fn evals_many(&self, points: &[(&[F], &[F], &[F])]) -> Vec<(F, F, F)> {
+        self.plan().run_many(&self.batch_inputs(points))
+    }
+
+    /// Native Pasta evaluator for the installed operation programs.
+    pub(crate) fn evals_many_pasta(&self, points: &[(&[F], &[F], &[F])]) -> Vec<(F, F, F)>
+    where
+        F: PastaField,
+    {
+        let tape = self.plan();
+        tape.run_many_with(&self.batch_inputs(points), &tape.pasta_scales())
+    }
+
+    fn batch_inputs(&self, points: &[(&[F], &[F], &[F])]) -> Vec<Vec<F>> {
         let k = if self.logup() { 2 } else { 0 };
-        let inputs: Vec<Vec<F>> = points
+        points
             .iter()
             .map(|(ch, rx, ry)| rx.iter().chain(*ry).chain(&ch[..k]).copied().collect())
-            .collect();
-        self.plan().run_many(&inputs)
+            .collect()
     }
 
     /// The compiled program's batched form: its registers against its slots.
@@ -5865,6 +5878,8 @@ impl Op {
 pub struct Tape<F> {
     inputs: usize,
     pool: Vec<F>,
+    /// Derived only from the public pool when a native batch first needs it.
+    word_scales: OnceLock<Vec<WordScale>>,
     out: [Slot; 3],
     /// Products of two slots.
     pub muls: usize,
@@ -5872,6 +5887,53 @@ pub struct Tape<F> {
     pub scales: usize,
     /// The same program over reused registers, for many points at once.
     regs: Regs,
+}
+
+/// The magnitude of a public scale when it fits in one machine word.
+#[derive(Clone, Copy)]
+enum WordScale {
+    Positive(u64),
+    Negative(u64),
+    Full,
+}
+
+impl WordScale {
+    fn of<F: PastaField>(constant: F) -> Self {
+        if let [word, 0, 0, 0] = constant.to_canonical_limbs() {
+            Self::Positive(word)
+        } else if let [word, 0, 0, 0] = (-constant).to_canonical_limbs() {
+            Self::Negative(word)
+        } else {
+            Self::Full
+        }
+    }
+}
+
+/// Apply one public coefficient across independent native evaluation points.
+trait ScalePool<F>: Sync {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L];
+}
+
+impl<F: Field> ScalePool<F> for [F] {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L] {
+        let c = self[k];
+        std::array::from_fn(|l| x[l] * c)
+    }
+}
+
+struct PastaScales<'a, F> {
+    pool: &'a [F],
+    words: &'a [WordScale],
+}
+
+impl<F: PastaField> ScalePool<F> for PastaScales<'_, F> {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L] {
+        match self.words[k] {
+            WordScale::Positive(word) => std::array::from_fn(|l| x[l].mul_u64(word)),
+            WordScale::Negative(word) => std::array::from_fn(|l| -x[l].mul_u64(word)),
+            WordScale::Full => self.pool.scale(x, k),
+        }
+    }
 }
 
 /// In-memory register instructions. The public artifact always uses its own
@@ -6081,13 +6143,14 @@ impl<F: Scalar> Tape<F> {
     /// of its registers (independent products, no dispatch per point).
     fn run_lanes<const L: usize>(&self, points: &[impl AsRef<[F]>]) -> Vec<(F, F, F)> {
         let mut registers = vec![[F::ZERO; L]; self.registers()];
-        self.run_lanes_with(points, &mut registers)
+        self.run_lanes_with(points, &mut registers, self.pool.as_slice())
     }
 
     fn run_lanes_with<const L: usize>(
         &self,
         points: &[impl AsRef<[F]>],
         r: &mut [[F; L]],
+        scales: &(impl ScalePool<F> + ?Sized),
     ) -> Vec<(F, F, F)> {
         assert!(points.len() <= L, "at most one point per lane");
         let rg = &self.regs;
@@ -6110,10 +6173,7 @@ impl<F: Scalar> Tape<F> {
                     let (x, y) = (&r[a as usize], &r[b as usize]);
                     std::array::from_fn(|l| x[l] * y[l])
                 }
-                Op::Scale(a, k) => {
-                    let (x, c) = (&r[a as usize], self.pool[k as usize]);
-                    std::array::from_fn(|l| x[l] * c)
-                }
+                Op::Scale(a, k) => scales.scale(&r[a as usize], k as usize),
                 Op::Const(k) => [self.pool[k as usize]; L],
             };
             r[d as usize] = v;
@@ -6135,6 +6195,7 @@ impl<F: Scalar> Tape<F> {
         &self,
         points: &[Vec<F>],
         max_concurrent_lanes: usize,
+        scales: &(impl ScalePool<F> + ?Sized),
     ) -> Vec<(F, F, F)> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let groups = points.len().div_ceil(L);
@@ -6154,7 +6215,7 @@ impl<F: Scalar> Tape<F> {
                         break;
                     }
                     let lanes = &points[group * L..((group + 1) * L).min(points.len())];
-                    out.push((group, self.run_lanes_with(lanes, &mut registers)));
+                    out.push((group, self.run_lanes_with(lanes, &mut registers, scales)));
                 }
                 out
             })
@@ -6166,6 +6227,26 @@ impl<F: Scalar> Tape<F> {
     /// Evaluate in order. Bound the simultaneous register files independently
     /// of the Rayon pool size. A single scalar file is always necessary.
     pub fn run_many(&self, points: &[Vec<F>]) -> Vec<(F, F, F)> {
+        self.run_many_with(points, self.pool.as_slice())
+    }
+
+    fn pasta_scales(&self) -> PastaScales<'_, F>
+    where
+        F: PastaField,
+    {
+        PastaScales {
+            pool: &self.pool,
+            words: self
+                .word_scales
+                .get_or_init(|| self.pool.iter().copied().map(WordScale::of).collect()),
+        }
+    }
+
+    fn run_many_with(
+        &self,
+        points: &[Vec<F>],
+        scales: &(impl ScalePool<F> + ?Sized),
+    ) -> Vec<(F, F, F)> {
         assert!(
             points.iter().all(|p| p.len() == self.inputs),
             "one value per input slot"
@@ -6174,10 +6255,10 @@ impl<F: Scalar> Tape<F> {
         let scalar_bytes = self.registers().saturating_mul(size_of::<F>()).max(1);
         let max_lanes = (REGISTER_BUDGET_BYTES / scalar_bytes).max(1);
         match q_lanes().min(max_lanes) {
-            16.. => self.run_groups::<16>(points, max_lanes),
-            8.. => self.run_groups::<8>(points, max_lanes),
-            4.. => self.run_groups::<4>(points, max_lanes),
-            _ => self.run_groups::<1>(points, max_lanes),
+            16.. => self.run_groups::<16>(points, max_lanes, scales),
+            8.. => self.run_groups::<8>(points, max_lanes, scales),
+            4.. => self.run_groups::<4>(points, max_lanes, scales),
+            _ => self.run_groups::<1>(points, max_lanes, scales),
         }
     }
 
@@ -6511,6 +6592,7 @@ impl<F: Scalar> Builder<F> {
         Tape {
             inputs: ni,
             pool: self.pool,
+            word_scales: OnceLock::new(),
             out,
             muls,
             scales,
@@ -8108,6 +8190,28 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn native_word_pool_is_lazy_and_accounted() {
+        let (c, _, _) = small();
+        let rx = vec![Fv::from(3); c.shape.sx];
+        let ry = vec![Fv::from(5); c.shape.sz()];
+        let ch = [Fv::from(7), Fv::from(11)];
+        let points = [(ch.as_slice(), rx.as_slice(), ry.as_slice())];
+        let reference = c.evals_many(&points);
+        let before = c.proving_memory_accounting();
+        assert!(c.plan().word_scales.get().is_none());
+        assert_eq!(c.evals_many_pasta(&points), reference);
+        let words = c.plan().word_scales.get().unwrap();
+        let bytes = (words.capacity() * size_of::<WordScale>()) as u64;
+        assert!(bytes > 0);
+        let after = c.proving_memory_accounting();
+        assert_eq!(
+            after.matrix_program_bytes,
+            before.matrix_program_bytes + bytes
+        );
+        assert_eq!(after.retained_bytes, before.retained_bytes + bytes);
+    }
+
     /// The interval closed forms (one, own, identity, broadcast, shifts by
     /// -1 and +1, constant and geometric coefficients) equal brute-force sums.
     #[test]
@@ -8947,6 +9051,7 @@ pub(crate) mod tests {
             let tape = Tape::<iroha_pasta::Fp> {
                 inputs: inputs as usize,
                 pool: Vec::new(),
+                word_scales: OnceLock::new(),
                 out,
                 muls: 1,
                 scales: 1,
@@ -8958,15 +9063,36 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn pasta_batch_scales_match_full_products() {
+        fn check<F: PastaField>() {
+            let pool = [F::from(u64::MAX), -F::from(u64::MAX), F::from_u128(1 << 64)];
+            let words = pool.map(WordScale::of);
+            assert!(matches!(words[0], WordScale::Positive(u64::MAX)));
+            assert!(matches!(words[1], WordScale::Negative(u64::MAX)));
+            assert!(matches!(words[2], WordScale::Full));
+            let scales = PastaScales {
+                pool: &pool,
+                words: &words,
+            };
+            let x = [F::ZERO, F::ONE, -F::ONE, F::from(17)];
+            for k in 0..pool.len() {
+                assert_eq!(scales.scale(&x, k), pool.as_slice().scale(&x, k));
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+
     /// Register reuse must retain inputs and outputs, including aliases,
     /// while releasing dead inputs and last-use operands exactly once.
     #[test]
     fn batched_register_tapes_match_scalar_on_both_fields() {
-        fn check<F: Scalar>() {
+        fn check<F: PastaField>() {
             let mut rng = SpikeRng::new(b"register lifetime parity");
             for inputs in [0, 1, 7] {
                 for seed in 0..24 {
-                    let pool: Vec<F> = (0..3).map(|_| rng.scalar()).collect();
+                    let pool: Vec<F> = vec![rng.scalar(), F::from(u64::MAX), -F::from(1 << 42)];
                     let mut ops = vec![Op::Const(0)];
                     for i in 1..64 {
                         let slots = inputs + ops.len();
@@ -8994,6 +9120,7 @@ pub(crate) mod tests {
                     let tape = Tape {
                         inputs,
                         pool,
+                        word_scales: OnceLock::new(),
                         out,
                         muls: 0,
                         scales: 0,
@@ -9039,7 +9166,10 @@ pub(crate) mod tests {
                         );
                         // Force consecutive groups to reuse a single register
                         // file, including a short final group and empty input.
-                        assert_eq!(tape.run_groups::<4>(&points, 4), expected);
+                        assert_eq!(
+                            tape.run_groups::<4>(&points, 4, &tape.pasta_scales()),
+                            expected
+                        );
                         assert_eq!(
                             points
                                 .chunks(4)

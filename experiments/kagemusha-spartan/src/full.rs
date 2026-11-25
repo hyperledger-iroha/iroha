@@ -1798,6 +1798,112 @@ mod tests {
     use iroha_pasta::Eq as Vesta;
 
     #[test]
+    fn repeated_fold_slot_reuses_the_scalar_verifiers_matrix_evaluation() {
+        use crate::{deferral, r1cs, spartan, verifier};
+        use iroha_pasta::Ep as Pallas;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let shape = r1cs::Shape {
+            label: "fresh matrix claim",
+            sx: 12,
+            row_bits: 2,
+            col_bits: 10,
+            k: 3,
+        };
+        let kinds: [_; deferral::MAX_KINDS] = std::array::from_fn(|_| toy_kind(shape));
+        let mut poly = deferral::MatPoly::new(kinds);
+        let acc = sample_acc(&poly, b"noncorner inherited matrix claim");
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        let own_kind = &mut poly.kinds[ARCHIVE_SENT];
+        let calls = evaluations.clone();
+        own_kind.eval = Box::new(move |_, rx, ry| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            r1cs::matrix_evals(&shape, rx, ry)
+        });
+        // The restriction has its own batched evaluator, like an installed
+        // program. Count only stand-alone tape evaluations for the fresh claim.
+        own_kind.eval_many = Some(Box::new(move |points| {
+            points
+                .iter()
+                .map(|(_, rx, ry)| r1cs::matrix_evals(&shape, rx, ry))
+                .collect()
+        }));
+
+        let gens = crate::ipa::Gens::<Pallas>::new(shape.cols());
+        let (mut inst, wit, _) = verifier::instance(shape, &gens, 0, 32, b"fresh fold proof");
+        inst.io.extend(acc.point.iter().chain([&acc.value]));
+        let mut rng = SpikeRng::new(b"fresh fold prover");
+        let (proof, _) = spartan::prove(&shape, &gens, &inst, &wit, &mut rng);
+        let tr = verifier::trace(&shape, &gens, &inst, &proof, &[], &spartan::Link::None);
+        assert!(tr.accepts);
+        let mut values = verifier::shared_values(&tr, &proof, &[]);
+        let kind_at = values.len();
+        values.extend([0, 0, 1]); // ArchiveSent.
+        let build = |poly: &deferral::MatPoly<Fq>, corrupt_scalar: bool| {
+            let mut w = Wiring::default();
+            let gfam = w.family(0, 1);
+            let shared = native_binding(&mut w, gfam, Fq::from(7), &values);
+            let sc = scalar_into(
+                &mut w,
+                gfam,
+                shared,
+                0,
+                &shape,
+                &inst,
+                &proof,
+                &[],
+                &tr,
+                &|rx, ry| (poly.kinds[ARCHIVE_SENT].eval)(&[Fq::ZERO; 2], rx, ry),
+            );
+            if corrupt_scalar {
+                w.arrays[sc.side + crate::scalar::S_GLUE].values[crate::scalar::M1][0] += Fq::ONE;
+            }
+            defer_into(
+                &mut w,
+                gfam,
+                poly,
+                &[(&shape, &inst, &tr, &sc, &acc)],
+                &[(ARCHIVE_SENT, KindSet::Fixed)],
+                (shared, kind_at),
+            )
+        };
+        let fold = build(&poly, false);
+        assert_eq!(evaluations.load(Ordering::Relaxed), 1);
+        assert_eq!(fold.claims[1], fold.claims[3]);
+        assert_eq!(fold.claims[1].value, poly.eval(&fold.claims[1].point));
+        let output = deferral::fold_output(&fold.claims, &fold.q, rng.scalar());
+        assert_eq!(output.value, poly.eval(&output.point));
+
+        // A warm-up hop changes another kind's polynomial. Its inherited
+        // claim now needs correction, while the fresh claim still holds.
+        poly.kinds[RECEIVE].eval = Box::new(move |_, rx, ry| {
+            let (a, b, c) = r1cs::matrix_evals(&shape, rx, ry);
+            (a + Fq::ONE, b, c)
+        });
+        assert_ne!(acc.value, poly.eval(&acc.point));
+        let warmup = build(&poly, false);
+        assert_eq!(fold.claims, warmup.claims);
+        for (t, claim) in warmup.claims.iter().enumerate() {
+            assert_eq!(deferral::horner(&warmup.q, Fq::from(t as u64)), claim.value);
+        }
+        let output = deferral::fold_output(&warmup.claims, &warmup.q, rng.scalar());
+        assert_ne!(output.value, poly.eval(&output.point));
+
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build(&poly, true);
+        }))
+        .expect_err("a corrupted fresh claim cannot be bent through its node");
+        assert!(
+            refusal
+                .downcast_ref::<String>()
+                .is_some_and(|why| why == "fresh claim of proof 0 holds")
+        );
+    }
+
+    #[test]
     fn archive_receiver_accepts_only_receive_and_send_on_both_curves() {
         fn holds<S: Scalar>(set: KindSet, installed: usize, bits: [u64; 3]) -> bool {
             let stride = kind_stride(installed);
@@ -3758,6 +3864,14 @@ fn toy_pair(gens: &PairGens, i: usize) -> TracedPair {
 pub fn uniform_kind<S: Scalar>(
     c: std::sync::Arc<crate::uniform::UniformCircuit<S>>,
 ) -> crate::deferral::Kind<S> {
+    uniform_kind_with(c, crate::uniform::UniformCircuit::evals_many)
+}
+
+/// Construct a kind with the batch evaluator for its native field.
+pub(crate) fn uniform_kind_with<S: Scalar>(
+    c: std::sync::Arc<crate::uniform::UniformCircuit<S>>,
+    batch: fn(&crate::uniform::UniformCircuit<S>, &[(&[S], &[S], &[S])]) -> Vec<(S, S, S)>,
+) -> crate::deferral::Kind<S> {
     let (sx, sz, deg) = (c.shape.sx, c.shape.sz(), c.challenge_degrees());
     let many = c.clone();
     crate::deferral::Kind {
@@ -3766,7 +3880,7 @@ pub fn uniform_kind<S: Scalar>(
         deg,
         eval: Box::new(move |ch: &[S], rx: &[S], ry: &[S]| c.evals(rx, ry, ch)),
         eval_many: Some(Box::new(move |pts: &[(&[S], &[S], &[S])]| {
-            many.evals_many(pts)
+            batch(&many, pts)
         })),
     }
 }
@@ -5462,7 +5576,7 @@ where
     for s in 0..2 {
         let i = slot_proof(s);
         let kind = kinds[i].0;
-        let (shape, inst, tr, _, acc) = proofs[i];
+        let (shape, inst, tr, sc, acc) = proofs[i];
         let io = tr.circuit.as_ref().map_or(&inst.io[..], |c| &c.io_full[..]);
         // A circuit proof's accumulator is its late io (at LATE_IO, before
         // the link's io); a toy proof's, its io's tail.
@@ -5473,20 +5587,20 @@ where
             "proof {i}'s io ends with its accumulator"
         );
         let r = tr.rabc[0];
-        let ch2: Vec<S<C>> = tr.circuit.as_ref().map_or(Vec::new(), |c| c.phase2.clone());
+        let ch2 = tr.circuit.as_ref().map_or(&[][..], |c| &c.phase2[..]);
         let (rx, ry): (Vec<S<C>>, Vec<S<C>>) = (tr.rx.concat(), tr.ry.concat());
-        let chv = [
-            ch2.first().copied().unwrap_or(S::<C>::ZERO),
-            ch2.get(1).copied().unwrap_or(S::<C>::ZERO),
-        ];
-        let (ma, mb, mc) = (poly.kinds[kind].eval)(&chv, &rx, &ry);
         assert_eq!(
             shape.sx, poly.kinds[kind].sx,
             "the kind is the verified proof's circuit"
         );
-        let value = r * ma + r.square() * mb + r.square() * r * mc;
-        let point = poly.fresh_point(kind, r, &ch2, &rx, &ry);
-        assert!(poly.eval(&point) == value, "fresh claim of proof {i} holds");
+        let point = poly.fresh_point(kind, r, ch2, &rx, &ry);
+        // These are the scalar verifier's weighted matrix evaluations at this
+        // transcript point. The fold links its fresh value to these same cells.
+        let glue = &w.arrays[sc.side + scalar::S_GLUE];
+        let value = glue.values[scalar::M1..scalar::M1 + 3]
+            .iter()
+            .map(|cell| cell[0])
+            .sum();
         let mut inherited = acc.clone();
         if total_incoming && i == 1 {
             inherited.value = poly.eval(&inherited.point);
@@ -5506,6 +5620,13 @@ where
     for (t, cl) in claims.iter().enumerate() {
         let off = cl.value - deferral::horner(&q, S::<C>::from(t as u64));
         if !bool::from(off.is_zero()) {
+            // The fresh value must agree with the independent restriction at
+            // its interpolation node. Only an inherited claim can need bending.
+            assert!(
+                t % 2 == 0,
+                "fresh claim of proof {} holds",
+                slot_proof(t / 2)
+            );
             eprintln!(
                 "deferral: claim {t} is false on this circuit's polynomial (warm-up chain); q bent through it"
             );

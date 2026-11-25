@@ -374,6 +374,10 @@ linked with S-send) is refused.
 - its point: the kind's corner, its r, its α and β, its `r_x` and `r_y` (padded);
 - its value: the value its verifier checks.
 
+The wallet prover reads the three weighted matrix values from the scalar verifier's witness and sums them for the
+fresh claim. The fold independently checks that sum against its restriction polynomial at the fresh claim's node.
+A one-proof step reuses the same scalar evaluation for both fresh slots.
+
 **The fold.** A step folds four claims (two incoming accumulators and two fresh claims) into its own accumulator.
 
 1. Take the cubic curve γ through the four points at t = 0..3.

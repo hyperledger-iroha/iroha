@@ -1219,8 +1219,8 @@ mod tests {
     /// curves, at random public points. Per kind it prints the program's size,
     /// instruction profile and live registers, the process CPU per
     /// instruction and point on one thread at each lane width, and the time of
-    /// its `kind_degree + 1` evaluations on the pool; every batched result
-    /// equals the one-point evaluation. It then times `restrict` for random
+    /// its `kind_degree + 1` evaluations on the pool. Paired runs compare word
+    /// multiplication with full field multiplication at the same points. It then times `restrict` for random
     /// claims and for claims that keep `c2` zero, which skip ArchiveSent.
     #[test]
     #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS, an authenticated five-family bundle"]
@@ -1271,7 +1271,8 @@ mod tests {
                     .map(|(ch, rx, ry)| (&ch[..], &rx[..], &ry[..]))
                     .collect();
                 let many = kind.eval_many.as_ref().expect("a uniform kind");
-                let reference: Vec<(F, F, F)> = refs[..2]
+                let probe = &refs[..16.min(m)];
+                let reference: Vec<(F, F, F)> = probe
                     .iter()
                     .map(|(ch, rx, ry)| (kind.eval)(ch, rx, ry))
                     .collect();
@@ -1290,13 +1291,12 @@ mod tests {
                 // One thread over the first 16 points: CPU per instruction
                 // and point at each lane width. Then the pool over every
                 // point at the default width.
-                let probe = &refs[..16.min(m)];
                 for lanes in [4, 8, 16] {
                     crate::uniform::set_q_lanes(lanes);
                     let (a, wall1, cpu1) = timed(|| one.install(|| many(probe)));
                     assert!(
-                        a[..2] == reference[..],
-                        "kind {k}: batched lanes equal one point"
+                        a == reference,
+                        "kind {k}: batched lanes equal scalar evaluations"
                     );
                     println!(
                         "  {lanes:>2} lanes, one thread, {} points: {wall1:.3} s wall {cpu1:.3} s CPU, {:.2} ns CPU per instruction and point",
@@ -1304,11 +1304,35 @@ mod tests {
                         cpu1 * 1e9 / (ops * probe.len()) as f64,
                     );
                 }
+                // Compare the installed evaluator against full field products on
+                // exactly the same program, lane width, worker and points. Alternate
+                // execution order to reduce bias from load and clock changes.
+                crate::uniform::set_q_lanes(4);
+                let mut samples = [[0.0; 4]; 2];
+                for round in 0..4 {
+                    for variant in [round % 2, 1 - round % 2] {
+                        let (values, _, cpu) = timed(|| {
+                            one.install(|| match variant {
+                                0 => c.evals_many(probe),
+                                _ => many(probe),
+                            })
+                        });
+                        assert_eq!(values, reference);
+                        samples[variant][round] = cpu;
+                    }
+                }
+                let [full, word] = samples.map(|mut cpu| {
+                    cpu.sort_by(f64::total_cmp);
+                    (cpu[1] + cpu[2]) / 2.0
+                });
+                println!(
+                    "  4 lanes, median of four CPU samples: full products {full:.4} s, word products {word:.4} s"
+                );
                 crate::uniform::set_q_lanes(0);
                 let (b, wall, cpu) = timed(|| many(&refs));
                 assert!(
-                    b[..2] == reference[..],
-                    "kind {k}: the pool equals one point"
+                    b[..probe.len()] == reference[..],
+                    "kind {k}: the pool equals the scalar evaluations"
                 );
                 println!(
                     "  pool of {}, {m} points: {wall:.3} s wall {cpu:.3} s CPU",

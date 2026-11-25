@@ -6,6 +6,7 @@
 //! non-canonical range `[m, 2^256)`.
 
 use ff::{Field, FromUniformBytes, PrimeField, PrimeFieldBits, WithSmallOrderMulGroup};
+use iroha_pasta::PastaField;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{Rng, SeedableRng};
 
@@ -93,6 +94,9 @@ macro_rules! field_suite {
                 assert!(same(&(*a * b), &(ta * tb)));
             }
             let ta = to_t(a);
+            for word in [0, 1, 2, u64::from(u32::MAX), 1 << 63, u64::MAX] {
+                assert!(same(&a.mul_u64(word), &(ta * T::from(word))));
+            }
             assert!(same(&a.square(), &ta.square()));
             assert!(same(&-*a, &-ta));
             assert!(same(&a.double(), &ta.double()));
@@ -156,6 +160,8 @@ macro_rules! field_suite {
             assert!(same(&(a + b), &(ta + tb)));
             assert!(same(&(a - b), &(ta - tb)));
             assert!(same(&(a * b), &(ta * tb)));
+            let word = rng.next_u64();
+            assert!(same(&a.mul_u64(word), &(ta * T::from(word))));
             assert!(same(&a.square(), &ta.square()));
             assert!(same(&-a, &-ta));
             assert!(same(&a.double(), &ta.double()));

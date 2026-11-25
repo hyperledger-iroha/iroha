@@ -356,6 +356,9 @@ impl<F: Scalar> UniformCircuit<F> {
         let start = retained;
         if let Some(t) = self.plan.get() {
             retained += bytes(&t.pool) + bytes(&t.regs.inputs);
+            if let Some(words) = t.word_scales.get() {
+                retained += bytes(words);
+            }
             retained += match &t.regs.ops {
                 RegisterInstructions::Packed(words) => bytes(words),
                 RegisterInstructions::Wide(instructions) => bytes(instructions),
