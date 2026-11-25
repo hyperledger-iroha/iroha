@@ -411,7 +411,15 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   | 11-10 fixed point, two kinds, 16 threads | 12.9 ms (73.8 ms one point at a time) | 9.3 ms (37.7) | | |
   | 11-12 checkpoint, three kinds with exact Bootstrap, 4 threads | 196.6 ms (657.9) | 32.2 ms (88.4) | 179.9 ms (672.2) | 48.9 ms (82.1) |
 
-  That is about 229 ms of native q per Receive pair on four Mac threads. Four kinds and the phone are unmeasured.
+  That is about 229 ms of native q per Receive pair on four Mac threads.
+- Five kinds, 968f bundle (`native_q_on_the_installed_bundle`, M4 Max, six threads, load average about 300, process
+  CPU): P's five programs hold 7,545,038 instructions and run at 157 points each, about 16 ns of CPU per instruction
+  and point on one thread. The arithmetic dominates: P-Bootstrap's 8,398-register program costs the same per
+  instruction as P-recv's 44,188-register one, and operand prefetch or cache-line-aligned registers changed it by
+  under 6%. P's `restrict` took 20.6 s CPU for random claims and 12.1 s for claims with `c2 = 0`; S's took 1.46 s
+  and 0.95 s. In back-to-back `two_wallet_round_trip_from_bundle` runs, the skip cut the primary wiring's CPU by
+  71% for Load and the first Send (their claims also keep `c1 = 1`, so Receive and Send vanish too) and by 30-41%
+  for the later Send and both Receives. Finalize CPU fell 9-23% per operation. The phone is unmeasured.
 
 ### 7.4 Generator claims
 

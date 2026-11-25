@@ -1231,9 +1231,17 @@ mod tests {
         fn timed<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
             let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
             let out = f();
-            (out, wall.elapsed().as_secs_f64(), process_cpu_seconds() - cpu)
+            (
+                out,
+                wall.elapsed().as_secs_f64(),
+                process_cpu_seconds() - cpu,
+            )
         }
-        fn side<F: crate::fs::Scalar>(name: &str, poly: &MatPoly<F>, programs: &[&UniformCircuit<F>]) {
+        fn side<F: crate::fs::Scalar>(
+            name: &str,
+            poly: &MatPoly<F>,
+            programs: &[&UniformCircuit<F>],
+        ) {
             let one = rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
                 .build()
@@ -1241,8 +1249,13 @@ mod tests {
             let mut rng = crate::fs::SpikeRng::new(b"native q on the installed bundle");
             let (mut pool_cpu, mut pool_wall) = (0.0, 0.0);
             for (k, (kind, c)) in poly.kinds.iter().zip(programs).enumerate() {
-                assert_eq!((kind.sx, kind.sz), (c.shape.sx, c.shape.sz()), "kind {k} is its program");
-                let ((muls, scales, ops), (registers, slots)) = (c.plan_stats(), c.plan_registers());
+                assert_eq!(
+                    (kind.sx, kind.sz),
+                    (c.shape.sx, c.shape.sz()),
+                    "kind {k} is its program"
+                );
+                let ((muls, scales, ops), (registers, slots)) =
+                    (c.plan_stats(), c.plan_registers());
                 let m = poly.kind_degree(k) + 1;
                 let points: Vec<(Vec<F>, Vec<F>, Vec<F>)> = (0..m)
                     .map(|_| {
@@ -1281,7 +1294,10 @@ mod tests {
                 for lanes in [4, 8, 16] {
                     crate::uniform::set_q_lanes(lanes);
                     let (a, wall1, cpu1) = timed(|| one.install(|| many(probe)));
-                    assert!(a[..2] == reference[..], "kind {k}: batched lanes equal one point");
+                    assert!(
+                        a[..2] == reference[..],
+                        "kind {k}: batched lanes equal one point"
+                    );
                     println!(
                         "  {lanes:>2} lanes, one thread, {} points: {wall1:.3} s wall {cpu1:.3} s CPU, {:.2} ns CPU per instruction and point",
                         probe.len(),
@@ -1290,7 +1306,10 @@ mod tests {
                 }
                 crate::uniform::set_q_lanes(0);
                 let (b, wall, cpu) = timed(|| many(&refs));
-                assert!(b[..2] == reference[..], "kind {k}: the pool equals one point");
+                assert!(
+                    b[..2] == reference[..],
+                    "kind {k}: the pool equals one point"
+                );
                 println!(
                     "  pool of {}, {m} points: {wall:.3} s wall {cpu:.3} s CPU",
                     rayon::current_num_threads(),

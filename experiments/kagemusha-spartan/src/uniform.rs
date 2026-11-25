@@ -4117,7 +4117,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 let r = v.to_repr();
                 std::array::from_fn(|i| u64::from_le_bytes(r[8 * i..8 * i + 8].try_into().unwrap()))
             };
-            let small = |w: [u64; 4], bits: u32| w[1..].iter().all(|x| *x == 0) && (bits == 64 || w[0] >> bits == 0);
+            let small = |w: [u64; 4], bits: u32| {
+                w[1..].iter().all(|x| *x == 0) && (bits == 64 || w[0] >> bits == 0)
+            };
             let (a, b) = (words(c), words(-c));
             for (i, bits) in [16, 32, 64].into_iter().enumerate() {
                 if small(a, bits) || small(b, bits) {

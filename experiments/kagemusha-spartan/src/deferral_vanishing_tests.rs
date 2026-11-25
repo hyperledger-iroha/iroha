@@ -100,7 +100,10 @@ fn a_fold_without_archive_sent_skips_its_matrices_and_keeps_q() {
         let q = restrict(&poly, &claims);
         let skipped = counts(&calls);
         assert_eq!(q, reference_q(&poly, &claims), "the same q");
-        assert_eq!(skipped[ARCHIVE_SENT_KIND], 0, "ArchiveSent's matrices are not run");
+        assert_eq!(
+            skipped[ARCHIVE_SENT_KIND], 0,
+            "ArchiveSent's matrices are not run"
+        );
         assert!(
             skipped[..ARCHIVE_SENT_KIND].iter().all(|c| *c > 0),
             "the other kinds are: {skipped:?}"
@@ -131,7 +134,10 @@ fn a_fold_over_an_archive_sent_history_evaluates_every_kind() {
         let q = restrict(&poly, &claims);
         let evaluated = counts(&calls);
         assert_eq!(q, reference_q(&poly, &claims), "the same q");
-        assert!(evaluated.iter().all(|c| *c > 0), "every kind: {evaluated:?}");
+        assert!(
+            evaluated.iter().all(|c| *c > 0),
+            "every kind: {evaluated:?}"
+        );
         counts(&calls);
     }
 }
@@ -144,7 +150,11 @@ fn a_fresh_corner_evaluates_only_its_kind() {
         let claim = fresh(&poly, &mut rng, kind);
         let value = poly.eval(&claim.point);
         let evaluated = counts(&calls);
-        assert_eq!(value, reference_eval(&poly, &claim.point), "kind {kind}: the same value");
+        assert_eq!(
+            value,
+            reference_eval(&poly, &claim.point),
+            "kind {kind}: the same value"
+        );
         let mut expected = vec![0; MAX_KINDS];
         expected[kind] = 1;
         assert_eq!(evaluated, expected, "kind {kind}: only its own matrices");
