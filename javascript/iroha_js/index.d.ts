@@ -14800,14 +14800,16 @@ export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 
-/** Exact independently reviewed target and canonical native argument record. */
+/**
+ * Exact independently reviewed target and call payload. The trigger callback takes
+ * its arguments from the firing event, so the payload is the only argument source.
+ */
 export interface CanonicalMultisigContractCallInput {
   multisig_account_id: string;
   contract_address: string;
   contract_alias: string;
   entrypoint: string;
   payload: Record<string, unknown>;
-  arguments_hex: string | null;
   code_hash_hex: string;
   /** Positive creation_time_ms of the exact frozen native Propose attempt. */
   creation_time_ms: number;

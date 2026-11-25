@@ -14010,6 +14010,36 @@ fn bound_signed_contract_arguments(
         .transpose()
         .map_err(|error| error.to_string())
 }
+/// Whether a multisig contract-call payload is exactly the empty JSON object.
+fn is_empty_multisig_contract_payload(payload: &IrohaJson) -> bool {
+    payload
+        .try_into_any_norito::<Value>()
+        .is_ok_and(|value| value.as_object().is_some_and(norito::json::Map::is_empty))
+}
+/// Check a multisig contract-call payload against the entrypoint's embedded argument
+/// schema and return the record a direct call with it would carry.
+///
+/// The multisig envelope always carries its payload as the firing event's JSON
+/// object and never a fixed record; the callback encodes the event against the
+/// schema when it fires. A zero-parameter entrypoint takes exactly the empty object,
+/// which its callback receives as the event but does not decode.
+fn multisig_contract_call_argument_record(
+    prepared: &ivm::PreparedContract,
+    entrypoint: &str,
+    payload: &IrohaJson,
+) -> core::result::Result<Option<Vec<u8>>, String> {
+    let embedded_entrypoint = prepared.entrypoint_descriptor(entrypoint).ok_or_else(|| {
+        format!("deployed contract is missing embedded entrypoint `{entrypoint}`")
+    })?;
+    if embedded_entrypoint.argument_schema.is_none() {
+        return if is_empty_multisig_contract_payload(payload) {
+            Ok(None)
+        } else {
+            Err("zero-parameter entrypoint takes the empty object payload".to_owned())
+        };
+    }
+    encode_contract_argument_record(prepared, entrypoint, Some(payload))
+}
 const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
 const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
 const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
@@ -16152,6 +16182,39 @@ fn normalize_contract_payload_after_authorization<E>(
     authorize()?;
     normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
+/// Normalize the payload of a multisig contract-call proposal.
+///
+/// The proposal envelope carries a JSON object as the firing event's arguments. A
+/// parameterized entrypoint takes the object its argument schema describes; a
+/// zero-parameter entrypoint takes exactly the empty object.
+fn normalize_multisig_contract_payload(
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: &IrohaJson,
+) -> Result<IrohaJson> {
+    if descriptor.argument_schema.is_none() {
+        // Keeps the refusal of a parameterized manifest that lacks its schema.
+        normalize_contract_payload(descriptor, None)?;
+        if !is_empty_multisig_contract_payload(payload) {
+            return Err(multisig_selector_conflict_error(
+                "multisig_contract_zero_parameter_payload",
+                "zero-parameter contract entrypoints take the empty object payload",
+            ));
+        }
+        return Ok(IrohaJson::new(norito::json!({})));
+    }
+    normalize_contract_payload(descriptor, Some(payload))?
+        .filter(|value| {
+            value
+                .try_into_any_norito::<Value>()
+                .is_ok_and(|value| value.as_object().is_some())
+        })
+        .ok_or_else(|| {
+            multisig_selector_conflict_error(
+                "multisig_contract_object_payload_required",
+                "contract multisig proposals require an exact object payload",
+            )
+        })
+}
 fn resolve_contract_entrypoint_pc(
     prepared: &ivm::PreparedContract,
     selector: &str,
@@ -17600,7 +17663,7 @@ fn build_multisig_contract_call_instructions(
 multisig_account_id: &iroha_data_model::account::AccountId,
 (contract_address, contract_alias): (&iroha_data_model::smart_contract::ContractAddress, Option<&iroha_data_model::smart_contract::ContractAlias>),
 entrypoint: &str,
-(payload, arguments): (Option<&IrohaJson>, Option<&[u8]>),
+payload: Option<&IrohaJson>,
 manifest: &manifest::ContractManifest,
 code_hash: &Hash,
 attempt_created_at_ms: NonZeroU64,
@@ -17621,15 +17684,14 @@ attempt_created_at_ms: NonZeroU64,
             "contract multisig proposals require an exact object payload",
         )
     })?;
-    let arguments =
-        bound_signed_contract_arguments(arguments.map(<[u8]>::to_vec)).map_err(conversion_error)?;
+    // The callback takes its arguments from the ExecuteTrigger payload when the
+    // approved proposal fires; core refuses a fixed argument record here.
     let call = iroha_data_model::smart_contract::multisig_call::build_multisig_contract_call(
         multisig_account_id,
         contract_address,
         contract_alias,
         entrypoint,
         payload,
-        arguments,
         code_hash,
         attempt_created_at_ms,
     )
@@ -18713,13 +18775,16 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     {
         return None;
     }
-    let expected_arguments = encode_contract_argument_record(
-        &prepared,
-        &contract_entrypoint,
-        Some(&IrohaJson::new(payload.clone())),
-    )
-    .ok()?;
-    if expected_arguments.as_deref() != invocation.arguments.as_ref().map(iroha_data_model::transaction::executable::ContractArgumentRecord::as_bytes) {
+    // Trigger callbacks take their arguments from the firing event, so the envelope
+    // carries no fixed record; its payload must still match the entrypoint's schema.
+    if invocation.arguments.is_some()
+        || multisig_contract_call_argument_record(
+            &prepared,
+            &contract_entrypoint,
+            &IrohaJson::new(payload.clone()),
+        )
+        .is_err()
+    {
         return None;
     }
     Some(ExactMultisigContractCallTarget {
@@ -19840,7 +19905,7 @@ mod multisig_contract_call_tests {
 &multisig,
 (&contract_address, Some(&contract_alias)),
 "main",
-(Some(&payload), None),
+Some(&payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1).expect("positive fixture attempt"),
@@ -19941,7 +20006,7 @@ NonZeroU64::new(1).expect("positive fixture attempt"),
 &multisig,
 (&contract_address, Some(alias)),
 entrypoint,
-(Some(payload), None),
+Some(payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1).expect("positive fixture attempt"),
@@ -23948,22 +24013,46 @@ seiyaku BytesPayloadNormalizeTest { permission CanEnactGovernance;
         let normalized_payload = normalize_contract_payload(entrypoint, Some(&request_payload))
             .expect("canonical blob payload should validate")
             .expect("validated payload");
-        let arguments = encode_contract_argument_record(
+        encode_contract_argument_record(
             program.prepared_contract(),
             "create",
             Some(&normalized_payload),
         )
-        .expect("argument record");
-        let (_, expected_hash) = build_multisig_contract_call_instructions(
+        .expect("payload matches the parameterized entrypoint schema")
+        .expect("parameterized entrypoint has an argument record");
+        let (expected_instructions, expected_hash) = build_multisig_contract_call_instructions(
 &multisig_account_id,
 (&contract_address, Some(&contract_alias)),
 "create",
-(Some(&normalized_payload), arguments.as_deref()),
+Some(&normalized_payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt"),
 )
         .expect("normalized instructions");
+        let Some(iroha_data_model::isi::RegisterBox::Trigger(register)) = expected_instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("the proposal registers the contract callback trigger")
+        };
+        let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+            register.object().action().executable()
+        else {
+            panic!("the callback trigger executes one contract invocation")
+        };
+        assert!(
+            invocation.arguments.is_none(),
+            "core refuses contract trigger callbacks with a fixed argument record"
+        );
+        let execute = expected_instructions[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("the proposal fires the registered trigger");
+        assert_eq!(
+            execute.args, normalized_payload,
+            "the parameterized callback takes its arguments from the firing event"
+        );
         let expected_hash = expected_hash.to_string();
         assert_eq!(
             proposal_id,
@@ -23977,6 +24066,164 @@ NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt"),
         assert_eq!(
             response_payload["instructions_hash"].as_str(),
             Some(expected_hash.as_str())
+        );
+    }
+    routing_test! { async multisig_contract_envelopes_take_arguments_from_the_firing_event
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            signer_two_id,
+            _alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let code = kotodama_lang::compiler::Compiler::new()
+            .compile_source(
+                r"
+seiyaku MultisigEventArguments { permission CanEnactGovernance;
+
+  kotoage fn create(bytes alias_literal) authorize(CanEnactGovernance) {}
+
+  kotoage fn ping() authorize(CanEnactGovernance) {}
+}
+",
+            )
+            .expect("compile event-argument contract");
+        let contract_alias = "review_event_args::universal"
+            .parse::<iroha_data_model::smart_contract::ContractAlias>()
+            .expect("contract alias");
+        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
+        install_contract_instance_with_code(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            &contract_address,
+            code,
+            Some(contract_alias.clone()),
+            std::slice::from_ref(&multisig_account_id),
+        );
+        let attempt = NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt");
+        let request = |entrypoint: &str, payload: IrohaJson| MultisigContractCallProposeDto {
+            proposal_nonce: MultisigProposalNonce::new([0x42; 32]).unwrap(),
+            selector: concrete_selector(multisig_account_id.clone()),
+            signer_account_id: signer_two_id.clone(),
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(attempt.get()),
+            contract_alias: contract_alias.clone(),
+            entrypoint: entrypoint.to_owned(),
+            payload,
+            fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
+        };
+        let PreparedContractCall {
+            program,
+            code_hash,
+            manifest,
+            ..
+        } = prepare_contract_call(state.as_ref(), &contract_address, None)
+            .expect("prepared contract call");
+        let envelope = |entrypoint: &str, payload: &IrohaJson| {
+            build_multisig_contract_call_instructions(
+                &multisig_account_id,
+                (&contract_address, Some(&contract_alias)),
+                entrypoint,
+                Some(payload),
+                &manifest,
+                &code_hash,
+                attempt,
+            )
+            .expect("canonical envelope")
+        };
+        // A zero-parameter entrypoint takes exactly the empty object payload.
+        let empty = IrohaJson::new(norito::json!({}));
+        let response = handle_post_contract_call_multisig_propose(
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(request("ping", empty.clone())),
+        )
+        .await
+        .expect("zero-parameter multisig proposal");
+        let response_payload = decode_json_response(response).await;
+        assert_eq!(
+            response_payload["instructions_hash"].as_str(),
+            Some(envelope("ping", &empty).1.to_string().as_str())
+        );
+        let error = handle_post_contract_call_multisig_propose(
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(request("ping", IrohaJson::new(norito::json!({ "probe": true })))),
+        )
+        .await
+        .expect_err("a zero-parameter entrypoint takes no arguments");
+        expect_app_conflict(error, "multisig_contract_zero_parameter_payload");
+        // The approve route admits exactly the canonical event-argument envelopes.
+        let target = |instructions: Vec<dm::InstructionBox>| {
+            exact_multisig_contract_call_target_with_world(
+                &state.world_view(),
+                &multisig_account_id,
+                &occurrence_fixture_value(instructions, 1, 2, BTreeSet::new()),
+            )
+        };
+        let create_payload = IrohaJson::new(norito::json!({
+            "alias_literal": "0x62616e6b696e674063656e7472616c62616e6b"
+        }));
+        for (entrypoint, payload) in [("create", &create_payload), ("ping", &empty)] {
+            let found = target(envelope(entrypoint, payload).0)
+                .expect("canonical event-argument envelope is an exact target");
+            assert_eq!(found.contract_alias, contract_alias);
+            assert_eq!(found.contract_entrypoint, entrypoint);
+            assert_eq!(&found.payload, payload);
+        }
+        assert!(
+            target(envelope("ping", &IrohaJson::new(norito::json!({ "probe": true }))).0)
+                .is_none(),
+            "a zero-parameter envelope with arguments is not an exact target"
+        );
+        assert!(
+            target(envelope("create", &IrohaJson::new(norito::json!({ "wrong": 1 }))).0)
+                .is_none(),
+            "a payload outside the entrypoint schema is not an exact target"
+        );
+        let mut fixed = envelope("create", &create_payload).0;
+        let Some(iroha_data_model::isi::RegisterBox::Trigger(register)) =
+            fixed[0].as_any().downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("the envelope registers the callback trigger")
+        };
+        let trigger = register.object();
+        let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+            trigger.action().executable()
+        else {
+            panic!("the callback trigger executes one contract invocation")
+        };
+        let mut invocation = invocation.clone();
+        invocation.arguments = bound_signed_contract_arguments(
+            encode_contract_argument_record(
+                program.prepared_contract(),
+                "create",
+                Some(&create_payload),
+            )
+            .expect("payload matches the schema"),
+        )
+        .expect("bounded record");
+        assert!(invocation.arguments.is_some());
+        let action = iroha_data_model::trigger::action::Action::new(
+            iroha_data_model::transaction::Executable::ContractCall(invocation),
+            iroha_data_model::trigger::action::Repeats::Exactly(1),
+            multisig_account_id.clone(),
+            trigger.action().filter().clone(),
+        )
+        .expect("fixed-record action fixture")
+        .with_metadata(trigger.action().metadata().clone());
+        fixed[0] = iroha_data_model::isi::Register::trigger(
+            iroha_data_model::trigger::Trigger::new(trigger.id().clone(), action),
+        )
+        .into();
+        assert!(
+            target(fixed).is_none(),
+            "core refuses contract trigger callbacks with a fixed argument record"
         );
     }
     routing_test! { async multisig_generic_propose_binds_assessment_only_in_signed_proposal_marker
@@ -24956,16 +25203,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_callable_contract_entrypoint(&manifest, &entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, Some(&payload))?;
-    if normalized_payload
-        .clone()
-        .and_then(|value| value.try_into_any_norito::<Value>().ok()).is_none_or(|value| value.as_object().is_none())
-    {
-        return Err(multisig_selector_conflict_error(
-            "multisig_contract_object_payload_required",
-            "contract multisig proposals require an exact object payload",
-        ));
-    }
+    let normalized_payload = normalize_multisig_contract_payload(entrypoint_descriptor, &payload)?;
     let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
         "apps_mint_request::cbsi"
             .parse()
@@ -24982,9 +25220,8 @@ pub async fn handle_post_contract_call_multisig_propose(
             ));
         }
         let payload_value = normalized_payload
-            .clone()
-            .and_then(|value| value.try_into_any_norito::<Value>().ok())
-            .ok_or_else(|| {
+            .try_into_any_norito::<Value>()
+            .map_err(|_| {
                 multisig_selector_conflict_error(
                     "mint_request_payload_invalid",
                     "CBSI mint requests require an exact object payload",
@@ -25044,14 +25281,18 @@ pub async fn handle_post_contract_call_multisig_propose(
             }
         }
     }
-    let arguments = encode_contract_argument_record(
+    // The encoded record checks the payload against the pinned schema and shapes the
+    // direct-call routing estimate. The proposal itself carries only the payload:
+    // the trigger callback encodes it from the firing event when the proposal executes.
+    let arguments = multisig_contract_call_argument_record(
         program.prepared_contract(),
         &entrypoint,
-        normalized_payload.as_ref(),
+        &normalized_payload,
     )
     .map_err(conversion_error)?;
-    let signed_arguments =
-        bound_signed_contract_arguments(arguments.clone()).map_err(conversion_error)?;
+    // A zero-parameter call's outer metadata omits the payload, as a direct call's does.
+    let metadata_payload = arguments.is_some().then_some(&normalized_payload);
+    let signed_arguments = bound_signed_contract_arguments(arguments).map_err(conversion_error)?;
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let attempt_created_at_ms = NonZeroU64::new(creation_time_ms).ok_or_else(|| {
         multisig_selector_validation_error("positive Propose creation_time_ms is required")
@@ -25062,7 +25303,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &code_hash,
         contract_alias.as_ref(),
         Some(&entrypoint),
-        normalized_payload.as_ref(),
+        metadata_payload,
     );
     tx_metadata.insert(
         Name::from_str("contract_attempt_created_at_ms").expect("static metadata key"),
@@ -25072,7 +25313,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &multisig_account_id,
         (&contract_address, contract_alias.as_ref()),
         &entrypoint,
-        (normalized_payload.as_ref(), arguments.as_deref()),
+        Some(&normalized_payload),
         &manifest,
         &code_hash,
         attempt_created_at_ms,

@@ -391,15 +391,19 @@ is before Fiat-Shamir, grinding and composition losses. Declared challenge degre
 import has to verify them or rely on authenticated compiler output (TODO G5).
 
 **Native decision.** An accumulated claim is checked by running each kind's matrix program once at its point: about
-0.2 ms per uniform kind on the Mac.
+0.2 ms per uniform kind on the Mac. A kind whose selector times padding is zero at the point adds zero and is not run.
 
 **The prover's native q.**
 
 - q needs P at the curve's points. Each kind's program runs only at its own degree + 1 points, in groups of four
   points per instruction over all cores; equispaced extension fills in the rest.
 - Every batched q equals the pointwise q.
-- Every fold evaluates every kind on its own degree-sized grid, so the largest program dominates. P-boot's program is
-  4.7 times P-recv's.
+- A fold evaluates every kind whose selector times padding is nonzero somewhere on its curve, each on its own
+  degree-sized grid, so the largest such program dominates; a kind zero at every point adds nothing and is not run.
+  With five kinds ArchiveSent's selector is `c2`. Every fresh claim of the other kinds has `c2 = 0`, and so does every
+  accumulator folded only from them, so a history without ArchiveSent never runs ArchiveSent's program. In the 968f
+  bundle that program is the largest: 3,049,142 of P's 7,545,038 instructions. The skip depends only on the public
+  claim points; a published accumulator already shows its `c2`.
 - Mac medians of seven interleaved rounds:
 
   | Run | P-recv | S-recv | P-send | S-send |

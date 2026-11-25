@@ -1214,6 +1214,128 @@ mod tests {
         run().unwrap();
     }
 
+    /// Native q on the installed bundle: the batched matrix evaluations that
+    /// `deferral::restrict` runs when an operation folds four claims, on both
+    /// curves, at random public points. Per kind it prints the program's size,
+    /// instruction profile and live registers, the process CPU per
+    /// instruction and point on one thread at each lane width, and the time of
+    /// its `kind_degree + 1` evaluations on the pool; every batched result
+    /// equals the one-point evaluation. It then times `restrict` for random
+    /// claims and for claims that keep `c2` zero, which skip ArchiveSent.
+    #[test]
+    #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS, an authenticated five-family bundle"]
+    fn native_q_on_the_installed_bundle() {
+        use crate::deferral::{Claim, MatPoly};
+        use crate::prof::process_cpu_seconds;
+        use crate::uniform::UniformCircuit;
+        fn timed<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
+            let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
+            let out = f();
+            (out, wall.elapsed().as_secs_f64(), process_cpu_seconds() - cpu)
+        }
+        fn side<F: crate::fs::Scalar>(name: &str, poly: &MatPoly<F>, programs: &[&UniformCircuit<F>]) {
+            let one = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("a one-thread pool");
+            let mut rng = crate::fs::SpikeRng::new(b"native q on the installed bundle");
+            let (mut pool_cpu, mut pool_wall) = (0.0, 0.0);
+            for (k, (kind, c)) in poly.kinds.iter().zip(programs).enumerate() {
+                assert_eq!((kind.sx, kind.sz), (c.shape.sx, c.shape.sz()), "kind {k} is its program");
+                let ((muls, scales, ops), (registers, slots)) = (c.plan_stats(), c.plan_registers());
+                let m = poly.kind_degree(k) + 1;
+                let points: Vec<(Vec<F>, Vec<F>, Vec<F>)> = (0..m)
+                    .map(|_| {
+                        (
+                            (0..2).map(|_| rng.scalar()).collect(),
+                            (0..kind.sx).map(|_| rng.scalar()).collect(),
+                            (0..kind.sz).map(|_| rng.scalar()).collect(),
+                        )
+                    })
+                    .collect();
+                let refs: Vec<(&[F], &[F], &[F])> = points
+                    .iter()
+                    .map(|(ch, rx, ry)| (&ch[..], &rx[..], &ry[..]))
+                    .collect();
+                let many = kind.eval_many.as_ref().expect("a uniform kind");
+                let reference: Vec<(F, F, F)> = refs[..2]
+                    .iter()
+                    .map(|(ch, rx, ry)| (kind.eval)(ch, rx, ry))
+                    .collect();
+                println!(
+                    "native q {name} kind {k}: sx {} sz {} deg {:?}; {ops} instructions ({muls} products, {scales} by constants), {registers} registers for {slots} slots ({} MiB per lane); {m} points",
+                    kind.sx,
+                    kind.sz,
+                    kind.deg,
+                    (registers * std::mem::size_of::<F>()) >> 20,
+                );
+                let (scale_classes, rest) = c.plan_op_profile();
+                println!(
+                    "  by constants below 2^16 / 2^32 / 2^64 / other powers of two / other (or negated): {scale_classes:?}; adds, subs, constant loads, squares: {rest:?}; rewrites (const products, scale of scale, sum of equal scales, unit scales, product of a scale): {:?}",
+                    c.plan_rewrite_profile()
+                );
+                // One thread over the first 16 points: CPU per instruction
+                // and point at each lane width. Then the pool over every
+                // point at the default width.
+                let probe = &refs[..16.min(m)];
+                for lanes in [4, 8, 16] {
+                    crate::uniform::set_q_lanes(lanes);
+                    let (a, wall1, cpu1) = timed(|| one.install(|| many(probe)));
+                    assert!(a[..2] == reference[..], "kind {k}: batched lanes equal one point");
+                    println!(
+                        "  {lanes:>2} lanes, one thread, {} points: {wall1:.3} s wall {cpu1:.3} s CPU, {:.2} ns CPU per instruction and point",
+                        probe.len(),
+                        cpu1 * 1e9 / (ops * probe.len()) as f64,
+                    );
+                }
+                crate::uniform::set_q_lanes(0);
+                let (b, wall, cpu) = timed(|| many(&refs));
+                assert!(b[..2] == reference[..], "kind {k}: the pool equals one point");
+                println!(
+                    "  pool of {}, {m} points: {wall:.3} s wall {cpu:.3} s CPU",
+                    rayon::current_num_threads(),
+                );
+                pool_cpu += cpu;
+                pool_wall += wall;
+            }
+            // Random claims select every kind; claims that keep c2 zero (a
+            // history without ArchiveSent: every fresh claim of the other
+            // kinds and every accumulator folded from them) do not select
+            // ArchiveSent anywhere on the curve.
+            let n = poly.n();
+            let c2 = poly.c2_at();
+            for archive in [true, false] {
+                let claims: [Claim<F>; 4] = std::array::from_fn(|_| {
+                    let mut point: Vec<F> = (0..n).map(|_| rng.scalar()).collect();
+                    if let (false, Some(j)) = (archive, c2) {
+                        point[j] = F::ZERO;
+                    }
+                    Claim {
+                        point,
+                        value: F::ZERO,
+                    }
+                });
+                let (q, wall, cpu) = timed(|| crate::deferral::restrict(poly, &claims));
+                println!(
+                    "native q {name}, {} claims: degree {} ({} coefficients); restrict on the pool {wall:.3} s wall {cpu:.3} s CPU; every kind on the pool: {pool_cpu:.3} s CPU, {pool_wall:.3} s wall",
+                    if archive { "random" } else { "c2 = 0" },
+                    poly.degree(),
+                    q.len()
+                );
+            }
+        }
+        let path = std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS")
+            .map(std::path::PathBuf::from)
+            .expect("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS names the bundle directory");
+        let parameters = install_test_bundle(&path).unwrap();
+        let set = &parameters.inner;
+        let primary: Vec<&UniformCircuit<Fp>> = set.programs.iter().map(|p| &*p.primary).collect();
+        let secondary: Vec<&UniformCircuit<crate::verifier::Fq>> =
+            set.programs.iter().map(|p| &*p.secondary).collect();
+        side("P", &set.generators.defer_p, &primary);
+        side("S", &set.generators.defer_s, &secondary);
+    }
+
     /// The canonical provider's dispatch order for every operation of an
     /// ordinary Send and its Receive: reconstruct the selected capsule,
     /// finalize it, then check the completion it staged. That check gets the

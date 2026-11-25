@@ -269,19 +269,33 @@ impl<F: PrimeField> MatPoly<F> {
         let at = |c: F, b: u64| if b == 1 { c } else { F::ONE - c };
         at(point[0], b0) * at(c1, b1)
     }
-    /// Kind `k`'s term at `point` from its matrices' values there:
-    /// `sel_k(c) pad_k (rho A + rho^2 B + rho^3 C)`.
-    fn kind_term(&self, k: usize, point: &[F], (a, b, cc): (F, F, F)) -> F {
+    /// Kind `k`'s selector times its padding at `point`, `sel_k(c) pad_k`.
+    /// Where it is zero the kind's term is zero, whatever its matrices are.
+    fn weight(&self, k: usize, point: &[F]) -> F {
         let kind = &self.kinds[k];
-        let rho = point[1];
         let (xs, ys) = self.xy(point);
-        let sel = self.selector(k, point);
         let pad = xs[kind.sx..]
             .iter()
             .chain(&ys[kind.sz..])
             .fold(F::ONE, |acc, v| acc * (F::ONE - v));
+        self.selector(k, point) * pad
+    }
+    /// Kind `k`'s term at `point` from its matrices' values there:
+    /// `sel_k(c) pad_k (rho A + rho^2 B + rho^3 C)`.
+    fn kind_term(&self, k: usize, point: &[F], (a, b, cc): (F, F, F)) -> F {
+        let rho = point[1];
         let rho2 = rho.square();
-        sel * pad * (rho * a + rho2 * b + rho2 * rho * cc)
+        self.weight(k, point) * (rho * a + rho2 * b + rho2 * rho * cc)
+    }
+    /// Whether kind `k`'s term is zero at every one of `points` for any
+    /// matrices: its matrices need no evaluation there. With five kinds a
+    /// history without ArchiveSent keeps `c2` zero in every claim, so
+    /// ArchiveSent's term vanishes along the whole fold curve; a fresh claim
+    /// at a kind's corner selects that kind alone. The points are public.
+    fn vanishes(&self, k: usize, points: &[impl AsRef<[F]>]) -> bool {
+        points
+            .iter()
+            .all(|p| self.weight(k, p.as_ref()).is_zero_vartime())
     }
     /// The empty claim: selector `(1, 1)` with rho zero. With three kinds
     /// the corner selects no kind; with four kinds rho zero still makes
@@ -302,13 +316,17 @@ impl<F: PrimeField> MatPoly<F> {
     }
     /// The combined polynomial at `point`. Each kind's matrix tape is an
     /// independent public evaluation, so the kinds run in parallel; the sum
-    /// is exact and independent of the order.
+    /// is exact and independent of the order. A kind whose term vanishes at
+    /// `point` adds zero without evaluating its matrices.
     pub fn eval(&self, point: &[F]) -> F {
         use rayon::prelude::*;
         (0..self.kinds.len())
             .into_par_iter()
             .map(|k| {
                 let (ch, rx, ry) = self.kind_inputs(k, point);
+                if self.vanishes(k, &[point]) {
+                    return F::ZERO;
+                }
                 self.kind_term(k, point, (self.kinds[k].eval)(ch, rx, ry))
             })
             .collect::<Vec<F>>()
@@ -342,6 +360,9 @@ impl<F: PrimeField> MatPoly<F> {
     pub fn eval_many(&self, points: &[Vec<F>]) -> Vec<F> {
         let mut total = vec![F::ZERO; points.len()];
         for k in 0..self.kinds.len() {
+            if self.vanishes(k, points) {
+                continue;
+            }
             for ((t, p), v) in total
                 .iter_mut()
                 .zip(points)
@@ -526,7 +547,9 @@ fn extend<F: PrimeField>(vals: &[(F, F, F)], n: usize, inv: &[F]) -> Vec<(F, F, 
 /// The honest `q = P(gamma(t))` by its `deg q + 1` coefficients, from the
 /// curve's points at `t = 0..=deg q` evaluated together: each kind's
 /// matrices only at `kind_degree + 1` of them (their degree along the
-/// curve; no selector, `rho` or padding), extended to the rest.
+/// curve; no selector, `rho` or padding), extended to the rest. A kind
+/// whose term vanishes at every one of the `deg q + 1` points adds nothing
+/// to them and is not evaluated.
 pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec<F> {
     let d = poly.degree();
     let l = lagrange4::<F>();
@@ -536,6 +559,9 @@ pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec
     let inv = small_inverses::<F>(d + 1);
     let mut values = vec![F::ZERO; d + 1];
     for k in 0..poly.kinds.len() {
+        if poly.vanishes(k, &points) {
+            continue;
+        }
         let m = (poly.kind_degree(k) + 1).min(d + 1);
         let abc = extend(&poly.kind_values(k, &points[..m]), d + 1, &inv);
         for ((v, p), e) in values.iter_mut().zip(&points).zip(abc) {
@@ -950,6 +976,10 @@ mod decision_tests;
 #[cfg(test)]
 #[path = "deferral_selector_tests.rs"]
 mod selector_tests;
+
+#[cfg(test)]
+#[path = "deferral_vanishing_tests.rs"]
+mod vanishing_tests;
 
 #[cfg(test)]
 mod tests {

@@ -80,6 +80,45 @@ pub fn resident_and_footprint() -> (u64, u64) {
     (rss, rss)
 }
 
+/// CPU seconds of this process so far (user and system, every thread). Under a
+/// loaded host a kernel's CPU time moves far less than its wall time.
+#[cfg(unix)]
+pub fn process_cpu_seconds() -> f64 {
+    #[cfg(target_vendor = "apple")]
+    type Usec = i32;
+    #[cfg(not(target_vendor = "apple"))]
+    type Usec = i64;
+    #[repr(C)]
+    struct TimeVal {
+        sec: i64,
+        usec: Usec,
+    }
+    #[repr(C)]
+    struct RUsage {
+        user: TimeVal,
+        system: TimeVal,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+    let mut usage = std::mem::MaybeUninit::<RUsage>::zeroed();
+    // SAFETY: getrusage(RUSAGE_SELF) writes one complete struct rusage.
+    if unsafe { getrusage(0, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    // SAFETY: zero-initialized and then fully written by getrusage.
+    let usage = unsafe { usage.assume_init() };
+    let seconds = |t: &TimeVal| t.sec as f64 + t.usec as f64 * 1e-6;
+    seconds(&usage.user) + seconds(&usage.system)
+}
+
+/// CPU seconds of this process: unavailable here, 0.
+#[cfg(not(unix))]
+pub fn process_cpu_seconds() -> f64 {
+    0.0
+}
+
 /// Returns the allocator's free pages to the system (macOS and iOS), so that a
 /// measurement's starting resident set holds live memory only and a phase's
 /// peak shows its own allocations rather than reused free pages. The native

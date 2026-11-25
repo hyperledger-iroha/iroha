@@ -4105,6 +4105,100 @@ impl<F: Scalar> UniformCircuit<F> {
         (p.muls, p.scales, p.regs.ops.len())
     }
 
+    /// The compiled matrix evaluation's products by a constant whose
+    /// canonical value or negation is below 2^16, 2^32 and 2^64, is another
+    /// power of two, or is none of these; then its additions, subtractions,
+    /// constant loads and squares (the native q benchmark's profile).
+    #[cfg(test)]
+    pub(crate) fn plan_op_profile(&self) -> ([usize; 5], [usize; 4]) {
+        let p = self.plan();
+        let class = |c: F| -> usize {
+            let words = |v: F| -> [u64; 4] {
+                let r = v.to_repr();
+                std::array::from_fn(|i| u64::from_le_bytes(r[8 * i..8 * i + 8].try_into().unwrap()))
+            };
+            let small = |w: [u64; 4], bits: u32| w[1..].iter().all(|x| *x == 0) && (bits == 64 || w[0] >> bits == 0);
+            let (a, b) = (words(c), words(-c));
+            for (i, bits) in [16, 32, 64].into_iter().enumerate() {
+                if small(a, bits) || small(b, bits) {
+                    return i;
+                }
+            }
+            let ones = |w: [u64; 4]| w.iter().map(|x| x.count_ones()).sum::<u32>();
+            if ones(a) == 1 || ones(b) == 1 { 3 } else { 4 }
+        };
+        let (mut scales, mut rest) = ([0; 5], [0; 4]);
+        for (op, _) in p.regs.ops.iter() {
+            match op {
+                Op::Scale(_, k) => scales[class(p.pool[k as usize])] += 1,
+                Op::Add(..) => rest[0] += 1,
+                Op::Sub(..) => rest[1] += 1,
+                Op::Const(_) => rest[2] += 1,
+                Op::Mul(a, b) if a == b => rest[3] += 1,
+                Op::Mul(..) => {}
+            }
+        }
+        (scales, rest)
+    }
+
+    /// Equivalent cheaper forms in the compiled matrix evaluation's
+    /// canonical instructions (the native q benchmark's profile): products
+    /// with a constant-load operand, scales of a single-use scale, sums or
+    /// differences of two single-use scales by one constant, scales by one
+    /// or minus one, and products with a single-use scale operand.
+    #[cfg(test)]
+    pub(crate) fn plan_rewrite_profile(&self) -> [usize; 5] {
+        let p = self.plan();
+        let ops: Vec<Op> = p.slot_instructions().collect();
+        let ni = p.inputs;
+        let mut uses = vec![0u32; ni + ops.len()];
+        for op in &ops {
+            let (src, k) = operands(*op);
+            for s in &src[..k] {
+                uses[*s as usize] += 1;
+            }
+        }
+        for o in p.out {
+            uses[o as usize] += 1;
+        }
+        let at = |s: Slot| (s as usize).checked_sub(ni).map(|i| ops[i]);
+        let single_scale = |s: Slot| match at(s) {
+            Some(Op::Scale(_, k)) if uses[s as usize] == 1 => Some(k),
+            _ => None,
+        };
+        let mut out = [0usize; 5];
+        for op in &ops {
+            match *op {
+                Op::Mul(a, b) => {
+                    if matches!(at(a), Some(Op::Const(_))) || matches!(at(b), Some(Op::Const(_))) {
+                        out[0] += 1;
+                    }
+                    if single_scale(a).is_some() || single_scale(b).is_some() {
+                        out[4] += 1;
+                    }
+                }
+                Op::Scale(a, k) => {
+                    if single_scale(a).is_some() {
+                        out[1] += 1;
+                    }
+                    let c = p.pool[k as usize];
+                    if c == F::ONE || c == -F::ONE {
+                        out[3] += 1;
+                    }
+                }
+                Op::Add(a, b) | Op::Sub(a, b) => {
+                    if let (Some(x), Some(y)) = (single_scale(a), single_scale(b))
+                        && p.pool[x as usize] == p.pool[y as usize]
+                    {
+                        out[2] += 1;
+                    }
+                }
+                Op::Const(_) => {}
+            }
+        }
+        out
+    }
+
     /// One array's part of `A~, B~, C~` (its own compiled program).
     pub fn evals_of(&self, a: usize, rx: &[F], ry: &[F], ch: &[F]) -> (F, F, F) {
         let k = if self.logup() { 2 } else { 0 };
