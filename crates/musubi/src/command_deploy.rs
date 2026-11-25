@@ -274,6 +274,7 @@ pub(super) fn run_deploy(
                     .unwrap_or_else(|| Value::Object(norito::json::Map::new())),
                 gas_limit: args.gas_limit,
                 max_fee: args.max_fee_asset.as_ref().zip(args.max_fee.as_ref()),
+                signing_window_ms: call::DEFAULT_SIGNING_WINDOW_MS,
                 prepare: false,
             },
             progress,

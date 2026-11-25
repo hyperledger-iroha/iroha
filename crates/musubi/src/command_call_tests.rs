@@ -110,6 +110,51 @@ fn mutable_call_cli_requires_new_intent_or_exact_resume() {
     );
 }
 
+#[test]
+fn mutable_call_cli_bounds_signing_window_to_new_calls() {
+    assert_eq!(
+        parsed_call(&["--entrypoint", "write"]).signing_window_ms,
+        60_000
+    );
+    for window in [1, 120_000, 300_000] {
+        let args = parsed_call(&[
+            "--entrypoint",
+            "write",
+            "--prepare",
+            "--signing-window-ms",
+            &window.to_string(),
+        ]);
+        assert_eq!(args.signing_window_ms, window);
+    }
+    for window in ["0", "300001"] {
+        assert!(
+            Cli::try_parse_from([
+                "musubi",
+                "call",
+                "--entrypoint",
+                "write",
+                "--signing-window-ms",
+                window,
+            ])
+            .is_err()
+        );
+    }
+    for action in ["--resume", "--cancel"] {
+        assert!(Cli::try_parse_from(["musubi", "call", action, "/private/call"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "musubi",
+                "call",
+                action,
+                "/private/call",
+                "--signing-window-ms",
+                "120000",
+            ])
+            .is_err()
+        );
+    }
+}
+
 fn continuation_network(config: Option<PathBuf>) -> network::SelectedNetwork {
     network::SelectedNetwork {
         name: "other-taira".to_owned(),

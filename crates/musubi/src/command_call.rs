@@ -15,6 +15,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// Default signing window for a new mutable call, in milliseconds.
+pub(super) const DEFAULT_SIGNING_WINDOW_MS: u64 = 60_000;
+
 #[derive(Args, Debug)]
 pub(super) struct CallArgs {
     #[command(flatten)]
@@ -49,6 +52,9 @@ pub(super) struct CallArgs {
     /// Positive aggregate cap across the self-grant and mutable call in --max-fee-asset.
     #[arg(long, requires = "max_fee_asset", conflicts_with_all = ["resume", "cancel"])]
     max_fee: Option<iroha_primitives::numeric::Quantity>,
+    /// Signing window in milliseconds for a new call. It also caps the signed transaction lifetime.
+    #[arg(long, default_value_t = DEFAULT_SIGNING_WINDOW_MS, value_parser = clap::value_parser!(u64).range(1..=300_000), conflicts_with_all = ["resume", "cancel"])]
+    signing_window_ms: u64,
     /// Persist the reviewed operation without submitting its self-grant or call.
     #[arg(long, conflicts_with_all = ["resume", "cancel"])]
     prepare: bool,
@@ -89,6 +95,8 @@ pub(super) struct CallInput<'a> {
         &'a iroha_data_model::asset::AssetDefinitionId,
         &'a iroha_primitives::numeric::Quantity,
     )>,
+    /// Maximum window for a new signed call, in milliseconds.
+    pub(super) signing_window_ms: u64,
     /// Persist the plan without submitting it.
     pub(super) prepare: bool,
 }
@@ -131,6 +139,7 @@ pub(super) fn run_call(
             payload,
             gas_limit: args.gas_limit,
             max_fee: args.max_fee_asset.as_ref().zip(args.max_fee.as_ref()),
+            signing_window_ms: args.signing_window_ms,
             prepare: args.prepare,
         },
         progress,
@@ -207,7 +216,7 @@ pub(super) fn execute_mutable_call(
             .as_millis(),
     )
     .ok()
-    .and_then(|now| now.checked_add(60_000))
+    .and_then(|now| now.checked_add(input.signing_window_ms))
     .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "call signing deadline overflow"))?;
     let prepared = service
         .prepare(ContractCallRequest {
