@@ -598,6 +598,9 @@ class HttpClientTransport private constructor(
         .timeout(config.requestTimeout())
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
+        .apply {
+            config.canonicalAuth()?.let { authenticatedProofs(config.requireLocalSigningContext(), it) }
+        }
         .build()
 
     /** Fetch one election's exact public u128 tally from a committed state snapshot. */

@@ -6,6 +6,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -66,5 +67,8 @@ fn register_domain_without_permission_rejected() {
     vm.set_register(10, Memory::INPUT_START);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
 }

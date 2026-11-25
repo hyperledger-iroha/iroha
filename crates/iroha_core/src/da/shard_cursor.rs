@@ -1227,7 +1227,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::{
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass},
@@ -1281,8 +1281,8 @@ mod tests {
             sequence,
             BlobDigest::new([lane_byte; 32]),
             ManifestDigest::new([epoch_byte; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([sequence_byte; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([sequence_byte; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x22; 32]),
@@ -1822,8 +1822,8 @@ mod tests {
                 2,
                 BlobDigest::new([0xAA; 32]),
                 ManifestDigest::new([0xBB; 32]),
-                DaProofScheme::MerkleSha256,
-                Hash::prehashed([0xCC; 32]),
+                DaProofScheme::SorafsPorBlake3,
+                BlobDigest::new([0xCC; 32]),
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),

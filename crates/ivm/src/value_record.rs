@@ -3,6 +3,7 @@
     clippy::result_large_err,
     reason = "Return decoding moves the original VM allocation refusal and retry owner by value; boxing this error would allocate on the memory-exhaustion path"
 )]
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     IVM, PointerType,
     codec::{decode_canonical_norito, encode_canonical_norito},
@@ -196,9 +197,9 @@ impl ReturnRecordBudget {
                 return Err(handle_decode_error(
                     word_index,
                     "value capture",
-                    crate::VMError::ExecutionDeferred(
+                    crate::VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::LocalInvariantViolation,
-                    ),
+                    )),
                 ));
             }
             Ok(bytes)
@@ -208,9 +209,9 @@ impl ReturnRecordBudget {
                 handle_decode_error(
                     word_index,
                     "value capture",
-                    crate::VMError::ExecutionDeferred(
+                    crate::VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::AllocationUnavailable,
-                    ),
+                    )),
                 )
             })?;
             owned.extend_from_slice(bytes);
@@ -282,24 +283,42 @@ fn push_list_header(
     atoms.push(EntrypointValueAtomV1::List(item_count));
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum ResultTableSource<'vm> {
+    Live {
+        context: &'vm dyn crate::host::SyscallContext,
+        base: u64,
+    },
+    Completed(&'vm IVM),
+}
+
+impl<'vm> ResultTableSource<'vm> {
+    fn context(self) -> &'vm dyn crate::host::SyscallContext {
+        match self {
+            Self::Live { context, .. } => context,
+            Self::Completed(vm) => vm,
+        }
+    }
+}
+
 struct ResultTableCursor<'vm, 'budget> {
-    vm: &'vm IVM,
-    live_base: Option<u64>,
+    source: ResultTableSource<'vm>,
     word_index: usize,
     budget: &'budget mut ReturnRecordBudget,
 }
 impl ResultTableCursor<'_, '_> {
     fn public_scalar(&mut self) -> Result<(usize, u64), EntrypointReturnDecodeError> {
         let word_index = self.word_index;
-        let value = if let Some(base) = self.live_base {
-            let offset = u64::try_from(word_index)
-                .ok()
-                .and_then(|index| index.checked_mul(8))
-                .and_then(|offset| base.checked_add(offset))
-                .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
-            self.vm.load_u64(offset)
-        } else {
-            self.vm.public_call_result_word(word_index)
+        let value = match self.source {
+            ResultTableSource::Live { context, base } => {
+                let offset = u64::try_from(word_index)
+                    .ok()
+                    .and_then(|index| index.checked_mul(8))
+                    .and_then(|offset| base.checked_add(offset))
+                    .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
+                context.load_u64(offset)
+            }
+            ResultTableSource::Completed(vm) => vm.public_call_result_word(word_index),
         }
         .map_err(|error| handle_decode_error(word_index, "value table", error))?;
         self.word_index = self.word_index.saturating_add(1);
@@ -430,7 +449,7 @@ fn handle_decode_error(
             word_index,
             reason: error,
         }
-    } else if matches!(error, crate::VMError::PrivacyViolation) {
+    } else if matches!(error, crate::VMError::Trap(VmTrap::PrivacyViolation)) {
         EntrypointReturnDecodeError::Privacy {
             word_index,
             reason: error,
@@ -459,9 +478,9 @@ impl EntrypointReturnDecodeError {
             Self::RecordTooLarge { max_bytes, .. }
                 if max_bytes < MAX_ENTRYPOINT_RETURN_RECORD_BYTES =>
             {
-                crate::VMError::OutOfGas
+                crate::VMError::Trap(VmTrap::OutOfGas)
             }
-            _ => crate::VMError::DecodeError,
+            _ => crate::VMError::Trap(VmTrap::DecodeError),
         }
     }
 }
@@ -586,7 +605,7 @@ fn nominal_scalar_atom(
     }
 }
 fn collect_cursor_pointer(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     pointer: u64,
     word_index: usize,
     key: &iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1,
@@ -594,7 +613,7 @@ fn collect_cursor_pointer(
     budget: &mut ReturnRecordBudget,
 ) -> Result<(), EntrypointReturnDecodeError> {
     let tlv = vm
-        .validate_tlv(pointer)
+        .public_tlv(pointer)
         .map_err(|error| handle_decode_error(word_index, "StateCursor", error))?;
     if tlv.type_id != PointerType::NoritoBytes {
         return Err(EntrypointReturnDecodeError::PointerType {
@@ -606,8 +625,7 @@ fn collect_cursor_pointer(
     // Reserve the entire owned envelope before cloning attacker-controlled bytes.
     let bytes = budget.reserve_pointer(tlv.payload.len())?;
     let envelope = vm
-        .memory
-        .load_region(
+        .tracked_public_bytes(
             pointer,
             u64::try_from(bytes).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?,
         )
@@ -624,7 +642,7 @@ fn collect_cursor_pointer(
     Ok(())
 }
 fn collect_leaf_from_words(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     words: &[u64],
     payload_word_index: &mut usize,
     word_index: usize,
@@ -661,7 +679,7 @@ fn collect_leaf_from_words(
             let expected = expected_pointer_type(pointer_kind)
                 .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
             let tlv = vm
-                .validate_tlv(word)
+                .public_tlv(word)
                 .map_err(|error| handle_decode_error(word_index, "List", error))?;
             if tlv.type_id != expected {
                 return Err(EntrypointReturnDecodeError::PointerType {
@@ -673,8 +691,7 @@ fn collect_leaf_from_words(
             let expected_envelope_bytes = budget.reserve_pointer(tlv.payload.len())?;
             validate_pointer_payload(pointer_kind, tlv.payload, word_index)?;
             let envelope = vm
-                .memory
-                .load_region(
+                .tracked_public_bytes(
                     word,
                     u64::try_from(expected_envelope_bytes)
                         .map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?,
@@ -719,11 +736,13 @@ fn collect_node(
             Source::Result => cursor.public_scalar(),
             Source::Memory { base, word_index } => {
                 cursor
-                    .vm
+                    .source
+                    .context()
                     .ensure_public_memory(base, 8)
                     .map_err(|error| handle_decode_error(word_index, "value", error))?;
                 let value = cursor
-                    .vm
+                    .source
+                    .context()
                     .load_u64(base)
                     .map_err(|error| handle_decode_error(word_index, "value", error))?;
                 Ok((word_index, value))
@@ -860,10 +879,12 @@ fn collect_node(
                     SumLayoutV1::try_new(widths[second] as u64, widths[first] as u64)
                 }
                 .map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
-                let (tag, _) = crate::sum::validate_active_words(cursor.vm, pointer, layout)
-                    .map_err(|error| handle_decode_error(word_index, kind, error))?;
+                let (tag, _) =
+                    crate::sum::validate_active_words(cursor.source.context(), pointer, layout)
+                        .map_err(|error| handle_decode_error(word_index, kind, error))?;
                 cursor
-                    .vm
+                    .source
+                    .context()
                     .ensure_public_memory(
                         pointer,
                         layout
@@ -895,10 +916,11 @@ fn collect_node(
                 let layout =
                     ListLayoutV1::try_new(u64::from(list.capacity), widths[element] as u64)
                         .map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
-                let count = crate::list::len(cursor.vm, pointer, layout)
+                let count = crate::list::len(cursor.source.context(), pointer, layout)
                     .map_err(|error| handle_decode_error(word_index, "List", error))?;
                 cursor
-                    .vm
+                    .source
+                    .context()
                     .ensure_public_memory(pointer, 16)
                     .map_err(|error| handle_decode_error(word_index, "List", error))?;
                 push_list_header(atoms, cursor.budget, count as usize)?;
@@ -923,7 +945,14 @@ fn collect_node(
             }
             EntrypointValueTypeNodeV1::StateCursor(key) => {
                 let (word_index, pointer) = next(visit.source, cursor)?;
-                collect_cursor_pointer(cursor.vm, pointer, word_index, key, atoms, cursor.budget)?;
+                collect_cursor_pointer(
+                    cursor.source.context(),
+                    pointer,
+                    word_index,
+                    key,
+                    atoms,
+                    cursor.budget,
+                )?;
             }
             node @ (EntrypointValueTypeNodeV1::Unit
             | EntrypointValueTypeNodeV1::Error(_)
@@ -934,7 +963,7 @@ fn collect_node(
             EntrypointValueTypeNodeV1::Leaf(kind) => {
                 let (word_index, word) = next(visit.source, cursor)?;
                 collect_leaf_from_words(
-                    cursor.vm,
+                    cursor.source.context(),
                     &[word],
                     &mut 0,
                     word_index,
@@ -1004,8 +1033,7 @@ fn collect_entrypoint_return_record(
     }
     let mut budget = ReturnRecordBudget::new(max_bytes);
     let mut cursor = ResultTableCursor {
-        vm,
-        live_base: None,
+        source: ResultTableSource::Completed(vm),
         word_index: 0,
         budget: &mut budget,
     };
@@ -1683,6 +1711,7 @@ pub fn decode_entrypoint_return(
 mod tests {
     use super::*;
     use crate::IVMHost;
+    use crate::error::VmDeferral;
     use iroha_crypto::Hash;
     use iroha_data_model::smart_contract::entrypoint::{
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
@@ -2992,13 +3021,13 @@ mod tests {
                 panic!("return reader must not stringify an unfinished attempt");
             };
             assert_eq!(*word_index, expected_word);
-            let crate::VMError::DecodeDeferred(original) = reason else {
+            let crate::VMError::Deferred(VmDeferral::DecodeDeferred(original)) = reason else {
                 panic!("retain the actual opaque decoder owner");
             };
             let retained = original.clone();
             norito::core::with_decode_limits_scope(limit, || {
                 assert!(
-                    matches!(error.into_nested_vm_error(), crate::VMError::DecodeDeferred(__actual_error_field) if __actual_error_field == (retained))
+                    matches!(error.into_nested_vm_error(), crate::VMError::Deferred(VmDeferral::DecodeDeferred(__actual_error_field)) if __actual_error_field == (retained))
                 );
             });
         }

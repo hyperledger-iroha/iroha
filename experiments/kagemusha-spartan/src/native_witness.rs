@@ -6,6 +6,9 @@ use crate::{
     send_controls::{Charge, QuotaWitness, Segment, Window, WindowSlot},
 };
 use ff::{Field, PrimeField};
+use iroha_data_model::kagemusha::{
+    KagemushaWalletIndexedLeafV1, KagemushaWalletIndexedOpeningV1, KagemushaWalletIndexedRemoveV1,
+};
 
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha.research.kagemusha_spartan.native.ExactWitness.v1")]
@@ -43,6 +46,18 @@ impl Writer {
     fn credential(&mut self, v: &Credential) {
         self.raw(&v.body);
         self.raw(&v.signature);
+    }
+    fn request_originals(&mut self, originals: &crate::request::Originals) -> Result<()> {
+        if !(1..=2).contains(&originals.certificates.len()) {
+            return Err(Error::Malformed("Request signer count"));
+        }
+        self.credential(&originals.receiver);
+        self.uint(originals.certificates.len() as u128, 1);
+        for cert in &originals.certificates {
+            self.raw(&cert.body);
+            self.raw(&cert.signature);
+        }
+        Ok(())
     }
     fn receipt(&mut self, v: &bootstrap::Receipt) {
         self.raw(&v.body);
@@ -91,6 +106,22 @@ impl Writer {
         self.uint(b.len() as u128, 4);
         self.raw(b);
     }
+    /// Wire v1 removal witness: each leaf `key ‖ value ‖ next_key`, each opening
+    /// `LE32 slot ‖ 32 siblings`, in removal order. Bytes are kept exactly.
+    fn removal(&mut self, x: &KagemushaWalletIndexedRemoveV1) {
+        for (leaf, opening) in [
+            (&x.predecessor, &x.predecessor_opening),
+            (&x.leaf, &x.leaf_opening),
+        ] {
+            self.raw(&leaf.key);
+            self.raw(&leaf.value);
+            self.raw(&leaf.next_key);
+            self.uint(opening.slot as u128, 4);
+            for sibling in &opening.siblings {
+                self.raw(sibling);
+            }
+        }
+    }
 }
 struct Reader<'a> {
     fields: &'a [[u8; 32]],
@@ -132,6 +163,24 @@ impl<'a> Reader<'a> {
         Ok(Credential {
             body: self.fixed()?,
             signature: self.fixed()?,
+        })
+    }
+    fn request_originals(&mut self) -> Result<crate::request::Originals> {
+        let receiver = self.credential()?;
+        let count = self.uint(1)? as usize;
+        if !(1..=2).contains(&count) {
+            return Err(Error::Malformed("Request signer count"));
+        }
+        let mut certificates = Vec::with_capacity(count);
+        for _ in 0..count {
+            certificates.push(crate::certificate::Certificate {
+                body: self.fixed()?,
+                signature: self.fixed()?,
+            });
+        }
+        Ok(crate::request::Originals {
+            receiver,
+            certificates,
         })
     }
     fn receipt(&mut self) -> Result<bootstrap::Receipt> {
@@ -198,12 +247,35 @@ impl<'a> Reader<'a> {
         }
         Ok(q)
     }
-    fn blob(&mut self) -> Result<Arc<[u8]>> {
+    fn blob(&mut self) -> Result<&'a [u8]> {
         let n = usize::try_from(self.uint(4)?).map_err(|_| Error::ResourceLimit)?;
         if n > MAX_RECOVERY_BYTES {
             return Err(Error::ResourceLimit);
         }
-        Ok(self.raw(n)?.into())
+        self.raw(n)
+    }
+    fn removal(&mut self) -> Result<KagemushaWalletIndexedRemoveV1> {
+        let mut pair = || -> Result<(KagemushaWalletIndexedLeafV1, KagemushaWalletIndexedOpeningV1)> {
+            let leaf = KagemushaWalletIndexedLeafV1 {
+                key: self.fixed()?,
+                value: self.fixed()?,
+                next_key: self.fixed()?,
+            };
+            let slot = self.uint(4)? as u32;
+            let mut siblings = [[0; 32]; 32];
+            for sibling in &mut siblings {
+                *sibling = self.fixed()?;
+            }
+            Ok((leaf, KagemushaWalletIndexedOpeningV1 { slot, siblings }))
+        };
+        let (predecessor, predecessor_opening) = pair()?;
+        let (leaf, leaf_opening) = pair()?;
+        Ok(KagemushaWalletIndexedRemoveV1 {
+            predecessor,
+            predecessor_opening,
+            leaf,
+            leaf_opening,
+        })
     }
 }
 pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>> {
@@ -244,6 +316,42 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.blob(finality_original);
             2
         }
+        ExactOperationWitness::Unload { step, destinations } => {
+            if step.mode != crate::control::Mode::Unload {
+                return Err(Error::Malformed("Unload mode"));
+            }
+            w.fields(&step.before_core);
+            w.fields(&step.before_rest);
+            w.fields(&step.after_core);
+            w.fields(&step.after_rest);
+            w.credential(&step.credential);
+            w.fields(&step.statement);
+            w.receipt(&step.receipt);
+            w.insert(&step.recovery);
+            let bytes = super::encode(destinations.as_ref())?;
+            if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
+                return Err(Error::ResourceLimit);
+            }
+            w.blob(&bytes);
+            6
+        }
+        ExactOperationWitness::RefreshTimeAnchor(step) => {
+            if step.mode != crate::control::Mode::RefreshTimeAnchor {
+                return Err(Error::Malformed("RefreshTimeAnchor mode"));
+            }
+            w.fields(&step.before_core);
+            w.fields(&step.before_rest);
+            w.fields(&step.after_core);
+            w.fields(&step.after_rest);
+            w.credential(&step.credential);
+            w.fields(&step.statement);
+            w.receipt(&step.receipt);
+            w.raw(&step.authority.certificate.body);
+            w.raw(&step.authority.certificate.signature);
+            w.raw(&step.authority.anchor.body);
+            w.raw(&step.authority.anchor.signature);
+            7
+        }
         ExactOperationWitness::Send(x) => {
             w.fields(&x.before_core);
             w.fields(&x.before_rest);
@@ -251,6 +359,7 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.fields(&x.after_rest);
             w.credential(&x.credential);
             w.request(&x.request);
+            w.request_originals(&x.request_originals)?;
             w.raw(&x.fee_schedule.body);
             w.raw(&x.fee_schedule.signature);
             w.quota(&x.quota);
@@ -288,9 +397,31 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.blob(incoming_payment);
             4
         }
+        ExactOperationWitness::ArchiveSent {
+            step: x,
+            send_capsule,
+            send_completion,
+            open_request,
+            credit_status,
+        } => {
+            w.fields(&x.before_core);
+            w.fields(&x.before_rest);
+            w.fields(&x.after_core);
+            w.fields(&x.after_rest);
+            w.credential(&x.credential);
+            w.fields(&x.statement);
+            w.receipt(&x.receipt);
+            w.removal(&x.core_removal);
+            w.removal(&x.adjusted_removal);
+            w.blob(send_capsule);
+            w.blob(send_completion);
+            w.blob(open_request);
+            w.blob(credit_status);
+            5
+        }
     };
     super::encode(&Frame {
-        version: 1,
+        version: if kind == 3 { 2 } else { 1 },
         kind,
         fields: w.fields,
         bytes: w.bytes,
@@ -298,7 +429,7 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
 }
 pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
     let f: Frame = super::decode(bytes)?;
-    if f.version != 1 {
+    if f.version != if f.kind == 3 { 2 } else { 1 } {
         return Err(Error::Malformed("recovery version"));
     }
     let mut r = Reader {
@@ -310,8 +441,8 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             let scheme = r.fixed()?;
             let relation = r.fixed()?;
             let root = p256::Point {
-                x: BigUint::from_bytes_be(&r.blob()?),
-                y: BigUint::from_bytes_be(&r.blob()?),
+                x: BigUint::from_bytes_be(r.blob()?),
+                y: BigUint::from_bytes_be(r.blob()?),
             };
             let certificate = crate::certificate::Certificate {
                 body: r.fixed()?,
@@ -346,8 +477,8 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             });
             ExactOperationWitness::Load {
                 step,
-                receipt_original: r.blob()?,
-                finality_original: r.blob()?,
+                receipt_original: r.blob()?.into(),
+                finality_original: r.blob()?.into(),
             }
         }
         3 => ExactOperationWitness::Send(Box::new(crate::send::Witness {
@@ -357,6 +488,7 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             after_rest: r.fields()?,
             credential: r.credential()?,
             request: r.request()?,
+            request_originals: r.request_originals()?,
             fee_schedule: crate::fee_schedule::SignedFeeSchedule {
                 body: r.fixed()?,
                 signature: r.fixed()?,
@@ -403,12 +535,72 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
             });
             ExactOperationWitness::Receive {
                 step,
-                incoming_payment: r.blob()?,
+                incoming_payment: r.blob()?.into(),
             }
         }
+        5 => {
+            let step = Box::new(ArchiveSentWitness {
+                before_core: r.fields()?,
+                before_rest: r.fields()?,
+                after_core: r.fields()?,
+                after_rest: r.fields()?,
+                credential: r.credential()?,
+                statement: r.fields()?,
+                receipt: r.receipt()?,
+                core_removal: r.removal()?,
+                adjusted_removal: r.removal()?,
+            });
+            ExactOperationWitness::ArchiveSent {
+                step,
+                send_capsule: Arc::new(Zeroizing::new(r.blob()?.to_vec())),
+                send_completion: r.blob()?.into(),
+                open_request: r.blob()?.into(),
+                credit_status: r.blob()?.into(),
+            }
+        }
+        6 => {
+            let step = crate::control::Witness::unload(crate::unload::Witness {
+                before_core: r.fields()?,
+                before_rest: r.fields()?,
+                after_core: r.fields()?,
+                after_rest: r.fields()?,
+                credential: r.credential()?,
+                statement: r.fields()?,
+                receipt: r.receipt()?,
+                recovery: r.insert()?,
+            });
+            let bytes = r.blob()?;
+            let destinations = UnloadDestinations::decode_bounded(bytes)?;
+            ExactOperationWitness::Unload {
+                step: Box::new(step),
+                destinations: Box::new(destinations),
+            }
+        }
+        7 => ExactOperationWitness::RefreshTimeAnchor(Box::new(crate::control::Witness::refresh(
+            r.fields()?,
+            r.fields()?,
+            r.fields()?,
+            r.fields()?,
+            r.credential()?,
+            r.fields()?,
+            r.receipt()?,
+            crate::time_anchor::Authority {
+                certificate: crate::certificate::Certificate {
+                    body: r.fixed()?,
+                    signature: r.fixed()?,
+                },
+                anchor: crate::time_anchor::TimeAnchor {
+                    body: r.fixed()?,
+                    signature: r.fixed()?,
+                },
+            },
+        ))),
         _ => return Err(Error::Malformed("recovery operation kind")),
     };
-    if !r.fields.is_empty() || !r.bytes.is_empty() || encode_witness(&out)? != bytes {
+    if !r.fields.is_empty()
+        || !r.bytes.is_empty()
+        || Zeroizing::new(encode_witness(&out)?).as_slice() != bytes
+    {
         return Err(Error::Malformed("recovery canonical original"));
     }
     Ok(out)
@@ -427,12 +619,7 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
         x.siblings.zeroize();
     }
     fn insert<const N: usize>(x: &mut InsertWitness<N>) {
-        x.old_root.zeroize();
-        x.key.zeroize();
-        x.value.zeroize();
-        leaf(&mut x.low);
-        path(&mut x.low_path);
-        path(&mut x.slot);
+        x.zeroize();
     }
     fn search<const N: usize>(x: &mut SearchWitness<N>) {
         x.root.zeroize();
@@ -455,6 +642,8 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
             x.ordinary.zeroize();
             insert(&mut x.recovery);
         }
+        // Control owns the zeroization of its state, statement and map.
+        ExactOperationWitness::RefreshTimeAnchor(_) | ExactOperationWitness::Unload { .. } => {}
         ExactOperationWitness::Send(x) => {
             x.before_core.zeroize();
             x.before_rest.zeroize();
@@ -493,6 +682,27 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
             insert(&mut x.maps.consumed_insert);
             search(&mut x.maps.credit_search);
             insert(&mut x.maps.credit_insert);
+        }
+        ExactOperationWitness::ArchiveSent { step: x, .. } => {
+            fn removal(x: &mut KagemushaWalletIndexedRemoveV1) {
+                for (leaf, opening) in [
+                    (&mut x.predecessor, &mut x.predecessor_opening),
+                    (&mut x.leaf, &mut x.leaf_opening),
+                ] {
+                    leaf.key.zeroize();
+                    leaf.value.zeroize();
+                    leaf.next_key.zeroize();
+                    opening.slot.zeroize();
+                    opening.siblings.iter_mut().for_each(Zeroize::zeroize);
+                }
+            }
+            x.before_core.zeroize();
+            x.before_rest.zeroize();
+            x.after_core.zeroize();
+            x.after_rest.zeroize();
+            x.statement.zeroize();
+            removal(&mut x.core_removal);
+            removal(&mut x.adjusted_removal);
         }
     }
 }

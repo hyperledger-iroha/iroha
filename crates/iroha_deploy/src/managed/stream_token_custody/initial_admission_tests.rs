@@ -73,8 +73,8 @@ fn first_configure_proof_is_consumed_before_changed_native_preparation_refusal()
             assert_eq!(binding, &policy.binding);
             observations.set(observations.get() + 1);
             let cut = native.observe(&owner.authority);
-            let proof = native.bootstrap_custody(&owner.authority, &policy, &cut);
-            assert!(proof.current().is_none());
+            let proof = native.bootstrap_custody_captured(&owner.authority, &policy, &cut, None)?;
+            assert!(proof.state.current().is_none());
             Ok((cut, proof))
         })
         .unwrap();
@@ -125,6 +125,52 @@ fn first_configure_proof_is_consumed_before_changed_native_preparation_refusal()
         })],
     );
     assert_eq!(native.chain.commit(vec![change]), vec![true]);
+    // The current-only publisher has advanced from the original H3 absence to H4 presence.
+    // Recover H3 solely from the exact retained frame; the original cannot authorize H4.
+    let old_cut = owner
+        .authority
+        .decode_checkpoint(&original.checkpoint)
+        .unwrap();
+    let old_state = owner
+        .historical_custody(&policy.binding, &old_cut, deadline)
+        .unwrap();
+    assert_eq!(old_state.height(), 3);
+    assert!(old_state.current().is_none());
+    let new_cut = native.observe(&owner.authority);
+    let new = native
+        .bootstrap_custody_captured(&owner.authority, &policy, &new_cut, None)
+        .unwrap();
+    assert!(new.state.current().is_some());
+    assert!(
+        owner
+            .fresh_predecessor_observation(&original, &old_state, &new.state, deadline)
+            .is_err()
+    );
+    assert!(unavailable.requests.lock().unwrap().is_empty());
+    let witnesses = owner
+        .authority
+        .directory
+        .open_child(original_proof::DIRECTORY)
+        .unwrap();
+    let old_name = format!(
+        "{}.nrt",
+        hex::encode(old_cut.checkpoint().tip().block_header.hash().as_ref())
+    );
+    let old_frame = witnesses.read(&old_name, iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1).unwrap();
+    for substitute in [new.frame.as_slice(), &old_frame[..old_frame.len() - 1]] {
+        witnesses
+            .write_atomic(&old_name, substitute, PublishMode::Replace)
+            .unwrap();
+        assert!(
+            owner
+                .historical_custody(&policy.binding, &old_cut, deadline)
+                .is_err()
+        );
+        assert!(unavailable.requests.lock().unwrap().is_empty());
+    }
+    witnesses
+        .write_atomic(&old_name, &old_frame, PublishMode::Replace)
+        .unwrap();
     let error = owner
         .advance_selected_with_preflight(
             SelectedCustodyOperation {

@@ -10,7 +10,7 @@ use blake3::Hasher as Blake3Hasher;
 #[cfg(test)]
 use iroha_config::parameters::actual::LaneConfig;
 #[cfg(any(test, feature = "iroha-core-tests"))]
-use iroha_data_model::da::ingest::StoredDaReceipt;
+use iroha_data_model::da::ingest::{StoredDaReceipt, StoredDaReceiptFrameError};
 use iroha_data_model::{
     da::{commitment::DaCommitmentRecord, ingest::DaIngestReceipt, types::StorageTicketId},
     sorafs::pin_registry::ManifestDigest,
@@ -753,18 +753,23 @@ fn decode_receipt(
     path: &Path,
 ) -> Result<(ReceiptFileKey, DaReceiptEntry), DaReceiptSpoolError> {
     let filename_key = parse_receipt_file_key(path)?;
-    let stored = norito::decode_from_bytes::<StoredDaReceipt>(data).map_err(|source| {
-        DaReceiptSpoolError::Decode {
+    let stored = StoredDaReceipt::decode_frame(data).map_err(|error| match error {
+        // The retired frame is identified by its exact header owner, never decoded.
+        StoredDaReceiptFrameError::RetiredVersion1 => DaReceiptSpoolError::UnsupportedVersion {
+            path: path.to_path_buf(),
+            version: 1,
+        },
+        StoredDaReceiptFrameError::UnsupportedVersion { found, .. } => {
+            DaReceiptSpoolError::UnsupportedVersion {
+                path: path.to_path_buf(),
+                version: found,
+            }
+        }
+        StoredDaReceiptFrameError::Codec(source) => DaReceiptSpoolError::Decode {
             path: path.to_path_buf(),
             source,
-        }
+        },
     })?;
-    if stored.version != StoredDaReceipt::VERSION {
-        return Err(DaReceiptSpoolError::UnsupportedVersion {
-            path: path.to_path_buf(),
-            version: stored.version,
-        });
-    }
     let StoredDaReceipt {
         sequence, receipt, ..
     } = stored;
@@ -1066,7 +1071,7 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::{
         da::{
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
@@ -1096,6 +1101,7 @@ mod tests {
             storage_ticket: StorageTicketId::new([0xEE; 32]),
             pdp_commitment: None,
             stripe_layout: DaStripeLayout::default(),
+            retention_policy: RetentionClass::default(),
             queued_at_unix: 0,
             rent_quote: DaRentQuote::default(),
             operator_signature: Signature::try_from_bytes(&[0x11; 64])
@@ -1109,8 +1115,8 @@ mod tests {
             sequence,
             receipt.client_blob_id,
             ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed(*receipt.chunk_root.as_bytes()),
+            DaProofScheme::SorafsPorBlake3,
+            receipt.chunk_root,
             None,
             RetentionClass::default(),
             receipt.storage_ticket,
@@ -1366,7 +1372,7 @@ mod tests {
         };
         crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
             &stored,
-            "iroha_torii::da::persistence::StoredDaReceipt",
+            "iroha_torii::da::persistence::StoredDaReceiptV2",
         );
         let bytes = to_bytes(&stored).expect("encode");
         let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
@@ -1548,6 +1554,29 @@ mod tests {
                     if version == StoredDaReceipt::VERSION + 1
             ),
             "unsupported receipt versions must reject the whole spool load"
+        );
+    }
+    #[test]
+    fn load_receipt_entries_refuses_retired_version_1_frames() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: StoredDaReceipt::VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let mut bytes = to_bytes(&stored).expect("encode");
+        bytes[6..22].copy_from_slice(&norito::core::schema_hash_for_name(
+            StoredDaReceipt::RETIRED_V1_FRAME_NAME,
+        ));
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
+        std::fs::write(&path, bytes).expect("write");
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::UnsupportedVersion { version: 1, .. })
+            ),
+            "a retired version-1 frame is refused by its header owner"
         );
     }
     #[test]

@@ -179,7 +179,7 @@ impl Port {
                     cell: first + k,
                     map: map.clone(),
                 },
-                coef: coef.clone(),
+                coef: coef.clone().into(),
             });
         }
         if self.consts[k]
@@ -188,7 +188,7 @@ impl Port {
         {
             out.push(Term {
                 src: USrc::One,
-                coef: self.consts[k].clone(),
+                coef: self.consts[k].clone().into(),
             });
         }
         compact(out)
@@ -1021,7 +1021,11 @@ pub const WALLET_ROWS: usize = 512;
 /// The wallet table's values, cell-major (`WALLET_CELLS` vectors of
 /// `WALLET_ROWS`): the wallet key's two comb tables (m = 16).
 pub fn wallet_table_values(q: &Point) -> Vec<Vec<Fp>> {
-    let qt = crate::operation::comb_tables(q, 16);
+    comb_table_values(&crate::operation::comb_tables(q, 16))
+}
+
+/// `wallet_table_values` of already derived m = 16 comb tables.
+fn comb_table_values(qt: &[Vec<Point>]) -> Vec<Vec<Fp>> {
     let mut vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
     for (t, entries) in qt.iter().enumerate() {
         for (idx, pt) in entries.iter().enumerate() {
@@ -1121,7 +1125,7 @@ pub fn comb_with_key_table(
         &moduli[..1],
     );
     let slots = 1usize << pi;
-    let gt = crate::operation::comb_tables(&p256::generator(), m);
+    let gt = crate::operation::g_comb_tables(m);
     let qt = crate::operation::comb_tables(&inputs[0].0, m);
     for (q, _, _, _) in inputs {
         assert_eq!(q, &inputs[0].0, "one public key per comb family");
@@ -1509,7 +1513,7 @@ pub fn comb_with_key_table(
                     cell: k,
                     map,
                 },
-                coef: vec![Fp::from(1u64 << (k % 8)); ns],
+                coef: vec![Fp::from(1u64 << (k % 8)); ns].into(),
             });
         }
         let mut t = vec![plus(
@@ -1540,7 +1544,7 @@ pub fn comb_with_key_table(
                         cell: 16 + l,
                         map: prev.clone(),
                     },
-                    coef: vec![-Fp::from(2u64); nd],
+                    coef: vec![-Fp::from(2u64); nd].into(),
                 }],
             );
             for k in (0..16).filter(|k| acc_limb(*k) == l) {
@@ -1569,7 +1573,7 @@ pub fn comb_with_key_table(
                     cell: k,
                     map,
                 },
-                coef: vec![one; na],
+                coef: vec![one; na].into(),
             }]
         };
         let (nl, pl) = (limbs(&(&nn - 1u32)), limbs(&(&p - 1u32)));
@@ -1585,7 +1589,8 @@ pub fn comb_with_key_table(
                         Fp::from(0u64),
                         Fp::from(0u64),
                         fp_u(&nlimbs[k]),
-                    ],
+                    ]
+                    .into(),
                 }],
             );
             let c = plus(
@@ -1618,18 +1623,7 @@ pub fn comb_with_key_table(
         rows
     };
     // G's table: rows 256 t + index for G's two tables.
-    let mut table_vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
-    for (t, entries) in tables[2..].iter().enumerate() {
-        for (idx, pt) in entries.iter().enumerate() {
-            let row = t * 256 + idx;
-            table_vals[0][row] = Fp::from(row as u64);
-            let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
-            for k in 0..3 {
-                table_vals[1 + k][row] = fp_u(&xl[k]);
-                table_vals[4 + k][row] = fp_u(&yl[k]);
-            }
-        }
-    }
+    let table_vals = comb_table_values(&gt);
     let arrays = vec![
         Array {
             name: "comb value",
@@ -1743,7 +1737,7 @@ pub fn comb_with_key_table(
             lookups: Vec::new(),
             widths: vec![9, 88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
-            values: wallet_table_values(&inputs[0].0),
+            values: comb_table_values(&qt),
         },
     ];
     Comb {
@@ -2177,7 +2171,7 @@ pub fn binding_chain_linked(
             plus(
                 &vec![Term {
                     src: USrc::Own(k),
-                    coef: at0.clone(),
+                    coef: at0.clone().into(),
                 }],
                 &link(
                     mu_a,

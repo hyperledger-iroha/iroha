@@ -1,3 +1,4 @@
+use ivm_abi::error::VmTrap;
 #[path = "cache/runtime_slot.rs"]
 mod runtime_slot;
 use runtime_slot::{IdleRuntimeBacking, IdleRuntimeSlot};
@@ -136,7 +137,11 @@ impl PreparedContractCache {
     fn check_checkout_for_test(&self) -> Result<(), ivm::VMError> {
         self.with_store(|store| store.checkout_refusal).map_or_else(
             || Ok(()),
-            |reason| Err(ivm::VMError::ExecutionDeferred(reason)),
+            |reason| {
+                Err(ivm::VMError::Deferred(
+                    ivm_abi::error::VmDeferral::ExecutionDeferred(reason),
+                ))
+            },
         )
     }
     /// Construct a store with the same entry bound used by the runtime cache.
@@ -211,8 +216,8 @@ impl PreparedContractCache {
     /// hash before publishing the prepared value.
     ///
     /// # Errors
-    /// Returns [`ivm::VMError::InvalidMetadata`] for malformed artifacts,
-    /// [`ivm::VMError::ArtifactAbiHashMismatch`] for stale ABI bindings, or an
+    /// Returns [`ivm::error::VmTrap::InvalidMetadata`] for malformed artifacts,
+    /// [`ivm::error::VmTrap::ArtifactAbiHashMismatch`] for stale ABI bindings, or an
     /// invalid-metadata error for an expected artifact-hash mismatch.
     pub fn get_or_prepare(
         &self,
@@ -330,12 +335,12 @@ impl PreparedContractCache {
             store.stats.preparations = store.stats.preparations.saturating_add(1);
             if prepared.code_hash() != code_hash {
                 self.ready.notify_all();
-                return Err(ivm::VMError::InvalidMetadata);
+                return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
             }
             if let Some(existing) = store.entries.get(&key).cloned() {
                 if existing.artifact() != prepared.artifact() {
                     self.ready.notify_all();
-                    return Err(ivm::VMError::InvalidMetadata);
+                    return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
                 }
                 store.touch(key);
                 self.ready.notify_all();
@@ -351,7 +356,7 @@ impl PreparedContractCache {
         self.with_store(|store| {
             if let Some(existing) = store.entries.get(&key).cloned() {
                 if existing.artifact() != contract.artifact() {
-                    return Err(ivm::VMError::InvalidMetadata);
+                    return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
                 }
                 store.touch(key);
                 return Ok(());
@@ -421,8 +426,9 @@ impl PreparedContractCache {
             store.stats.runtime_template_builds =
                 store.stats.runtime_template_builds.saturating_add(1);
         });
-        // A cold template prepays its image, tree, register and tracking copies
-        // from this VM's original State pool. Keep that fallible allocation
+        // A cold template admits its image, registers and tracking from this
+        // VM's State pool. Only a rooted image needs tree storage in its copy.
+        // Keep that fallible allocation
         // outside the shared store mutex so another borrower can
         // resolve or return a prepared artifact while it is being built.
         let baseline = vm.try_runtime_template()?;
@@ -1191,7 +1197,7 @@ impl IvmCache {
                 .map(ExecutableProgramSummary::Contract)
         } else {
             if profile != generic_program_profile() {
-                return Err(ivm::VMError::InvalidMetadata);
+                return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
             }
             self.summarize_generic_program(bytecode)
                 .map(ExecutableProgramSummary::Generic)
@@ -1200,7 +1206,7 @@ impl IvmCache {
     /// Validate and summarize an ABI-bound program that has no `CNTR` section.
     ///
     /// # Errors
-    /// Returns [`ivm::VMError::InvalidMetadata`] if a contract interface is
+    /// Returns [`ivm::error::VmTrap::InvalidMetadata`] if a contract interface is
     /// present or any generic-program validation fails.
     pub fn summarize_generic_program(
         &mut self,
@@ -1212,7 +1218,7 @@ impl IvmCache {
         let cached = self.with_local(|local| local.generic_summaries.get(&key).cloned());
         if let Some(hit) = cached {
             if hit.program() != bytecode {
-                return Err(ivm::VMError::InvalidMetadata);
+                return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
             }
             self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
             self.touch_summary(key);
@@ -1220,7 +1226,7 @@ impl IvmCache {
         }
         let parsed = ProgramMetadata::parse_for_profile(bytecode, generic_program_profile())?;
         if parsed.contract_interface.is_some() {
-            return Err(ivm::VMError::InvalidMetadata);
+            return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
         }
         self.finish_generic_program_summary(
             bytecode,
@@ -1252,7 +1258,7 @@ impl IvmCache {
         let cached = self.with_local(|local| local.generic_summaries.get(&key).cloned());
         if let Some(hit) = cached {
             if hit.program() != bytecode {
-                return Err(ivm::VMError::InvalidMetadata);
+                return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
             }
             self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
             self.touch_summary(key);
@@ -1279,7 +1285,7 @@ impl IvmCache {
         verifier.set_zk_trace_enabled(false);
         verifier.load_program_for_profile(bytecode, profile)?;
         if Hash::prehashed(verifier.code_hash()) != code_hash {
-            return Err(ivm::VMError::InvalidMetadata);
+            return Err(ivm::VMError::Trap(VmTrap::InvalidMetadata));
         }
         let syscalls = ivm::analysis::program_syscall_numbers_for_profile(bytecode, profile)
             .map_err(ProgramAnalysisError::into_vm_error)?;
@@ -1287,7 +1293,9 @@ impl IvmCache {
             .filter(|number| !is_generic_syscall_allowed(*number))
             .min()
         {
-            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: forbidden });
+            return Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
+                syscall: forbidden,
+            }));
         }
         let summary = GenericProgramSummary {
             program: ivm::cache_memory::SharedAllocation::try_copy_from_slice_with_memory_budget(
@@ -1907,6 +1915,7 @@ mod tests {
     use super::*;
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use ivm::runtime::IvmConfig;
+    use ivm_abi::error::{VmDeferral, VmTrap};
     const HEAP_LIMIT: u64 = ivm::Memory::HEAP_MAX_SIZE;
 
     // Strict reuse positives own the canonical configuration writer for their
@@ -2248,7 +2257,7 @@ mod tests {
                 .summarize_generic_program(&program)
                 .expect_err("generic syscall profile must reject contract-only calls");
             assert!(
-                matches!((&(error), &(ivm::VMError::GenericSyscallNotAllowed { syscall })), (ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}, ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0),
+                matches!((&(error), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall }))), (ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0),
                 "generic syscall profile must reject 0x{syscall:02x}"
             );
         }
@@ -2738,9 +2747,15 @@ mod tests {
             let image_bytes = usize::try_from(runtime.memory.stack_top()).unwrap();
             let leaf_bytes = image_bytes.div_ceil(32) * 32;
             let funded_bytes = budget.reserved_bytes();
+            let runtime_bytes = funded_bytes - prepared_bytes;
+            assert!(!runtime.memory.merkle_storage_allocated());
             assert!(
-                funded_bytes > 2 * (image_bytes + leaf_bytes),
-                "both VM and baseline image, leaves, nodes, and tracking are prepaid"
+                runtime_bytes > 2 * image_bytes,
+                "both images own their tracking"
+            );
+            assert!(
+                runtime_bytes < 2 * (image_bytes + leaf_bytes),
+                "unused Merkle storage is admitted on the first request"
             );
             funded_bytes
         };
@@ -2801,7 +2816,7 @@ mod tests {
         budget.set_limit_bytes(prepared_bytes + vm_bytes);
         assert!(matches!(
             cache.checkout_runtime(&prepared, GAS_LIMIT, HEAP_LIMIT),
-            Err(ivm::VMError::AllocationDeferred(_))
+            Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(
             budget.reserved_bytes(),
@@ -2833,9 +2848,9 @@ mod tests {
         budget.set_limit_bytes(0);
         assert!(matches!(
             cache.checkout_runtime(&prepared, 10_000, HEAP_LIMIT),
-            Err(ivm::VMError::AllocationDeferred(
+            Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-            ))
+            )))
         ));
         assert_eq!(budget.reserved_bytes(), prepared_bytes);
         budget.set_limit_bytes(64 * 1024 * 1024);
@@ -3038,7 +3053,7 @@ mod tests {
         let cache = PreparedContractCache::with_capacity(1);
         assert!(matches!(
             cache.get_or_prepare(first_hash, &second_program),
-            Err(ivm::VMError::InvalidMetadata)
+            Err(ivm::VMError::Trap(VmTrap::InvalidMetadata))
         ));
         cache
             .get_or_prepare(first_hash, &first_program)
@@ -3052,7 +3067,7 @@ mod tests {
         // different artifact. The caller must supply the exact bytes again.
         assert!(matches!(
             cache.get_or_prepare(first_hash, &[]),
-            Err(ivm::VMError::InvalidMetadata)
+            Err(ivm::VMError::Trap(VmTrap::InvalidMetadata))
         ));
         let final_stats = cache.stats();
         assert_eq!(final_stats.misses, after_eviction.misses + 1);
@@ -3199,10 +3214,10 @@ fn require_prepared_profile(
     if contract.profile_id() == profile {
         return Ok(());
     }
-    Err(ivm::VMError::ArtifactAbiHashMismatch {
+    Err(ivm::VMError::Trap(VmTrap::ArtifactAbiHashMismatch {
         expected: profile.abi_hash(),
         actual: contract.profile_id().abi_hash(),
-    })
+    }))
 }
 
 impl PreparedContractCache {
@@ -3238,13 +3253,13 @@ impl PreparedContractCache {
     }
 }
 impl IvmCache {
-    /// Summarize the original artifact under the exact root-selected policy.
+    /// Summarize a raw executable under its original admission interface.
     pub(crate) fn summarize_executable_in_world(
         &mut self,
         world: &impl crate::state::WorldReadOnly,
         bytes: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        let profile = super::profile::resolve_artifact(world, bytes);
+        let profile = super::profile::resolve_raw_artifact(world, bytes);
         self.summarize_executable_for_profile(bytes, profile.id())
     }
     /// Summarize trusted content with its original root's explicit policy.
@@ -3299,6 +3314,7 @@ impl IvmCache {
 #[cfg(test)]
 mod named_profile_tests {
     use super::*;
+    use ivm_abi::error::VmTrap;
     use mv::storage::StorageReadOnly as _;
     fn artifact() -> Vec<u8> {
         let bytes = super::tests::minimal_program();
@@ -3371,12 +3387,12 @@ mod named_profile_tests {
         let query = QueryStateRef::View(&view);
         assert!(matches!(
             query.prepare_contract_cache_hit(&cache, hash),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         let cold = PreparedContractCache::with_capacity(4);
         assert!(matches!(
             query.prepare_contract_cache_miss(&cold, artifact_id),
-            Err(ivm::VMError::PermissionDenied)
+            Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert_eq!(
             original.syscall_policy(),

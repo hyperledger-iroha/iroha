@@ -75,16 +75,11 @@ fn commitment_record_fixture(
         pdp_bytes.clone(),
         manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
-    let record = build_da_commitment_record(
-        &fixture.request,
-        manifest,
-        &fixture.request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::MerkleSha256,
-    );
+    let record =
+        receipt.commitment_record(fixture.request.sequence, DaProofScheme::SorafsPorBlake3);
     (pdp_bytes, record)
 }
 #[test]
@@ -163,7 +158,6 @@ fn persist_pdp_commitment_writes_and_is_idempotent() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &fixture.chunk_store,
-        fixture.canonical.as_slice(),
         1_701_000_777,
     )
     .expect("commitment");
@@ -222,7 +216,7 @@ fn build_da_commitment_record_reflects_artifacts() {
     assert_eq!(record.retention_class, request.retention_policy);
     assert_eq!(record.storage_ticket, manifest.storage_ticket);
     assert!(record.proof_digest.is_some(), "expected proof digest");
-    assert_eq!(record.proof_scheme, DaProofScheme::MerkleSha256);
+    assert_eq!(record.proof_scheme, DaProofScheme::SorafsPorBlake3);
 }
 #[test]
 fn persist_da_commitment_record_writes_and_is_idempotent() {
@@ -298,15 +292,18 @@ fn persist_da_pin_intent_writes_file() {
     let mut request = sample_request();
     request.sequence = 42;
     request.metadata.items.push(MetadataEntry::new(
-        META_DA_REGISTRY_ALIAS,
+        "da.registry.alias",
         b"sora/docs".to_vec(),
         MetadataVisibility::Public,
     ));
     resign_sample_request(&mut request);
     let (fixture, manifest) = resolved_manifest_fixture(request, 1_701_700_123, "manifest");
     let request = &fixture.request;
-    let alias =
-        registry_alias_from_metadata(&request.metadata).expect("alias metadata should parse");
+    let alias = request
+        .metadata
+        .registry_alias()
+        .expect("alias metadata should parse")
+        .map(str::to_owned);
     let intent = signed_pin_intent(
         request,
         manifest.storage_ticket,
@@ -316,6 +313,7 @@ fn persist_da_pin_intent_writes_file() {
     let path = persistence::persist_da_pin_intent(
         manifest_dir,
         &intent,
+        &FIXTURE_COMMITMENT_DIGEST,
         request.lane_id,
         request.epoch,
         request.sequence,
@@ -337,6 +335,7 @@ fn persist_da_pin_intent_writes_file() {
         request.sequence,
         &manifest.storage_ticket,
         &manifest.fingerprint,
+        &FIXTURE_COMMITMENT_DIGEST,
     )
     .expect("load exact pin intent");
     assert_eq!(loaded, intent);
@@ -395,7 +394,7 @@ fn load_da_pin_intent_rejects_filename_body_tuple_mismatch() {
     let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
     let request = context.request;
     let manifest = context.artifacts;
-    let intent = signed_pin_intent_for_manifest(&request, &manifest);
+    let intent = signed_pin_intent_for_manifest(&request, &manifest, BlobDigest::new([0x32; 32]));
     let wrong_sequence = request.sequence.saturating_add(1);
     let path = spool_artifact_path_for_key(
         temp_dir.path(),
@@ -415,6 +414,7 @@ fn load_da_pin_intent_rejects_filename_body_tuple_mismatch() {
         wrong_sequence,
         &manifest.storage_ticket,
         &manifest.fingerprint,
+        &BlobDigest::new([0x32; 32]),
     )
     .expect_err("pin-intent filename/body mismatch must reject");
     assert_eq!(err.kind(), ErrorKind::InvalidData);
@@ -450,8 +450,8 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         request.sequence,
         request.client_blob_id,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed(*manifest.chunk_root.as_bytes()),
+        DaProofScheme::SorafsPorBlake3,
+        manifest.chunk_root,
         Some(Hash::new(&pdp_bytes)),
         request.retention_policy.clone(),
         manifest.storage_ticket,
@@ -555,6 +555,7 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         persistence::persist_da_pin_intent(
             manifest_dir,
             &intent,
+            &FIXTURE_COMMITMENT_DIGEST,
             request.lane_id,
             request.epoch,
             request.sequence.saturating_add(1),
@@ -594,16 +595,10 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote.clone(),
         stripe_layout,
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
-    let record = build_da_commitment_record(
-        &request,
-        &manifest,
-        &request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::MerkleSha256,
-    );
+    let record = receipt.commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3);
     let intent = signed_pin_intent(
         &request,
         manifest.storage_ticket,
@@ -723,6 +718,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         persistence::persist_da_pin_intent(
             manifest_dir,
             &intent,
+            &FIXTURE_COMMITMENT_DIGEST,
             request.lane_id,
             request.epoch,
             request.sequence,

@@ -458,7 +458,7 @@ pub(super) fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapsh
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinkPolicy {
     Single,
-    BuildInput,
+    Counted,
 }
 
 fn snapshot(file: &File, private: bool, directory: bool) -> io::Result<Snapshot> {
@@ -1663,7 +1663,7 @@ impl Directory {
     }
 
     pub(super) fn remove_build_output_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, false, None, LinkPolicy::BuildInput)
+        self.remove_file_native(name, false, None, LinkPolicy::Counted)
     }
 
     fn remove_file_native(
@@ -1694,7 +1694,7 @@ impl Directory {
             Err(error) => return Err(error),
         };
         let before = snapshot(&file)?;
-        let build_security = if links == LinkPolicy::BuildInput {
+        let build_security = if links == LinkPolicy::Counted {
             Some(directory_move::SecuritySnapshot::of(&file)?)
         } else {
             None
@@ -1703,7 +1703,7 @@ impl Directory {
             return Err(changed());
         }
         #[cfg(test)]
-        if links == LinkPolicy::BuildInput {
+        if links == LinkPolicy::Counted {
             crate::build_output::before_named_removal(name);
         }
         self.revalidate()?;
@@ -1850,8 +1850,20 @@ impl Directory {
             preserved,
             0,
             &mut 100_000,
+            &mut Removal::SingleLink,
         )?;
         self.sync()
+    }
+
+    pub(super) fn walk_snapshot(&self, pass: &mut Removal<'_>) -> io::Result<()> {
+        self.clear(
+            &self.current().file,
+            self.path(),
+            &[],
+            0,
+            &mut 100_000,
+            pass,
+        )
     }
 
     fn clear(
@@ -1861,11 +1873,13 @@ impl Directory {
         preserved: &[&OsStr],
         depth: usize,
         remaining: &mut usize,
+        pass: &mut Removal<'_>,
     ) -> io::Result<()> {
         if depth >= 128 {
             return Err(invalid("private removal depth bound exceeded"));
         }
         let parent_id = identity(parent)?;
+        pass.visit_directory(parent_id)?;
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -1890,10 +1904,20 @@ impl Directory {
             )?;
             let standard: FILE_STANDARD_INFO = info(&file, FileStandardInfo)?;
             let directory = standard.Directory;
-            snapshot(&file, false, directory)?;
+            let policy = if matches!(pass, Removal::SingleLink) {
+                LinkPolicy::Single
+            } else {
+                LinkPolicy::Counted
+            };
+            let observed = snapshot_with_links(&file, false, directory, policy)?;
             validate_current_owner(&file)?;
             if directory {
-                self.clear(&file, &path.join(&name), &[], depth + 1, remaining)?;
+                self.clear(&file, &path.join(&name), &[], depth + 1, remaining, pass)?;
+            } else {
+                pass.admit_file(observed.id, u64::from(observed.links))?;
+            }
+            if pass.inspecting() {
+                continue;
             }
             self.revalidate()?;
             let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
@@ -1909,7 +1933,11 @@ impl Directory {
             }
             drop(file);
         }
-        sync_directory_metadata(parent)
+        if pass.inspecting() {
+            self.revalidate()
+        } else {
+            sync_directory_metadata(parent)
+        }
     }
 }
 
@@ -1954,7 +1982,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     }
 
     fn open_build_input(directory: D, name: N) -> io::Result<Self> {
-        Self::open_with_links(directory, name, false, false, LinkPolicy::BuildInput)
+        Self::open_with_links(directory, name, false, false, LinkPolicy::Counted)
     }
 
     fn open_with_links(
@@ -2478,7 +2506,7 @@ mod build_input_snapshot_tests {
             after,
             after,
             after.id,
-            LinkPolicy::BuildInput
+            LinkPolicy::Counted
         ));
         let mut late_link = after;
         late_link.links += 1;
@@ -2486,7 +2514,7 @@ mod build_input_snapshot_tests {
             late_link,
             after,
             after.id,
-            LinkPolicy::BuildInput
+            LinkPolicy::Counted
         ));
         let mut late_content = after;
         late_content.length += 1;
@@ -2494,7 +2522,7 @@ mod build_input_snapshot_tests {
             late_content,
             after,
             after.id,
-            LinkPolicy::BuildInput
+            LinkPolicy::Counted
         ));
         let mut late_metadata = after;
         late_metadata.changed += 1;
@@ -2502,11 +2530,11 @@ mod build_input_snapshot_tests {
             late_metadata,
             after,
             after.id,
-            LinkPolicy::BuildInput
+            LinkPolicy::Counted
         ));
         let mut replaced = after;
         replaced.id.object[0] ^= 1;
-        for policy in [LinkPolicy::Single, LinkPolicy::BuildInput] {
+        for policy in [LinkPolicy::Single, LinkPolicy::Counted] {
             assert!(!named_file_matches(replaced, after, after.id, policy));
         }
         // Strict owners keep their prior final ID join after their separate single-link

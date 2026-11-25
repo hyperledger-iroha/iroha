@@ -11,6 +11,7 @@ description = "Planning utilities for assembling CARv2 archives for SoraFS."
 default = []
 dev-tools = []
 manifest = [
+    "dep:iroha_primitives",
     "dep:sorafs_manifest",
     "dep:iroha_data_model",
     "dep:iroha_crypto",
@@ -23,10 +24,10 @@ manifest = [
 ]
 da_harness = [
     "manifest",
+    "dep:iroha_model_base",
     "dep:eyre",
     "dep:clap",
     "dep:iroha_crypto",
-    "dep:iroha_primitives",
 ]
 cli = [
     "dep:iroha_model_base",
@@ -35,7 +36,6 @@ cli = [
     "dep:ed25519-dalek",
     "dep:iroha_crypto",
     "dep:iroha_data_model",
-    "dep:iroha_primitives",
     "dep:eyre",
     "dep:clap",
 ]

@@ -268,6 +268,8 @@ fn load_with_registration(
         session::universal_authorities(field(runtime, "sessions")?, &android.0, &apple.0)?;
     Ok(Selection {
         base,
+        // The generic application release names no Spartan profile.
+        spartan: None,
         application: ApplicationBinding::ApplicationReleaseV1 {
             _registration: Box::new(registration),
             _source: input.registration_source.into(),

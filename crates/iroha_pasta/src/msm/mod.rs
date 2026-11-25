@@ -19,6 +19,11 @@
 //! - [`FixedBaseTable`]: precomputed window multiples of a fixed commitment
 //!   key; one bucket set and no doublings per MSM.
 //!
+//! No entry point is constant time in its scalars: the secret kernels choose
+//! buckets by digit and skip zero digits, so their timing and memory accesses
+//! follow the scalars (see [`pippenger`]). Callers that commit private values
+//! through them accept that timing exposure.
+//!
 //! Every entry point runs on the caller's Rayon pool
 //! (`rayon::current_num_threads()` of the pool the call is made from). Scratch
 //! admission never blocks. [`MemoryBudget`] limits each kernel,
@@ -126,7 +131,8 @@ pub fn msm_public<C: PastaCurve>(
 ///
 /// The plan assumes 255-bit scalars regardless of their values, the batch
 /// inversions are constant time, and scratch holding digits or bucket sums is
-/// zeroised. Bucket selection still follows the digits (see [`pippenger`]).
+/// zeroised. Bucket selection and zero-digit skips still follow the digits, so
+/// the kernel is variable time in the scalars (see [`pippenger`]).
 ///
 /// # Errors
 ///
@@ -1073,3 +1079,7 @@ mod columns_tests;
 #[cfg(test)]
 #[path = "streaming_tests.rs"]
 mod streaming_tests;
+
+#[cfg(test)]
+#[path = "secret_reference_tests.rs"]
+mod secret_reference_tests;

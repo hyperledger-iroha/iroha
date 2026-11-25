@@ -167,6 +167,7 @@ pub mod kagemusha_wallet_ffi;
 mod kagemusha_wallet_load_original;
 pub use kagemusha_wallet_load_original::connect_norito_kagemusha_wallet_load_original_validate_v1;
 mod private_settlement_ffi;
+mod transaction_layout;
 pub use private_settlement_ffi::{
     CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,
     CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
@@ -304,6 +305,14 @@ const ERR_CANONICAL_JSON: c_int = -503;
 const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 const ERR_RETAIL_FEE_ASSESSMENT: c_int = -506;
 const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
+/// An unknown layout or archive-format selector, or a combination the layout lacks.
+const ERR_WIRE_LAYOUT: c_int = -515;
+/// A wire ID this bridge registers no instruction under.
+const ERR_INSTRUCTION_UNREGISTERED: c_int = -516;
+/// Bytes that are not the canonical payload of the registered instruction in the selected layout.
+const ERR_INSTRUCTION_PAYLOAD: c_int = -517;
+/// Bytes that are not exactly one canonical transaction archive in the selected layout.
+const ERR_TRANSACTION_ARCHIVE: c_int = -518;
 
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
@@ -341,6 +350,10 @@ enum BridgeError {
     ValidationFeePolicyProof,
     RetailFeeAssessment,
     PrivateSettlementResponse,
+    WireLayout,
+    InstructionUnregistered,
+    InstructionPayload,
+    TransactionArchive,
 }
 impl BridgeError {
     const fn code(self) -> c_int {
@@ -379,6 +392,10 @@ impl BridgeError {
             BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
             BridgeError::RetailFeeAssessment => ERR_RETAIL_FEE_ASSESSMENT,
             BridgeError::PrivateSettlementResponse => ERR_PRIVATE_SETTLEMENT_RESPONSE,
+            BridgeError::WireLayout => ERR_WIRE_LAYOUT,
+            BridgeError::InstructionUnregistered => ERR_INSTRUCTION_UNREGISTERED,
+            BridgeError::InstructionPayload => ERR_INSTRUCTION_PAYLOAD,
+            BridgeError::TransactionArchive => ERR_TRANSACTION_ARCHIVE,
         }
     }
 }
@@ -3577,9 +3594,8 @@ where
         builder.set_nonce(nonce);
     }
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let signed = builder
-        .try_sign(&private_key)
-        .map_err(|_| BridgeError::TransactionSign)?;
+    let signed =
+        transaction_layout::sign_builder(builder, &private_key, norito::core::WireLayout::Compact)?;
     let signed_bytes = signed.encode_versioned();
     let mut hash = [0u8; 32];
     hash.copy_from_slice(signed.hash().as_ref());
@@ -9468,9 +9484,11 @@ mod accel_tests {
         let mut out_json_ptr: *mut u8 = ptr::null_mut();
         let mut out_json_len: c_ulong = 0;
         let decode_status = unsafe {
-            connect_norito_decode_signed_transaction_json(
+            crate::transaction_layout::connect_norito_decode_signed_transaction_json_v1(
                 out_signed_ptr,
                 out_signed_len,
+                crate::transaction_layout::LAYOUT_CURRENT,
+                crate::transaction_layout::FORMAT_VERSIONED,
                 &mut out_json_ptr,
                 &mut out_json_len,
             )
@@ -10356,41 +10374,6 @@ define_ed25519_signed_transaction_wrapper! {
             private_key,
             InstructionBox::from(ClaimIdentifier { account, receipt }),
         )?;
-    }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
-    signed_ptr: *const c_uchar,
-    signed_len: c_ulong,
-    out_json_ptr: *mut *mut c_uchar,
-    out_json_len: *mut c_ulong,
-) -> c_int {
-    unsafe {
-        if signed_ptr.is_null() || out_json_ptr.is_null() || out_json_len.is_null() {
-            return -1;
-        }
-        let bytes = slice::from_raw_parts(signed_ptr, signed_len as usize);
-        let tx = match decode_signed_transaction(bytes) {
-            Ok(v) => v,
-            Err(_) => return -2,
-        };
-        let mut json_value = match norito::json::value::to_value(&tx) {
-            Ok(value) => value,
-            Err(_) => return -3,
-        };
-        if let JsonValue::Object(root) = &mut json_value {
-            root.insert(
-                "bridge_debug".into(),
-                signed_transaction_bridge_debug_json(&tx),
-            );
-        }
-        write_output_result(
-            norito::json::to_vec(&json_value),
-            out_json_ptr,
-            out_json_len,
-            -3,
-            ERR_ALLOC,
-        )
     }
 }
 /// Decode a canonical internal `AssetId` balance-bucket literal into readable JSON fields.

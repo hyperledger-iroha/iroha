@@ -1,6 +1,7 @@
 //! Consensus work charges for authenticated V1 argument/result tables.
 
 use crate::VMError;
+use crate::error::VmTrap;
 
 /// Version binding charge ordering, logical work and private fixed-size validation.
 pub const FORMULA_VERSION: u64 = 1;
@@ -20,9 +21,11 @@ pub const NODE: u64 = 1;
 pub fn frame(frame_bytes: u32, result_words: usize) -> Result<u64, VMError> {
     u64::from(frame_bytes)
         .div_ceil(BITMAP_COVERAGE)
-        .checked_add(u64::try_from(result_words).map_err(|_| VMError::GasCostOverflow)?)
+        .checked_add(
+            u64::try_from(result_words).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?,
+        )
         .and_then(|bytes| bytes.checked_mul(PER_BYTE))
-        .ok_or(VMError::GasCostOverflow)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 
 /// Charge the complete canonical envelope; secret callers supply the public type's maximum.
@@ -31,12 +34,13 @@ pub fn pointer(payload_bytes: u64) -> Result<u64, VMError> {
         .checked_add(7 + iroha_crypto::Hash::LENGTH as u64)
         .and_then(|bytes| bytes.checked_mul(PER_BYTE))
         .and_then(|bytes| bytes.checked_add(POINTER_BASE))
-        .ok_or(VMError::GasCostOverflow)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn frame_cost_covers_each_allocation_byte_at_the_v1_bounds() {
         assert!(matches!(frame(16, 1), Ok(3)));
@@ -53,6 +57,9 @@ mod tests {
     fn pointer_cost_is_byte_linear_and_overflow_checked() {
         assert!(matches!(pointer(0), Ok(55)));
         assert!(matches!(pointer(1), Ok(56)));
-        assert!(matches!(pointer(u64::MAX), Err(VMError::GasCostOverflow)));
+        assert!(matches!(
+            pointer(u64::MAX),
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
+        ));
     }
 }

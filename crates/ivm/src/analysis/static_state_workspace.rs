@@ -7,6 +7,7 @@
 //! immutable result keys use their respective original funded owners.
 
 use super::StaticStateFacts;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     PreparedContract, VMError,
     error::ExecutionDeferral,
@@ -54,16 +55,16 @@ pub(super) struct Workspace {
 }
 impl Workspace {
     pub(super) fn new(instructions: usize, budget: &AllocationBudget) -> Result<Self, VMError> {
-        let mut plan =
-            ExecutionMemoryPlan::array::<Row>(instructions).map_err(VMError::AllocationDeferred)?;
+        let mut plan = ExecutionMemoryPlan::array::<Row>(instructions)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(
             ExecutionMemoryPlan::array::<usize>(instructions)
-                .map_err(VMError::AllocationDeferred)?,
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         // Admit the combined exact layouts before allocating either backing.
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut rows = ExecutionBuffer::new(instructions, &mut lease).map_err(buffer_error)?;
         let mut queue = ExecutionBuffer::new(instructions, &mut lease).map_err(buffer_error)?;
         for _ in 0..instructions {
@@ -93,7 +94,7 @@ impl Workspace {
             .rows
             .as_mut_slice()
             .get_mut(index)
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let changed = match &mut row.facts {
             Some(facts) => facts.merge_from(incoming),
             None => {
@@ -106,7 +107,7 @@ impl Workspace {
             // Every pending entry has a distinct marked row. An unmarked row
             // therefore guarantees a free queue slot, including after wrap.
             if self.pending == capacity {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             let tail = (self.head + self.pending) % capacity;
             self.queue.as_mut_slice()[tail] = index;
@@ -140,12 +141,12 @@ impl Workspace {
 fn buffer_error(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(error)) => {
-            VMError::AllocationDeferred(error)
+            VMError::Deferred(VmDeferral::AllocationDeferred(error))
         }
         PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
-        | PrepaidBufferError::Reservation(_) => {
-            VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
-        }
+        | PrepaidBufferError::Reservation(_) => VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable,
+        )),
     }
 }
 

@@ -3,6 +3,7 @@
 use std::cell::Cell;
 
 use super::*;
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::VerifierPackV1;
 use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::{
     AuthenticatedProducerInventoryV1, EncodedDirectoryOriginalsV1, EncodedTransportV1,
     OpeningMetricsV1, OperationQualificationProgressV1, ProducerInventoryV1,
@@ -192,6 +193,70 @@ fn parse_request(bytes: &[u8]) -> io::Result<BuiltinRequest> {
     Ok(request)
 }
 
+/// Explain an installed carrier refusal using only reauthenticated public originals. These
+/// diagnostics run after admission has failed and cannot grant a producer or verifier.
+fn report_binding_mismatch(original: &[u8], install: InstallationV1) {
+    let Ok(pack) = VerifierPackV1::decode_canonical(original) else {
+        return;
+    };
+    let Ok(scheme) = KagemushaWalletSchemeV1::decode_canonical(&pack.scheme, &install.scheme_id)
+    else {
+        return;
+    };
+    let Ok(certificate) =
+        KagemushaWalletSignerCertificateV1::decode_canonical(&pack.signer_certificate, &scheme)
+    else {
+        return;
+    };
+    let Ok(manifest) = KagemushaWalletArtifactManifestV1::decode_canonical(&pack.manifest, &scheme)
+    else {
+        return;
+    };
+    if manifest.verify(&scheme, &certificate).is_err() {
+        return;
+    }
+    let Ok(runtime) = pack.runtime_bindings() else {
+        return;
+    };
+    let body = &manifest.body;
+    for (name, signed, compiled) in [
+        ("scheme_id", scheme.scheme_id(), install.scheme_id),
+        (
+            "manifest_digest",
+            manifest.manifest_digest(),
+            install.manifest_digest,
+        ),
+        (
+            "eq_protocol",
+            body.eq_protocol_digest,
+            runtime.eq_protocol_digest,
+        ),
+        (
+            "ep_protocol",
+            body.ep_protocol_digest,
+            runtime.ep_protocol_digest,
+        ),
+        (
+            "native_profile",
+            body.native_profile_digest,
+            runtime.native_profile_digest,
+        ),
+        (
+            "artifact_inventory",
+            body.artifact_inventory_digest,
+            runtime.artifact_inventory_digest,
+        ),
+    ] {
+        if signed != compiled {
+            println!(
+                "BUILTIN_BINDING_MISMATCH field={name} signed={} expected={}",
+                hex::encode(signed),
+                hex::encode(compiled)
+            );
+        }
+    }
+}
+
 /// Every mode authenticates the independent native genesis. Export always takes
 /// the unconditional strict path and never looks up an existing registry entry.
 ///
@@ -235,14 +300,19 @@ pub fn run(path: &str, mode: Mode) -> io::Result<()> {
     )?;
     opening.lap("selection");
     let pack_start = std::time::Instant::now();
-    let installed = InstalledVerifierPackV1::load(
-        &pack.bytes,
-        InstallationV1 {
-            scheme_id: digest(&request.scheme_id)?,
-            manifest_digest: digest(&request.manifest_digest)?,
-        },
-    )
-    .map_err(io::Error::other)?;
+    let selection = InstallationV1 {
+        scheme_id: digest(&request.scheme_id)?,
+        manifest_digest: digest(&request.manifest_digest)?,
+    };
+    let installed = InstalledVerifierPackV1::load(&pack.bytes, selection).map_err(|error| {
+        if matches!(
+            error,
+            iroha_core_zk::kagemusha_wallet_proofs_v1::Error::RuntimeBinding
+        ) {
+            report_binding_mismatch(&pack.bytes, selection);
+        }
+        io::Error::other(error)
+    })?;
     println!(
         "BUILTIN_PROFILE_PHASE stage=pack_and_parameters elapsed_ms={}",
         pack_start.elapsed().as_millis()

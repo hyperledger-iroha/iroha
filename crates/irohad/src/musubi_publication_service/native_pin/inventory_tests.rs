@@ -37,6 +37,7 @@ fn fixture_operation(store: &Store) -> Operation {
         ordinal: 1,
         context_digest: [0x51; 32],
         source: slot::encode_frame(&source).unwrap(),
+        includes_archive_order: false,
         authorization: NativePinAuthorizationV1 {
             deadline_unix_ms: 200_000,
             max_check_rounds: 2,
@@ -490,4 +491,47 @@ fn warm_original_retention_survives_later_payload_time_and_exact_wire_reopen() {
     assert_eq!(slot.request().pin_selected_at_unix_ms, Some(1_000));
     assert_eq!(slot.request().instruction, original_instruction);
     assert_eq!(slot.signed().unwrap().encode_wire_v1().unwrap(), wire);
+}
+
+#[test]
+fn fresh_storage_reserves_one_archive_order_after_the_last_authorized_check() {
+    let root = tempfile::tempdir().unwrap();
+    let (session, _) = original();
+    let store = Store::initialize(&root.path().join("pin"), session).unwrap();
+    let mut operation = fixture_operation(&store);
+    operation.authorization.max_check_rounds = 4;
+    let fee = operation.authorization.per_transaction.clone();
+    operation
+        .authorization
+        .max_total_fees
+        .values_mut()
+        .for_each(|amount| *amount = Quantity::from(8u64));
+    let old = norito::json::to_vec(&operation).unwrap();
+    assert!(
+        !std::str::from_utf8(&old)
+            .unwrap()
+            .contains("includes_archive_order")
+    );
+    let legacy: Operation = norito::json::from_slice(&old).unwrap();
+    assert_eq!(norito::json::to_vec(&legacy).unwrap(), old);
+    let mut fees = ReservedFeesV1::default();
+    for check in [true, true, true, true, false, false, false] {
+        fees = legacy.reserve_payload(&fees, &fee, check).unwrap();
+    }
+    assert!(legacy.reserve_payload(&fees, &fee, false).is_err());
+    operation.includes_archive_order = true;
+    assert_ne!(
+        operation_commitment(&legacy).unwrap(),
+        operation_commitment(&operation).unwrap()
+    );
+    let after = operation.reserve_payload(&fees, &fee, false).unwrap();
+    assert_eq!(after.transactions, 8);
+    assert!(operation.reserve_payload(&fees, &fee, true).is_err());
+    assert!(operation.reserve_payload(&after, &fee, false).is_err());
+    operation
+        .authorization
+        .max_total_fees
+        .values_mut()
+        .for_each(|amount| *amount = Quantity::from(7u64));
+    assert!(operation.reserve_payload(&fees, &fee, false).is_err());
 }

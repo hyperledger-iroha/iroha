@@ -16,7 +16,9 @@ enum class IrohaPeerPayloadProfile(
      * (`KWRQAC1`), Payment its unchanged complete envelope and required payer companion (`KWPYPC1`); other canonical
      * payloads are one complete `KagemushaWalletEnvelopeV1` frame (`specs/kagemusha_wallet_wire_v1.md` sections 2 and 3.4).
      */
-    KAGEMUSHA_WALLET_V1(1, KagemushaWalletWireV1.VERSION);
+    KAGEMUSHA_WALLET_V1(1, KagemushaWalletWireV1.VERSION),
+    /** Uncompressed Spartan Request, Payment and CreditStatus originals. Native authenticates their financial contents. */
+    KAGEMUSHA_SPARTAN_PAYMENT_V3(0x8001, 3);
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadProfile? =
@@ -44,6 +46,14 @@ enum class IrohaPeerPayloadKind(
      * Exact complete canonical payload cap of this kind: the Request and Payment carriers with their
      * companions, otherwise the wallet envelope frame of this kind, header and padding included.
      */
+    internal fun maximumBytes(profile: IrohaPeerPayloadProfile): Int =
+        if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3) maximumWalletFrameBytes
+        else when (this) {
+            REQUEST -> IrohaPeerSpartanOpenRequestV3.MAXIMUM_BYTES
+            CREDITED -> 10_000
+            else -> maximumWalletFrameBytes
+        }
+
     val maximumWalletFrameBytes: Int get() = when (this) {
         REQUEST -> IrohaPeerWalletRequestV1.MAXIMUM_BYTES
         PAYMENT -> IrohaPeerWalletPaymentV1.MAXIMUM_BYTES
@@ -108,10 +118,17 @@ class IrohaPeerCanonicalPayload(
             "Peer payload profile ${profile.name} requires schema " +
                 "${profile.requiredSchemaVersion}, received $schemaVersion"
         }
-        require(canonicalBytes.size <= kind.maximumWalletFrameBytes) {
+        require(canonicalBytes.size <= kind.maximumBytes(profile)) {
             "${profile.name} ${kind.name} payload exceeds its frozen protocol bound"
         }
         validateTypedCanonicalPayload(profile, kind, canonicalBytes)
+    }
+
+    /** Outcome bit carried by a structurally valid Spartan receipt. Native authenticates it against its Send. */
+    fun spartanCreditStatusBurned(): Boolean {
+        require(profile == IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 && kind == IrohaPeerPayloadKind.CREDITED)
+        val tag = canonicalBytes[0].toInt() and 0xff
+        return if (tag and 0xe0 == 0xa0) tag and 1 != 0 else canonicalBytes[8].toInt() == 1
     }
 
     override fun equals(other: Any?): Boolean = other is IrohaPeerCanonicalPayload &&
@@ -142,12 +159,52 @@ private fun ByteArray.boundedCanonicalCopy(): ByteArray {
  * The check is structural ([KagemushaWalletWireV1.inspectEnvelope]): the wallet still decodes,
  * validates and verifies the message and its companion, and decides its scheme, before acting on it.
  */
+private fun validateSpartanCreditStatus(b: ByteArray) {
+    val flags = b[0].toInt() and 0xff
+    if (flags and 0xe0 == 0xa0) {
+        // Folded later Send. The fixed fields end with the indexed opening's next word and index.
+        val openingEnd = 1 + 336 + 128 + 8 + 32 + 32 + 4
+        val proofStart = if (flags and 0x10 != 0) openingEnd + 32 * 32 else {
+            require(b.size >= openingEnd + 4)
+            val siblings = (openingEnd until openingEnd + 4).sumOf { Integer.bitCount(b[it].toInt() and 0xff) }
+            require(siblings < 32) { "A full opening requires the dense encoding" }
+            openingEnd + 4 + siblings * 32
+        }
+        require(b.size > proofStart) { "The folded Send opening and linked proof are required" }
+        return
+    }
+    require(b.size in 9..10_000 && b.copyOfRange(0,8).contentEquals("KGSCST3\u0000".toByteArray(Charsets.US_ASCII)) && b[8].toInt() in 0..1)
+    var at = 9
+    fun field() {
+        require(at < b.size)
+        val width = b[at++].toInt() and 255
+        require(width <= 32 && width <= b.size-at && (width == 0 || b[at+width-1] != 0.toByte()))
+        at += width
+    }
+    repeat(9) { field() }
+    require(b.size-at >= 160)
+    at += 160
+    repeat(6) { field() }
+    require(b.size-at >= 8)
+    val siblings = (at+4 until at+8).sumOf { Integer.bitCount(b[it].toInt() and 255) }
+    at += 8 + siblings*32
+    require(at < b.size)
+}
+
 private fun validateTypedCanonicalPayload(
     profile: IrohaPeerPayloadProfile,
     kind: IrohaPeerPayloadKind,
     bytes: ByteArray,
 ) {
     when (profile) {
+        IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 -> {
+            when (kind) {
+                IrohaPeerPayloadKind.CREDITED -> validateSpartanCreditStatus(bytes)
+                IrohaPeerPayloadKind.REQUEST -> IrohaPeerSpartanOpenRequestV3(bytes)
+                IrohaPeerPayloadKind.PAYMENT -> IrohaPeerWalletPaymentV1.envelopeEnd(bytes)
+                else -> throw IllegalArgumentException("Unsupported Spartan message kind")
+            }
+        }
         IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1 -> {
             val envelope = try {
                 KagemushaWalletWireV1.inspectEnvelope(when (kind) {
@@ -283,16 +340,20 @@ class IrohaPeerWireMessageV1 private constructor(
             val kind = IrohaPeerPayloadKind.fromCode(data[8].toInt() and 0xff)
                 ?: throw IllegalArgumentException("Invalid peer payload kind")
             require(data[9].toInt() == 0) { "Invalid peer message flags" }
+            require(profile != IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 ||
+                ((kind == IrohaPeerPayloadKind.PAYMENT || kind == IrohaPeerPayloadKind.REQUEST || kind == IrohaPeerPayloadKind.CREDITED) && encoding == IrohaPeerContentEncodingV1.NONE)) {
+                "Spartan requires an uncompressed Request, Payment or CreditStatus"
+            }
             val schemaVersion = data.readU16(10)
             require(schemaVersion != 0) { "Invalid peer schema version" }
             require(schemaVersion == profile.requiredSchemaVersion) {
                 "Peer payload profile ${profile.name} requires schema " +
                     "${profile.requiredSchemaVersion}, received $schemaVersion"
             }
-            val canonicalLength = checkedLength(data.readU32(12), minOf(limits.maximumCanonicalBytes, kind.maximumWalletFrameBytes))
+            val canonicalLength = checkedLength(data.readU32(12), minOf(limits.maximumCanonicalBytes, kind.maximumBytes(profile)))
             val encodedLength = checkedLength(
                 data.readU32(16),
-                minOf(limits.maximumWalletEncodedBytes, kind.maximumWalletFrameBytes),
+                minOf(limits.maximumWalletEncodedBytes, kind.maximumBytes(profile)),
             )
             require(data.size == HEADER_LENGTH + encodedLength) { "Peer message length mismatch" }
             require(encoding != IrohaPeerContentEncodingV1.ZLIB ||
@@ -353,15 +414,19 @@ class IrohaPeerWireMessageV1 private constructor(
             val kind = IrohaPeerPayloadKind.fromCode(data[8].toInt() and 0xff)
                 ?: throw IllegalArgumentException("Malformed IPM1 header")
             require(data[9].toInt() == 0 && data.readU16(10) != 0) { "Malformed IPM1 header" }
+            require(profile != IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 ||
+                ((kind == IrohaPeerPayloadKind.PAYMENT || kind == IrohaPeerPayloadKind.REQUEST || kind == IrohaPeerPayloadKind.CREDITED) && encoding == IrohaPeerContentEncodingV1.NONE)) {
+                "Spartan requires an uncompressed Request, Payment or CreditStatus"
+            }
             val schemaVersion = data.readU16(10)
             require(schemaVersion == profile.requiredSchemaVersion) {
                 "Peer payload profile ${profile.name} requires schema " +
                     "${profile.requiredSchemaVersion}, received $schemaVersion"
             }
-            val canonicalLength = checkedLength(data.readU32(12), minOf(limits.maximumCanonicalBytes, kind.maximumWalletFrameBytes))
+            val canonicalLength = checkedLength(data.readU32(12), minOf(limits.maximumCanonicalBytes, kind.maximumBytes(profile)))
             val encodedLength = checkedLength(
                 data.readU32(16),
-                minOf(limits.maximumWalletEncodedBytes, kind.maximumWalletFrameBytes),
+                minOf(limits.maximumWalletEncodedBytes, kind.maximumBytes(profile)),
             )
             require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength) {
                 "Malformed IPM1 header"
@@ -406,7 +471,8 @@ class IrohaPeerWireMessageV1 private constructor(
             val maximumEncoded = limits.maximumWalletEncodedBytes
             val digest = canonicalHash(payload)
             val canonical = payload.bytes
-            val compressed = if (policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {
+            val compressed = if (payload.profile != IrohaPeerPayloadProfile.KAGEMUSHA_SPARTAN_PAYMENT_V3 &&
+                policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {
                 deflateZlib(canonical)
             } else {
                 null

@@ -5,6 +5,7 @@
 //! finite execution pool; independent snapshots retain that same admission owner.
 //! Runtime-template copies split the already prepaid parent lease once.
 
+use crate::error::VmDeferral;
 use std::ops::Deref;
 
 use crate::{
@@ -117,18 +118,19 @@ impl WriteLog {
         if let Some(budget) = &self.active_budget {
             let capacity = self.rows.funded_growth_capacity()?;
             let mut plan = ExecutionMemoryPlan::array::<u8>(bytes.len())
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             if let Some(capacity) = capacity {
                 plan.include_child(
-                    ExecutionMemoryPlan::array::<WriteLogEntry>(capacity)
-                        .map_err(VMError::AllocationDeferred)?,
+                    ExecutionMemoryPlan::array::<WriteLogEntry>(capacity).map_err(|cause| {
+                        VMError::Deferred(VmDeferral::AllocationDeferred(cause))
+                    })?,
                 )
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             }
             // Old row backing stays charged throughout admission and physical
             // allocation of both replacements. Refusal cannot change guest bytes.
-            let mut lease =
-                ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+            let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             let replacement = Rows::prepare_growth(capacity, &mut lease)?;
             let copied = Bytes::copy_funded(bytes, &mut lease)?;
             let entry = WriteLogEntry {
@@ -162,13 +164,13 @@ impl WriteLog {
 
     pub(super) fn memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::array::<WriteLogEntry>(self.rows.len())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         for entry in self.rows.iter() {
             plan.include_child(
                 ExecutionMemoryPlan::array::<u8>(entry.bytes.len())
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             )
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         Ok(plan)
     }
@@ -189,7 +191,7 @@ impl WriteLog {
                         .map_err(|_| allocation_error(OwnedVecGrowthError::AllocationUnavailable))?
                 }
                 None => ExecutionMemoryLease::reserve(budget, plan)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             })
         } else {
             // A local owner cannot silently accept a foreign funded template.
@@ -235,7 +237,9 @@ impl WriteLog {
 }
 
 fn allocation_error(_: OwnedVecGrowthError) -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 #[cfg(test)]

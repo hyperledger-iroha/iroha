@@ -5966,6 +5966,17 @@ pub(crate) mod tests {
         stx.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
     }
+    // Release the callback block's stack frame before acquiring the next epoch height.
+    #[inline(never)]
+    fn apply_staking_fixture_callbacks(
+        state: &State,
+        header: iroha_data_model::block::BlockHeader,
+    ) {
+        let mut block = state.block(header);
+        block.transaction_for_callback_testing().apply();
+        block.commit_world_overlay_for_testing().unwrap();
+    }
+
     #[test]
     fn pending_activation_auto_promotes_at_epoch_boundary() {
         let mut state = setup_state();
@@ -5994,10 +6005,7 @@ pub(crate) mod tests {
         stx.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height(5);
-        let mut state_block2 = state.block(block2.as_ref().header());
-        let stx2 = state_block2.transaction_for_callback_testing();
-        stx2.apply();
-        state_block2.commit_world_overlay_for_testing().unwrap();
+        apply_staking_fixture_callbacks(&state, block2.as_ref().header());
         let block3 = new_block_with_height(6);
         let view = state.view();
         let pending_record = view
@@ -6014,18 +6022,9 @@ pub(crate) mod tests {
             "validator should remain pending during the full key-preparation epoch"
         );
         drop(view);
-        let mut state_block3 = state.block(block3.as_ref().header());
-        let stx3 = state_block3.transaction_for_callback_testing();
-        stx3.apply();
-        state_block3.commit_world_overlay_for_testing().unwrap();
+        apply_staking_fixture_callbacks(&state, block3.as_ref().header());
         for height in 7..=9 {
-            let mut intermediate_block = state.block(block_header_with_height(height));
-            intermediate_block
-                .transaction_for_callback_testing()
-                .apply();
-            intermediate_block
-                .commit_world_overlay_for_testing()
-                .unwrap();
+            apply_staking_fixture_callbacks(&state, block_header_with_height(height));
         }
         let block4 = new_block_with_height(10);
         let state_block4 = state.block(block4.as_ref().header());

@@ -7,16 +7,19 @@
 //! metadata. Retrying a retired attempt requires a fresh timestamp and fresh
 //! consent; an Approve transaction retains the original proposal hash. Terminal
 //! proposal identities and their original controller history are immutable.
+//!
+//! The registered trigger's contract invocation carries no fixed argument
+//! record. Trigger callbacks take their arguments from the firing event: the
+//! `ExecuteTrigger` payload, which the executor encodes against the pinned
+//! code's entrypoint schema when the approved proposal executes. Core refuses
+//! to register a contract trigger whose invocation carries a fixed record.
 use crate::{
     HasMetadata,
     account::AccountId,
     events::execute_trigger::ExecuteTriggerEventFilter,
     isi::{ExecuteTrigger, InstructionBox, Register, RegisterBox},
     smart_contract::{ContractAddress, ContractAlias},
-    transaction::{
-        Executable,
-        executable::{ContractArgumentRecord, ContractInvocation},
-    },
+    transaction::{Executable, executable::ContractInvocation},
     trigger::{
         Trigger, TriggerId,
         action::{Action, Repeats},
@@ -31,7 +34,7 @@ use std::{num::NonZeroU64, str::FromStr};
 pub struct CanonicalMultisigContractCall {
     /// Exactly `RegisterTrigger` followed by `ExecuteTrigger`.
     pub instructions: Vec<InstructionBox>,
-    /// Hash of the exact native instruction vector, including target, code and arguments.
+    /// Hash of the exact native instruction vector, including target, code and event payload.
     pub instructions_hash: HashOf<Vec<InstructionBox>>,
     /// Reserved metadata on the constructed trigger action.
     pub metadata: Metadata,
@@ -125,21 +128,18 @@ fn derive_trigger_id_checked(
 /// The positive attempt timestamp must equal the frozen Propose transaction's
 /// creation time. A fresh retry receives a distinct real instruction identity;
 /// approvals continue to bind the original attempt's exact instruction hash.
+/// The payload is the callback's sole argument source: it is carried as the
+/// `ExecuteTrigger` arguments and the invocation holds no fixed argument record.
 ///
 /// # Errors
 /// Rejects an empty, overlong, or whitespace-padded entrypoint, a payload that is
 /// not a JSON object, or a failure to derive the trigger ID or construct its action.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "keep the independently reviewed signing inputs explicit at the canonical construction boundary"
-)]
 pub fn build_multisig_contract_call(
     authority: &AccountId,
     address: &ContractAddress,
     alias: &ContractAlias,
     entrypoint: &str,
     payload: &Json,
-    arguments: Option<ContractArgumentRecord>,
     code_hash: &Hash,
     attempt_created_at_ms: NonZeroU64,
 ) -> Result<CanonicalMultisigContractCall, String> {
@@ -172,7 +172,7 @@ pub fn build_multisig_contract_call(
         contract_address: address.clone(),
         expected_code_hash: *code_hash,
         entrypoint: entrypoint.to_owned(),
-        arguments,
+        arguments: None,
     };
     let (trigger, execute) =
         contract_call_pair(authority, invocation, payload, trigger_id, metadata.clone())?;
@@ -252,7 +252,8 @@ fn read_recognition_json<T: norito::json::JsonDeserialize>(
 ///
 /// All six reserved metadata values, positive attempt timestamp, derived trigger
 /// identity, exact action and execute payload are checked. Extra instructions or
-/// metadata, nested native instructions and IVM executables are not recognized.
+/// metadata, nested native instructions, IVM executables and invocations with a
+/// fixed argument record (which core refuses to register) are not recognized.
 /// The whole typed pair is compared without `InstructionBox::eq` (which invokes
 /// an infallible encoder) or `Trigger::eq` (which compares identifiers only).
 ///
@@ -279,6 +280,7 @@ pub fn recognize_multisig_contract_call(
     };
     let metadata = trigger.action().metadata();
     if metadata.iter().len() != 6
+        || invocation.arguments.is_some()
         || invocation.entrypoint.is_empty()
         || invocation.entrypoint.len() > 128
         || invocation.entrypoint.trim() != invocation.entrypoint
@@ -382,31 +384,51 @@ mod tests {
         (owner, address, alias, Hash::new(b"reviewed-artifact"))
     }
     #[test]
-    fn exact_call_binds_arguments_target_code_and_instruction_order() {
+    fn exact_call_binds_payload_target_code_and_instruction_order() {
         let (owner, address, alias, code) = fixture();
         let payload = Json::new(norito::json!({"proposal_id":"case-1", "finalized_at_ms":12}));
-        let build = |args, code| {
+        let changed_payload =
+            Json::new(norito::json!({"proposal_id":"case-1", "finalized_at_ms":13}));
+        let build = |payload, code| {
             build_multisig_contract_call(
                 &owner,
                 &address,
                 &alias,
                 "finalize_mint_request",
-                &payload,
-                Some(ContractArgumentRecord::try_new(args).expect("args")),
+                payload,
                 code,
                 NonZeroU64::new(1).unwrap(),
             )
             .expect("call")
         };
-        let original = build(vec![1, 2, 3], &code);
+        let original = build(&payload, &code);
         assert_ne!(
             original.instructions_hash,
-            build(vec![1, 2, 4], &code).instructions_hash
+            build(&changed_payload, &code).instructions_hash
         );
         assert_ne!(
             original.instructions_hash,
-            build(vec![1, 2, 3], &Hash::new(b"different-artifact")).instructions_hash
+            build(&payload, &Hash::new(b"different-artifact")).instructions_hash
         );
+        let RegisterBox::Trigger(register) = original.instructions[0]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .expect("register instruction")
+        else {
+            panic!("the first instruction registers the callback trigger")
+        };
+        let Executable::ContractCall(invocation) = register.object().action().executable() else {
+            panic!("the callback trigger executes one contract invocation")
+        };
+        assert!(
+            invocation.arguments.is_none(),
+            "trigger callbacks take their arguments from the firing event"
+        );
+        let execute = original.instructions[1]
+            .as_any()
+            .downcast_ref::<ExecuteTrigger>()
+            .expect("execute instruction");
+        assert_eq!(execute.args, payload);
         let mut reordered = original.instructions.clone();
         reordered.reverse();
         assert_ne!(original.instructions_hash, HashOf::new(&reordered));
@@ -429,7 +451,6 @@ mod tests {
                 &alias,
                 "finalize_mint_request",
                 &Json::new("scalar"),
-                None,
                 &code,
                 NonZeroU64::new(1).unwrap(),
             )
@@ -465,7 +486,6 @@ mod tests {
                 &alias,
                 " ",
                 &Json::new(norito::json!({})),
-                None,
                 &code,
                 NonZeroU64::new(1).unwrap(),
             )
@@ -483,7 +503,6 @@ mod tests {
                 &alias,
                 "finalize_mint_request",
                 &payload,
-                None,
                 &code,
                 NonZeroU64::new(attempt).unwrap(),
             )
@@ -526,7 +545,6 @@ mod tests {
             &alias,
             "issue_dpn",
             &Json::new(norito::json!({"invoice_id":"invoice-7"})),
-            Some(ContractArgumentRecord::try_new(vec![1, 2, 3]).unwrap()),
             &code,
             NonZeroU64::new(1_700_000_000_001).unwrap(),
         )
@@ -561,10 +579,7 @@ mod tests {
         assert_eq!(recognized.invocation.contract_address, address);
         assert_eq!(recognized.invocation.expected_code_hash, code);
         assert_eq!(recognized.invocation.entrypoint, "issue_dpn");
-        assert_eq!(
-            recognized.invocation.arguments.as_ref().unwrap().as_bytes(),
-            &[1, 2, 3]
-        );
+        assert!(recognized.invocation.arguments.is_none());
         assert_eq!(recognized.attempt_created_at_ms.get(), 1_700_000_000_001);
         let encoded = norito::encode_canonical(&call.instructions).unwrap();
         let decoded = norito::decode_canonical::<Vec<InstructionBox>>(&encoded).unwrap();
@@ -572,6 +587,35 @@ mod tests {
             recognize_multisig_contract_call(&owner, &decoded)
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn canonical_recognition_rejects_fixed_argument_record() {
+        use crate::transaction::executable::ContractArgumentRecord;
+
+        let (owner, call) = recognition_fixture();
+        let mut instructions = call.instructions.clone();
+        replace_recognition_action(&mut instructions, |trigger| {
+            let Executable::ContractCall(invocation) = trigger.action().executable() else {
+                panic!("fixture trigger executes one contract invocation")
+            };
+            let mut invocation = invocation.clone();
+            invocation.arguments = Some(ContractArgumentRecord::try_new(vec![1, 2, 3]).unwrap());
+            Action::new(
+                Executable::ContractCall(invocation),
+                Repeats::Exactly(1),
+                owner.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger.id().clone()),
+            )
+            .unwrap()
+            .with_metadata(trigger.action().metadata().clone())
+        });
+        assert!(
+            recognize_multisig_contract_call(&owner, &instructions)
+                .unwrap()
+                .is_none(),
+            "core refuses to register a callback with a fixed argument record"
         );
     }
 

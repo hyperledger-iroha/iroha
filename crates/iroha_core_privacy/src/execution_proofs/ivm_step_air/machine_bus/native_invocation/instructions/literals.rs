@@ -2,6 +2,7 @@
 
 use super::{tests::*, *};
 use ivm::{encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 
 #[test]
 fn full_scalar_bits_and_sixteen_bit_indexes_join_without_memory_or_tag_events() {
@@ -123,7 +124,7 @@ fn literal_and_load_tariffs_reach_exact_zero_and_refund_failed_capture() {
         if gas == 90 {
             assert!(matches!(
                 result,
-                Err(CaptureError::Execution(VMError::OutOfGas))
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas)))
             ));
         } else {
             let native = result.unwrap();

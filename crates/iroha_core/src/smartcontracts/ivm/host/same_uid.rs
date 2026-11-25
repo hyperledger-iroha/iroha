@@ -1,6 +1,7 @@
 //! Reader-granted scalar equality of exact native retail memberships.
 use super::*;
 use crate::state::asset_uid_reader::AssetUidHoldingQuoteError;
+use ivm_abi::error::VmTrap;
 fn map_same_uid_error(error: AssetUidHoldingQuoteError) -> ivm::VMError {
     match error {
         AssetUidHoldingQuoteError::Local(owner) => owner.into_vm_error(),
@@ -10,7 +11,7 @@ fn map_same_uid_error(error: AssetUidHoldingQuoteError) -> ivm::VMError {
         ) => map_query_execution_error(crate::execution_attempt::ExecutionAttemptError::Rejected(
             error,
         )),
-        AssetUidHoldingQuoteError::Execution(_) => ivm::VMError::DecodeError,
+        AssetUidHoldingQuoteError::Execution(_) => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 impl QueryStateRef<'_, '_, '_> {
@@ -48,29 +49,29 @@ impl QueryStateRef<'_, '_, '_> {
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_same_uid(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
     ) -> Result<u64, ivm::VMError> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         for register in 10..=12 {
-            vm.ensure_public_register(register)?;
+            vm.quote().ensure_public_register(register)?;
         }
         let definition: AssetDefinitionId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
         let source: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
         let destination: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(12), PointerType::AccountId)?;
-        let remaining = vm.remaining_gas();
+            Self::decode_tlv_typed(vm, vm.public_register(12)?, PointerType::AccountId)?;
+        let remaining = vm.quote().remaining_gas();
         let context_gas = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&context_gas, remaining)?;
         let state = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::NotImplemented { syscall })?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }))?;
         let (equal, execution_stats) = state.same_uid(
             &self.effect_authority(),
             context,
@@ -89,7 +90,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         )?;
         // Bool is one canonical public word. No heap/TLV allocation and no queued effect.
         // All source/response gas is preflighted before publishing that word.
-        vm.set_register(10, u64::from(equal));
+        vm.write_register(10, u64::from(equal))?;
         Ok(gas)
     }
 }
@@ -101,6 +102,7 @@ mod tests {
     use crate::state::asset_uid_reader::SameUidReaderFixture as Fixture;
     use iroha_data_model::prelude::BlockHeader;
     use ivm::host::IVMHost;
+    use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
     use std::num::NonZeroU64;
     fn header() -> BlockHeader {
         BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0)
@@ -229,7 +231,7 @@ mod tests {
         let mut vm = arguments(&f, &f.destination, 50_000_000);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_SAME_UID, &mut vm),
-            Err(ivm::VMError::NotImplemented { .. })
+            Err(ivm::VMError::Trap(VmTrap::NotImplemented { .. }))
         ));
     }
     #[test]
@@ -239,7 +241,7 @@ mod tests {
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
         assert!(
-            matches!(map_same_uid_error(AssetUidHoldingQuoteError::Local(refusal.into())),ivm::VMError::AllocationDeferred(actual) if actual==expected)
+            matches!(map_same_uid_error(AssetUidHoldingQuoteError::Local(refusal.into())),ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual==expected)
         );
         drop(retained);
         assert!(budget.try_reserve_bytes(1).is_ok());
@@ -247,7 +249,7 @@ mod tests {
             map_same_uid_error(AssetUidHoldingQuoteError::Query(
                 QueryExecutionFail::GasBudgetExceeded
             )),
-            ivm::VMError::OutOfGas
+            ivm::VMError::Trap(VmTrap::OutOfGas)
         ));
     }
     const SOURCE: &str = r"seiyaku SameUid {
@@ -271,19 +273,27 @@ mod tests {
         fn allows_syscall(&self, policy: ivm::SyscallPolicy, number: u32) -> bool {
             self.inner.allows_syscall(policy, number)
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_SAME_UID {
                 assert!(self.before.replace(Some(vm.remaining_gas())).is_none());
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_SAME_UID {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
-                self.input = Some(vm.alloc_input_tlv(&[]).unwrap());
+                self.input = Some(crate::ivm_test_support::next_host_input_address(vm));
                 self.heap = Some(vm.alloc_heap(0).unwrap());
-                self.argument = Some(vm.register(10));
+                self.argument = Some(vm.public_register(10)?);
             }
             let result = self.inner.syscall(number, vm);
             if number == ivm::syscalls::SYSCALL_ASSET_SAME_UID {
@@ -362,7 +372,7 @@ mod tests {
         } else {
             assert!(matches!(
                 result.unwrap_err().as_unmetered(),
-                ivm::VMError::OutOfGas
+                VmErrorRef::Trap(VmTrap::OutOfGas)
             ));
             assert!(host.actual.is_none());
             assert!(vm.call_result_word_count().is_err());

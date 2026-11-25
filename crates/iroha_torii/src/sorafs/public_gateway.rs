@@ -993,9 +993,10 @@ async fn handle_get_sorafs_site_path_inner(
             resolved.stored.manifest_cid(),
         ))
     {
-        response
-            .headers_mut()
-            .insert(header::HeaderName::from_static("x-sora-content-cid"), value);
+        response.headers_mut().insert(
+            header::HeaderName::from_static(super::HEADER_SORA_CONTENT_CID),
+            value,
+        );
     }
     response
 }
@@ -1373,9 +1374,10 @@ async fn handle_get_sorafs_cid_path_inner(
         if let Ok(value) =
             HeaderValue::from_str(&super::site::encode_content_cid(stored.manifest_cid()))
         {
-            response
-                .headers_mut()
-                .insert(header::HeaderName::from_static("x-sora-content-cid"), value);
+            response.headers_mut().insert(
+                header::HeaderName::from_static(super::HEADER_SORA_CONTENT_CID),
+                value,
+            );
         }
         response.headers_mut().insert(
             header::CACHE_CONTROL,

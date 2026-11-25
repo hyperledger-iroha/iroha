@@ -9,9 +9,11 @@
 //! consumers must still run both linked cryptographic verifiers against the
 //! independently authenticated profile and reconstructed external inputs.
 //! The compact projection checks every ordinary word against explicitly supplied
-//! external inputs. Its caller must authenticate those sources. TODO: compose
-//! their actual encoding with the full monetary envelope before reporting a
-//! Payment size. `payment_wire` composes the complete future Send envelope.
+//! external inputs. Its caller authenticates those sources. The complete
+//! future Send envelope and its independent layer limits live in `payment_wire`.
+
+#[path = "payment_word_codec.rs"]
+pub(crate) mod payment_words;
 
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
@@ -21,7 +23,7 @@ use crate::ipa::F;
 use crate::r1cs::{Circuit, Instance, Shape};
 use crate::spartan::Proof;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 // A parser resource limit, deliberately above the proposed 12,000-byte Payment
 // target so an oversized actual result can be measured rather than suppressed.
 const MAX_RESEARCH_BYTES: usize = 65_536;
@@ -83,6 +85,23 @@ impl Layout {
     }
 }
 
+/// Compact proof layout retained after checking one circuit tape.
+pub(crate) struct ProjectedSide {
+    pub(crate) shape: Shape,
+    layout: Layout,
+    late_slots: Vec<usize>,
+}
+
+impl ProjectedSide {
+    pub(crate) fn measure<S: Scalar>(shape: Shape, circuit: &dyn Circuit<S>) -> Self {
+        Self {
+            shape,
+            layout: Layout::new(&shape, circuit, 64),
+            late_slots: circuit.late_slots(),
+        }
+    }
+}
+
 /// Trusted fixture context, supplied independently of untrusted carrier bytes.
 /// `id` must identify the caller's exact authorized scheme/VK, not just geometry.
 /// The measurement hook uses an in-memory run-specific fixture context, which
@@ -94,6 +113,7 @@ pub(crate) struct TrustedProfile {
     s_shape: Shape,
     p: Layout,
     s: Layout,
+    late_slots: [Vec<usize>; 2],
     lean: bool,
 }
 
@@ -101,6 +121,67 @@ impl TrustedProfile {
     pub(crate) fn id(&self) -> &[u8; 32] {
         &self.id
     }
+    /// Byte offset, authenticated slot order and column dimension of one side's late public words.
+    pub(crate) fn projected_late_layout(
+        &self,
+        primary: bool,
+    ) -> Result<(usize, &[usize], usize), String> {
+        let ranges = projected_ranges(self)?;
+        let (start, layout, slots) = if primary {
+            (ranges.primary.start, &self.p, &self.late_slots[0])
+        } else {
+            (ranges.secondary.start, &self.s, &self.late_slots[1])
+        };
+        Ok((
+            start + layout.rows as usize * 32,
+            slots,
+            layout.col_bits as usize,
+        ))
+    }
+    /// Original KGSPPR2 offsets for the inherited generator's public coordinates
+    /// and endoscalar challenges. The installed circuit supplies the slot order.
+    pub(crate) fn payment_generator_words(
+        &self,
+    ) -> Result<(usize, payment_words::Positions), String> {
+        let ranges = projected_ranges(self)?;
+        let mut words = Vec::new();
+        for (primary, shape, layout, start, slots) in [
+            (
+                true,
+                &self.p_shape,
+                &self.p,
+                ranges.primary.start,
+                &self.late_slots[0],
+            ),
+            (
+                false,
+                &self.s_shape,
+                &self.s,
+                ranges.secondary.start,
+                &self.late_slots[1],
+            ),
+        ] {
+            if slots.len() != layout.late as usize {
+                return Err("installed late-slot layout differs".into());
+            }
+            for (index, &slot) in slots.iter().enumerate() {
+                if let Some(word) = slot.checked_sub(crate::generator_claim::IO_START)
+                    && word < 4 + shape.col_bits
+                {
+                    let encoding = if word < 4 {
+                        payment_words::Encoding::Low(16)
+                    } else if primary {
+                        payment_words::Encoding::PrimaryEndo
+                    } else {
+                        payment_words::Encoding::SecondaryEndo
+                    };
+                    words.push((start + 32 * (layout.rows as usize + index), encoding));
+                }
+            }
+        }
+        Ok((ranges.total, words))
+    }
+
     /// Parameters must be authenticated independently. The ID identifies the
     /// exact authorized scheme/VKs, not a choice supplied by a Payment.
     pub(crate) fn from_parameters(
@@ -111,17 +192,33 @@ impl TrustedProfile {
         secondary: &dyn Circuit<Fq>,
         lean: bool,
     ) -> Result<Self, String> {
-        let profile = Self {
+        Self::from_sides(
             id,
-            p_shape,
-            s_shape,
-            p: Layout::new(&p_shape, primary, 64),
-            s: Layout::new(&s_shape, secondary, 62),
+            [
+                ProjectedSide::measure(p_shape, primary),
+                ProjectedSide::measure(s_shape, secondary),
+            ],
             lean,
-        };
-        profile.p.check(&p_shape)?;
-        profile.s.check(&s_shape)?;
-        Ok(profile)
+        )
+    }
+
+    pub(crate) fn from_sides(
+        id: [u8; 32],
+        sides: [ProjectedSide; 2],
+        lean: bool,
+    ) -> Result<Self, String> {
+        let [p, s] = sides;
+        p.layout.check(&p.shape)?;
+        s.layout.check(&s.shape)?;
+        Ok(Self {
+            id,
+            p_shape: p.shape,
+            s_shape: s.shape,
+            p: p.layout,
+            s: s.layout,
+            late_slots: [p.late_slots, s.late_slots],
+            lean,
+        })
     }
 }
 
@@ -134,7 +231,7 @@ impl TrustedProfile {
     norito::NoritoDeserialize,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.carrier.Wire.v1")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.carrier.Wire.v2")]
 struct Wire {
     version: u8,
     profile: Vec<u8>,
@@ -186,12 +283,18 @@ impl ProjectedInputs {
         lineage: [Fp; crate::bootstrap_context::LINEAGE_FIELDS],
         table: [Fp; 4],
         kind: usize,
+        bits: [Fp; 2],
     ) -> Result<Self, String> {
-        if kind > crate::full::LOAD || crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
+        let mode = crate::control::Mode::for_program(kind, bits)?;
+        // Whether `kind` is installed is the parameter owner's decision (its
+        // program count); this reconstruction only names its exact corner.
+        let corner = crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind)
+            .map_err(|_| "invalid projected kind or table commitment")?;
+        if crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
             return Err("invalid projected kind or table commitment".into());
         }
         let mut p = vec![Fp::ZERO; 64];
-        let mut s = vec![Fq::ZERO; 62];
+        let mut s = vec![Fq::ZERO; 64];
         p[0] = Fp::ONE;
         s[0] = Fq::ONE;
         p[crate::full::HEAD_IO] = head;
@@ -202,11 +305,17 @@ impl ProjectedInputs {
         let start = crate::bootstrap_context::LINEAGE_IO;
         p[start..start + lineage.len()].copy_from_slice(&lineage);
         p[crate::full::TABLE_IO..crate::full::TABLE_IO + 4].copy_from_slice(&table);
-        let (a, b) = crate::deferral::kind_bits(kind);
-        p[crate::full::KIND_IO] = Fp::from(a as u64);
-        p[crate::full::KIND_IO + 1] = Fp::from(b as u64);
-        s[crate::full::KIND_IO] = Fq::from(a as u64);
-        s[crate::full::KIND_IO + 1] = Fq::from(b as u64);
+        let [a, b, c2] = corner;
+        p[crate::full::KIND_IO] = Fp::from(a);
+        p[crate::full::KIND_IO + 1] = Fp::from(b);
+        s[crate::full::KIND_IO] = Fq::from(a);
+        s[crate::full::KIND_IO + 1] = Fq::from(b);
+        // Zero for the four signed kinds, exactly as their unused input.
+        p[crate::full::KIND_C2_IO] = Fp::from(c2);
+        s[crate::full::KIND_C2_IO] = Fq::from(c2);
+        let offset = crate::control::MODE_IO;
+        p[offset..offset + 2].copy_from_slice(&bits);
+        s[offset..offset + 2].copy_from_slice(&mode.map_or([0, 0], |m| m.bits()).map(Fq::from));
         Ok(Self {
             primary: Instance { io: p },
             secondary: Instance { io: s },
@@ -307,7 +416,7 @@ pub(crate) fn decode_with_projection(
             if wire.p_io.is_empty()
                 && wire.s_io.is_empty()
                 && profile.p.io == 64
-                && profile.s.io == 62 =>
+                && profile.s.io == 64 =>
         {
             (inputs.primary.clone(), inputs.secondary.clone())
         }
@@ -377,7 +486,7 @@ fn wire_of(
 fn project_wire(wire: &Wire, inputs: &ProjectedInputs) -> Result<Wire, String> {
     if wire.io_source != 0
         || wire.p_layout.io != 64
-        || wire.s_layout.io != 62
+        || wire.s_layout.io != 64
         || wire.p_io != io_bytes(&inputs.primary.io)
         || wire.s_io != io_bytes(&inputs.secondary.io)
     {
@@ -413,7 +522,7 @@ pub(crate) fn encode_projected_pair(
     Ok(bytes)
 }
 
-const PROJECTED_MAGIC: &[u8; 8] = b"KGSPPR1\0";
+pub(crate) const PROJECTED_MAGIC: &[u8; 8] = b"KGSPPR2\0";
 pub(crate) const PROJECTED_HEADER: usize = 74;
 
 /// Exact fixed offsets for the full raw-byte commitment relation. No search
@@ -426,7 +535,7 @@ pub(crate) struct ProjectedRanges {
     pub(crate) total: usize,
 }
 
-fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String> {
+pub(crate) fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String> {
     profile.p.check(&profile.p_shape)?;
     profile.s.check(&profile.s_shape)?;
     let count = |shape: &Shape, layout: &Layout| {
@@ -434,7 +543,7 @@ fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String>
     };
     let p_end = PROJECTED_HEADER + count(&profile.p_shape, &profile.p);
     let total = p_end + count(&profile.s_shape, &profile.s);
-    if profile.p.io != 64 || profile.s.io != 62 || total > MAX_RESEARCH_BYTES {
+    if profile.p.io != 64 || profile.s.io != 64 || total > MAX_RESEARCH_BYTES {
         return Err("invalid compact pair trusted layout".into());
     }
     Ok(ProjectedRanges {
@@ -445,7 +554,7 @@ fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String>
     })
 }
 
-fn projected_prefix(profile: &TrustedProfile) -> Vec<u8> {
+pub(crate) fn projected_prefix(profile: &TrustedProfile) -> Vec<u8> {
     let mut bytes = PROJECTED_MAGIC.to_vec();
     bytes.extend_from_slice(&[u8::from(profile.lean), 0]);
     bytes.extend_from_slice(&profile.id);
@@ -627,6 +736,7 @@ pub fn measure_pair_with_projection(
         s_shape: cs.shape,
         p: Layout::new(&cp.shape, cp, ip.io.len()),
         s: Layout::new(&cs.shape, cs, is.io.len()),
+        late_slots: [cp.late_slots(), cs.late_slots()],
         lean: crate::fs::lean_schedule(),
     };
     let wire = wire_of(&profile, ip, is, &pair.pp, &pair.ps, pair.r);
@@ -720,6 +830,7 @@ mod tests {
             p,
             s,
             lean: false,
+            late_slots: [vec![], vec![]],
         };
         let wire = wire_of(
             &profile,
@@ -745,6 +856,7 @@ mod tests {
             [Fp::from(9); crate::bootstrap_context::LINEAGE_FIELDS],
             crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
             crate::full::SEND,
+            [Fp::ZERO; 2],
         )
         .unwrap()
     }
@@ -753,7 +865,7 @@ mod tests {
     fn projection_roundtrip_requires_every_actual_io_word_and_external_context() {
         let (mut profile, old) = fixture();
         profile.p.io = 64;
-        profile.s.io = 62;
+        profile.s.io = 64;
         let inputs = projection();
         let mut wire = old;
         wire.p_layout = profile.p.clone();
@@ -763,7 +875,7 @@ mod tests {
         let raw = encode(&wire).unwrap();
         let projected = project_wire(&wire, &inputs).unwrap();
         let compact = encode(&projected).unwrap();
-        assert_eq!(raw.len() - compact.len(), 4032);
+        assert_eq!(raw.len() - compact.len(), 4096);
         assert!(
             decode(&profile, &compact).is_err(),
             "external context is mandatory"
@@ -771,7 +883,7 @@ mod tests {
         let decoded = decode_with_projection(&profile, &compact, Some(&inputs)).unwrap();
         assert_eq!(decoded.ip.io, inputs.primary.io);
         assert_eq!(decoded.is.io, inputs.secondary.io);
-        for i in 0..126 {
+        for i in 0..128 {
             let mut changed = wire.clone();
             if i < 64 {
                 changed.p_io[32 * i] ^= 1;
@@ -796,6 +908,55 @@ mod tests {
     }
 
     #[test]
+    fn recursive_mode_projection_authenticates_both_fields() {
+        use crate::{
+            control::Mode,
+            full::{BOOTSTRAP, CONTROL, RECEIVE, SEND},
+        };
+        let project = |kind, bits| {
+            ProjectedInputs::from_authenticated_fields(
+                Fp::ONE,
+                Fp::ONE,
+                Fp::ONE,
+                [Fp::ZERO; crate::bootstrap_context::FIELDS],
+                [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
+                crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
+                kind,
+                bits,
+            )
+        };
+        for mode in [Mode::Load, Mode::RefreshTimeAnchor, Mode::Unload] {
+            let bits = mode.bits();
+            let inputs = project(CONTROL, bits.map(Fp::from)).unwrap();
+            assert_eq!(
+                &inputs.primary.io[crate::control::MODE_IO..],
+                &bits.map(Fp::from)
+            );
+            assert_eq!(
+                &inputs.secondary.io[crate::control::MODE_IO..],
+                &bits.map(Fq::from)
+            );
+        }
+        for kind in [RECEIVE, SEND, BOOTSTRAP, crate::full::ARCHIVE_SENT] {
+            assert!(project(kind, [Fp::ZERO; 2]).is_ok());
+            assert!(project(kind, [Fp::ZERO, Fp::ONE]).is_err());
+            assert!(project(kind, [Fp::ONE, Fp::ZERO]).is_err());
+        }
+        let archive = project(crate::full::ARCHIVE_SENT, [Fp::ZERO; 2]).unwrap();
+        for (index, expected) in [
+            (crate::full::KIND_IO, 0u64),
+            (crate::full::KIND_IO + 1, 0),
+            (crate::full::KIND_C2_IO, 1),
+        ] {
+            assert_eq!(archive.primary.io[index], Fp::from(expected));
+            assert_eq!(archive.secondary.io[index], Fq::from(expected));
+        }
+        for bits in [[Fp::ONE; 2], [Fp::from(2), Fp::ZERO], [Fp::ZERO, -Fp::ONE]] {
+            assert!(project(CONTROL, bits).is_err());
+        }
+    }
+
+    #[test]
     fn projection_rejects_invalid_table_point_and_kind() {
         assert!(
             ProjectedInputs::from_authenticated_fields(
@@ -805,7 +966,8 @@ mod tests {
                 [Fp::ZERO; crate::bootstrap_context::FIELDS],
                 [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
                 [Fp::ZERO; 4],
-                crate::full::SEND
+                crate::full::SEND,
+                [Fp::ZERO; 2],
             )
             .is_err()
         );
@@ -817,7 +979,8 @@ mod tests {
                 [Fp::ZERO; crate::bootstrap_context::FIELDS],
                 [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
                 crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
-                4
+                crate::deferral::MAX_KINDS,
+                [Fp::ZERO; 2],
             )
             .is_err()
         );
@@ -884,6 +1047,7 @@ mod tests {
             p: Layout::new::<Fp>(&p_shape, &crate::r1cs::ToyCircuit, spec.inst_p.io.len()),
             s: Layout::new::<Fq>(&s_shape, &crate::r1cs::ToyCircuit, spec.inst_s.io.len()),
             lean: crate::fs::lean_schedule(),
+            late_slots: [vec![], vec![]],
         };
         let wire = wire_of(
             &profile,

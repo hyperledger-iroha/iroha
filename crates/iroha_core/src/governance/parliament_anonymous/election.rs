@@ -25,15 +25,16 @@ use iroha_data_model::{
     governance::{
         GovernanceAnchorV1,
         anonymous_ballot::{
-            AnonymousGovernanceCertificateErrorV1, AnonymousParliamentRosterRootPreimageV1,
-            AnonymousRosterBindingV1, AnonymousSealedBodyV1, MIN_SEALED_SEATS_V1, ProofProfileIdV1,
-            anonymous_body_instance_id_v1, digests::anonymous_roster_root_v1,
+            AnonymousBallotCodecErrorV1, AnonymousGovernanceCertificateErrorV1,
+            AnonymousParliamentRosterRootPreimageV1, AnonymousRosterBindingV1,
+            AnonymousSealedBodyV1, BallotContextErrorV1, MIN_SEALED_SEATS_V1, ProofProfileIdV1,
+            checked_anonymous_body_instance_id_v1, digests::anonymous_roster_root_v1,
         },
         types::{
             AssignmentId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
             GovernanceAttemptId, GovernanceAttemptStatusV1, ParliamentBody,
             ParliamentSeatAssignmentV1, SortitionRequestId, SortitionRequestV1,
-            parliament_assignment_plan_root_v1, parliament_candidate_root_v1,
+            checked_parliament_assignment_plan_root_v1, checked_parliament_candidate_root_v1,
         },
     },
 };
@@ -47,8 +48,10 @@ use super::{
     AnonymousParliamentErrorV1 as Error, is_binding, stage_for_body,
 };
 use crate::governance::{
-    draw::{ParliamentDrawSizingV1, derive_bounded_body_plan_v1},
-    parliament::{aligned_sortition_pulse_height_v1, candidate_snapshot_fits_resource_bounds_v1},
+    draw::{ParliamentDrawSizingV1, derive_bounded_body_plan_checked_v1},
+    parliament::{
+        aligned_sortition_pulse_height_v1, candidate_snapshot_fits_resource_bounds_checked_v1,
+    },
 };
 
 /// Why a body's election ended without a roster.
@@ -66,6 +69,7 @@ use crate::governance::{
 )]
 #[norito(tag = "reason", content = "details", deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousNoRosterKindV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousNoRosterKindV1 {
     /// The generation includes a binding jury and its snapshot held fewer than three
     /// citizens: capacity evidence, never drawn.
@@ -97,6 +101,7 @@ pub enum AnonymousNoRosterKindV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousElectionClosedV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousElectionClosedV1 {
     /// Anchor of the `CloseInvitations` item.
     pub at: GovernanceAnchorV1,
@@ -118,6 +123,7 @@ pub struct AnonymousElectionClosedV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousElectionV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousElectionV1 {
     /// Zero-based sortition sequence of the body.
     pub(super) sequence: u32,
@@ -213,6 +219,7 @@ impl AnonymousElectionV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousDrawV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousDrawV1 {
     /// The consumed pulse.
     pub pulse_id: BeaconPulseId,
@@ -239,6 +246,7 @@ pub struct AnonymousDrawV1 {
 )]
 #[norito(tag = "status", content = "details", deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousGenerationStatusV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum AnonymousGenerationStatusV1 {
     /// Waiting for the pulse of its exact slot, indefinitely.
     #[codec(index = 0)]
@@ -269,6 +277,7 @@ pub enum AnonymousGenerationStatusV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_core::governance::parliament_anonymous::AnonymousGenerationV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct AnonymousGenerationV1 {
     /// Height of the block whose transaction registered it.
     pub(super) request_height: u64,
@@ -439,7 +448,7 @@ impl ParliamentDrawSizingV1 for FrozenDrawSizing<'_> {
 /// citizens and 8 MiB.
 pub(super) fn check_snapshot(candidates: &[AccountId]) -> Result<(), Error> {
     if candidates.windows(2).all(|pair| pair[0] < pair[1])
-        && candidate_snapshot_fits_resource_bounds_v1(candidates)
+        && candidate_snapshot_fits_resource_bounds_checked_v1(candidates)?
     {
         Ok(())
     } else {
@@ -674,7 +683,7 @@ impl AnonymousParliamentAttemptStateV1 {
             return Err(Error::RedrawBudgetExhausted);
         }
         let slot = self.next_slot(request_height).ok_or(Error::Schedule)?;
-        let session = BeaconSessionId::for_network_v1(network_id);
+        let session = BeaconSessionId::for_network_checked_v1(network_id)?;
         let candidate_count =
             u32::try_from(candidates.len()).map_err(|_| Error::CandidateSnapshot)?;
         let mut elections = Vec::with_capacity(bodies.len());
@@ -687,22 +696,29 @@ impl AnonymousParliamentAttemptStateV1 {
                 .required_body(*body)
                 .ok_or(Error::UnknownBody { body: *body })?;
             let election_attempt_id =
-                BodyElectionAttemptId::derive_v1(self.attempt.id, *body, *sequence);
+                BodyElectionAttemptId::derive_checked_v1(self.attempt.id, *body, *sequence)?;
             let mut request = SortitionRequestV1 {
                 id: SortitionRequestId::new([0; 32]),
                 governance_attempt_id: self.attempt.id,
                 body_election_attempt_id: election_attempt_id,
                 body: *body,
-                candidate_root: parliament_candidate_root_v1(self.attempt.id, *body, &candidates),
+                candidate_root: checked_parliament_candidate_root_v1(
+                    self.attempt.id,
+                    *body,
+                    &candidates,
+                )?,
                 candidate_count,
                 target_seats: u32::from(required.target_seats),
                 request_height,
                 pulse_height: slot,
                 beacon_session_id: session,
             };
-            request.id = request.canonical_id();
+            request.id = request.canonical_id_checked_v1()?;
             if !evidence {
-                request.validate(None).map_err(|_| Error::Schedule)?;
+                request.validate_checked_v1(None).map_err(|error| match error {
+                    iroha_data_model::governance::types::CheckedSortitionRequestErrorV1::Rejected(_) => Error::Schedule,
+                    iroha_data_model::governance::types::CheckedSortitionRequestErrorV1::Codec(original) => original.into(),
+                })?;
             }
             elections.push(AnonymousElectionV1 {
                 sequence: *sequence,
@@ -824,7 +840,7 @@ impl AnonymousParliamentAttemptStateV1 {
                     && generation.status == AnonymousGenerationStatusV1::AwaitingPulse
             })
             .ok_or(Error::UnknownGeneration)?;
-        if pulse.beacon_session_id != BeaconSessionId::for_network_v1(network_id)
+        if pulse.beacon_session_id != BeaconSessionId::for_network_checked_v1(network_id)?
             || pulse.pulse_id.as_bytes() == &[0; 32]
             || at.height < pulse.height
         {
@@ -890,7 +906,7 @@ impl AnonymousParliamentAttemptStateV1 {
         let bound = u32::try_from(bodies.len())
             .unwrap_or(u32::MAX)
             .min(self.policy.sortition_policy.max_cross_body_assignment_cap);
-        let Some(plan) = derive_bounded_body_plan_v1(
+        let Some(plan) = derive_bounded_body_plan_checked_v1(
             &FrozenDrawSizing(&self.policy),
             network_id,
             generation.slot,
@@ -898,7 +914,8 @@ impl AnonymousParliamentAttemptStateV1 {
             &generation.candidates,
             &bodies,
             bound,
-        ) else {
+        )?
+        else {
             return Ok(None);
         };
         let mut plans = Vec::with_capacity(generation.elections.len());
@@ -919,17 +936,19 @@ impl AnonymousParliamentAttemptStateV1 {
             {
                 return Err(Error::Allocation);
             }
-            let assign = |members: &[AccountId]| -> Vec<ParliamentSeatAssignmentV1> {
+            let assign = |members: &[AccountId]| -> Result<Vec<ParliamentSeatAssignmentV1>, Error> {
                 members
                     .iter()
-                    .map(|member| ParliamentSeatAssignmentV1 {
-                        assignment_id: AssignmentId::derive_v1(election.id(), member),
-                        member: member.clone(),
+                    .map(|member| {
+                        Ok(ParliamentSeatAssignmentV1 {
+                            assignment_id: AssignmentId::derive_checked_v1(election.id(), member)?,
+                            member: member.clone(),
+                        })
                     })
                     .collect()
             };
-            let primaries = assign(&roster.members);
-            let alternates = assign(&roster.alternates);
+            let primaries = assign(&roster.members)?;
+            let alternates = assign(&roster.alternates)?;
             let invited: BTreeSet<_> = primaries
                 .iter()
                 .chain(&alternates)
@@ -1270,9 +1289,9 @@ impl AnonymousParliamentAttemptStateV1 {
             assignments: assignments.clone(),
             anonymous_ballot: binding,
         })
-        .map_err(|_| Error::RosterBinding)?;
+        .map_err(roster_binding_error)?;
         let sealed = AnonymousSealedBodyV1 {
-            body_instance_id: anonymous_body_instance_id_v1(election.id(), &roster_root),
+            body_instance_id: checked_anonymous_body_instance_id_v1(election.id(), &roster_root)?,
             election_attempt_id: election.id(),
             election_attempt_sequence: election.sequence,
             sortition_request: election.request,
@@ -1280,12 +1299,12 @@ impl AnonymousParliamentAttemptStateV1 {
             seats,
             beacon_pulse_id: draw.pulse_id,
             roster_root,
-            assignment_root: parliament_assignment_plan_root_v1(
+            assignment_root: checked_parliament_assignment_plan_root_v1(
                 election.id(),
                 &election.primaries,
                 &election.alternates,
                 cap,
-            ),
+            )?,
         };
         Ok(AnonymousBodyStateV1::sealed(
             sealed,
@@ -1293,5 +1312,68 @@ impl AnonymousParliamentAttemptStateV1 {
             assignments,
             binding,
         ))
+    }
+}
+
+// Keep the roster's original local codec refusal retryable. Structural or malformed-codec
+// errors retain the existing semantic roster rejection; no local authority is fabricated.
+fn roster_binding_error(error: BallotContextErrorV1) -> Error {
+    match error {
+        BallotContextErrorV1::Codec(error @ AnonymousBallotCodecErrorV1::DecodeUnavailable(_)) => {
+            Error::ProposalFrame(error)
+        }
+        _ => Error::RosterBinding,
+    }
+}
+
+#[cfg(test)]
+mod roster_error_tests {
+    use super::*;
+
+    #[test]
+    fn roster_codec_mapping_retains_the_exact_original_local_refusal() {
+        // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+        let payload = std::collections::BinaryHeap::from([(1_u64, 2_u64)]);
+        let error = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || iroha_data_model::governance::checked_fingerprint(b"test.roster", &payload),
+        )
+        .unwrap_err();
+        let original = error.local_refusal().unwrap();
+        let mapped = roster_binding_error(BallotContextErrorV1::Codec(
+            AnonymousBallotCodecErrorV1::from_attempt(error),
+        ));
+        assert_eq!(mapped.original_codec_refusal(), Some(&original));
+        assert!(mapped.is_local());
+        assert_eq!(
+            mapped,
+            Error::ProposalFrame(AnonymousBallotCodecErrorV1::DecodeUnavailable(original))
+        );
+    }
+
+    #[test]
+    fn roster_structure_and_malformed_codec_remain_semantic_rejections() {
+        let invalid = AnonymousParliamentRosterRootPreimageV1 {
+            election_attempt_id: BodyElectionAttemptId::new([0x42; 32]),
+            assignments: Vec::new(),
+            anonymous_ballot: None,
+        };
+        let error = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || anonymous_roster_root_v1(&invalid),
+        )
+        .unwrap_err();
+        assert_eq!(error, BallotContextErrorV1::EmptyRoster);
+        for error in [
+            error,
+            BallotContextErrorV1::Codec(AnonymousBallotCodecErrorV1::Codec(
+                "malformed roster encoding".into(),
+            )),
+        ] {
+            let mapped = roster_binding_error(error);
+            assert_eq!(mapped, Error::RosterBinding);
+            assert!(mapped.original_codec_refusal().is_none());
+            assert!(!mapped.is_local());
+        }
     }
 }

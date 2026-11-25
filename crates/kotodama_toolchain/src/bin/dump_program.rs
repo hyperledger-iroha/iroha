@@ -1,10 +1,12 @@
 //! Compile, disassemble, and execute a small Kotodama V1 program.
 use iroha_primitives::numeric_abi::IntValueV1;
 use ivm::{IVM, PointerType, ProgramMetadata};
-fn returned_int(vm: &IVM, register: usize) -> i64 {
+fn returned_int(vm: &IVM) -> i64 {
     let tlv = vm
-        .validate_tlv(vm.register(register))
-        .unwrap_or_else(|error| panic!("validate returned int in r{register}: {error:?}"));
+        .validate_tlv(vm.public_call_result_word(0).expect("public result word"))
+        .unwrap_or_else(|error| {
+            panic!("validate returned int in the public result table: {error:?}")
+        });
     assert_eq!(tlv.type_id, PointerType::Int);
     IntValueV1::decode_frame(tlv.payload)
         .expect("decode canonical returned int")
@@ -28,10 +30,12 @@ fn main() {
             }
         }
     ";
-    let code = kotodama_lang::compiler::Compiler::new()
+    let options = kotodama_lang::compiler::CompilerOptions::default();
+    let profile = options.target_profile().expect("compiler target");
+    let code = kotodama_lang::compiler::Compiler::new_with_options(options)
         .compile_source(src)
         .expect("compile");
-    let parsed = ProgramMetadata::parse(&code).unwrap();
+    let parsed = ProgramMetadata::parse_for_profile(&code, profile).unwrap();
     let mut memory = ivm::Memory::new();
     memory
         .load_code(&code[parsed.header_len..])
@@ -42,23 +46,14 @@ fn main() {
         println!("pc=0x{pc:04x} word=0x{word:08x}");
         pc += 4;
     }
-    let entrypoint = parsed
-        .contract_interface
-        .as_ref()
-        .expect("dump program contract interface")
-        .entrypoints
-        .iter()
-        .find(|entrypoint| entrypoint.name == "main")
-        .expect("main entrypoint descriptor");
-    let entrypoint_pc =
-        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + entrypoint.entry_pc;
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    vm.set_program_counter(entrypoint_pc)
+    vm.load_program_for_profile(&code, profile)
+        .expect("load compiled profile");
+    vm.select_entrypoint("main")
         .expect("select main entrypoint");
     vm.run().unwrap();
     for reg in 2..10 {
         println!("x{reg}={}", vm.register(reg));
     }
-    println!("x10={}", returned_int(&vm, 10));
+    println!("result={}", returned_int(&vm));
 }

@@ -4,6 +4,7 @@ use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use ivm::{PointerType, ProgramMetadata};
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -68,5 +69,5 @@ fn unknown_pointer_type_rejected_under_current() {
     let err =
         CoreHost::decode_tlv_typed::<AccountId>(&vm, ivm::Memory::INPUT_START, PointerType::Blob)
             .expect_err("unknown pointer type id must be rejected");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }

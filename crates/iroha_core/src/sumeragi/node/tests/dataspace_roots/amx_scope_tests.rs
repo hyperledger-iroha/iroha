@@ -80,7 +80,7 @@ fn signed_private_genesis_cannot_install_global_amx_coordinator() {
     };
     assert_eq!(rejection.output_index, 0);
     assert!(
-        matches!(rejection.reason.as_ref(),
+        matches!(rejection.reason.as_borrowed().baseline().expect("baseline AMX execution"),
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(message))
             if message == "AMX coordinator requires the authenticated global root"

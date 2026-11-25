@@ -17,7 +17,7 @@ use iroha_data_model::{
         types::{
             AssignmentId, BeaconSessionId, BodyElectionAttemptId, DeliberationPhaseV1,
             GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentBody,
-            parliament_candidate_root_v1, parliament_quorum_seats_v1,
+            checked_parliament_candidate_root_v1, parliament_quorum_seats_v1,
         },
     },
 };
@@ -298,7 +298,7 @@ impl AnonymousParliamentAttemptStateV1 {
     }
 
     fn validate_restored_generations(&self, network_id: &NetworkId) -> Result<(), Error> {
-        let session = BeaconSessionId::for_network_v1(network_id);
+        let session = BeaconSessionId::for_network_checked_v1(network_id)?;
         let sortition = &self.policy.sortition_policy;
         let mut latest = BTreeMap::<ParliamentBody, (usize, usize)>::new();
         let mut previous_slot = None::<u64>;
@@ -373,26 +373,31 @@ impl AnonymousParliamentAttemptStateV1 {
                 let request = &election.request;
                 if request.governance_attempt_id != self.attempt.id
                     || request.body_election_attempt_id
-                        != BodyElectionAttemptId::derive_v1(
+                        != BodyElectionAttemptId::derive_checked_v1(
                             self.attempt.id,
                             body,
                             election.sequence,
-                        )
+                        )?
                     || request.candidate_root
-                        != parliament_candidate_root_v1(
+                        != checked_parliament_candidate_root_v1(
                             self.attempt.id,
                             body,
                             &generation.candidates,
-                        )
+                        )?
                     || request.candidate_count != candidate_count
                     || request.target_seats != u32::from(required.target_seats)
                     || request.request_height != generation.request_height
                     || request.pulse_height != generation.slot
                     || request.beacon_session_id != session
-                    || request.id != request.canonical_id()
-                    || (!evidence && request.validate(None).is_err())
+                    || request.id != request.canonical_id_checked_v1()?
                 {
                     return Err(restore("generations"));
+                }
+                if !evidence {
+                    request.validate_checked_v1(None).map_err(|error| match error {
+                        iroha_data_model::governance::types::CheckedSortitionRequestErrorV1::Rejected(_) => restore("generations"),
+                        iroha_data_model::governance::types::CheckedSortitionRequestErrorV1::Codec(original) => original.into(),
+                    })?;
                 }
                 if body == ParliamentBody::ConfirmationJury {
                     self.validate_restored_confirmation_request(election.sequence, generation)?;

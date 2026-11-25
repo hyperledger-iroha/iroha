@@ -7517,6 +7517,58 @@ mod tests {
         }
     }
     #[test]
+    fn certified_c10_rejection_preserves_its_original_family() {
+        use iroha_data_model::{
+            block::execution_output::TransactionRejectionRef,
+            ivm_c10::{
+                IvmAdmissionErrorC10V1, TransactionRejectionReasonC10V1 as C,
+                ValidationFailC10V1 as V,
+            },
+        };
+        let tx: CommittedTransaction = norito::decode_canonical(include_bytes!(
+            "../../../../fixtures/sumeragi/native-finality/c10-mixed/input-1.nrt"
+        ))
+        .unwrap();
+        let rejection = tx.result().as_ref().unwrap_err();
+        assert!(matches!(
+            rejection,
+            TransactionRejectionRef::C10(C::Validation(V::IvmAdmission(
+                IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(19)
+            )))
+        ));
+        assert_eq!(
+            profiled_rejection(rejection),
+            ("IvmAdmission", rejection.to_string(), None, None)
+        );
+        use iroha_data_model::{
+            executor::fault::{IvmFaultPositionV1, IvmFaultSiteV1, IvmInvocationSelectorV1},
+            ivm_c10::{IvmFaultC10V1, IvmFaultKindC10V1, NumericFaultC10V1},
+        };
+        for kind in [
+            IvmFaultKindC10V1::ControlFlowViolation,
+            IvmFaultKindC10V1::Numeric(NumericFaultC10V1::RegisterIntegerOverflow),
+        ] {
+            let fault = IvmFaultC10V1 {
+                kind,
+                site: IvmFaultSiteV1 {
+                    code_hash: Hash::new(b"c10-origin"),
+                    selector: IvmInvocationSelectorV1::Entrypoint(3),
+                    position: IvmFaultPositionV1::Execute { pc_offset: 28 },
+                },
+            };
+            let reason = C::Validation(V::IvmFault(fault));
+            assert_eq!(
+                profiled_rejection(TransactionRejectionRef::C10(&reason)),
+                (
+                    "IvmFault",
+                    reason.to_string(),
+                    None,
+                    Some(norito::json!(fault))
+                )
+            );
+        }
+    }
+    #[test]
     fn ivm_fault_projection_retains_typed_origin_without_presentation() {
         use iroha_data_model::executor::fault::{
             IvmFaultKindV1, IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1,
@@ -12526,6 +12578,11 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     else {
         return None;
     };
+    Some(contract_rejection_json(rejection))
+}
+fn contract_rejection_json(
+    rejection: &iroha_data_model::executor::ContractRejection,
+) -> json::Value {
     let mut value = json::Map::new();
     value.insert(
         "contract".into(),
@@ -12547,7 +12604,55 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
                 json::Value::String(message.to_owned())
             }),
     );
-    Some(json::Value::Object(value))
+    json::Value::Object(value)
+}
+/// Project the authenticated rejection in its selected execution family.
+fn profiled_rejection(
+    reason: iroha_data_model::block::execution_output::TransactionRejectionRef<'_>,
+) -> (&str, String, Option<json::Value>, Option<json::Value>) {
+    use iroha_data_model::{
+        block::execution_output::TransactionRejectionRef,
+        ivm_c10::{TransactionRejectionReasonC10V1 as C, ValidationFailC10V1 as V},
+    };
+    let reason = match reason {
+        TransactionRejectionRef::Baseline(reason) => {
+            return (
+                transaction_rejection_code(reason),
+                reason.to_string(),
+                transaction_contract_rejection_json(reason),
+                transaction_ivm_fault_json(reason),
+            );
+        }
+        TransactionRejectionRef::C10(reason) => reason,
+    };
+    let mut contract = None;
+    let mut fault = None;
+    let code = match reason {
+        C::AccountDoesNotExist(_) => "AccountDoesNotExist",
+        C::LimitCheck(_) => "LimitCheck",
+        C::InstructionExecution(_) => "InstructionExecutionFailed",
+        C::TriggerExecution(_) => "TriggerExecutionFailed",
+        C::AnonymousBallot(reason) => match reason {
+            iroha_data_model::governance::anonymous_ballot::AnonymousBallotRejectionV1::OutsideCastingWindow => "OutsideCastingWindow",
+            iroha_data_model::governance::anonymous_ballot::AnonymousBallotRejectionV1::DuplicateNullifier => "DuplicateNullifier",
+        },
+        C::Validation(validation) => match validation {
+            V::NotPermitted(_) => "NotPermitted",
+            V::IvmAdmission(_) => "IvmAdmission",
+            V::InstructionFailed(error) => instruction_execution_rejection_code(error),
+            V::ContractRejected(rejection) => {
+                contract = Some(contract_rejection_json(rejection));
+                rejection.name.as_str()
+            }
+            V::IvmFault(value) => { fault = Some(norito::json!(value)); "IvmFault" }
+            V::QueryFailed(_) => "QueryFailed",
+            V::AxtReject(_) => "AxtRejected",
+            V::SettlementReplay(_) => "SettlementReplay",
+            V::TooComplex => "TooComplex",
+            V::InternalError(_) => "InternalError",
+        },
+    };
+    (code, reason.to_string(), contract, fault)
 }
 fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
     match code {
@@ -12646,7 +12751,7 @@ fn project_selected_execution_context(
     block: &iroha_data_model::block::SignedBlock,
     committed: &CommittedTransaction,
 ) -> PyResult<json::Value> {
-    let Some(output) = committed.output.network() else {
+    let Some(input_index) = committed.output.network_index() else {
         return Err(PyValueError::new_err(
             "verified route requires a Network output",
         ));
@@ -12666,7 +12771,7 @@ fn project_selected_execution_context(
             ));
         }
     }
-    let index = usize::try_from(output.input_index)
+    let index = usize::try_from(input_index)
         .map_err(|_| PyValueError::new_err("verified route input index overflow"))?;
     let route = bundle.external.get(index).ok_or_else(|| {
         PyValueError::new_err("verified route input index is outside the original block")
@@ -12678,7 +12783,7 @@ fn project_selected_execution_context(
     }
     let mut projected = json::Map::new();
     projected.insert("bundle_version".into(), json::Value::from(bundle.version));
-    projected.insert("input_index".into(), json::Value::from(output.input_index));
+    projected.insert("input_index".into(), json::Value::from(input_index));
     projected.insert(
         "route".into(),
         json::to_value(route).map_err(|error| {
@@ -12752,22 +12857,14 @@ fn project_authenticated_committed_transaction(
             Ok::<_, PyErr>(hex_encode(bytes))
         })
         .transpose()?;
-    let (result_ok, rejection_code, rejection_message, contract_rejection) =
-        match &committed.result().0 {
-            Ok(_) => (true, None, None, None),
-            Err(reason) => (
-                false,
-                Some(transaction_rejection_code(reason)),
-                Some(reason.to_string()),
-                transaction_contract_rejection_json(reason),
-            ),
+    let (result_ok, rejection_code, rejection_message, contract_rejection, ivm_fault) =
+        match committed.result().as_ref() {
+            Ok(_) => (true, None, None, None, None),
+            Err(reason) => {
+                let (code, message, contract, fault) = profiled_rejection(reason);
+                (false, Some(code), Some(message), contract, fault)
+            }
         };
-    let ivm_fault = committed
-        .result()
-        .0
-        .as_ref()
-        .err()
-        .and_then(transaction_ivm_fault_json);
     let batch_outcomes = committed
         .result()
         .batch_transfer_outcomes()

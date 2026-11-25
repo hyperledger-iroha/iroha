@@ -397,6 +397,7 @@ data_availability.commitment.list	POST	/v1/da/commitments	public	torii_default	p
 data_availability.commitment.prove	POST	/v1/da/commitments/prove	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.commitment.verify	POST	/v1/da/commitments/verify	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.ingest	POST	/v1/da/ingest	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	true	true
+data_availability.ingest.parts	POST	/v1/da/ingest/parts	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	true	true
 data_availability.manifest.read	GET	/v1/da/manifests/{ticket}	public	torii_default	public	read	http	feature(app_api)	true	true	true	false
 data_availability.pin_intent.list	POST	/v1/da/pin-intents	public	torii_default	public	read	http	always	true	true	true	false
 data_availability.pin_intent.prove	POST	/v1/da/pin-intents/prove	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
@@ -423,6 +424,9 @@ game_partition.transfer_proof.read	GET	/v1/game-partitions/{world}/transfers/{tr
 governance.anonymous_ballot.attempt.read	GET	/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 governance.anonymous_ballot.board.read	GET	/v1/gov/anonymous-ballots/boards/{scope}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 governance.anonymous_ballot.submit	POST	/v1/gov/anonymous-ballots	public	unauthenticated	anonymous_ballot_proof	mutation	http	feature(app_api)	true	true	false	false
+governance.anonymous_parliament.attempt.draft	POST	/v1/gov/anonymous-parliament/attempts/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+governance.anonymous_parliament.credential.draft	POST	/v1/gov/anonymous-parliament/credentials/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+governance.anonymous_parliament.transition.draft	POST	/v1/gov/anonymous-parliament/transitions/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.plain	POST	/v1/gov/ballots/plain	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1	POST	/v1/gov/ballots/zk-v1	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1_proof	POST	/v1/gov/ballots/zk-v1/ballot-proof	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true

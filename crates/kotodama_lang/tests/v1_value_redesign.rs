@@ -398,3 +398,27 @@ fn call_tables_reject_oversized_shared_product_returns_before_lowering() {
                 && diagnostic.message.contains("returns more than 8192"))
     );
 }
+
+#[test]
+fn missing_match_arms_name_the_source_variants() {
+    for (ty, arm, missing) in [
+        (
+            "Status",
+            "Status::Active",
+            vec!["Status::Paused", "Status::Closed"],
+        ),
+        ("Failure", "Failure::Unknown", vec!["Failure::Closed"]),
+        ("Option<int>", "Option::some(_)", vec!["Option::none"]),
+        (
+            "Result<int, Failure>",
+            "Result::ok(_)",
+            vec!["Result::err(_)"],
+        ),
+    ] {
+        let error = checked(&format!("enum Status {{ Active = 1, Paused = 2, Closed = 3 }} error enum Failure {{ Unknown = 1, Closed = 2 }} fn read({ty} value) -> int {{ match value {{ {arm} => 1 }} }}")).unwrap_err();
+        assert_eq!(error.code(), "E_MATCH_NON_EXHAUSTIVE");
+        for name in missing {
+            assert!(error.to_string().contains(name), "{error}");
+        }
+    }
+}

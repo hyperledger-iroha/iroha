@@ -12,6 +12,7 @@ use iroha_data_model::block::{
     SharedSignedBlock, commit_certificate::CertificateCustodyError,
 };
 use iroha_data_model::da::commitment::{DaCommitmentCustodyError, DaProofPolicyCustodyError};
+use ivm_abi::error::VmDeferral;
 use norito::core::{PreparedDecodeError, PreparedDecodeScopeError};
 use std::alloc::Layout;
 
@@ -36,7 +37,8 @@ fn transported(map: impl FnOnce() -> ExecutionDeferred) -> AllocatorRefusal {
         let PublicationDeferral::Execution(original) = publication else {
             unreachable!()
         };
-        let VMError::AllocatorDeferred(original) = original.into_vm_error() else {
+        let VMError::Deferred(VmDeferral::AllocatorDeferred(original)) = original.into_vm_error()
+        else {
             panic!("exact physical allocator cause")
         };
         retained = Some(original);

@@ -347,6 +347,7 @@ fn vm_error_rows() -> Vec<Value> {
                 ("producers", Value::Array(producers)),
                 ("trap_kind", optional(entry.trap_kind.map(trap_kind_name))),
                 ("variant", Value::from(entry.variant)),
+                ("family", Value::from(entry.family.name())),
             ])
         })
         .collect()

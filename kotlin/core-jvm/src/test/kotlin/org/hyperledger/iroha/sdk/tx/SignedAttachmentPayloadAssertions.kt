@@ -265,7 +265,7 @@ internal object SignedAttachmentPayloadAssertions {
         assertEquals(wireIds.toSet(), InstructionWireIdsV1.values)
     }
 
-    fun nonIrohaNativeOperationsRoundtrip() {
+    fun nativeOperationsRoundtrip() {
         val vector = vectors().arrayValue("accepted").map { it.objectValue() }
             .single { it.text("name") == "contract_subject_nested_invocation" }
         val payload = adapter.decodeTransaction(hex(vector.text("payload_hex")))
@@ -289,6 +289,12 @@ internal object SignedAttachmentPayloadAssertions {
             "soracloud::DeploySoracloudService",
             "consensus::RegisterConsensusKey",
             "identity::ClaimIdentifier",
+            "iroha.governance.parliament.anonymous.runtime_upgrade.create.v1",
+            "iroha.runtime.child_admin.attest.v1",
+            "iroha.runtime.child_admin.authorize.v1",
+            "iroha.runtime.generic_carrier.stage_artifact.v1",
+            "iroha.smart_contract.code.c10.register.v1",
+            "iroha.trigger.c10.register.v1",
             "zk::ScheduleConfidentialPolicyTransition",
         )) {
             val candidate = rebound(wireId)

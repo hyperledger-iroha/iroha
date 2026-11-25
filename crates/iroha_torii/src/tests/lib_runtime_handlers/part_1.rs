@@ -2598,6 +2598,9 @@ fn mk_app_state_for_tests_with_native_scope(
         iroha_core::da::ReplayCacheConfig::new(),
     ));
     let da_ingest = iroha_config::parameters::actual::DaIngest::default();
+    let da_upload_finishes = Arc::new(tokio::sync::Semaphore::new(
+        da_ingest.max_concurrent_compute_jobs.get(),
+    ));
     let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
         da_ingest.max_concurrent_compute_jobs.get(),
     ));
@@ -2904,6 +2907,7 @@ fn mk_app_state_for_tests_with_native_scope(
         ),
         da_ingest,
         da_ingest_compute_inflight,
+        da_upload_finishes,
         da_spooler: None,
         #[cfg(feature = "app_api")]
         sorafs_cache,

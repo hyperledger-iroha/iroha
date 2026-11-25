@@ -45,6 +45,9 @@ use iroha_data_model::{
 use iroha_model_base::state_path::StatePath;
 use std::alloc::Layout;
 pub use zk_x509::NativeZkX509StateV1;
+#[path = "world_state_snapshot/retained_provider.rs"]
+mod retained_provider;
+pub use retained_provider::NativeProviderSnapshotV1;
 
 /// A complete World snapshot either retains the original local refusal or rejects its claim.
 #[derive(Debug, thiserror::Error)]
@@ -792,6 +795,66 @@ fn native_world_schema_selections_v1() -> Result<
 }
 
 impl State {
+    /// Bind retirement-only typed originals to the complete original certified pre-tail cut.
+    /// This method grants no authority to a caller-edited query view: its State-owned caller
+    /// acquires and retains the view privately, and every census element is checked here.
+    pub(in crate::state) fn authenticate_runtime_retirement_world(
+        &self,
+        view: &crate::state::StateQueryView<'_>,
+        tip: &CommittedBlock,
+    ) -> Result<(), WorldStateSnapshotError> {
+        self.with_native_world_state_snapshot_cut_v1(
+            tip,
+            None,
+            &self.ivm_execution_budget(),
+            |snapshot, _world| {
+                use crate::state::runtime_retirement_cut::original_hash;
+                use mv::storage::StorageReadOnly as _;
+                for (field, hash) in [
+                    (
+                        "world.runtime_selection",
+                        original_hash(view.world().runtime_selection())?,
+                    ),
+                    (
+                        "world.private_dataspaces",
+                        original_hash(view.world().private_dataspaces())?,
+                    ),
+                ] {
+                    require_target(snapshot, field, WorldStateElementKindV1::Cell, None, hash)?;
+                }
+                require_complete_table_count(
+                    snapshot,
+                    "world.runtime_definitions",
+                    view.world().runtime_definitions().iter().count(),
+                )?;
+                for (key, value) in view.world().runtime_definitions().iter() {
+                    require_target(
+                        snapshot,
+                        "world.runtime_definitions",
+                        WorldStateElementKindV1::Table,
+                        Some(original_hash(key)?),
+                        original_hash(value)?,
+                    )?;
+                }
+                require_complete_table_count(
+                    snapshot,
+                    "world.runtime_retirements",
+                    view.world().runtime_retirements().iter().count(),
+                )?;
+                for (key, value) in view.world().runtime_retirements().iter() {
+                    require_target(
+                        snapshot,
+                        "world.runtime_retirements",
+                        WorldStateElementKindV1::Table,
+                        Some(original_hash(key)?),
+                        original_hash(value)?,
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    }
+
     /// Capture one current names cut before doing certificate or attestation work.
     /// The complete World and native pre-tail journal are checked while the short
     /// physical overlay is held. Both original height/generation fences run before
@@ -805,9 +868,34 @@ impl State {
         authority: &'a AccountId,
         budget: &'a AllocationBudget,
     ) -> Result<NativeResourceNamesSnapshotV1<'a>, WorldStateSnapshotError> {
+        let (view, snapshot) = self.capture_original_snapshot(None, Some(authority), budget)?;
+        Ok(NativeResourceNamesSnapshotV1 {
+            snapshot,
+            view,
+            state: self,
+            authority,
+            budget,
+        })
+    }
+
+    fn capture_original_snapshot<'a>(
+        &'a self,
+        height: Option<u64>,
+        authority: Option<&AccountId>,
+        budget: &AllocationBudget,
+    ) -> Result<(StateView<'a>, CapturedSnapshot), WorldStateSnapshotError> {
         let view = self.try_view_once()?;
-        if view.native_world_snapshot_height_v1()? < 2 {
-            return Err("World names snapshot requires a certified successor".into());
+        let observed_height = view.native_world_snapshot_height_v1()?;
+        if let Some(requested_height) = height
+            && requested_height != observed_height
+        {
+            return Err(WorldStateSnapshotError::CutChanged {
+                requested_height,
+                observed_height,
+            });
+        }
+        if observed_height < 2 {
+            return Err("World snapshot requires a certified successor".into());
         }
         let cut = self.native_world_cut.lock().as_ref().cloned()
             .ok_or("World snapshot has no original certified pre-tail capture; restored state requires native replay")?;
@@ -818,7 +906,9 @@ impl State {
                 require_same_names_capture(&view, &self.try_view_once()?)
             }));
         }
-        require_names_read_authority(&view.world, authority)?;
+        if let Some(authority) = authority {
+            require_names_read_authority(&view.world, authority)?;
+        }
         let snapshot = {
             let execution_budget = self.ivm_execution_budget();
             let world = self
@@ -831,18 +921,14 @@ impl State {
             {
                 return Err("World snapshot acquired another complete applied World".into());
             }
-            require_names_read_authority(&world, authority)?;
+            if let Some(authority) = authority {
+                require_names_read_authority(&world, authority)?;
+            }
             let captured = capture(&world, expected, budget)?;
             reconstruct(&captured, &cut, budget)?
         };
         require_same_names_capture(&view, &self.try_view_once()?)?;
-        Ok(NativeResourceNamesSnapshotV1 {
-            snapshot,
-            view,
-            state: self,
-            authority,
-            budget,
-        })
+        Ok((view, snapshot))
     }
 
     /// Schema commitment `S` of the baseline selection a World of this release is founded on
@@ -925,30 +1011,9 @@ impl State {
         consume: impl FnOnce(ProviderAdmissionSnapshotOriginalsV1<'_>) -> Result<T, String>,
     ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
-            let (council_head, council_predecessor) =
-                admission_originals(snapshot, world, None, budget)?;
-            let (provider_head, provider_predecessor) =
-                admission_originals(snapshot, world, Some(provider), budget)?;
-            let owner = world
-                .provider_owners
-                .get(&provider)
-                .ok_or("World snapshot native provider owner is absent")?;
-            require_target(
-                snapshot,
-                "world.provider_owners",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(&provider)?),
-                hash_value(owner)?,
-            )?;
-            consume(ProviderAdmissionSnapshotOriginalsV1 {
-                world: snapshot,
-                council_head,
-                council_predecessor,
-                provider_head,
-                provider_predecessor,
-                owner,
-                stream_token: stream_token_originals(snapshot, world, provider, budget)?,
-            })
+            consume(retained_provider::admission_rows(
+                snapshot, world, provider, budget,
+            )?)
             .map_err(WorldStateSnapshotError::from)
         })
     }
@@ -971,50 +1036,8 @@ impl State {
         ) -> Result<T, String>,
     ) -> Result<T, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
-            if provider.as_bytes() == &[0; 32]
-                || crate::sumeragi::lanes::routing::committed_root_scope(world)
-                    != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
-            {
-                return Err(
-                    "Custody projection requires a nonzero provider on the global root".into(),
-                );
-            }
-            let owner = world
-                .provider_owners
-                .get(&provider)
-                .ok_or("World snapshot native provider owner is absent")?;
-            require_target(
-                snapshot,
-                "world.provider_owners",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(&provider)?),
-                hash_value(owner)?,
-            )?;
-            let current = stream_token_originals(snapshot, world, provider, budget)?;
-            if current.is_none() {
-                use iroha_data_model::sorafs::stream_token_custody::history::{
-                    head_key, record_key,
-                };
-                // Current typed absence cannot hide a value in the certified pre-tail cut.
-                for key in [head_key(provider), record_key(provider, 1)] {
-                    let target = (
-                        "world.smart_contract_state",
-                        WorldStateElementKindV1::Table,
-                        Some(hash_value(&key)?),
-                    );
-                    if snapshot
-                        .entries
-                        .binary_search_by(|entry| {
-                            (entry.field_id.as_str(), entry.kind, entry.key_hash).cmp(&target)
-                        })
-                        .is_ok()
-                    {
-                        return Err(
-                            "Custody absence differs from the certified original cut".into()
-                        );
-                    }
-                }
-            }
+            let (owner, current) =
+                retained_provider::custody_rows(snapshot, world, provider, budget)?;
             consume(snapshot, owner, current).map_err(WorldStateSnapshotError::from)
         })
     }
@@ -1573,7 +1596,7 @@ mod cut_observation_tests {
 
 fn admission_originals<'a>(
     snapshot: &WorldStateSnapshotV1,
-    world: &'a WorldBlock<'_>,
+    world: &'a impl WorldReadOnly,
     subject: Option<iroha_data_model::sorafs::capacity::ProviderId>,
     budget: &AllocationBudget,
 ) -> Result<(&'a Vec<u8>, Option<&'a Vec<u8>>), String> {
@@ -1590,7 +1613,7 @@ fn admission_originals<'a>(
     let read_original = |suffix: AdmissionHistoryPathV1| -> Result<&'a Vec<u8>, String> {
         let key = path(subject, suffix);
         let bytes = world
-            .smart_contract_state
+            .smart_contract_state()
             .get(&key)
             .ok_or("World snapshot native provider admission original is absent")?;
         require_target(
@@ -1614,7 +1637,7 @@ type StreamTokenOriginals<'a> = (&'a Vec<u8>, &'a Vec<u8>);
 
 fn stream_token_originals<'a>(
     snapshot: &WorldStateSnapshotV1,
-    world: &'a WorldBlock<'_>,
+    world: &'a impl WorldReadOnly,
     provider: iroha_data_model::sorafs::capacity::ProviderId,
     budget: &AllocationBudget,
 ) -> Result<Option<StreamTokenOriginals<'a>>, String> {
@@ -1629,7 +1652,7 @@ fn stream_token_originals<'a>(
     };
     let original = |key: StatePath| -> Result<&'a Vec<u8>, String> {
         let bytes = world
-            .smart_contract_state
+            .smart_contract_state()
             .get(&key)
             .ok_or("World snapshot token custody original is absent")?;
         require_target(

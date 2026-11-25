@@ -9558,6 +9558,50 @@
         ],
         "type": "object"
       },
+      "DaBlobClass": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "enum": [
+                  "TaikaiSegment",
+                  "NexusLaneSidecar",
+                  "GovernanceArtifact"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "class",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "const": "Custom"
+              },
+              "value": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "class",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "DaCommitmentKey": {
         "additionalProperties": false,
         "description": "Canonical DA commitment ordering key.",
@@ -9829,12 +9873,16 @@
         "additionalProperties": false,
         "properties": {
           "acknowledgement_sig": {
-            "description": "Canonical uppercase Ed25519 acknowledgement signature.",
-            "pattern": "^[0-9A-F]{128}$",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalSignature"
+              }
+            ],
+            "description": "Torii receipt signature over the complete acknowledgement and sequence.",
+            "maxLength": 8192
           },
           "chunk_root": {
-            "$ref": "#/components/schemas/DaIrohaHash"
+            "$ref": "#/components/schemas/DaDigest32"
           },
           "client_blob_id": {
             "$ref": "#/components/schemas/DaDigest32"
@@ -9943,6 +9991,22 @@
         ],
         "type": "object"
       },
+      "DaControllerWitnessV1": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
       "DaDigest32": {
         "description": "Canonical Norito JSON layout for a transparent 32-byte digest wrapper.",
         "items": {
@@ -9959,6 +10023,87 @@
         "minItems": 1,
         "type": "array"
       },
+      "DaErasureProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_alignment": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "data_shards": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "fec_scheme": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "scheme": {
+                    "enum": [
+                      "Rs12_10",
+                      "RsWin14_10",
+                      "Rs18_14"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "scheme",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "scheme": {
+                    "const": "Custom"
+                  },
+                  "value": {
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "scheme",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "parity_shards": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "row_parity_stripes": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data_shards",
+          "parity_shards",
+          "row_parity_stripes",
+          "chunk_alignment",
+          "fec_scheme"
+        ],
+        "type": "object"
+      },
       "DaGovernanceTag": {
         "description": "Canonical Norito JSON layout for the transparent governance-tag wrapper.",
         "items": {
@@ -9967,6 +10112,337 @@
         "maxItems": 1,
         "minItems": 1,
         "type": "array"
+      },
+      "DaIngestAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "payload_bytes": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "request_content_hash": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              }
+            ],
+            "description": "Commitment to every remaining signed request field: the BLAKE3 content digest as an Iroha hash, whose final bit is set."
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "payload_hash",
+          "payload_bytes",
+          "request_content_hash",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "DaIngestReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "chunk_root": {
+            "$ref": "#/components/schemas/DaDigest32",
+            "description": "Raw BLAKE3 SoraFS proof-of-retrievability root."
+          },
+          "client_blob_id": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "epoch": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "operator_signature": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalSignature"
+              }
+            ],
+            "description": "Torii operator signature over the receipt and request sequence.",
+            "maxLength": 8192
+          },
+          "pdp_commitment": {
+            "contentEncoding": "base64",
+            "description": "Norito-encoded PDP commitment present on every successful ingest and repeated in Sora-PDP-Commitment.",
+            "minLength": 4,
+            "type": "string"
+          },
+          "queued_at_unix": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rent_quote": {
+            "$ref": "#/components/schemas/DaRentQuote"
+          },
+          "retention_policy": {
+            "$ref": "#/components/schemas/DaRetentionPolicy"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "stripe_layout": {
+            "$ref": "#/components/schemas/DaStripeLayout"
+          }
+        },
+        "required": [
+          "client_blob_id",
+          "lane_id",
+          "epoch",
+          "blob_hash",
+          "chunk_root",
+          "manifest_hash",
+          "storage_ticket",
+          "pdp_commitment",
+          "stripe_layout",
+          "queued_at_unix",
+          "retention_policy",
+          "rent_quote",
+          "operator_signature"
+        ],
+        "type": "object"
+      },
+      "DaIngestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "blob_class": {
+            "$ref": "#/components/schemas/DaBlobClass"
+          },
+          "chunk_size": {
+            "enum": [
+              1024,
+              2048,
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072,
+              262144,
+              524288,
+              1048576,
+              2097152
+            ],
+            "type": "integer"
+          },
+          "client_blob_id": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "codec": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "compression": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Identity",
+                  "Gzip",
+                  "Deflate",
+                  "Zstd"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "epoch": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "erasure_profile": {
+            "$ref": "#/components/schemas/DaErasureProfile"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/DaMetadataEntry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "norito_manifest": {
+            "contentEncoding": "base64",
+            "description": "Caller-supplied Norito manifest bytes, or null to generate the manifest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "description": "Transmitted bytes in the declared compression format. Multipart Finish restores them from the upload.",
+            "maxLength": 89478488,
+            "type": "string"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/DaDigest32",
+            "description": "Raw BLAKE3 digest of the decompressed payload."
+          },
+          "pin_scope_signatures": {
+            "description": "An empty array prepares the receipt and pin scope. Retry with the controller witnesses over the verified scope, keeping the original request signatures.",
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "type": "array"
+          },
+          "retention_policy": {
+            "$ref": "#/components/schemas/DaRetentionPolicy"
+          },
+          "sequence": {
+            "format": "uint64",
+            "maximum": 18446744073709551614,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signatures": {
+            "description": "Canonically signer-key-ordered controller witnesses over the ingest request.",
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "total_size": {
+            "description": "Number of decompressed payload bytes. The source may span at most 1,024 chunks.",
+            "format": "uint64",
+            "maximum": 67108864,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "client_blob_id",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "blob_class",
+          "codec",
+          "erasure_profile",
+          "retention_policy",
+          "chunk_size",
+          "total_size",
+          "payload_hash",
+          "compression",
+          "norito_manifest",
+          "payload",
+          "metadata",
+          "signatures",
+          "pin_scope_signatures"
+        ],
+        "type": "object"
+      },
+      "DaIngestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicate": {
+            "description": "True when Torii recognized a replay of the ingest.",
+            "type": "boolean"
+          },
+          "pin_scope": {
+            "$ref": "#/components/schemas/DaPinScopeProposalV1"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/DaIngestReceipt"
+          },
+          "status": {
+            "description": "pending_pin_authorization requests controller signatures on the returned scope. accepted confirms pin authorization and may precede block inclusion.",
+            "enum": [
+              "pending_pin_authorization",
+              "accepted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "duplicate",
+          "receipt",
+          "pin_scope"
+        ],
+        "type": "object"
       },
       "DaIrohaHash": {
         "description": "Canonical checksummed Iroha hash literal. Decoders also verify the CRC-16 checksum and marked-hash bit.",
@@ -10024,15 +10500,107 @@
         ],
         "type": "object"
       },
+      "DaMetadataEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "encryption": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "cipher": {
+                    "const": "None"
+                  },
+                  "params": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "cipher",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "cipher": {
+                    "const": "ChaCha20Poly1305"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key_label": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "key_label"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "cipher",
+                  "params"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "visibility": {
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "visibility": {
+                "enum": [
+                  "Public",
+                  "GovernanceOnly"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "visibility",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "visibility",
+          "encryption"
+        ],
+        "type": "object"
+      },
       "DaPinIntent": {
         "additionalProperties": false,
         "properties": {
           "alias": {
             "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
             "maxLength": 256,
-            "nullable": true,
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "x-iroha-maxUtf8Bytes": 256
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/DaIngestAuthorizationV1"
           },
           "epoch": {
             "format": "uint64",
@@ -10045,10 +10613,8 @@
           "manifest_hash": {
             "$ref": "#/components/schemas/DaDigest32"
           },
-          "owner": {
-            "description": "Optional canonical I105 universal account identifier.",
-            "nullable": true,
-            "type": "string"
+          "pin_scope_authorization": {
+            "$ref": "#/components/schemas/DaPinScopeAuthorizationV1"
           },
           "sequence": {
             "format": "uint64",
@@ -10065,7 +10631,8 @@
           "storage_ticket",
           "manifest_hash",
           "alias",
-          "owner"
+          "authorization",
+          "pin_scope_authorization"
         ],
         "type": "object"
       },
@@ -10366,6 +10933,137 @@
         ],
         "type": "object"
       },
+      "DaPinScopeAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/DaPinScopeV1"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "DaPinScopeProposalV1": {
+        "additionalProperties": false,
+        "description": "Pin scope returned to a producer for approval. Producer witnesses sign the scope together with commitment_digest, the digest of the complete proposed commitment; stored pin intents carry only the DaPinScopeV1 projection.",
+        "properties": {
+          "alias": {
+            "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "commitment_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "request_authorization_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "request_authorization_digest",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "storage_ticket",
+          "manifest_hash",
+          "commitment_digest",
+          "alias"
+        ],
+        "type": "object"
+      },
+      "DaPinScopeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "request_authorization_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "request_authorization_digest",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "storage_ticket",
+          "manifest_hash",
+          "alias"
+        ],
+        "type": "object"
+      },
       "DaProofPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -10417,6 +11115,38 @@
         ],
         "type": "object"
       },
+      "DaRentQuote": {
+        "additionalProperties": false,
+        "properties": {
+          "base_rent": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "egress_credit_per_gib": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "pdp_bonus": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "potr_bonus": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "protocol_reserve": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "provider_reward": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "base_rent",
+          "protocol_reserve",
+          "provider_reward",
+          "pdp_bonus",
+          "potr_bonus",
+          "egress_credit_per_gib"
+        ],
+        "type": "object"
+      },
       "DaRetentionPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -10448,13 +11178,42 @@
         ],
         "type": "object"
       },
+      "DaStripeLayout": {
+        "additionalProperties": false,
+        "properties": {
+          "row_parity_stripes": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shards_per_stripe": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_stripes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_stripes",
+          "shards_per_stripe",
+          "row_parity_stripes"
+        ],
+        "type": "object"
+      },
       "DaTaggedProofScheme": {
         "additionalProperties": false,
-        "description": "First-release DA V1 supports MerkleSha256 only; unknown proof-scheme discriminants are rejected.",
+        "description": "The DA V1 chunk root is the raw SoraFS proof-of-retrievability root computed with domain-separated BLAKE3 hashes.",
         "properties": {
           "type": {
             "enum": [
-              "MerkleSha256"
+              "SorafsPorBlake3"
             ],
             "type": "string"
           },
@@ -14928,6 +15687,343 @@
         "maxItems": 48,
         "minItems": 48,
         "type": "array"
+      },
+      "GovernanceAnonymousParliamentAttemptDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_sequence": {
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
+          }
+        },
+        "required": [
+          "proposal",
+          "attempt_sequence"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentAttemptDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.anonymous.attempt.create.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentCredentialDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "election_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "registration": {
+            "additionalProperties": false,
+            "properties": {
+              "authorization": {
+                "maxLength": 128,
+                "minLength": 128,
+                "pattern": "^[0-9a-f]{128}$",
+                "type": "string"
+              },
+              "commitment": {
+                "maxLength": 256,
+                "minLength": 256,
+                "pattern": "^[0-9a-f]{256}$",
+                "type": "string"
+              },
+              "proof": {
+                "contentEncoding": "base64",
+                "description": "Padded base64 of the 160148-byte V1 registration proof.",
+                "maxLength": 213532,
+                "minLength": 213532,
+                "type": "string"
+              }
+            },
+            "required": [
+              "commitment",
+              "authorization",
+              "proof"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "governance_attempt_id",
+          "election_attempt_id",
+          "registration"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentCredentialDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.credential.register.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentTransitionDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+          },
+          "transition": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentEscalateRiskPayloadV1"
+                  },
+                  "transition": {
+                    "const": "EscalateRisk",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "CloseQualificationEarly",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "RegisterInitialSortition",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "transition": {
+                    "const": "RegisterSortitionRetry",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentRecordInvitationResponsePayloadV1"
+                  },
+                  "transition": {
+                    "const": "RecordInvitationResponse",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "body_instance_id": {
+                        "$ref": "#/components/schemas/GovernanceParliamentAttemptIdV1"
+                      },
+                      "phase": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Orientation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Evidence",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Questions",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Responses",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "phase": {
+                                "const": "Deliberation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "phase"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "body_instance_id",
+                      "phase"
+                    ],
+                    "type": "object"
+                  },
+                  "transition": {
+                    "const": "ClosePhaseEarly",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentRecordAttemptAbsencePayloadV1"
+                  },
+                  "transition": {
+                    "const": "RecordAttemptAbsence",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/GovernanceParliamentEndorsePublicFindingPayloadV1"
+                  },
+                  "transition": {
+                    "const": "EndorsePublicFinding",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transition",
+                  "payload"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "governance_attempt_id",
+          "transition"
+        ],
+        "type": "object"
+      },
+      "GovernanceAnonymousParliamentTransitionDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "$ref": "#/components/schemas/GovernanceParliamentFramedPayloadHexV1"
+          },
+          "wire_id": {
+            "const": "iroha.governance.parliament.anonymous.transition.submit.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
       },
       "GovernanceAtWindowV1": {
         "additionalProperties": false,
@@ -38126,6 +39222,37 @@
         "required": [
           "attestation",
           "expected_location_revision"
+        ],
+        "type": "object"
+      },
+      "RegisteredManifestC10V1": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/ContractArtifactId"
+          },
+          "host_profile": {
+            "description": "Captured immutable C10 host definition.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "manifest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            ],
+            "description": "Signed ContractManifestC10V1, including the captured ABI hash and family-specific provenance."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          }
+        },
+        "required": [
+          "network_id",
+          "artifact_id",
+          "host_profile",
+          "manifest"
         ],
         "type": "object"
       },
@@ -71685,6 +72812,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ContractArtifactManifestResponse"
                 }
+              },
+              "application/vnd.iroha.c10-manifest.v1+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredManifestC10V1"
+                }
               }
             },
             "description": "The exact scoped contract manifest and network binding.",
@@ -74358,7 +75490,12 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/DaIngestRequest",
+                "properties": {
+                  "payload": {
+                    "minLength": 4
+                  }
+                }
               }
             }
           },
@@ -74369,11 +75506,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/DaIngestResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito frame containing the signed ingest result. Request this representation in Accept.",
+                  "format": "binary",
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_torii::da::ingest::DaIngestResponse"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Signed ingest result. Read status to determine whether the returned pin scope still needs controller signatures.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -74382,8 +75527,20 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "Sora-PDP-Commitment": {
+                "description": "Base64 of the same Norito PDP commitment carried in the signed receipt.",
+                "required": true,
+                "schema": {
+                  "contentEncoding": "base64",
+                  "minLength": 4,
+                  "type": "string"
+                }
               }
             }
+          },
+          "507": {
+            "description": "The local retained-source spool cannot reserve capacity for this ticket."
           }
         },
         "security": [
@@ -74406,6 +75563,283 @@
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "data_availability.ingest"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/da/ingest/parts": {
+      "post": {
+        "description": "Resume a producer-scoped upload, append an immutable part, release it, or restore its bytes and finalize the original signed ingest request.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Begin"
+                          },
+                          "value": {
+                            "type": "null"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Put"
+                          },
+                          "value": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "bytes_b64": {
+                                "contentEncoding": "base64",
+                                "maxLength": 1398104,
+                                "type": "string"
+                              },
+                              "index": {
+                                "maximum": 63,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "index",
+                              "bytes_b64"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Finish"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/DaIngestRequest",
+                            "description": "Signed ingest metadata for the authenticated owner, network, lane and epoch of this upload. Supply an empty payload string. Torii restores and verifies the staged bytes.",
+                            "properties": {
+                              "payload": {
+                                "const": ""
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Release"
+                          },
+                          "value": {
+                            "type": "null"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "upload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "epoch": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "lane_id": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "network_id": {
+                        "$ref": "#/components/schemas/NetworkId"
+                      },
+                      "wire_bytes": {
+                        "maximum": 67108864,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "wire_hash": {
+                        "$ref": "#/components/schemas/DaDigest32",
+                        "description": "BLAKE3 digest of the exact transmitted bytes."
+                      }
+                    },
+                    "required": [
+                      "network_id",
+                      "lane_id",
+                      "epoch",
+                      "wire_bytes",
+                      "wire_hash"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "upload",
+                  "action"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_part": {
+                      "maximum": 64,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "next_part"
+                  ],
+                  "type": "object"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "First missing part index, or zero after release.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaIngestResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito frame containing the signed ingest result. Request this representation in Accept.",
+                  "format": "binary",
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_torii::da::ingest::DaIngestResponse"
+                }
+              }
+            },
+            "description": "Signed ingest result. Read status to determine whether the returned pin scope still needs controller signatures.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Sora-PDP-Commitment": {
+                "description": "Base64 of the same Norito PDP commitment carried in the signed receipt.",
+                "required": true,
+                "schema": {
+                  "contentEncoding": "base64",
+                  "minLength": 4,
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed upload descriptor, part or final metadata."
+          },
+          "401": {
+            "description": "Canonical account authentication failed."
+          },
+          "403": {
+            "description": "Producer, network, lane or epoch admission failed."
+          },
+          "404": {
+            "description": "The selected upload session is absent or expired."
+          },
+          "409": {
+            "description": "Conflicting upload, out-of-order part or incomplete transfer."
+          },
+          "413": {
+            "description": "The wire payload or request body exceeds its bound."
+          },
+          "415": {
+            "description": "The transfer request requires application/json."
+          },
+          "422": {
+            "description": "The reconstructed wire payload differs from its descriptor digest."
+          },
+          "429": {
+            "description": "The staging session budget is full or the request was rate limited."
+          },
+          "503": {
+            "description": "The upload or ingest worker is busy, or storage is unavailable."
+          },
+          "507": {
+            "description": "The local retained-source spool cannot reserve capacity for this ticket."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Stage or finalize a DA upload.",
+        "tags": [
+          "DataAvailability"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "data_availability.ingest.parts"
         },
         "x-iroha-tool-effect": "write"
       }
@@ -80631,6 +82065,447 @@
           "stableRouteId": "governance.anonymous_ballot.board.read"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/anonymous-parliament/attempts/draft": {
+      "post": {
+        "description": "Draft an anonymous-family Parliament attempt for exact proposal content. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentAttemptDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentAttemptDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentAttemptDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft an anonymous-family Parliament attempt for exact proposal content.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.attempt.draft"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/gov/anonymous-parliament/credentials/draft": {
+      "post": {
+        "description": "Draft a binding-seat credential registration with its public registration proof. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentCredentialDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentCredentialDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentCredentialDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft a binding-seat credential registration with its public registration proof.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.credential.draft"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/gov/anonymous-parliament/transitions/draft": {
+      "post": {
+        "description": "Draft an account-signed fact or intent for the anonymous Parliament family. The authenticated caller receives the exact V1 instruction bytes for local signing.",
+        "operationId": "governanceAnonymousParliamentTransitionDraftV1",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceAnonymousParliamentTransitionDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceAnonymousParliamentTransitionDraftResponseV1"
+                }
+              }
+            },
+            "description": "The registered wire identifier and one canonical framed instruction payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Draft an account-signed fact or intent for the anonymous Parliament family.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_parliament.transition.draft"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/ballots/plain": {

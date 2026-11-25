@@ -68,7 +68,8 @@ import {
 } from "./address.js";
 import {
   _createDataAvailabilityApi,
-  buildDaIngestRequest,
+  prepareDaIngest,
+  postDaIngestPhase,
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
 import {
@@ -4415,7 +4416,7 @@ export class ToriiClient {
 
   /**
    * Submit a DA ingest request (`POST /v1/da/ingest`).
-   * Mirrors the `iroha da submit` flow so callers can push blobs without shelling out to the CLI.
+   * Mirrors the `iroha app da submit` flow so callers can push blobs without shelling out to the CLI.
    * @param {DaIngestRequestInput & {signal?: AbortSignal}} options
    * @returns {Promise<DaIngestSubmitResponse>}
    */
@@ -4424,13 +4425,23 @@ export class ToriiClient {
       options,
       "submitDaBlob",
     );
-    const { request, artifacts } = buildDaIngestRequest(rest);
     const artifactDir = normalizeOptionalPathInput(
       rest.artifactDir ?? rest.artifact_dir,
       "submitDaBlob.artifactDir",
     );
     const noSubmit =
       rest.noSubmit === true || rest.no_submit === true || rest.dryRun === true;
+    const { request, artifacts, wireBytes } = prepareDaIngest(rest, Boolean(artifactDir));
+    const canonicalAuth = noSubmit ? null :
+      ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth ?? this.#canonicalRequestAuth);
+    if (!noSubmit) {
+      const context = this._localSigningContext;
+      if (!(context instanceof LocalSigningContext) || !context.networkId.equals(rest.networkId) ||
+          !canonicalAuth || canonicalAuth.accountId !== request.owner ||
+          AccountAddress.parseEncoded(request.owner).chainDiscriminant !== context.chainDiscriminant) {
+        rejectType("DA requires canonical account credentials for the exact network and I105 owner");
+      }
+    }
     let artifactPaths = null;
     if (artifactDir) {
       artifactPaths = await persistDaRequestArtifacts(artifactDir, request);
@@ -4440,22 +4451,50 @@ export class ToriiClient {
         status: "prepared",
         duplicate: false,
         receipt: null,
+        pinScope: null,
+        responseBytes: null,
         artifacts,
         pdpCommitmentHeader: null,
         artifactPaths,
       };
     }
-    const response = await this._request("POST", "/v1/da/ingest", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(request),
-      signal,
+    const { payload, response, sourceBytes } = await postDaIngestPhase(request, wireBytes, async (path, body, status) => {
+      const result = await this._request("POST", path, {
+        headers: JSON_REQUEST_HEADERS,
+        body: JSON.stringify(body),
+        canonicalAuth,
+        exactNetworkId: rest.networkId,
+        redirect: "error",
+        signal,
+      });
+      await this._expectStatus(result, [status]);
+      if (status === 200) {
+        return this._readBoundedLosslessIntegerJson(result, 1024, "DA upload progress", { signal });
+      }
+      const reply = await this._readBoundedLosslessIntegerJson(
+        result, 4 * 1024 * 1024, "DA ingest response", { signal, includeSourceBytes: true },
+      );
+      return { ...reply, response: result };
     });
-    await this._expectStatus(response, [202]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("da ingest endpoint returned no payload");
-    }
     const normalized = normalizeDaIngestResponse(payload);
+    const hasPinWitness = request.pin_scope_signatures.length !== 0;
+    if ((normalized.status === "pending_pin_authorization" && hasPinWitness) ||
+        (normalized.status === "accepted" && !hasPinWitness && !normalized.duplicate)) {
+      rejectType("DA acknowledgement status does not match the submitted pin authorization");
+    }
+    const scope = normalized.pinScope;
+    const receipt = normalized.receipt;
+    const hexDigest = (tuple) => Buffer.from(tuple[0]).toString("hex").toUpperCase();
+    if (scope.network_id !== request.network_id || scope.owner !== request.owner ||
+        scope.lane_id !== request.lane_id || scope.epoch !== request.epoch || scope.sequence !== request.sequence ||
+        hexDigest(scope.request_authorization_digest) !== artifacts.signingDigestHex.toUpperCase() ||
+        hexDigest(scope.storage_ticket) !== receipt.storage_ticket_hex ||
+        hexDigest(scope.manifest_hash) !== receipt.manifest_hash_hex ||
+        receipt.lane_id !== request.lane_id || receipt.epoch !== request.epoch ||
+        receipt.blob_hash_hex !== artifacts.payloadHashHex.toUpperCase() ||
+        receipt.client_blob_id_hex !== artifacts.clientBlobIdHex.toUpperCase()) {
+      rejectType("DA pin scope or receipt differs from the original signed request");
+    }
     const pdpHeader =
       response.headers && typeof response.headers.get === JS_TYPE_FUNCTION
         ? response.headers.get(HEADER_SORA_PDP_COMMITMENT)
@@ -4463,13 +4502,15 @@ export class ToriiClient {
     if (artifactDir) {
       artifactPaths = await persistDaReceiptArtifacts(
         artifactDir,
-        normalized,
+        payload,
+        sourceBytes,
         pdpHeader,
         artifactPaths,
       );
     }
     return {
       ...normalized,
+      responseBytes: sourceBytes,
       artifacts,
       pdpCommitmentHeader: pdpHeader ?? null,
       artifactPaths,
@@ -24773,17 +24814,19 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
 async function persistDaRequestArtifacts(artifactDir, request) {
   const pathModule = await getPathModule();
   const requestJsonPath = pathModule.join(artifactDir, "da_request.json");
-  await writeJsonFile(requestJsonPath, request);
+  await writeBufferFile(requestJsonPath, Buffer.from(JSON.stringify(request), "utf8"));
   return {
     requestJsonPath,
     receiptJsonPath: null,
     responseHeadersPath: null,
+    responseJsonPath: null,
   };
 }
 
 async function persistDaReceiptArtifacts(
   artifactDir,
   response,
+  responseBytes,
   pdpHeader,
   existing,
 ) {
@@ -24792,7 +24835,10 @@ async function persistDaReceiptArtifacts(
     requestJsonPath: null,
     receiptJsonPath: null,
     responseHeadersPath: null,
+    responseJsonPath: null,
   };
+  next.responseJsonPath = pathModule.join(artifactDir, "da_response.json");
+  await writeBufferFile(next.responseJsonPath, responseBytes);
   if (response.receipt) {
     const receiptPath = pathModule.join(artifactDir, "da_receipt.json");
     await writeJsonFile(receiptPath, response.receipt);
@@ -25183,14 +25229,41 @@ function normalizeDaGatewayProviders(value, context) {
   });
 }
 
+function normalizeDaPinScope(value) {
+  const scope = ensureRecord(value, "DA pin scope");
+  const digests = ["request_authorization_digest", "storage_ticket", "manifest_hash", "commitment_digest"];
+  assertSupportedOptionKeys(scope, new Set(["network_id", "owner", "lane_id", "epoch", "sequence", "alias", ...digests]), "DA pin scope");
+  for (const key of digests) decodeDaDigestTuple(scope[key], 32, `DA pin scope.${key}`);
+  if (scope.alias !== null) requireExactNonEmptyString(scope.alias, "DA pin scope.alias");
+  return scope;
+}
+
 function normalizeDaIngestResponse(payload, context = "da ingest response") {
   const record = ensureRecord(payload ?? {}, context);
-  const status = requireNonEmptyString(record.status, `${context}.status`);
-  const duplicate = requireBooleanLike(record.duplicate, `${context}.duplicate`);
-  const receipt = record.receipt
-    ? normalizeDaIngestReceipt(record.receipt, `${context}.receipt`)
-    : null;
-  return { status, duplicate, receipt };
+  assertSupportedOptionKeys(record, new Set(["status", "duplicate", "receipt", "pin_scope"]), context);
+  const status = record.status;
+  if (status !== "accepted" && status !== "pending_pin_authorization") rejectType(`${context} has an invalid status`);
+  if (typeof record.duplicate !== "boolean") rejectType(`${context}.duplicate must be a boolean`);
+  const receipt = normalizeDaIngestReceipt(record.receipt, `${context}.receipt`);
+  const pinScope = normalizeDaPinScope(record.pin_scope);
+  return { status, duplicate: record.duplicate, receipt, pinScope };
+}
+
+function normalizeDaRetentionPolicy(value, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, new Set([
+    "hot_retention_secs", "cold_retention_secs", "required_replicas", "storage_class", "governance_tag",
+  ]), context);
+  if (!Array.isArray(record.governance_tag) || record.governance_tag.length !== 1) {
+    rejectType(`${context}.governance_tag must be a single string tuple`);
+  }
+  return {
+    hot_retention_secs: ToriiClient._normalizeUnsignedInteger(record.hot_retention_secs, `${context}.hot_retention_secs`, { allowZero: true }),
+    cold_retention_secs: ToriiClient._normalizeUnsignedInteger(record.cold_retention_secs, `${context}.cold_retention_secs`, { allowZero: true }),
+    required_replicas: ToriiClient._normalizeUnsignedInteger(record.required_replicas, `${context}.required_replicas`, { allowZero: false, max: 0xffff }),
+    storage_class: normalizeTaggedUnit(record.storage_class, "type", new Set(["Hot", "Warm", "Cold"]), `${context}.storage_class`),
+    governance_tag: requireExactNonEmptyString(record.governance_tag[0], `${context}.governance_tag`),
+  };
 }
 
 function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
@@ -25208,6 +25281,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       "pdp_commitment",
       "stripe_layout",
       "queued_at_unix",
+      "retention_policy",
       "rent_quote",
       "operator_signature",
     ]),
@@ -25325,10 +25399,11 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       `${context}.queued_at_unix`,
       { allowZero: true },
     ),
-    operator_signature_hex: normalizeUpperHex(
-      record.operator_signature ?? "",
+    operator_signature_hex: requireDaSignatureHex(
+      record.operator_signature,
       `${context}.operator_signature`,
     ),
+    retention_policy: normalizeDaRetentionPolicy(record.retention_policy, `${context}.retention_policy`),
     rent_quote: rentQuote,
   };
 }
@@ -25379,10 +25454,10 @@ function normalizeDaRentQuote(payload, context = "da rent quote") {
 }
 
 function decodeDaDigestTuple(value, expectedLength, name) {
-  if (!arrayIsArray(value) || value.length === 0) {
-    rejectType(`${name} must be an array`);
+  if (!arrayIsArray(value) || value.length !== 1 || !arrayIsArray(value[0])) {
+    rejectType(`${name} must be a single fixed-byte tuple`);
   }
-  const bytes = arrayIsArray(value[0]) ? value[0] : value;
+  const bytes = value[0];
   if (bytes.length !== expectedLength) {
     rejectType(`${name} must contain ${expectedLength} entries`);
   }
@@ -25397,15 +25472,12 @@ function bufferToUpperHex(buffer) {
   return Buffer.from(buffer).toString("hex").toUpperCase();
 }
 
-function normalizeUpperHex(value, name) {
-  const trimmed = requireNonEmptyString(String(value ?? ""), name).replace(/^0x/i, "");
-  if (trimmed.length === 0 || trimmed.length % 2 !== 0) {
-    rejectType(`${name} must be an even-length hex string`);
+function requireDaSignatureHex(value, name) {
+  if (typeof value !== "string" || value.length < 2 || value.length > 8192 ||
+      value.length % 2 !== 0 || /[^0-9A-F]/u.test(value) || /^0+$/u.test(value)) {
+    rejectType(`${name} requires nonzero uppercase signature bytes within 4096 bytes`);
   }
-  if (!/^([0-9A-Fa-f]{2})+$/.test(trimmed)) {
-    rejectType(`${name} must be a hex string`);
-  }
-  return trimmed.toUpperCase();
+  return value;
 }
 
 function normalizeSorafsPorSubmissionResponse(

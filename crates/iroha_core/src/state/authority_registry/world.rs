@@ -8,7 +8,11 @@ use iroha_data_model::nexus::{
 pub(in crate::state) mod musubi_availability_policy;
 pub(in crate::state) mod musubi_universal_policy;
 
-use super::{Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, schema};
+#[cfg(not(test))]
+use super::schema;
+#[cfg(test)]
+use super::schema_with_structure as schema;
+use super::{Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT};
 use crate::state::*;
 use iroha_data_model::block::consensus::EvidenceRecord;
 
@@ -178,8 +182,22 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::obligation::ObligationId>(), value: schema::<iroha_data_model::runtime::native_amx::NativeAmxCaptureV1>() })), release = runtime_amx_captures;
     runtime_game_transfers: Storage<iroha_crypto::Hash, iroha_data_model::runtime::native_game::NativeGameTransferV1> => ("world.runtime_game_transfers",
         Role::Canonical(Canonical::Table { key: schema::<iroha_crypto::Hash>(), value: schema::<iroha_data_model::runtime::native_game::NativeGameTransferV1>() })), release = runtime_game_transfers;
+    c10_contract_manifests: Storage<iroha_data_model::smart_contract::ContractArtifactId, iroha_data_model::ivm_c10::ContractManifestC10V1> => ("world.c10_contract_manifests",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractArtifactId>(), value: schema::<iroha_data_model::ivm_c10::ContractManifestC10V1>() })), release = c10_contract_manifests;
+    c10_contract_profiles: Storage<iroha_data_model::smart_contract::ContractArtifactId, iroha_data_model::runtime::definition::DefinitionId> => ("world.c10_contract_profiles",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractArtifactId>(), value: schema::<iroha_data_model::runtime::definition::DefinitionId>() })), release = c10_contract_profiles;
+    c10_triggers: Storage<iroha_data_model::trigger::TriggerId, iroha_data_model::ivm_c10::StoredC10TriggerV1> => ("world.c10_triggers",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::trigger::TriggerId>(), value: schema::<iroha_data_model::ivm_c10::StoredC10TriggerV1>() })), release = c10_triggers;
+    c10_trigger_candidates: Storage<iroha_data_model::trigger::TriggerId, iroha_data_model::events::TriggeringEventType> => ("world.c10_trigger_candidates",
+        Role::Derived { sources: &["world.c10_triggers"], check: DerivationCheck::Rebuild("state::deserialize_world::c10_trigger_candidates; current and predecessor rebuild") }), release = c10_trigger_candidates;
+    kagemusha_spartan_programs: Storage<[u8; 32], iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1> => ("world.kagemusha_spartan_programs",
+        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1>() })), release = kagemusha_spartan_programs;
     runtime_retirements: Storage<iroha_data_model::runtime::definition::DefinitionId, iroha_data_model::runtime::retirement::RuntimeRetirementStateV1> => ("world.runtime_retirements",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::definition::DefinitionId>(), value: schema::<iroha_data_model::runtime::retirement::RuntimeRetirementStateV1>() })), release = runtime_retirements;
+    runtime_generic_values: CarrierStorage => ("world.runtime_generic_values",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::carrier::CarrierStorageKeyV1>(), value: schema::<Vec<u8>>() })), release = runtime_generic_values;
+    runtime_generic_artifacts: ArtifactStorage => ("world.runtime_generic_artifacts",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractArtifactId>(), value: schema::<Vec<u8>>() })), release = runtime_generic_artifacts;
     runtime_escrow_captures: Storage<iroha_data_model::escrow::EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1> => ("world.runtime_escrow_captures",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::escrow::EscrowId>(), value: schema::<iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>() })), release = runtime_escrow_captures;
     runtime_migrations: Storage<iroha_data_model::runtime::definition::DefinitionId, iroha_data_model::runtime::obligation::MigrationRecordV1> => ("world.runtime_migrations",
@@ -282,6 +300,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::definition::DefinitionId>(), value: schema::<iroha_data_model::runtime::definition::DefinitionDescriptorV1>() })), release = runtime_definitions;
     runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> => ("world.runtime_selection",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::runtime::definition::RootSelectionV1>()))), release = runtime_selection;
+    runtime_child_admin_state: Cell<Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>> => ("world.runtime_child_admin_state",
+        Role::Canonical(Canonical::Cell(schema::<Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>()))), release = runtime_child_admin_state;
     privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> => ("world.privacy_consensus_policy",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::privacy::PrivacyConsensusPolicyV1>()))), release = privacy_consensus_policy;
     privacy_protocol_policies: Storage< iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1, iroha_data_model::privacy::PrivacyProtocolPolicyV1, > => ("world.privacy_protocol_policies",

@@ -9,6 +9,8 @@ use iroha_data_model::sumeragi_finality::keyed_state::{
     KeyedStateBuilderV1, KeyedStateError, KeyedStateTreeV1, StateKeyV1,
 };
 
+mod carrier;
+
 /// Keep resource refusal distinct from source or schema divergence.
 #[derive(Debug, thiserror::Error)]
 pub(in crate::state) enum KeyedCaptureError {
@@ -22,6 +24,12 @@ pub(in crate::state) enum KeyedCaptureError {
     /// the supplied predecessor disagrees with an original undo entry.
     #[error("keyed State source mismatch at {0}")]
     SourceMismatch(String),
+    /// Original carrier codec refusal, retained until the execution boundary classifies it.
+    #[error("keyed carrier codec: {0}")]
+    Codec(#[source] norito::core::DecodeAttemptError),
+    /// Original local allocation owner for a carrier projection.
+    #[error("keyed carrier projection deferred: {0}")]
+    Deferred(#[source] crate::execution_attempt::ExecutionDeferred),
 }
 
 impl Collector {
@@ -215,15 +223,21 @@ fn capture_image(
         if base.committed_frontier() != base.logical_predecessor_frontier() {
             return Err(CaptureError::Changed("state.transactions").into());
         }
-        output.advance_keyed(schema, tree)
+        if schema.carrier_tables.is_some() {
+            output.advance_carrier(schema, tree, &fields.world)
+        } else {
+            output.advance_keyed(schema, tree)
+        }
     } else {
-        output.build_keyed(
-            schema,
-            fields
-                .state_ref
-                .world
-                .sccp_committee_generations
-                .allocation_budget(),
-        )
+        let budget = fields
+            .state_ref
+            .world
+            .sccp_committee_generations
+            .allocation_budget();
+        if schema.carrier_tables.is_some() {
+            output.build_carrier(schema, budget, &fields.world)
+        } else {
+            output.build_keyed(schema, budget)
+        }
     }
 }

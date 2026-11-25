@@ -46,6 +46,7 @@ PROFILE_CONTRACTS = {
         / "stark.rs",
         "function": "private_note_profile_constraint_residues_inner_v1",
         "shared_function": "private_note_shared_constraint_residues_v1",
+        "capacity": "PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1",
         "aliases": (
             ("BASE_WIDTH", "PRIVATE_NOTE_BASE_WIDTH_V1"),
             ("PROFILE_AUX_WIDTH", "PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1"),
@@ -70,6 +71,7 @@ PROFILE_CONTRACTS = {
         / "pq_masp"
         / "stark.rs",
         "function": "pq_masp_profile_constraint_residues_inner_v1",
+        "capacity": "PQ_MASP_PROFILE_CONSTRAINT_COUNT_V1",
         "aliases": (
             ("BASE_WIDTH", "PQ_MASP_BASE_WIDTH_V1"),
             ("PROFILE_AUX_WIDTH", "PQ_MASP_PROFILE_AUX_WIDTH_V1"),
@@ -162,22 +164,31 @@ def _alias_block(aliases: tuple[tuple[str, str], ...]) -> str:
 
 
 def _validate_source(shared: str, profiles: dict[str, str]) -> None:
+    # The aligned residue capacity added in 8abd5d8e6d changes only allocation.
+    # Verify the two precise edits before comparing all arithmetic to its audited pins.
+    matcher = "($function_name:ident, $capacity:expr)"
+    allocation = "let mut residues = Vec::with_capacity($capacity);"
+    _require(shared.count(matcher) == shared.count(allocation) == 1,
+             "capacity must be supplied once and used for the initial residue allocation")
+    audited = shared.replace(matcher, "($function_name:ident)").replace(
+        allocation, "let mut residues = Vec::new();"
+    )
     _require(
-        _token_hash(shared) == EXPECTED_MACRO_SHA256,
+        _token_hash(audited) == EXPECTED_MACRO_SHA256,
         "shared macro matcher, expansion, signature, or constraint order changed",
     )
     _require(
         shared.count("macro_rules! define_note_profile_constraint_residues_v1") == 1,
         "shared profile-constraint macro inventory changed",
     )
-    template = _function(shared, "$function_name")
+    template = _function(audited, "$function_name")
     for profile, contract in PROFILE_CONTRACTS.items():
         source = profiles[profile]
         function = str(contract["function"])
         generated = str(contract.get("shared_function", function))
         aliases = contract["aliases"]
         assert isinstance(aliases, tuple)
-        invocation = f"define_note_profile_constraint_residues_v1!({generated});"
+        invocation = f"define_note_profile_constraint_residues_v1!(\n    {generated},\n    {contract['capacity']}\n);"
         exact_boundary = _alias_block(aliases) + INCLUDE + "\n" + invocation
         _require(
             source.count(exact_boundary) == 1,
@@ -256,7 +267,7 @@ class NoteStarkProfileConstraintDedupSourceTests(unittest.TestCase):
                 profiles,
             ),
             (
-                shared.replace("($function_name:ident)", "($function_name:path)", 1),
+                shared.replace("$function_name:ident", "$function_name:path", 1),
                 profiles,
             ),
             (
@@ -272,6 +283,10 @@ class NoteStarkProfileConstraintDedupSourceTests(unittest.TestCase):
                     ),
                 },
             ),
+            (
+                shared.replace("Vec::with_capacity($capacity)", "Vec::with_capacity($capacity + 1)", 1),
+                profiles,
+            ),
             (shared, {**profiles, "pq": profiles["pq"].replace(INCLUDE, "", 1)}),
             (
                 shared,
@@ -279,9 +294,9 @@ class NoteStarkProfileConstraintDedupSourceTests(unittest.TestCase):
                     **profiles,
                     "ivm": profiles["ivm"].replace(
                         "define_note_profile_constraint_residues_v1!("
-                        "private_note_shared_constraint_residues_v1);",
+                        "\n    private_note_shared_constraint_residues_v1,",
                         "define_note_profile_constraint_residues_v1!("
-                        "private_note_profile_constraint_residues_inner_v2);",
+                        "\n    private_note_profile_constraint_residues_inner_v2,",
                         1,
                     ),
                 },

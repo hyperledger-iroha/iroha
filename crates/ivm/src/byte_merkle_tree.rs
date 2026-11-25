@@ -1,5 +1,6 @@
 //! Canonical byte-chunk Merkle commitments with fixed leaf ownership.
 
+use crate::error::{VmDeferral, VmTrap};
 #[cfg(any(target_os = "macos", feature = "cuda", test))]
 mod acceleration_policy;
 mod canonical_nodes;
@@ -104,9 +105,9 @@ impl ByteMerkleTree {
     pub(crate) fn memory_plan(leaf_count: usize) -> Result<ExecutionMemoryPlan, VMError> {
         let leaf_count = leaf_count.max(1);
         let mut plan = ExecutionMemoryPlan::array::<[u8; 32]>(leaf_count)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(CanonicalNodes::memory_plan(leaf_count)?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         Ok(plan)
     }
 
@@ -115,10 +116,13 @@ impl ByteMerkleTree {
         &self,
         mut lease: Option<&mut ExecutionMemoryLease>,
     ) -> Result<Self, VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         // The same node-then-leaf lock order protects complete snapshots.
-        let _nodes = self.nodes.lock();
+        let nodes = self.nodes.lock();
         let leaves = self.leaves.lock();
         let copied_leaves = if let Some(lease) = lease.as_deref_mut() {
             let mut copied =
@@ -131,7 +135,7 @@ impl ByteMerkleTree {
             copied.copy_from_slice(&leaves);
             MerkleLeaves::Local(copied)
         };
-        let nodes = CanonicalNodes::from_leaves(&copied_leaves, lease)?;
+        let nodes = nodes.copy_for_template(&copied_leaves, lease)?;
         Ok(Self {
             chunk: self.chunk,
             zero_hash: self.zero_hash,
@@ -151,7 +155,7 @@ impl ByteMerkleTree {
     }
     fn validate_chunk_size(chunk: usize) -> Result<(), VMError> {
         if !(1..=32).contains(&chunk) {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         Ok(())
     }
@@ -205,14 +209,14 @@ impl ByteMerkleTree {
 
     fn checked_leaf_index(&self, index: usize) -> Result<u32, VMError> {
         if index >= self.leaves.lock().len() {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
-        u32::try_from(index).map_err(|_| VMError::MemoryOutOfBounds)
+        u32::try_from(index).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
     /// Construct a tree from raw bytes, padding the final chunk with zeros.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`;
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `chunk` is in `1..=32`;
     /// local leaf-allocation refusal defers execution.
     pub fn from_bytes(data: &[u8], chunk: usize) -> Result<Self, VMError> {
         Self::from_bytes_hashed(data, chunk, false)
@@ -275,7 +279,7 @@ impl ByteMerkleTree {
     /// falls back to the same canonical parallel constructor.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
     pub fn from_bytes_accel(data: &[u8], chunk: usize) -> Result<Self, VMError> {
         Self::validate_chunk_size(chunk)?;
         #[cfg(any(target_os = "macos", feature = "cuda"))]
@@ -338,7 +342,7 @@ impl ByteMerkleTree {
     /// Construct a zero-filled tree with at least one leaf.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `chunk` is in `1..=32`.
     pub fn new(num_leaves: usize, chunk: usize) -> Result<Self, VMError> {
         Self::validate_chunk_size(chunk)?;
         let zero_hash = Self::compute_zero_hash(chunk);
@@ -363,7 +367,9 @@ impl ByteMerkleTree {
         let zero_hash = Self::compute_zero_hash(chunk);
         let leaf_count = num_leaves.max(1);
         let mut leaves = ExecutionBuffer::new(leaf_count, lease).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         let zeros = [zero_hash; 128];
         while leaves.as_slice().len() < leaf_count {
@@ -392,18 +398,20 @@ impl ByteMerkleTree {
     /// Retrieve the canonical Merkle proof for the leaf at `index`.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
     /// represented by the canonical proof format.
     pub fn proof(&self, index: usize) -> Result<MerkleProof<[u8; 32]>, VMError> {
         let index = self.checked_leaf_index(index)?;
         let mut nodes = self.nodes.lock();
         self.refresh_locked(&mut nodes);
-        nodes.get_proof(index).ok_or(VMError::MemoryOutOfBounds)
+        nodes
+            .get_proof(index)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
     /// Combined helper returning both the root hash and the Merkle proof.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
     /// represented by the canonical proof format.
     pub fn root_and_proof(
         &self,
@@ -413,7 +421,9 @@ impl ByteMerkleTree {
         let mut nodes = self.nodes.lock();
         self.refresh_locked(&mut nodes);
         let root = nodes.root().expect("tree has at least one leaf");
-        let proof = nodes.get_proof(index).ok_or(VMError::MemoryOutOfBounds)?;
+        let proof = nodes
+            .get_proof(index)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         Ok((root, proof))
     }
     pub fn root(&self) -> [u8; 32] {
@@ -423,11 +433,11 @@ impl ByteMerkleTree {
     /// Update leaf at `index` with new chunk bytes.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or `data`
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `index` is not an exact leaf index or `data`
     /// is larger than the configured leaf width.
     pub fn update_leaf(&self, index: usize, data: &[u8]) -> Result<(), VMError> {
         if data.len() > self.chunk {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         self.checked_leaf_index(index)?;
         let digest = self.hash_chunk_padded(data);
@@ -445,7 +455,7 @@ impl ByteMerkleTree {
     /// Keep this convention in sync with canonical proof consumers and tests.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
     /// represented by the canonical proof format.
     pub fn path(&self, index: usize) -> Result<Vec<[u8; 32]>, VMError> {
         let proof = self.proof(index)?;
@@ -513,7 +523,7 @@ impl ByteMerkleTree {
     /// Refreshes retained canonical nodes in place at most once.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be
     /// represented by the canonical proof format.
     pub fn root_and_path(
         &self,
@@ -532,7 +542,7 @@ impl ByteMerkleTree {
     /// accelerators are unavailable.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `chunk` is in `1..=32`,
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `chunk` is in `1..=32`,
     /// or a local execution deferral when the canonical CPU backing is unavailable.
     pub fn root_from_bytes_accel(data: &[u8], chunk: usize) -> Result<[u8; 32], VMError> {
         Self::validate_chunk_size(chunk)?;
@@ -563,10 +573,12 @@ impl ByteMerkleTree {
         // CPU fallback
         let canonical =
             MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).map_err(|error| match error {
-                iroha_crypto::MerkleError::AllocationUnavailable => VMError::ExecutionDeferred(
-                    crate::error::ExecutionDeferral::AllocationUnavailable,
-                ),
-                _ => VMError::MemoryOutOfBounds,
+                iroha_crypto::MerkleError::AllocationUnavailable => {
+                    VMError::Deferred(VmDeferral::ExecutionDeferred(
+                        crate::error::ExecutionDeferral::AllocationUnavailable,
+                    ))
+                }
+                _ => VMError::Trap(VmTrap::MemoryOutOfBounds),
             })?;
         crate::metrics::record_merkle_root(crate::metrics::MerkleRootBackend::Cpu);
         Ok(*canonical.root().expect("non-empty").as_ref())
@@ -613,6 +625,7 @@ pub(crate) fn sha256_oneblock32_in_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmDeferral;
     use iroha_allocation::AllocationBudget;
 
     #[test]
@@ -669,9 +682,9 @@ mod tests {
     fn constructor_defers_unrepresentable_leaf_storage() {
         assert!(matches!(
             ByteMerkleTree::new(usize::MAX, 32),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
     }
     #[test]

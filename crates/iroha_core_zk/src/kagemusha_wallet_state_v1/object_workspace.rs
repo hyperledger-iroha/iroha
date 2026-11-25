@@ -95,7 +95,7 @@ impl ObjectBatch {
 
 /// One finite logical view over an authenticated durable source.
 /// No method on this owner writes to or removes from the underlying store.
-pub(super) struct DraftWorkspace<'a> {
+pub(crate) struct DraftWorkspace<'a> {
     source: &'a mut dyn ObjectStore,
     limits: WorkspaceLimits,
     batch: ObjectBatch,
@@ -121,6 +121,23 @@ impl<'a> DraftWorkspace<'a> {
         self.batch.objects.sort_unstable_by_key(|(key, _)| *key);
         self.batch
     }
+}
+
+/// Return the exact immutable map objects only after the complete transfer derivation succeeds.
+/// The exclusive provider publishes and drains these objects before selecting the index.
+pub(crate) fn with_transfer_draft<T>(
+    source: &mut dyn ObjectStore,
+    derive: impl FnOnce(&mut DraftWorkspace<'_>) -> Result<T, Error>,
+) -> Result<(T, Vec<([u8; 32], PrivateArchiveBytes)>), Error> {
+    let mut staged = DraftWorkspace::new(
+        source,
+        WorkspaceLimits {
+            max_bytes: super::lifecycle::INTAKE_DRAFT_BYTES,
+            max_objects: super::lifecycle::INTAKE_DRAFT_OBJECTS,
+        },
+    );
+    let result = derive(&mut staged)?;
+    Ok((result, staged.into_batch().into_owned()))
 }
 
 fn copy_fallible(bytes: &[u8]) -> Result<Vec<u8>, Error> {

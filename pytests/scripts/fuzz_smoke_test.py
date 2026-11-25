@@ -234,7 +234,7 @@ class FuzzSmokeTests(unittest.TestCase):
             "try_decimal_div_exact",
             "try_decimal_div_round",
             "fuzz_staged_out_of_gas",
-            "VMError::SyscallOutOfGas",
+            "VMError::Trap(VmTrap::SyscallOutOfGas",
             "SyscallCompletion::Trap",
         ):
             self.assertIn(required, source)

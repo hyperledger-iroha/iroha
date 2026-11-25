@@ -80,7 +80,7 @@ async fn handle_get_sorafs_gateway_compliance_feed_inner(
     uri: Uri,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[]).await
     {
         return response;
     }
@@ -121,7 +121,7 @@ async fn handle_get_sorafs_gateway_compliance_status_inner(
     uri: Uri,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[]).await
     {
         return response;
     }
@@ -170,7 +170,7 @@ async fn handle_post_sorafs_gateway_compliance_stage_inner(
     body: Bytes,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body)
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body).await
     {
         return response;
     }
@@ -236,7 +236,7 @@ async fn handle_post_sorafs_gateway_compliance_acknowledge_inner(
     body: Bytes,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body)
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body).await
     {
         return response;
     }
@@ -313,7 +313,7 @@ async fn handle_post_sorafs_gateway_compliance_promote_inner(
     body: Bytes,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body)
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body).await
     {
         return response;
     }
@@ -381,7 +381,7 @@ async fn handle_post_sorafs_gateway_compliance_rollback_inner(
     body: Bytes,
 ) -> Response {
     if let Err(response) =
-        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body)
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body).await
     {
         return response;
     }
@@ -665,33 +665,20 @@ fn gateway_compliance_unavailable() -> Response {
         "the governed SoraFS gateway compliance controller is not enabled",
     )
 }
-#[expect(
-    clippy::result_large_err,
-    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
-)]
-fn authorize_gateway_compliance_request(
+async fn authorize_gateway_compliance_request(
     state: &SharedAppState,
     headers: &HeaderMap,
     method: &Method,
     uri: &Uri,
     body: &[u8],
 ) -> Result<(), Response> {
-    let authentication_owner =
-        match crate::history_producer::HistoryProducerOwner::authentication_read(state) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(error.into_response());
-            }
-        };
-
-    let verified = match crate::app_auth::verify_canonical_network_request(
-        &state.state,
-        state.state.network_id_ref(),
+    let verified = match crate::authenticate_canonical_account_headers(
+        state,
         headers,
         crate::app_auth::CanonicalRequestParts { method, uri, body },
-        None,
-        authentication_owner.allocation_context(),
-    ) {
+    )
+    .await
+    {
         Ok(Some(verified)) => verified,
         Ok(None) => {
             return Err(gateway_compliance_request_error(
@@ -700,6 +687,11 @@ fn authorize_gateway_compliance_request(
                 "SoraFS gateway compliance control requires X-Iroha canonical request authentication",
             ));
         }
+        Err(
+            error @ crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )),
+        ) => return Err(no_store_response(error.into_response())),
         Err(_) => {
             warn!("SoraFS gateway compliance canonical request authentication rejected");
             return Err(gateway_compliance_request_error(
@@ -1322,8 +1314,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn gateway_compliance_auth_rejects_foreign_exact_network() {
+    #[tokio::test]
+    async fn gateway_compliance_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
             crate::app_auth::CanonicalRequestAuthConfig::default(),
         );
@@ -1336,8 +1328,31 @@ mod tests {
             &method, &uri, body, 0xD2, 0xE2,
         );
         let response = authorize_gateway_compliance_request(&state, &headers, &method, &uri, body)
+            .await
             .expect_err("foreign-network gateway authorization must fail closed");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    #[tokio::test]
+    async fn gateway_compliance_auth_reports_an_exhausted_owner() {
+        let method = Method::POST;
+        let uri = "/v1/sorafs/gateway/compliance/catalog".parse().unwrap();
+        let body = b"{}";
+        let (mut state, headers) =
+            crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
+                &method, &uri, body, 0xD2, 0xE2,
+            );
+        // Even a foreign signature cannot be judged until verification has an owner.
+        std::sync::Arc::get_mut(&mut state)
+            .unwrap()
+            .query_fanout_working_set_bytes = 1;
+        let response = authorize_gateway_compliance_request(&state, &headers, &method, &uri, body)
+            .await
+            .expect_err("canonical verification cannot fit in this owner");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers()[CACHE_CONTROL],
+            "private, no-store, max-age=0"
+        );
     }
     fn signed_catalog() -> GatewayComplianceCatalogV1 {
         let signing_key = SigningKey::from_bytes(&[0x31; 32]);

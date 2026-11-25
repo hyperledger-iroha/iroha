@@ -346,7 +346,7 @@ fn analyze_prepared_in(
     aggregate::analyze(
         contract.profile_id().engine(),
         contract.metadata().clone(),
-        || contract.decoded().iter().copied(),
+        || contract.instructions().iter(),
         budget,
     )
     .map_err(ProgramAnalysisError::Decode)
@@ -784,6 +784,7 @@ pub fn enforce_amx_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::{encoding::wide as wide_enc, instruction::wide};
 
     #[test]
@@ -793,16 +794,18 @@ mod tests {
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         for metadata in [false, true] {
             for original in [
-                VMError::AllocationDeferred(refusal.clone()),
-                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable),
-                VMError::InvalidMetadata,
-                VMError::DecodeError,
+                VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone())),
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable,
+                )),
+                VMError::Trap(VmTrap::InvalidMetadata),
+                VMError::Trap(VmTrap::DecodeError),
             ] {
                 let expected = match &original {
-                    VMError::AllocationDeferred(_) => 0,
-                    VMError::ExecutionDeferred(_) => 1,
-                    VMError::InvalidMetadata => 2,
-                    VMError::DecodeError => 3,
+                    VMError::Deferred(VmDeferral::AllocationDeferred(_)) => 0,
+                    VMError::Deferred(VmDeferral::ExecutionDeferred(_)) => 1,
+                    VMError::Trap(VmTrap::InvalidMetadata) => 2,
+                    VMError::Trap(VmTrap::DecodeError) => 3,
                     _ => unreachable!(),
                 };
                 let error = if metadata {
@@ -811,12 +814,15 @@ mod tests {
                     ProgramAnalysisError::Decode(original)
                 };
                 match (expected, error.into_vm_error()) {
-                    (0, VMError::AllocationDeferred(actual)) => assert_eq!(actual, refusal),
-                    (1, VMError::ExecutionDeferred(reason)) => assert_eq!(
+                    (0, VMError::Deferred(VmDeferral::AllocationDeferred(actual))) => {
+                        assert_eq!(actual, refusal)
+                    }
+                    (1, VMError::Deferred(VmDeferral::ExecutionDeferred(reason))) => assert_eq!(
                         reason,
                         crate::error::ExecutionDeferral::AllocationUnavailable
                     ),
-                    (2, VMError::InvalidMetadata) | (3, VMError::DecodeError) => {}
+                    (2, VMError::Trap(VmTrap::InvalidMetadata))
+                    | (3, VMError::Trap(VmTrap::DecodeError)) => {}
                     (_, other) => panic!("analysis changed the original failure: {other:?}"),
                 }
             }
@@ -861,7 +867,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, ProgramAnalysisError::Metadata(_)));
         assert!(
-            matches!(error.into_vm_error(), VMError::DecodeDeferred(original) if original.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit)
+            matches!(error.into_vm_error(), VMError::Deferred(VmDeferral::DecodeDeferred(original)) if original.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit)
         );
         assert!(analyze_program(&bytes).unwrap().instruction_count > 0);
     }
@@ -946,9 +952,9 @@ seiyaku HelperMapAnalysis { permission CanWrite;
             .expect("helper_write entrypoint")
             .entry_pc;
         let helper_calls = prepared
-            .decoded()
+            .instructions()
             .iter()
-            .filter_map(|op| direct_call_edges(IvmEngine::C10, op))
+            .filter_map(|op| direct_call_edges(IvmEngine::C10, &op))
             .map(|(call_target, _)| call_target)
             .collect::<Vec<_>>();
         assert_eq!(helper_calls.len(), 2, "both helper call sites are retained");
@@ -985,12 +991,15 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             .entrypoint_descriptor("run")
             .expect("run entrypoint")
             .entry_pc;
-        let mut decoded = prepared.decoded().as_ref().to_vec();
+        let mut decoded = prepared.instructions().iter().collect::<Vec<_>>();
         let entry = decoded
             .iter_mut()
             .find(|op| op.pc == entry_pc)
             .expect("entrypoint instruction");
         entry.inst = wide_enc::encode_rr(wide::control::JALR, 0, 2, 0);
+        let offset = prepared.code_offset() + entry_pc as usize;
+        let mut artifact = prepared.artifact().to_vec();
+        artifact[offset..offset + 4].copy_from_slice(&entry.inst.to_le_bytes());
         let control_flow = crate::prepared::PreparedControlFlow::from_decoded(
             &decoded,
             None,
@@ -999,7 +1008,9 @@ seiyaku IndirectStateAnalysis { permission CanRun;
         .expect("build adversarial indirect control flow");
         let adversarial = crate::prepared::PreparedContract::from_parts(
             crate::prepared::PreparedContractParts {
-                artifact: prepared.shared_artifact(),
+                artifact: crate::cache_memory::SharedAllocation::from_boxed(
+                    artifact.into_boxed_slice(),
+                ),
                 metadata: prepared.metadata().clone(),
                 profile: prepared.profile_id(),
                 vector_length: prepared.vector_length(),
@@ -1009,9 +1020,6 @@ seiyaku IndirectStateAnalysis { permission CanRun;
                 code_hash: prepared.code_hash(),
                 contract_interface: prepared.shared_contract_interface(),
                 literal_table: prepared.literal_table().clone(),
-                decoded: crate::cache_memory::SharedAllocation::from_boxed(
-                    decoded.into_boxed_slice(),
-                ),
                 prepared_program: prepared.prepared_program().clone(),
                 control_flow,
             },

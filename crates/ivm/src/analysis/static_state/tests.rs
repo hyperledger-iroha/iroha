@@ -1,6 +1,7 @@
 //! Real prepared-program refusal and retry across optional dataflow traversal.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_allocation::AllocationRefusal;
 
 fn prepared() -> PreparedContract {
@@ -23,9 +24,9 @@ fn real_analyzer_preserves_original_refusal_then_returns_identical_exact_keys() 
         analyze(&contract, Some("write_one"), &budget)
     });
     assert!(matches!(refused,
-        Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes, limit_bytes: 0,
-        })) if requested_bytes > 0));
+        }))) if requested_bytes > 0));
     assert_eq!(
         refused_decode.total_allocated_bytes(),
         0,
@@ -75,7 +76,7 @@ fn real_analyzer_preserves_original_refusal_then_returns_identical_exact_keys() 
     budget.set_limit_bytes(demand);
     let occupied = budget.try_reserve_bytes(1).unwrap();
     assert!(matches!(analyze(&contract, Some("write_one"), &budget),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == output_charge));
     assert_eq!(budget.reserved_bytes(), 1);
     drop(occupied);
@@ -106,8 +107,13 @@ fn missing_selector_stays_unprovable_without_allocating_or_relabeling_as_refusal
 fn real_text_index_refusal_releases_earlier_dataflow_owners_and_retries() {
     let contract = prepared();
     let probe = AllocationBudget::new(64 * 1024 * 1024);
-    let workspace = Workspace::new(contract.decoded().len(), &probe).unwrap();
-    let keys = KeyScratch::new(crate::IvmEngine::C10, contract.decoded(), &probe).unwrap();
+    let workspace = Workspace::new(contract.instructions().len(), &probe).unwrap();
+    let keys = KeyScratch::new(
+        crate::IvmEngine::C10,
+        contract.instructions().iter(),
+        &probe,
+    )
+    .unwrap();
     let preceding = probe.reserved_bytes();
     let literals = PreparedLiterals::new(&contract, &probe).unwrap();
     let text_bytes = probe.reserved_bytes() - preceding;
@@ -116,7 +122,7 @@ fn real_text_index_refusal_releases_earlier_dataflow_owners_and_retries() {
     assert_eq!(probe.reserved_bytes(), 0);
     let budget = AllocationBudget::new(preceding + text_bytes - 1);
     assert!(matches!(analyze(&contract, Some("write_one"), &budget),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
             if requested_bytes == text_bytes));
     assert_eq!(
         budget.reserved_bytes(),

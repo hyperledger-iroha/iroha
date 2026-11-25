@@ -51,7 +51,8 @@ fn publication_start_uses_fresh_storage_profile_and_always_attempts_owned_cleanu
             .map(|command| command.lines().collect::<Vec<_>>())
             .collect::<Vec<_>>();
         assert_eq!(commands.len(), 2, "startup failure must still run cleanup");
-        let state = commands[0][5];
+        // The start carries the smoke's explicit startup budget; cleanup starts nothing.
+        let state = commands[0][7];
         assert_eq!(
             commands[0],
             [
@@ -59,6 +60,8 @@ fn publication_start_uses_fresh_storage_profile_and_always_attempts_owned_cleanu
                 "up",
                 "local",
                 "--with-storage",
+                "--timeout",
+                "600",
                 "--state",
                 state,
                 "--json"

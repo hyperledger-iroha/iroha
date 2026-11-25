@@ -1860,7 +1860,8 @@ fn rejection_messages_name_the_failure_and_its_causes() {
     let message = rejection_message(&limit);
     assert!(message.starts_with(&limit.to_string()), "{message}");
     assert!(message.ends_with(": too many instructions"), "{message}");
-    let long = TransactionRejectionReason::Validation(ValidationFail::NotPermitted("x".repeat(4096)));
+    let long =
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted("x".repeat(4096)));
     assert_eq!(
         rejection_message(&long).chars().count(),
         MAX_REJECTION_MESSAGE_CHARS
@@ -1868,14 +1869,14 @@ fn rejection_messages_name_the_failure_and_its_causes() {
 }
 
 #[test]
-fn explorer_rejections_prefer_the_canonical_reason_over_the_explorer_wording() {
+fn explorer_rejections_display_the_bounded_message_without_guessing_a_family() {
     let record = norito::json!({
         "status": "Rejected",
         "rejection_reason": { "reason": (LIVE_MINT_REJECTION), "message": "explorer wording" }
     });
     assert_eq!(
         explorer_rejection_message(&record).as_deref(),
-        Some(LIVE_MINT_MESSAGE)
+        Some("explorer wording")
     );
     let unreadable = norito::json!({
         "rejection_reason": { "reason": "not a reason", "message": " explorer wording " }
@@ -1883,6 +1884,12 @@ fn explorer_rejections_prefer_the_canonical_reason_over_the_explorer_wording() {
     assert_eq!(
         explorer_rejection_message(&unreadable).as_deref(),
         Some("explorer wording")
+    );
+    let oversized = "x".repeat(MAX_REJECTION_MESSAGE_CHARS + 3);
+    let record = norito::json!({"rejection_reason": {"reason": (LIVE_MINT_REJECTION), "message": oversized}});
+    assert_eq!(
+        explorer_rejection_message(&record).unwrap().chars().count(),
+        MAX_REJECTION_MESSAGE_CHARS
     );
     for applied in [
         norito::json!({ "status": "Applied", "rejection_reason": null }),

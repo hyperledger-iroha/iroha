@@ -14,13 +14,13 @@ from pathlib import Path
 import types
 
 CIRCUIT = "scripts/parliament_ballot_oracle_log_circuit.py"
-ACCOUNTING = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/report.json"
-RECEIPT = "docs/validation/parliament_ballot_oracle_log_circuit_20261104_model_refresh/receipt.json"
+ACCOUNTING = "docs/validation/parliament_ballot_resource_bindings_20261118/ideal_sampler_accounting/report.json"
+RECEIPT = "docs/validation/parliament_ballot_resource_bindings_20261118/oracle_log_circuit/receipt.json"
 PINS = {
-    CIRCUIT: "8a9231ebc700f0b2628420a101825aa87d5cfe51714de0a7e5db4c95f74e3c58",
-    ACCOUNTING: "28f9f50f376d1aee6f03738744acfbba27e4c6cab6a40555b64d983803e96805",
-    RECEIPT: "f993f057e1fae4dcd5e28b55e298b683cff0712f5a7259714d10ce890343aed4",
-    "docs/validation/parliament_ballot_oracle_log_circuit_20261104_model_refresh/report.json": "90c734609ff9bc7ab080a42b7e415bd3ed995f430ceacc23ae62475d2fa65203",
+    CIRCUIT: "73b59dcf8d3cd53df629608322deebafae60cc040b5742a5b2b630708c708d82",
+    ACCOUNTING: "1822617ab4f5b10f60abbec6a862a05658bb349b690811b235e39b6cf82a71e0",
+    RECEIPT: "ade837e8265c57e9bf0cfb67c91209a2b75319ea6b1c4edc7dbf28689be0fdd4",
+    "docs/validation/parliament_ballot_resource_bindings_20261118/oracle_log_circuit/report.json": "27ba265647795ccaf3f02cbc88d7c44324d10415eba43115532387517b49f624",
     "specs/parliament_ballot_b6_oracle_log_circuit.md": "de33b603bfc281238b348f082a2316a645f1d236894e7837ee95078ddbc1d673",
 }
 PREFIX = b"PARL/FAEST/v1"

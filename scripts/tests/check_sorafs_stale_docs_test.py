@@ -319,7 +319,10 @@ def test_stream_token_runtime_has_separate_trust_and_one_body_recovery_owners() 
     for contract in (
         "iroha_sumeragi::crypto::Verifier::new(authority.crypto, &self.instance, &authority.epoch, authority.committee,)"
         ".verify_qc(commit_qc)",
-        "commit_qc.height != height", "commit_qc.block_hash != frame.parent.core_hash",
+        "self.verify_commit_qc_identity(height, header, frame.parent.core_hash, "
+        "frame.parent.result, authority, commit_qc,)",
+        "commit_qc.height != height", "commit_qc.block_hash != core_hash",
+        "commit_qc.result != result",
         "self.verify_commit_qc_source(&frame, authority, &commit_qc)?",
         "verify_availability_source(source, config, authority.crypto, availability, admit_scratch, budget,)?",
     ):
@@ -398,6 +401,10 @@ def test_future_dated_seaglass_reports_are_not_readiness_evidence() -> None:
     (NATIVE_ACQUISITION, ".native_frame_read(height, self.expected)", ".native_frame_read(height, other_hash)"),
     (NATIVE_ACQUISITION, "PreparedSignedBlockSignaturesDecode::new(&self.budget)", "decode_local_cached_body(&self.budget)"),
     (NATIVE_ACQUISITION, "block.hash() != self.expected || block.header().height().get() != height", "block.hash() != self.expected"),
+    (CERTIFIED_CHAIN, "            frame.parent.core_hash,\n            frame.parent.result,",
+     "            frame.parent.result,\n            frame.parent.core_hash,"),
+    (CERTIFIED_CHAIN, "commit_qc.block_hash != core_hash", "commit_qc.block_hash == core_hash"),
+    (CERTIFIED_CHAIN, "commit_qc.result != result", "commit_qc.result == result"),
     (CERTIFIED_CHAIN, ".verify_qc(commit_qc)", ".skip_qc(commit_qc)"),
     (CERTIFIED_CHAIN, "verify_availability_source(\n            source,", "skip_availability_source(\n            source,"),
 ))

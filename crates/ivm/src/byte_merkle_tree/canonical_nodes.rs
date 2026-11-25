@@ -1,5 +1,6 @@
 //! One fixed canonical node array and its original execution/retention charges.
 
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{FixedAllocationValue, MemoryReservation},
@@ -28,7 +29,7 @@ impl CanonicalNodes {
     pub(super) fn memory_plan(leaves: usize) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::default();
         plan.include(Self::layout(leaves)?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         Ok(plan)
     }
 
@@ -49,6 +50,19 @@ impl CanonicalNodes {
             MerkleTree::try_from_hashed_leaves_sha256(leaves)
         })
     }
+    pub(super) fn copy_for_template(
+        &self,
+        leaves: &[[u8; 32]],
+        lease: Option<&mut ExecutionMemoryLease>,
+    ) -> Result<Self, VMError> {
+        if self.stale {
+            return Self::from_leaves(leaves, lease);
+        }
+        Self::with_tree(leaves.len(), lease, || {
+            self.tree.try_clone_retained_allocation()
+        })
+    }
+
     fn with_tree(
         leaves: usize,
         lease: Option<&mut ExecutionMemoryLease>,
@@ -136,7 +150,9 @@ impl Deref for CanonicalNodes {
     }
 }
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 #[cfg(test)]
 thread_local! {

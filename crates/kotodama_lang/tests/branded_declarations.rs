@@ -112,3 +112,62 @@ fn english_words_remain_available_as_ordinary_identifiers() {
         })
         .expect("English words that are not feature syntax must resolve as ordinary identifiers");
 }
+
+#[test]
+fn every_mixed_keyword_spelling_emits_identical_bytes_within_each_profile() {
+    use kotodama_lang::compiler::CompilerOptions;
+    let spellings = [
+        ["seiyaku", "誓約"],
+        ["kotoage", "言挙げ"],
+        ["hajimari", "始まり"],
+        ["kaizen", "改善"],
+    ];
+    for options in [CompilerOptions::default(), CompilerOptions::c10()] {
+        let profile = options.target_profile().unwrap();
+        let session = CompilerSession::new(options);
+        let mut reference = None;
+        for mask in 0..16usize {
+            let [unit, entry, init, upgrade] =
+                std::array::from_fn(|i| spellings[i][(mask >> i) & 1]);
+            let source = format!(
+                "{unit} Counter {{
+                permission Increment;
+                state int value;
+                {init}() {{ value = 0; }}
+                {upgrade}() {{ value = 1; }}
+                {entry} fn bump(int step) authorize(Increment) {{ value += step; }}
+                view fn read() authorize(anyone) -> int {{ value }}
+            }}"
+            );
+            let artifact = session
+                .build(CompileRequest {
+                    source: &source,
+                    source_name: Some("Counter.ko"),
+                })
+                .unwrap()
+                .artifact;
+            assert_eq!(ivm_abi::IvmProfileId::declared(&artifact), Some(profile));
+            if let Some(expected) = &reference {
+                assert_eq!(&artifact, expected, "{profile:?}, {mask:04b}");
+            } else {
+                reference = Some(artifact);
+            }
+        }
+    }
+}
+
+#[test]
+fn formatter_wraps_japanese_arguments_at_display_cell_boundary() {
+    let source = r#"誓約 Pretty { 言挙げ fn run() authorize(anyone) { write_pair(first: "書類を確認してから提出してください", second: "口座の残高を確認してください"); } }"#;
+    let formatted = |text: &str| {
+        format_source(
+            &SourceFile::new(SourceId(0), "pretty.ko", text),
+            FrontendBudget::v1(),
+        )
+        .unwrap()
+    };
+    let output = formatted(source);
+    assert!(output.contains("write_pair(\n"), "{output}");
+    assert!(output.contains("誓約 Pretty") && output.contains("言挙げ fn run"));
+    assert_eq!(formatted(&output), output);
+}

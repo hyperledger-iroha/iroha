@@ -3752,8 +3752,7 @@ extension ToriiClient {
                                           fileManager: FileManager) throws {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
         let requestURL = directory.appendingPathComponent("da_request.json")
-        let rendered = try prettyPrintedJSON(from: body)
-        try rendered.write(to: requestURL, options: .atomic)
+        try body.write(to: requestURL, options: .atomic)
     }
 
     static func persistDaReceiptArtifacts(responseBody: Data,
@@ -3761,6 +3760,7 @@ extension ToriiClient {
                                           directory: URL,
                                           fileManager: FileManager) throws {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+        try responseBody.write(to: directory.appendingPathComponent("da_response.json"), options: .atomic)
         let receiptURL = directory.appendingPathComponent("da_receipt.json")
         let rendered = try prettyPrintedJSON(from: responseBody)
         try rendered.write(to: receiptURL, options: .atomic)
@@ -20736,27 +20736,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaCommitmentProofRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/commitments/prove",
-                                      method: .post,
-                                      body: body,
-                                      headers: [
-                                        "Content-Type": "application/json",
-                                        "Accept": "application/json"
-                                      ])
-        let data = try await data(for: request)
+        let data = try await postDaProof(path: "/v1/da/commitments/prove", body: body)
         return try decodeJSON(ToriiDaCommitmentProofResponse?.self, from: data)
     }
 
     public func verifyDaCommitment(proof: ToriiDaCommitmentProof) async throws -> ToriiDaCommitmentVerifyResponse {
         let encoder = JSONEncoder()
-        let request = try makeRequest(path: "/v1/da/commitments/verify",
-                                      method: .post,
-                                      body: try encoder.encode(proof),
-                                      headers: [
-                                        "Content-Type": "application/json",
-                                        "Accept": "application/json"
-                                      ])
-        let data = try await data(for: request)
+        let data = try await postDaProof(path: "/v1/da/commitments/verify", body: try encoder.encode(proof))
         return try decodeJSON(ToriiDaCommitmentVerifyResponse.self, from: data)
     }
 
@@ -20779,28 +20765,33 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/pin-intents/prove",
-                                      method: .post,
-                                      body: body,
-                                      headers: [
-                                        "Content-Type": "application/json",
-                                        "Accept": "application/json"
-                                      ])
-        let data = try await data(for: request)
+        let data = try await postDaProof(path: "/v1/da/pin-intents/prove", body: body)
         return try decodeJSON(ToriiDaPinIntentProof?.self, from: data)
     }
 
     public func verifyDaPinIntent(proof: ToriiDaPinIntentProof) async throws -> ToriiDaPinIntentVerifyResponse {
         let encoder = JSONEncoder()
-        let request = try makeRequest(path: "/v1/da/pin-intents/verify",
-                                      method: .post,
-                                      body: try encoder.encode(proof),
-                                      headers: [
-                                        "Content-Type": "application/json",
-                                        "Accept": "application/json"
-                                      ])
-        let data = try await data(for: request)
+        let data = try await postDaProof(path: "/v1/da/pin-intents/verify", body: try encoder.encode(proof))
         return try decodeJSON(ToriiDaPinIntentVerifyResponse.self, from: data)
+    }
+
+    private func postDaProof(path: String, body: Data) async throws -> Data {
+        guard let canonicalRequestAuth else {
+            throw ToriiClientError.invalidPayload("DA proof operations require canonical account credentials")
+        }
+        guard body.count <= 64 * 1024 else {
+            throw ToriiClientError.invalidPayload("DA proof request exceeds the 64 KiB route limit")
+        }
+        let request = try makeCanonicalAccountRequest(
+            path: path, method: .post, body: body,
+            headers: ["Content-Type": "application/json", "Accept": "application/json"],
+            canonicalAuth: canonicalRequestAuth
+        )
+        let (data, response) = try await sendBoundedResponse(request, context: "DA proof", maximumBytes: 8 * 1024 * 1024)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "DA proof response")
+        return data
     }
 
     public func fetchDaPayloadViaGateway(
@@ -20942,31 +20933,64 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                              noSubmit: Bool = false,
                              fileManager: FileManager = .default) async throws -> ToriiDaIngestSubmitResult {
         let builder = ToriiDaIngestRequestBuilder(submission: submission)
-        let (body, artifacts) = try builder.makeRequestBody()
-        if let artifactDirectory {
-            try ToriiClient.persistDaRequestArtifacts(body: body,
-                                                      directory: artifactDirectory,
-                                                      fileManager: fileManager)
+        let multipart = submission.wireBytes.count > ToriiDaUpload.partBytes
+        let (body, artifacts) = try builder.makeRequestBody(includePayload: !multipart || artifactDirectory != nil)
+        func persistRequest() throws {
+            if let artifactDirectory {
+                try ToriiClient.persistDaRequestArtifacts(body: body, directory: artifactDirectory, fileManager: fileManager)
+            }
         }
         if noSubmit {
+            try persistRequest()
             return ToriiDaIngestSubmitResult(status: "prepared",
                                              duplicate: false,
                                              receipt: nil,
                                              artifacts: artifacts,
                                              pdpCommitmentHeaderBase64: nil)
         }
-        let request = try makeRequest(
-            path: "/v1/da/ingest",
-            method: .post,
-            body: body,
-            headers: [
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            ]
-        )
-        let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202, responseBody: data)
+        guard let canonicalRequestAuth, localSigningContext?.networkId == submission.networkId,
+              canonicalRequestAuth.accountId.utf8.elementsEqual(submission.owner.utf8) else {
+            throw ToriiClientError.invalidPayload("DA requires canonical account credentials for its exact network and I105 owner")
+        }
+        try persistRequest()
+        func post(_ path: String, _ body: Data, _ status: Int) async throws -> (Data, HTTPURLResponse) {
+            let request = try makeCanonicalAccountRequest(path: path, method: .post, body: body,
+                headers: ["Content-Type": "application/json", "Accept": "application/json"], canonicalAuth: canonicalRequestAuth)
+            let (data, response) = try await sendBoundedResponse(request, context: "DA ingest",
+                                                                 maximumBytes: status == 200 ? 1024 : 4 * 1024 * 1024)
+            try ensureStatus(response, equals: status, responseBody: data)
+            try ensureResponseMediaType(response, equals: "application/json")
+            try rejectDuplicateJSONKeys(data, context: "DA ingest response")
+            return (data, response)
+        }
+        let data: Data
+        let response: HTTPURLResponse
+        if multipart {
+            let metadata = artifactDirectory == nil ? body : try builder.makeRequestBody(includePayload: false).body
+            (data, response) = try await ToriiDaUpload.transfer(submission, metadata: metadata, post: post)
+        } else {
+            (data, response) = try await post("/v1/da/ingest", body, 202)
+        }
         let payload = try decodeJSON(ToriiDaIngestSubmitPayload.self, from: data)
+        let hasPinWitness = submission.pinScopeSignature != nil
+        switch payload.status {
+        case "pending_pin_authorization" where !hasPinWitness, "accepted" where hasPinWitness || payload.duplicate:
+            break
+        default:
+            throw ToriiClientError.invalidPayload("DA acknowledgement status does not match the submitted pin authorization")
+        }
+        guard let scope = payload.pinScope, let receipt = payload.receipt,
+              scope.networkId == submission.networkId,
+              scope.owner.utf8.elementsEqual(submission.owner.utf8),
+              scope.laneId == submission.laneId, scope.epoch == submission.epoch,
+              scope.sequence == submission.sequence, scope.storageTicket == receipt.storageTicket,
+              scope.manifestHash == receipt.manifestHash,
+              scope.requestAuthorizationDigest.upperHexString() == artifacts.signingDigestHex,
+              receipt.laneId == submission.laneId, receipt.epoch == submission.epoch,
+              receipt.blobHashHex == artifacts.payloadHashHex,
+              receipt.clientBlobIdHex == artifacts.clientBlobIdHex else {
+            throw ToriiClientError.invalidPayload("Torii DA status, pin scope or receipt differs from the signed request")
+        }
         let headerValue = response.value(forHTTPHeaderField: ToriiPdpCommitmentHeader)
         if let artifactDirectory {
             try ToriiClient.persistDaReceiptArtifacts(responseBody: data,
@@ -20978,6 +21002,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             status: payload.status,
             duplicate: payload.duplicate,
             receipt: payload.receipt,
+            pinScope: payload.pinScope,
             artifacts: artifacts,
             pdpCommitmentHeaderBase64: headerValue
         )

@@ -31,8 +31,10 @@ pub enum StreamTokenGatewayRuntimeErrorV1 {
     InvalidGatewayIdentity,
     /// The configured public provider binding is incomplete.
     IncompleteBinding,
-    /// Provider qualification, readback, or callback admission failed.
+    /// Configured admission binding or live native provider qualification failed.
     Admission(StreamTokenGatewayAdmissionErrorV1),
+    /// Initial native pending readback or callback reconciliation failed.
+    InitialReconciliation(StreamTokenGatewayAdmissionErrorV1),
     /// The reconciliation cadence is zero.
     InvalidReconcileInterval,
 }
@@ -55,7 +57,10 @@ impl fmt::Display for StreamTokenGatewayRuntimeErrorV1 {
                 "enabled stream-token issuance has an incomplete gateway admission binding"
             }
             Self::Admission(_) => {
-                "stream-token gateway admission qualification or durable reconciliation failed"
+                "stream-token gateway admission provider qualification failed"
+            }
+            Self::InitialReconciliation(_) => {
+                "initial stream-token gateway pending reconciliation failed"
             }
             Self::InvalidReconcileInterval => {
                 "stream-token gateway reconciliation interval must be non-zero"
@@ -66,7 +71,7 @@ impl fmt::Display for StreamTokenGatewayRuntimeErrorV1 {
 impl std::error::Error for StreamTokenGatewayRuntimeErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Admission(error) => Some(error),
+            Self::Admission(error) | Self::InitialReconciliation(error) => Some(error),
             _ => None,
         }
     }
@@ -107,7 +112,9 @@ pub fn prepare_capture(
         provider,
         reputation,
     )?);
-    capture.reconcile_pending()?;
+    capture
+        .reconcile_pending()
+        .map_err(StreamTokenGatewayRuntimeErrorV1::InitialReconciliation)?;
     Ok(Some(capture))
 }
 fn configured_binding(
@@ -375,6 +382,15 @@ mod tests {
                 StreamTokenGatewayAdmissionErrorV1::BindingMismatch
             )
         );
+        let report = error_stack::Report::new(error).change_context(crate::StartError::StartTorii);
+        assert!(report.contains::<StreamTokenGatewayRuntimeErrorV1>());
+        let diagnostic = format!("{report:?}");
+        assert!(
+            diagnostic.contains("stream-token gateway admission provider qualification failed")
+        );
+        assert!(
+            diagnostic.contains(&StreamTokenGatewayAdmissionErrorV1::BindingMismatch.to_string())
+        );
     }
     #[test]
     fn malformed_pending_readback_fails_before_torii_launch() {
@@ -388,9 +404,17 @@ mod tests {
         .expect_err("omitted pending row must fail startup");
         assert_eq!(
             error,
-            StreamTokenGatewayRuntimeErrorV1::Admission(
+            StreamTokenGatewayRuntimeErrorV1::InitialReconciliation(
                 StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome
             )
+        );
+        let report = error_stack::Report::new(error).change_context(crate::StartError::StartTorii);
+        assert!(report.contains::<StreamTokenGatewayRuntimeErrorV1>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains("initial stream-token gateway pending reconciliation failed"));
+        assert!(
+            diagnostic
+                .contains(&StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome.to_string())
         );
     }
     #[test]

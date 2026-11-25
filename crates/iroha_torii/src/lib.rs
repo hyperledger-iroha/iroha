@@ -300,9 +300,7 @@ use iroha_data_model::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
-    transaction::{
-        SignedTransaction, error::TransactionRejectionReason, signed::TransactionEntrypoint,
-    },
+    transaction::{SignedTransaction, signed::TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanResolveAccountAlias,
@@ -2599,6 +2597,7 @@ struct AppState {
     recipient_lookup_rate_limiter: limits::RateLimiter,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
+    da_upload_finishes: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -3158,7 +3157,7 @@ impl PipelineStatusCache {
         kind: PipelineStatusKind,
         observed_at: Instant,
         entrypoint: &TransactionEntrypoint,
-        result: &iroha_data_model::transaction::TransactionResult,
+        result: iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ) {
         let (entry_kind, rejection) = match result.as_ref() {
             Ok(_) => (kind, None),
@@ -3557,8 +3556,10 @@ fn reconcile_iso_bridge_transactions(
                 )?;
             }
             CanonicalTransactionOutcome::Rejected { reason, .. } => {
-                let transitioned =
-                    runtime.mark_transaction_rejected(&transaction_hash, Some(&reason));
+                let transitioned = runtime.mark_profiled_transaction_rejected(
+                    &transaction_hash,
+                    Some(reason.as_borrowed()),
+                );
                 iso_bridge_transition_completed(
                     runtime,
                     &transaction_hash,
@@ -5515,6 +5516,11 @@ async fn capture_response_format(
     let (format, deferred_native_negotiation) =
         match utils::negotiate_response_format(accept.as_ref()) {
             Ok(format) => (format, false),
+            // The vendor representation has its own exact preference even when the
+            // client explicitly excludes the baseline JSON representation.
+            Err(_) if safe_method && req.extensions().get::<MatchedRouteMetadata>().is_some_and(|route|
+                route.stable_route_id() == route_catalog::contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_GET.stable_route_id()
+            ) && utils::prefers_c10_manifest(accept.as_ref()) => (ResponseFormat::Json, true),
             Err(mut response) if !safe_method || !allows_native_response => {
                 append_vary_accept(response.headers_mut());
                 return Ok(response);
@@ -24841,6 +24847,16 @@ fn validate_norito_websocket_handshake(
     headers: &axum::http::HeaderMap,
     raw_query: Option<&str>,
 ) -> Result<(), Error> {
+    select_norito_websocket_protocol(headers, raw_query, false).map(|_| ())
+}
+
+#[cfg(feature = "app_api")]
+fn select_norito_websocket_protocol(
+    headers: &axum::http::HeaderMap,
+    raw_query: Option<&str>,
+    c10_event_stream: bool,
+) -> Result<&'static str, Error> {
+    use iroha_data_model::ivm_c10::events::C10_EVENT_SUBPROTOCOL;
     if headers.contains_key("last-event-id") {
         return Err(Error::AppQueryValidation {
             code: "stream_resume_unsupported",
@@ -24877,7 +24893,18 @@ fn validate_norito_websocket_handshake(
             code: "websocket_subprotocol_required",
             message: format!("Sec-WebSocket-Protocol must be `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`."),
         }),
-        [protocol] if *protocol == NORITO_V1_WEBSOCKET_SUBPROTOCOL => Ok(()),
+        [protocol] if *protocol == NORITO_V1_WEBSOCKET_SUBPROTOCOL => {
+            Ok(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
+        }
+        [protocol] if c10_event_stream && *protocol == C10_EVENT_SUBPROTOCOL => {
+            Ok(C10_EVENT_SUBPROTOCOL)
+        }
+        _ if c10_event_stream => Err(Error::AppQueryValidation {
+            code: "websocket_subprotocol_unsupported",
+            message: format!(
+                "Offer exactly one event subprotocol: `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}` or `{C10_EVENT_SUBPROTOCOL}`."
+            ),
+        }),
         _ => Err(Error::AppQueryValidation {
             code: "websocket_subprotocol_unsupported",
             message: format!(
@@ -25153,13 +25180,17 @@ async fn handler_subscription_ws(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
-    validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
+    let protocol = select_norito_websocket_protocol(&headers, raw_query.as_deref(), true)?;
     let visibility =
         torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/ws").await?;
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
-    let events_rx = app.events.subscribe();
+    let events_rx = if protocol == iroha_data_model::ivm_c10::events::C10_EVENT_SUBPROTOCOL {
+        routing::event::EventReceiver::C10(app.state.subscribe_c10_event_blocks())
+    } else {
+        routing::event::EventReceiver::Baseline(app.events.subscribe())
+    };
     let ws = ws
-        .protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
+        .protocols([protocol])
         .max_message_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES)
         .max_frame_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES);
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
@@ -25167,7 +25198,7 @@ async fn handler_subscription_ws(
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _ = Box::pin(crate::panic_recovery::catch_async_recoverable(async move {
             let _preauth_guard = preauth_guard;
-            let stream = routing::event::handle_events_stream_with_receiver_visible(
+            let stream = routing::event::handle_negotiated_event_stream(
                 events_rx,
                 ws,
                 app.ws_message_timeout,
@@ -25371,6 +25402,9 @@ async fn handler_get_contract_code(
 ) -> Result<AxResponse, Error> {
     let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
     admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
+    if utils::prefers_c10_manifest(headers.get(axum::http::header::ACCEPT)) {
+        return routing::handle_get_c10_contract_code(&app.state, artifact_id);
+    }
     routing::handle_get_contract_code(app.state.clone(), artifact_id)
         .await
         .map(IntoResponse::into_response)
@@ -38666,9 +38700,12 @@ impl Torii {
         #[cfg(feature = "app_api")]
         {
             let body_limit = self.transaction_max_content_len;
+            let part_limit =
+                body_limit.min(iroha_torii_shared::da::upload::DA_UPLOAD_REQUEST_MAX_BYTES);
             mount_catalog_route_rows!(
                 builder, data_availability;
                 INGEST => limited_canonical_account_post(da::handler_post_da_ingest, app_state, body_limit, body_limit);
+                INGEST_PARTS => limited_canonical_account_post(da::handler_post_da_parts, app_state, part_limit, part_limit);
                 MANIFEST => public_get(da::handler_get_da_manifest);
             );
         }
@@ -39860,6 +39897,9 @@ impl Torii {
                 GOV_PARLIAMENT_ATTEMPT_READ => canonical_account_get(handler_gov_parliament_attempt_read, app_state, 0);
                 GOV_PARLIAMENT_ATTEMPT_PLAN => canonical_account_get(handler_gov_parliament_attempt_plan, app_state, 0);
                 GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
+                GOV_ANONYMOUS_PARLIAMENT_ATTEMPT_DRAFT => canonical_account_post(gov::anonymous_drafts::attempt, app_state, runtime_governance_body_limit);
+                GOV_ANONYMOUS_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(gov::anonymous_drafts::transition, app_state, runtime_governance_body_limit);
+                GOV_ANONYMOUS_PARLIAMENT_CREDENTIAL_DRAFT => canonical_account_post(gov::anonymous_drafts::credential, app_state, runtime_governance_body_limit);
                 GOV_ANONYMOUS_BALLOT_SUBMIT => limited_unauthenticated_post(handler_gov_anonymous_ballot_submit, anonymous_ballot_body_limit);
                 GOV_ANONYMOUS_BALLOT_BOARD_READ => public_get(handler_gov_anonymous_ballot_board_read);
                 GOV_ANONYMOUS_BALLOT_ATTEMPT_READ => public_get(handler_gov_anonymous_parliament_attempt_read);
@@ -42453,6 +42493,9 @@ ingress,
             "da_ingest.max_concurrent_compute_jobs",
             self.da_ingest.max_concurrent_compute_jobs.get(),
         )?;
+        let da_upload_finishes = Arc::new(tokio::sync::Semaphore::new(
+            da_ingest_max_concurrent_compute_jobs,
+        ));
         let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
             da_ingest_max_concurrent_compute_jobs,
         ));
@@ -42628,6 +42671,7 @@ ingress,
             recipient_lookup_rate_limiter: self.recipient_lookup_rate_limiter.clone(),
             da_ingest: self.da_ingest.clone(),
             da_ingest_compute_inflight,
+            da_upload_finishes,
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "connect"))]

@@ -1,4 +1,5 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
+use crate::error::VmTrap;
 use crate::{
     ProgramMetadata, VMError,
     cache_memory::{MemoryReservation, SharedValue},
@@ -28,7 +29,6 @@ pub(crate) struct PreparedContractParts {
     pub(crate) code_hash: Hash,
     pub(crate) contract_interface: SharedValue<EmbeddedContractInterfaceV1>,
     pub(crate) literal_table: DecodedLiteralTable,
-    pub(crate) decoded: crate::ivm_cache::DecodedStream,
     pub(crate) prepared_program: PreparedProgram,
     pub(crate) control_flow: PreparedControlFlow,
 }
@@ -45,7 +45,6 @@ struct PreparedContractInner {
     contract_interface: SharedValue<EmbeddedContractInterfaceV1>,
     entrypoints: Entrypoints,
     literal_table: DecodedLiteralTable,
-    decoded: crate::ivm_cache::DecodedStream,
     prepared_program: PreparedProgram,
     control_flow: PreparedControlFlow,
     reservation: MemoryReservation,
@@ -104,11 +103,16 @@ impl PreparedContract {
             .code_offset
             .checked_sub(parts.header_len)
             .and_then(|offset| u64::try_from(offset).ok())
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let (shell, reservation) = PreparedShell::reserve(budget)?;
         let entrypoints = Entrypoints::prepare(
             &parts.contract_interface.entrypoints,
-            parts.decoded.as_ref(),
+            crate::ivm_cache::ValidatedInstructions::from_admitted(
+                parts
+                    .artifact
+                    .get(parts.code_offset..)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            ),
             &parts.control_flow,
             instruction_entry_pc,
             budget,
@@ -134,7 +138,6 @@ impl PreparedContract {
                 contract_interface: parts.contract_interface,
                 entrypoints,
                 literal_table: parts.literal_table,
-                decoded: parts.decoded,
                 prepared_program: parts.prepared_program,
                 control_flow: parts.control_flow,
                 reservation,
@@ -155,7 +158,6 @@ impl PreparedContract {
             && self.inner.reservation.try_retain()
             && self.inner.entrypoints.try_retain()
             && self.inner.artifact.try_retain()
-            && self.inner.decoded.try_retain()
             && self.inner.prepared_program.try_retain()
             && self.inner.literal_table.try_retain()
             && self.inner.control_flow.boundaries.try_retain()
@@ -302,8 +304,11 @@ impl PreparedContract {
     pub(crate) fn literal_table(&self) -> &DecodedLiteralTable {
         &self.inner.literal_table
     }
-    pub(crate) fn decoded(&self) -> &crate::ivm_cache::DecodedStream {
-        &self.inner.decoded
+    /// Borrow the verified executable words without retaining a second instruction array.
+    pub(crate) fn instructions(&self) -> crate::ivm_cache::ValidatedInstructions<'_> {
+        crate::ivm_cache::ValidatedInstructions::from_admitted(
+            &self.artifact()[self.code_offset()..],
+        )
     }
     pub(crate) fn prepared_program(&self) -> &PreparedProgram {
         &self.inner.prepared_program
@@ -323,7 +328,7 @@ impl fmt::Debug for PreparedContract {
             .field("code_offset", &self.inner.code_offset)
             .field("seiyaku_name", &self.inner.contract_interface.seiyaku_name)
             .field("entrypoint_count", &self.inner.entrypoints.len())
-            .field("instructions", &self.inner.decoded.len())
+            .field("instructions", &self.instructions().len())
             .finish()
     }
 }

@@ -1164,6 +1164,27 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "read",
         ),
         (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_ATTEMPT_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentAttemptDraftRequestV1",
+            "GovernanceAnonymousParliamentAttemptDraftResponseV1",
+            "write",
+        ),
+        (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_TRANSITION_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentTransitionDraftRequestV1",
+            "GovernanceAnonymousParliamentTransitionDraftResponseV1",
+            "write",
+        ),
+        (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_CREDENTIAL_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentCredentialDraftRequestV1",
+            "GovernanceAnonymousParliamentCredentialDraftResponseV1",
+            "write",
+        ),
+        (
             route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path(),
             "post",
             "GovernanceParliamentTransitionDraftRequestV1",
@@ -2259,12 +2280,16 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>(),
-        vec!["MerkleSha256"]
+        vec!["SorafsPorBlake3"]
     );
     let commitment_record = schemas
         .get("DaCommitmentRecord")
         .and_then(Value::as_object)
         .expect("DA commitment record schema");
+    assert_eq!(
+        commitment_record["properties"]["chunk_root"]["$ref"].as_str(),
+        Some("#/components/schemas/DaDigest32")
+    );
     assert!(
         !commitment_record
             .get("properties")
@@ -2282,6 +2307,33 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
                     .any(|field| field.as_str() == Some("kzg_commitment"))
             }),
         "removed KZG commitments must not remain in DA record requirements"
+    );
+    let pin_properties = &schemas["DaPinIntent"]["properties"];
+    assert!(pin_properties.get("owner").is_none());
+    assert_eq!(
+        pin_properties["authorization"]["$ref"].as_str(),
+        Some("#/components/schemas/DaIngestAuthorizationV1")
+    );
+    assert_eq!(
+        pin_properties["pin_scope_authorization"]["$ref"].as_str(),
+        Some("#/components/schemas/DaPinScopeAuthorizationV1")
+    );
+    // Stored pin scopes keep their frozen layout; the commitment digest is offered to
+    // producers in the proposal and verified from the paired record.
+    assert!(
+        schemas["DaPinScopeV1"]["properties"]
+            .get("commitment_digest")
+            .is_none()
+    );
+    assert_eq!(
+        schemas["DaPinScopeProposalV1"]["properties"]["commitment_digest"]["$ref"].as_str(),
+        Some("#/components/schemas/DaDigest32")
+    );
+    assert_eq!(
+        schemas["DaIngestAuthorizationV1"]["properties"]["request_content_hash"]["allOf"][0]
+            ["$ref"]
+            .as_str(),
+        Some("#/components/schemas/Hash")
     );
     let direction = schemas
         .get("MerkleDirection")

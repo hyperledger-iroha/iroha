@@ -161,3 +161,151 @@ fn absent_catalog_observation_does_not_create_catalog_custody() {
     assert!(http.requests.lock().unwrap().is_empty());
     http.finish();
 }
+
+#[test]
+fn failed_group_keeps_original_anchors_for_two_durable_owner_promotions() {
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, prepared) = fixture("compliance-group-retry");
+    let providers = prepared
+        .stream_token_authorities()
+        .unwrap()
+        .unwrap()
+        .providers;
+    let owners = providers
+        .map(|source| ManagedGatewayCompliance::open(&prepared, source.provider_id).unwrap());
+    let serve = |owner: &ManagedGatewayCompliance, steps| {
+        RuntimeHttp::start_selected(
+            &prepared,
+            owner.authority.provider_id().unwrap(),
+            &operation(owner),
+            steps,
+            true,
+        )
+    };
+    let original = owners.each_ref().map(|owner| {
+        let mut server = serve(owner, complete_script());
+        let value = owner.advance(&mut TestLive::default(), deadline()).unwrap();
+        server.finish();
+        value
+    });
+    let advance = |owner: &ManagedGatewayCompliance| {
+        // Resume the original signed successor after publication to custody but before dispatch.
+        let prior = retained(&operation(owner), "original.nrt");
+        let successor = owner
+            .authority
+            .sign_gateway_compliance_catalog(Some(&prior), now_ms().unwrap() / 1_000)
+            .unwrap();
+        retain_catalog(owner, 2, &successor);
+        let mut server = serve(
+            owner,
+            vec![
+                Step::Status(Observation::Promoted),
+                Step::SuccessorMutation(Mutation::Stage),
+                Step::Status(Observation::SuccessorCandidate),
+                Step::SuccessorMutation(Mutation::Ack),
+                Step::SuccessorMutation(Mutation::Promote),
+                Step::Status(Observation::PromotedSuccessor),
+            ],
+        );
+        let promoted = owner.advance(&mut TestLive::default(), deadline()).unwrap();
+        assert_eq!(promoted, report(&successor).unwrap());
+        server.finish();
+        promoted
+    };
+    let observe = |slot: usize, status| {
+        let owner = &owners[slot];
+        let mut server = serve(owner, vec![Step::Status(status)]);
+        let result = owner.recover_promoted(&mut TestLive::default(), original[slot], deadline());
+        server.finish();
+        assert_eq!(server.requests.lock().unwrap().len(), 1);
+        result
+    };
+    let first = advance(&owners[0]);
+    assert_eq!(observe(0, Observation::PromotedSuccessor).unwrap(), first);
+    assert!(observe(1, Observation::ForeignHead).is_err());
+    // A's effect is durable. A failed set grants no new lease and its old catalog anchors stay put.
+    let mut changed_anchor = original[0];
+    changed_anchor.digest[0] ^= 1;
+    assert!(
+        owners[0]
+            .recover_promoted(&mut TestLive::default(), changed_anchor, deadline())
+            .is_err()
+    );
+    assert!(
+        owners[0]
+            .observe_promoted(&mut TestLive::default(), original[0], deadline())
+            .is_err()
+    );
+    let second = advance(&owners[1]);
+    let joined = |statuses: [Observation; 3], refuse_at: Option<usize>| {
+        let mut servers = std::array::from_fn::<_, 3, _>(|index| {
+            serve(&owners[index], vec![Step::Status(statuses[index])])
+        });
+        let mut phases = 0;
+        let result = ManagedGatewayCompliance::recover_promoted_set(
+            &owners,
+            original,
+            deadline(),
+            |plans| {
+                phases += 1;
+                for (owner, plan) in owners.iter().zip(plans) {
+                    assert_eq!(owner.plan.gateway_id(), plan.gateway_id());
+                    assert_eq!(owner.plan.original_commitment(), plan.original_commitment());
+                }
+                if Some(phases) == refuse_at {
+                    return Err(invalid("original child stopped during status"));
+                }
+                Ok(())
+            },
+        );
+        for server in &mut servers {
+            server.finish();
+            let calls = server.requests.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "GET");
+        }
+        (result, phases)
+    };
+    let statuses = [
+        Observation::PromotedSuccessor,
+        Observation::PromotedSuccessor,
+        Observation::Promoted,
+    ];
+    let (failed, phases) = joined(statuses, Some(3));
+    assert!(failed.is_err());
+    assert_eq!(phases, 3);
+    let mut foreign = statuses;
+    foreign[1] = Observation::ForeignHead;
+    assert!(joined(foreign, None).0.is_err());
+    let (resolved, phases) = joined(statuses, None);
+    let resolved = resolved.unwrap();
+    assert_eq!(phases, 4);
+    assert_eq!(resolved, [first, second, original[2]]);
+    resolved[0].require_writer_receipt(None).unwrap();
+    resolved[1].require_writer_receipt(Some(second)).unwrap();
+    assert!(
+        resolved[1]
+            .require_writer_receipt(Some(original[1]))
+            .is_err()
+    );
+    assert!(resolved[1].require_writer_receipt(Some(first)).is_err());
+    // A fresh serving response for the genuine successor cannot cross its signed exclusive expiry.
+    let catalog: GatewayComplianceCatalogV1 =
+        retained_at(&operation(&owners[0]), 2, "original.nrt");
+    let status = status_fixture(
+        Observation::PromotedSuccessor,
+        &owners[0].plan,
+        &operation(&owners[0]),
+        first.valid_until_unix - 1,
+    );
+    assert!(
+        owners[0]
+            .require_fresh_promoted(&status, &catalog, first.valid_until_unix)
+            .is_err()
+    );
+    assert!(
+        owners[0]
+            .recover_promoted(&mut TestLive::default(), original[0], Instant::now())
+            .is_err()
+    );
+}

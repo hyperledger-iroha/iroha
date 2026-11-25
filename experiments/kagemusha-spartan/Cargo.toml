@@ -21,11 +21,15 @@ group = "0.14.0"
 rayon = "1.11.0"
 blake3 = { version = "1.8.2", features = ["zeroize"] }
 blake2 = "0.11.0"
+sha2 = { version = "0.11.1", default-features = false }
 getrandom = "0.4.3"
 zeroize = "1.8.2"
+zstd = "=0.14.3"
 num-bigint = "0.4.8"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
+# Projective P-256 group for public comb tables; already locked through iroha_data_model.
+p256 = { version = "0.14.0", default-features = false, features = ["alloc", "arithmetic"] }
 norito = { path = "../../crates/norito", default-features = false, features = ["base-codec"] }
 
 [dev-dependencies]

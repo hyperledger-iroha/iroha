@@ -395,8 +395,7 @@ fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::Sumeragi
     value
 }
 
-#[test]
-fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_body() {
+fn assert_bridge_attestation_request(height: Option<NonZeroU64>, path: &str) {
     let root_scope = current_finality_fixture().1.root_scope();
     let attestation = client_attestation_fixture();
     let mut client = current_finality_client();
@@ -417,19 +416,26 @@ fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_bod
     let (actual, request) = capture_request(response, |transport| {
         let client = client.with_test_http_transport(transport);
         mark_data_model_compatible(&client);
-        client.get_sumeragi_finality_attestation(
-            NonZeroU64::new(1).unwrap(),
-            attestation.body.challenge,
-            &attestation.body.node_id,
-            root_scope,
-        )
+        match height {
+            Some(height) => client.get_sumeragi_finality_attestation(
+                height,
+                attestation.body.challenge,
+                &attestation.body.node_id,
+                root_scope,
+            ),
+            None => client.get_latest_sumeragi_finality_attestation(
+                attestation.body.challenge,
+                &attestation.body.node_id,
+                root_scope,
+            ),
+        }
     });
     let actual = actual.expect("authenticated attestation");
     assert_eq!(actual.root_scope(), root_scope);
     assert_eq!(actual.attestation(), &attestation);
     assert_eq!(actual.into_attestation(), attestation);
     assert_eq!(request.method, HttpMethod::GET);
-    assert_eq!(request.url.path(), "/v1/bridge/finality/attestation/1");
+    assert_eq!(request.url.path(), path);
     assert!(request.url.query().is_none());
     assert!(request.body.is_empty());
     assert_eq!(
@@ -450,6 +456,55 @@ fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_bod
             .iter()
             .all(|(name, _)| !name.eq_ignore_ascii_case("content-type"))
     );
+}
+
+#[test]
+fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_body() {
+    assert_bridge_attestation_request(NonZeroU64::new(1), "/v1/bridge/finality/attestation/1");
+}
+
+#[test]
+fn durable_tip_reader_binds_exact_request_headers_and_signed_body() {
+    assert_bridge_attestation_request(None, "/v1/bridge/finality/attestation/latest");
+}
+
+#[test]
+fn durable_tip_reader_rejects_a_replayed_challenge_and_unavailable_tip() {
+    let attestation = client_attestation_fixture();
+    let root_scope = current_finality_fixture().1.root_scope();
+    let progress = client_tip_progress_fixture();
+    for (status, body, challenge) in [
+        (
+            StatusCode::OK,
+            norito::to_bytes(&attestation).unwrap(),
+            [18; 32],
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            norito::to_bytes(&client_tip_progress_envelope(progress)).unwrap(),
+            attestation.body.challenge,
+        ),
+    ] {
+        let (reply, request) = capture_request(
+            mk_response(status, body, Some(APPLICATION_NORITO)),
+            |transport| {
+                let client = current_finality_client().with_test_http_transport(transport);
+                mark_data_model_compatible(&client);
+                client.get_latest_sumeragi_finality_attestation(
+                    challenge,
+                    &attestation.body.node_id,
+                    root_scope,
+                )
+            },
+        );
+        assert_eq!(request.url.path(), "/v1/bridge/finality/attestation/latest");
+        assert!(
+            reply
+                .unwrap_err()
+                .downcast_ref::<BridgeFinalityAttestationTipMismatch>()
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -1748,9 +1803,12 @@ fn independent_custody_state_decodes_authenticated_absence_on_the_selected_globa
     let (result, _) = capture_request(response, |transport| {
         let client = client.with_test_http_transport(transport);
         mark_data_model_compatible(&client);
-        client.get_stream_token_custody_state(provider, &owner, &binding, schema, &verified)
+        client.get_stream_token_custody_state_with_proof(
+            provider, &owner, &binding, schema, &verified,
+        )
     });
-    let state = result.unwrap();
+    let (state, frame) = result.unwrap();
+    assert_eq!(frame, norito::encode_canonical(&proof).unwrap());
     assert!(state.current().is_none());
     assert_eq!(state.owner(), &owner);
     assert_eq!(state.context_id(), verified.context_id());

@@ -5,6 +5,17 @@ use crate::{beacon::fixtures::*, test_allocations::allocations_during};
 
 #[test]
 fn retained_lifecycle_encoding_and_transitions_preserve_the_original_session_owner() {
+    use iroha_schema::IntoSchema as _;
+
+    let schema = RetainedFinalizedGlobalThresholdBeaconSessionV1::schema();
+    assert_eq!(
+        schema.get::<RetainedFinalizedGlobalThresholdBeaconSessionV1>(),
+        schema.get::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>(),
+        "structural evidence must follow the same signed DTO as the byte comparison below"
+    );
+    assert!(
+        schema.contains_key::<iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1>()
+    );
     let fixture = adaptive_beacon_fixture();
     let pool = fixture_budget();
     let finalized = fixture.session.adaptive_dkg.finalized_at_height;

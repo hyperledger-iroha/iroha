@@ -494,7 +494,7 @@ pub(super) struct CellWriters<'a, V: CellValue, C: Send + Sync + 'static> {
 }
 
 impl<'a, V: CellValue, C: Send + Sync + 'static> CellWriters<'a, V, C> {
-    fn new(revert: CellWriter<'a, Option<V>, C>, blocks: CellWriter<'a, V, C>) -> Self {
+    pub(super) fn new(revert: CellWriter<'a, Option<V>, C>, blocks: CellWriter<'a, V, C>) -> Self {
         Self {
             state: Some(CellWriterState::Attached(OriginalCellWriters {
                 revert,

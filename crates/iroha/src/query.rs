@@ -48,6 +48,29 @@ use url::Url;
 
 const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
+/// Check the internal coordinates available in a selective response before its roots are authenticated.
+pub(crate) fn plausible_network_proofs(transaction: &CommittedTransaction) -> bool {
+    fn possible<T>(proof: &iroha_crypto::MerkleProof<T>) -> bool {
+        let mut index = proof.leaf_index();
+        if proof.audit_path().len() > u32::BITS as usize {
+            return false;
+        }
+        for sibling in proof.audit_path() {
+            if index % 2 == 1 && sibling.is_none() {
+                return false;
+            }
+            index >>= 1;
+        }
+        index == 0
+    }
+    possible(transaction.entrypoint_proof())
+        && possible(transaction.output_proof())
+        && transaction.output().matches_network_proof_positions(
+            transaction.entrypoint_proof().leaf_index(),
+            transaction.output_proof().leaf_index(),
+        )
+}
+
 /// Check only the response's local source/output bindings, not inclusion or finality.
 /// The full executed carrier and independently authenticated commitment remain required.
 pub(crate) fn validate_transaction_details_bindings(
@@ -55,26 +78,22 @@ pub(crate) fn validate_transaction_details_bindings(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<()> {
     let transaction = &details.transaction;
-    let Some(output) = transaction.output().network() else {
+    let output = transaction.output();
+    if output.network_index().is_none() {
         return Err(eyre!(
             "transaction-details response carries an internal execution output"
         ));
-    };
+    }
     if details.hash != entrypoint_hash.to_string()
         || transaction.entrypoint_hash() != &entrypoint_hash
         || transaction.entrypoint().hash() != entrypoint_hash
         || transaction.output_hash() != &HashOf::new(transaction.output())
-        || output.input_index != transaction.entrypoint_proof().leaf_index()
-        // TODO(specs/parliament_private_ballot_design.md §12.3, slice 5): a block whose
-        // start pass committed governance rows places its Network outputs after them, so
-        // this equality refuses such a block's transactions until the response carries the
-        // count of leading governance rows. No network commits such rows before slice 4.
-        || output.input_index != transaction.output_proof().leaf_index()
-        || (output.result.is_err()
-            && (!output.result.batch_transfer_outcomes().is_empty()
-                || !output.completions.is_empty()))
+        || !plausible_network_proofs(transaction)
+        || (output.result().is_err()
+            && (!output.result().batch_transfer_outcomes().is_empty()
+                || !output.completions().is_empty()))
         || output
-            .completions
+            .completions()
             .windows(2)
             .any(|pair| pair[0].callback_index >= pair[1].callback_index)
     {
@@ -797,9 +816,27 @@ impl Client {
         &self,
         transaction: &SignedTransaction,
     ) -> Result<TransactionRejectionReason, QueryError> {
+        use iroha_data_model::block::execution_output::ProfiledTransactionRejection;
+        match self.get_profiled_transaction_rejection_reason(transaction)? {
+            ProfiledTransactionRejection::Baseline(reason) => Ok(reason),
+            ProfiledTransactionRejection::C10(reason) => {
+                Err(QueryError::Other(eyre::Report::new(reason)))
+            }
+        }
+    }
+
+    /// Fetch the authenticated rejection in its original execution profile.
+    ///
+    /// # Errors
+    /// Returns the authenticated lookup failure or a refusal for a successful transaction.
+    pub fn get_profiled_transaction_rejection_reason(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> Result<iroha_data_model::block::execution_output::ProfiledTransactionRejection, QueryError>
+    {
         let entrypoint_hash = transaction.hash_as_entrypoint();
         let details = self.get_transaction_details(entrypoint_hash)?;
-        crate::client::rejection_reason_from_transaction_details(
+        crate::client::profiled_rejection_from_transaction_details(
             &details,
             transaction.hash(),
             entrypoint_hash,
@@ -1852,6 +1889,57 @@ pub(crate) mod query_errors_handling {
             },
         )
     }
+    #[test]
+    fn authenticated_c10_rejection_binds_the_signed_hash_and_governed_output_position() {
+        use iroha_data_model::{
+            block::execution_output::{
+                ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1,
+                ProfiledTransactionRejection,
+            },
+            ivm_c10::{
+                IvmAdmissionErrorC10V1, TransactionRejectionReasonC10V1, TransactionResultC10V1,
+                ValidationFailC10V1,
+            },
+        };
+        let (identity, mut details) = successful_transaction_details_fixture();
+        let TransactionEntrypoint::External(signed) = details.transaction.entrypoint() else {
+            panic!("signed fixture")
+        };
+        let signed_hash = signed.hash();
+        let reason = TransactionRejectionReasonC10V1::Validation(
+            ValidationFailC10V1::IvmAdmission(IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(17)),
+        );
+        details.transaction.output = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source: ExecutionSourceC10V1::Network(0),
+            result: TransactionResultC10V1(Err(reason.clone()), vec![], None, Default::default()),
+            completions: vec![],
+            trigger_lifecycle: None,
+        });
+        details.transaction.output_hash = HashOf::new(&details.transaction.output);
+        details.transaction.output_proof = iroha_crypto::MerkleProof::from_audit_path(
+            1,
+            vec![Some(details.transaction.output_hash)],
+        );
+        assert_eq!(
+            crate::client::profiled_rejection_from_transaction_details(
+                &details,
+                signed_hash,
+                identity
+            )
+            .unwrap(),
+            ProfiledTransactionRejection::C10(reason)
+        );
+        details.transaction.output_proof = iroha_crypto::MerkleProof::from_audit_path(257, vec![]);
+        assert!(
+            crate::client::profiled_rejection_from_transaction_details(
+                &details,
+                signed_hash,
+                identity
+            )
+            .is_err()
+        );
+    }
+
     fn successful_transaction_details_fixture() -> (
         HashOf<TransactionEntrypoint>,
         PipelineTransactionDetailsResponse,
@@ -2069,10 +2157,9 @@ pub(crate) mod query_errors_handling {
             actual
                 .transaction
                 .result()
-                .0
                 .as_ref()
                 .expect_err("fixture result must be rejected"),
-            &reason
+            (&reason).into()
         );
     }
     fn transaction_details_http_failure(

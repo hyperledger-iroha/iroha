@@ -1,7 +1,7 @@
 //! Regression guard for IVM AXT descriptor builder parity with the canonical fixture.
 use hex::encode;
 use iroha_model_base::topology::DataSpaceId;
-use ivm::axt::{AxtDescriptor, TouchManifest, compute_binding};
+use ivm_abi::axt::{AxtDescriptor, TouchManifest, compute_binding};
 use norito::json::{self, Value};
 #[derive(Debug, Clone, json::Serialize, json::Deserialize)]
 struct FixtureManifest {

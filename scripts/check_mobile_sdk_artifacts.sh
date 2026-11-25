@@ -453,6 +453,9 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_encode_transfer_signed_transaction
   connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg
   connect_norito_encode_transfer_instruction_box
+  connect_norito_decode_signed_transaction_json_v1
+  connect_norito_sign_transaction_payload_v1
+  connect_norito_transcode_instruction_v1
   connect_norito_detached_transaction_scaffold_inspect_v1
   connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
   connect_norito_canonical_json_blake3_v1
@@ -485,6 +488,14 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_spartan_begin_account_v1
   connect_norito_kagemusha_spartan_authorize_account_v1
   connect_norito_kagemusha_spartan_prepare_v1
+  connect_norito_kagemusha_spartan_credit_status_v1
+  connect_norito_kagemusha_spartan_epoch_v1
+  connect_norito_kagemusha_spartan_activation_settlement_v1
+  connect_norito_kagemusha_spartan_unload_settlement_v1
+  connect_norito_kagemusha_spartan_issue_open_request_v1
+  connect_norito_kagemusha_spartan_install_blacklist_v1
+  connect_norito_kagemusha_spartan_confirm_v1
+  connect_norito_kagemusha_spartan_time_v1
   connect_norito_kagemusha_spartan_execute_v1
   connect_norito_kagemusha_spartan_output_v1
   connect_norito_kagemusha_spartan_verify_payment_v1
@@ -532,6 +543,14 @@ REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_beginAccount
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_authorizeAccount
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_prepare
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_creditStatus
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_epoch
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_activationSettlement
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_unloadSettlement
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_issueOpenRequest
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_installBlacklist
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_confirm
+  Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_time
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_execute
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_output
   Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_verifyPayment
@@ -568,6 +587,10 @@ REQUIRED_WALLET_JNI_SYMBOLS=(
 )
 REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate
+)
+REQUIRED_LAYOUT_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeTranscodeInstruction
 )
 REQUIRED_PRIVACY_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeSubmitProofIntentProjectionV1
@@ -610,6 +633,7 @@ RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   v1
 )
 RETIRED_PROTOCOL_C_SYMBOLS=(
+  connect_norito_decode_signed_transaction_json
   connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1
   connect_norito_parliament_timed_ovn_registration_from_proof_v1
@@ -644,7 +668,7 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[@]}" "${REQUIRED_PRIVACY_JNI_SYMBOLS[@]}"; do
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[@]}" "${REQUIRED_PRIVACY_JNI_SYMBOLS[@]}" "${REQUIRED_LAYOUT_JNI_SYMBOLS[@]}"; do
       if ! grep -Fxq "$symbol" <<<"$symbols"; then
         fail "$label is missing $symbol"
       fi

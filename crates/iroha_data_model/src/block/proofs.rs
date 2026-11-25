@@ -292,7 +292,7 @@ impl TrustedBlockProofAnchor {
         let entry_index = u32::try_from(entry_index)
             .map_err(|_| TrustedBlockProofAnchorError::TooManyEntrypoints)?;
         let (output_index, _) = block
-            .network_output_at(entry_index)
+            .network_execution_output_at(entry_index)
             .ok_or(TrustedBlockProofAnchorError::MissingNetworkOutput)?;
         let output_hash = HashOf::new(&block.execution_outputs()[output_index as usize]);
         Ok(Self {
@@ -510,11 +510,7 @@ impl BlockProofs {
             || self.output_commitment != anchor.output_commitment
             || self.output_proof.proof().leaf_index() != anchor.output_index
             || self.output_proof.leaf() != anchor.output_hash
-            || !self
-                .output_proof
-                .output()
-                .network()
-                .is_some_and(|row| row.input_index == anchor.entry_index)
+            || self.output_proof.output().network_index() != Some(anchor.entry_index)
             || !self.output_proof.verify(&anchor.output_commitment)
             || self.fastpq_transcripts != anchor.fastpq_transcripts
         {

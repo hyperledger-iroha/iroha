@@ -11,12 +11,14 @@ use core::fmt::Debug;
 pub mod allocation;
 mod capture;
 mod publication;
+mod suspension;
 pub use capture::{BlockCapture, CaptureCleanup};
 use iroha_allocation::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
 pub use publication::{
     BlockPublicationIdentity, PublicationCleanup, PublicationPreparationError,
     PublicationPreparationResult,
 };
+pub use suspension::{BlockResumption, BlockSuspension};
 #[cfg(test)]
 #[path = "release_tests.rs"]
 mod release_tests;

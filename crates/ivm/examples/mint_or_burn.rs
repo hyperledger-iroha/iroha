@@ -4,6 +4,7 @@ use iroha_data_model::{account::AccountId, asset::AssetDefinitionId};
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{IVM, PointerType, VMError, encoding, host::IVMHost, instruction, syscalls};
+use ivm_abi::error::VmTrap;
 use std::{
     any::Any,
     collections::HashMap,
@@ -30,44 +31,52 @@ impl AssetHost {
     fn supply(&self) -> u64 {
         *self.supply.lock().expect("supply mutex poisoned")
     }
-    fn decode_account(vm: &IVM) -> Result<AccountId, VMError> {
-        let tlv = vm.validate_tlv(vm.register(10))?;
+    fn decode_account(vm: &dyn ivm::host::SyscallContext) -> Result<AccountId, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(10)?)?;
         if tlv.type_id != PointerType::AccountId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_asset(vm: &IVM) -> Result<AssetDefinitionId, VMError> {
-        let tlv = vm.validate_tlv(vm.register(11))?;
+    fn decode_asset(vm: &dyn ivm::host::SyscallContext) -> Result<AssetDefinitionId, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(11)?)?;
         if tlv.type_id != PointerType::AssetDefinitionId {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
-        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
+        norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
-    fn decode_amount(vm: &IVM) -> Result<u64, VMError> {
-        let tlv = vm.validate_tlv(vm.register(12))?;
+    fn decode_amount(vm: &dyn ivm::host::SyscallContext) -> Result<u64, VMError> {
+        let tlv = vm.public_tlv(vm.public_register(12)?)?;
         if tlv.type_id != PointerType::Quantity {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         let quantity = QuantityValueV1::decode_frame(tlv.payload)
-            .map_err(|_| VMError::DecodeError)?
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
             .into_quantity();
-        u64::try_from(quantity.into_numeric()).map_err(|_| VMError::DecodeError)
+        u64::try_from(quantity.into_numeric()).map_err(|_| VMError::Trap(VmTrap::DecodeError))
     }
 }
 impl IVMHost for AssetHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_MINT_ASSET | syscalls::SYSCALL_BURN_ASSET => Ok(0),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         if !matches!(
             number,
             syscalls::SYSCALL_MINT_ASSET | syscalls::SYSCALL_BURN_ASSET
         ) {
-            return Err(VMError::UnknownSyscall(number));
+            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
         }
         let account = Self::decode_account(vm)?;
         let asset = Self::decode_asset(vm)?;
@@ -77,8 +86,12 @@ impl IVMHost for AssetHost {
         match number {
             syscalls::SYSCALL_MINT_ASSET => {
                 let balance = balances.entry((account, asset)).or_default();
-                let updated_balance = balance.checked_add(amount).ok_or(VMError::DecodeError)?;
-                let updated_supply = supply.checked_add(amount).ok_or(VMError::DecodeError)?;
+                let updated_balance = balance
+                    .checked_add(amount)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                let updated_supply = supply
+                    .checked_add(amount)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 *balance = updated_balance;
                 *supply = updated_supply;
                 Ok(0)
@@ -86,10 +99,12 @@ impl IVMHost for AssetHost {
             syscalls::SYSCALL_BURN_ASSET => {
                 let balance = balances.entry((account, asset)).or_default();
                 if *balance < amount {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 *balance -= amount;
-                *supply = supply.checked_sub(amount).ok_or(VMError::DecodeError)?;
+                *supply = supply
+                    .checked_sub(amount)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 Ok(0)
             }
             _ => unreachable!("mutation syscall filtered above"),

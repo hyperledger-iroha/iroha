@@ -1685,21 +1685,28 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
+    has_sorafs_permission(&state_transaction.world, authority, permission)
+}
+
+/// Check the same null-payload direct or role grant used by ordinary SoraFS instructions.
+pub(crate) fn has_sorafs_permission(
+    world: &impl crate::state::WorldReadOnly,
+    authority: &AccountId,
+    permission: &str,
+) -> bool {
     let matches = |grant: &Permission| {
         // Borrow canonical JSON so null remains distinct from "null", including
         // when the enclosing instruction has exhausted its decode allocation budget.
         grant.name() == permission && grant.payload().get().as_str() == "null"
     };
-    let direct = state_transaction
-        .world
-        .account_permissions
+    let direct = world
+        .account_permissions()
         .get(authority)
         .is_some_and(|perms| perms.iter().any(matches));
     direct
-        || state_transaction
-            .world
+        || world
             .account_roles_iter(authority)
-            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .filter_map(|role_id| world.roles().get(role_id))
             .any(|role| role.permissions().any(matches))
 }
 fn require_permission(

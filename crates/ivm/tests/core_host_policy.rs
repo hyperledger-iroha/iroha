@@ -2,6 +2,7 @@
 
 use iroha_data_model::nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError};
 use ivm::{CoreHost, IVM, IVMHost, VMError};
+use ivm_abi::error::VmTrap;
 
 #[test]
 fn core_host_rejects_noncanonical_policy_snapshot() {
@@ -25,7 +26,7 @@ fn core_host_rejects_retired_handle_syscall_without_effects() {
     let before = vm.remaining_gas();
     let mut host = CoreHost::new();
     assert!(
-        matches!(host.syscall(0xB4, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xB4))
+        matches!(host.syscall(0xB4, &mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (0xB4))
     );
     assert_eq!(vm.remaining_gas(), before);
 }

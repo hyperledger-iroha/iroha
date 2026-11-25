@@ -146,6 +146,25 @@ class KagemushaWalletAndroidPlatformV1Test {
         assertEquals(File(target.canonicalPath, "kagemusha-wallet-v1").path, root.path)
     }
 
+    @Test fun `Spartan accepts only the exact active prompt result on its owning platform`() {
+        val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), TestKeyStoreV1())
+        val foreign = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), TestKeyStoreV1())
+        val slot = ByteArray(32) { 1 }; val message = ByteArray(32) { 2 }; val der = ByteArray(70) { 3 }
+        val call = platform.javaClass.getDeclaredMethod("nativeCall", Int::class.javaPrimitiveType,
+            ByteArray::class.java, ByteArray::class.java, Int::class.javaPrimitiveType).apply { isAccessible = true }
+        fun origin(owner: KagemushaWalletAndroidPlatformV1, id: ByteArray = slot, bytes: ByteArray = message + der): Int =
+            (call.invoke(owner, 16, id, bytes, 0) as KagemushaWalletNativeReplyV1).tag
+        assertEquals(2, origin(platform))
+        platform.retainSpartanSignature(slot, message, der) {
+            assertEquals(0, origin(platform))
+            assertEquals(2, origin(foreign))
+            assertEquals(2, origin(platform, id = ByteArray(32)))
+            assertEquals(2, origin(platform, bytes = message + ByteArray(70)))
+            assertEquals(2, origin(platform, bytes = ByteArray(32) + der))
+        }
+        assertEquals(2, origin(platform))
+    }
+
     @Test fun `the handle exposes only creation and checked E5 evidence export to app code`() {
         val type = JvmApiInventory.read(KagemushaWalletAndroidPlatformV1::class.java)
         val declaredPublic = type.methods.filter { it.isPublic && !it.isSynthetic && it.name != "<init>" }

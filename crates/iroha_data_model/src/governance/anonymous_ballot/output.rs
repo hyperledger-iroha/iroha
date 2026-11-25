@@ -951,6 +951,33 @@ mod tests {
     }
 
     #[test]
+    fn native_lifecycle_wire_has_exactly_nine_closed_items() {
+        let schema = GovernanceLifecycleItemV1::schema();
+        let entry = schema
+            .iter()
+            .find(|(id, _)| **id == core::any::TypeId::of::<GovernanceLifecycleItemV1>())
+            .expect("actual native lifecycle type")
+            .1;
+        let iroha_schema::Metadata::Enum(variants) = &entry.metadata else {
+            panic!("actual native lifecycle enum");
+        };
+        assert_eq!(variants.variants.len(), 9);
+        assert_eq!(
+            variants
+                .variants
+                .iter()
+                .map(|variant| variant.discriminant)
+                .collect::<Vec<_>>(),
+            (0..9).collect::<Vec<_>>()
+        );
+        let mut reader = &9_u32.to_le_bytes()[..];
+        assert!(
+            <GovernanceLifecycleItemV1 as Decode>::decode(&mut reader).is_err(),
+            "a native receipt must never accept a new G3 tag"
+        );
+    }
+
+    #[test]
     fn the_partition_holds_every_prelude_row_and_one_maximal_item() {
         // At most K <= 16 casting clocks are established per block; one maximal positioned
         // item adds a receipt and a full governance row.

@@ -39,8 +39,9 @@ pub struct Witness {
 
 /// A fully constructed Receive relation, not a host-side acceptance verdict.
 /// Its incoming facts can only be produced by the total recursive verifier.
-/// Native admission additionally requires `valid == 1`; the fold must retain
-/// the derived invalid/burn branch for an already selected historical Receive.
+/// Native admission derives the same verdict from the exact Payment bytes
+/// (`engine.rs`): an invalid admitted candidate takes this relation's burn
+/// branch instead of being rejected.
 pub struct ReceiveRelation<R> {
     before: StateCells,
     after: StateCells,

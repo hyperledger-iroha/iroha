@@ -1144,13 +1144,20 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
     let _guard = crate::managed::native_test_guard();
     let mut fixture = Fixture::predecessor();
     fixture.wait_renewable();
-    // The body is signed under its own authorization. The short absolute request interval is
-    // selected only for the request it bounds, immediately before that request.
     let history = fixture.select(2);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
-    let utc = now_ms().unwrap() + 2_000;
+    // The journal writes the real wallet request before recovery can observe it.
+    // Allow that I/O and the first recovery to finish while the request is live.
+    let request_window = Duration::from_secs(30);
+    fixture.begin_operation();
+    let utc = now_ms().unwrap() + u64::try_from(request_window.as_millis()).unwrap();
+    let Action::Enroll { validity, .. } = &original.action else {
+        panic!("expected an enrollment body");
+    };
+    let body_expiry = validity.expires_at_unix_ms;
+    assert!(utc < body_expiry);
     journal::explicit(
         &directory,
         original,
@@ -1178,7 +1185,7 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         .unwrap();
     assert_eq!(report.transaction_status, OperationStatus::Absent);
     assert!(report.finalized.is_none() && report.current.is_none());
-    wait_until(utc, Duration::from_secs(3));
+    wait_until(utc, request_window);
     drop(fixture.owner);
     let mut owner = ManagedStreamTokenCustody::open(
         &fixture.prepared,
@@ -1190,6 +1197,7 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         .unwrap()
         .unwrap();
     assert_eq!(report.transaction_status, OperationStatus::Expired);
+    assert!(now_ms().unwrap() < body_expiry);
     assert!(report.finalized.is_none() && report.current.is_none());
     assert_eq!(
         directory
@@ -1513,12 +1521,15 @@ impl renewal::RenewalReads for FixtureReads<'_> {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
+    ) -> Result<(FinalityVerifier, CapturedCustody)> {
         require_deadline(deadline)?;
         let checkpoint = fixture_observe(self.native, &owner.authority, deadline)?;
-        let current = self
-            .native
-            .bootstrap_custody(&owner.authority, policy, &checkpoint);
+        let current = self.native.bootstrap_custody_captured(
+            &owner.authority,
+            policy,
+            &checkpoint,
+            Some(deadline),
+        )?;
         Ok((checkpoint, current))
     }
     fn retain_carrier(
@@ -1902,7 +1913,8 @@ fn renewal_selection_commitment_refuses_lost_body_and_uncertain_epoch_cannot_rei
 #[test]
 fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacement() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    // The predecessor and the retained renewal must each finish a genuine wallet journal.
+    let mut fixture = Fixture::predecessor_with_renewal_validity(30_000);
     fixture.wait_renewable();
     // The body is signed under an authorization as long as its own validity, selected only
     // after the genuine current proof is available.
@@ -1920,7 +1932,10 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
     };
     let expires = validity.expires_at_unix_ms;
     // The short absolute request interval bounds only this request, inside the body's validity.
-    let utc = (now_ms().unwrap() + 2_000).min(expires);
+    let now = now_ms().unwrap();
+    let remaining = expires.checked_sub(now).expect("renewal body is live");
+    let utc = now + remaining / 2;
+    assert!(now < utc && utc < expires);
     journal::explicit(
         &directory,
         original,
@@ -1940,7 +1955,7 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
         .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
         .unwrap();
     let inventory = wallet.entries(8).unwrap();
-    wait_until(expires, Duration::from_secs(10));
+    wait_until(expires, Duration::from_secs(32));
     let mut peers = fixture.unavailable_peers();
     // Explicit one-intent calls cannot refresh the retained dispatch UTC or replace this body.
     // Semantic replacement requires a separate live generated issuer and native predecessor join.

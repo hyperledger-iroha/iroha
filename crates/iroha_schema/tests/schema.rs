@@ -39,6 +39,7 @@ fn impls_macro_distinguishes_present_and_absent_traits() {
 
 mod common;
 mod enum_composite_fields;
+mod tuples;
 
 #[path = "architecture-dependent.rs"]
 mod architecture_dependent;

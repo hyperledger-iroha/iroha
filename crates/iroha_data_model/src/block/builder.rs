@@ -337,7 +337,7 @@ mod tests {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "lane-1".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy]);
         let mut builder = BlockBuilder::new(header);
@@ -389,8 +389,8 @@ mod tests {
             1,
             BlobDigest::new([0x11; 32]),
             ManifestDigest::new([0x22; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0x33; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([0x33; 32]),
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),

@@ -16,7 +16,7 @@ pub(in crate::managed) use generated::{
 pub(in crate::managed::stream_token_custody) use generated::{CarrierReplay, RenewalReads};
 
 // Local generated-profile bound, not a native protocol revision or sequence limit.
-const MAX_GENERATED_SEQUENCE: u64 = 64;
+pub(super) const MAX_GENERATED_SEQUENCE: u64 = 64;
 
 pub(in crate::managed) fn directory_name(sequence: u64) -> Result<String> {
     if !(2..=MAX_GENERATED_SEQUENCE).contains(&sequence) {
@@ -56,7 +56,13 @@ impl ManagedStreamTokenCustody {
         } else {
             let terms = Terms::new(deadline_unix_ms, options)?;
             let (policy, _) = self.retained_configuration(options.deadline)?;
-            let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
+            let (
+                verifier,
+                CapturedCustody {
+                    state: current,
+                    frame,
+                },
+            ) = self.observe_captured(&policy.binding, options.deadline)?;
             let unsigned = self.select_renewal_unsigned(
                 sequence,
                 &policy,
@@ -68,13 +74,14 @@ impl ManagedStreamTokenCustody {
             let turn = SigningTurn::Explicit(&terms);
             let history = match existing {
                 Some(history) => history,
-                None => BodyHistory::initialize(
+                None => BodyHistory::initialize_with_witness(
                     self,
                     purpose,
                     unsigned,
                     &terms.fees,
                     &turn,
                     options.deadline,
+                    SelectionWitness::Captured(&frame),
                 )?,
             };
             history.finish_pending(self, &current, &turn, options.deadline)?

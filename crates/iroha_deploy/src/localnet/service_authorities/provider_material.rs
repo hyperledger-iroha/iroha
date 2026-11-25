@@ -38,6 +38,8 @@ const PLAN_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
     48,
 );
 const PROFILE: &str = "sorafs.sf1@1.0.0";
+// The automatic pin and purpose-issued archive order reserve one GiB each per provider.
+const GENERATED_CAPACITY_GIB: u64 = 2;
 pub(super) const VALIDITY_SECONDS: u64 = 30 * 86_400;
 const ADVERT_KEY: &str = "provider-advert.key";
 const VRF_KEY: &str = "provider-por-vrf.key";
@@ -269,7 +271,7 @@ impl GeneratedProvider {
             pool_id: tagged_identity(b"iroha.localnet.provider.stake-pool.v1\0", provider),
             stake_amount: XorQuantity::try_from_quantity(pricing.required_collateral(
                 StorageClass::Hot,
-                1,
+                GENERATED_CAPACITY_GIB,
                 issued_at,
                 issued_at,
             )?)?,
@@ -355,18 +357,18 @@ impl GeneratedProvider {
                 tier: ReserveTier::TierA,
                 storage_class: StorageClass::Hot,
                 duration: ReserveDuration::Monthly,
-                capacity_gib: 1,
+                capacity_gib: GENERATED_CAPACITY_GIB,
             },
             attestation_journal_policy_digest: native_attestation::policy().digest()?,
             declaration: CapacityDeclarationV1 {
                 version: 1,
                 provider_id: *provider.as_bytes(),
                 stake,
-                committed_capacity_gib: 1,
+                committed_capacity_gib: GENERATED_CAPACITY_GIB,
                 chunker_commitments: vec![ChunkerCommitmentV1 {
                     profile_id: PROFILE.into(),
                     profile_aliases: Some(profile_aliases),
-                    committed_gib: 1,
+                    committed_gib: GENERATED_CAPACITY_GIB,
                     capability_refs: vec![
                         CapabilityType::ToriiGateway,
                         CapabilityType::ChunkRangeFetch,
@@ -465,11 +467,17 @@ impl ProviderServicePlanV1 {
         );
         let issued_at = network.creation_time_ms / 1_000;
         let cap = policy(&self.material.proposal.capabilities)?;
+        // Authenticated older profiles retain their original one-GiB declaration and backing.
+        let capacity_gib = self.reserve_terms.capacity_gib;
+        ensure!(
+            matches!(capacity_gib, 1 | GENERATED_CAPACITY_GIB),
+            "unsupported original generated provider capacity"
+        );
         let exact_stake = StakePointer {
             pool_id: tagged_identity(b"iroha.localnet.provider.stake-pool.v1\0", provider),
             stake_amount: XorQuantity::try_from_quantity(network.pricing.required_collateral(
                 StorageClass::Hot,
-                1,
+                capacity_gib,
                 issued_at,
                 issued_at,
             )?)?,
@@ -484,7 +492,7 @@ impl ProviderServicePlanV1 {
                         tier: ReserveTier::TierA,
                         storage_class: StorageClass::Hot,
                         duration: ReserveDuration::Monthly,
-                        capacity_gib: 1
+                        capacity_gib
                     })
                 && network.pricing == PricingScheduleRecord::launch_default()
                 && self.material.issued_at == issued_at
@@ -496,7 +504,7 @@ impl ProviderServicePlanV1 {
                 && self.material.proposal.endpoints.len() == 1
                 && self.declaration.provider_id == *provider.as_bytes()
                 && self.declaration.stake == exact_stake
-                && self.declaration.committed_capacity_gib == 1
+                && self.declaration.committed_capacity_gib == capacity_gib
                 && self.declaration.valid_from == issued_at
                 && self.declaration.valid_until == self.material.retention_epoch
                 && self.declaration.metadata

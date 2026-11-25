@@ -1,5 +1,6 @@
 //! Once-per-loaded-image layouts with original-pool allocation custody.
 
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationBudget;
 use ivm_abi::call::CallNodeLayoutV1;
 
@@ -21,7 +22,9 @@ impl<T: Copy + Default> Storage<T> {
     fn new(len: usize, lease: Option<&mut ExecutionMemoryLease>) -> Result<Self, VMError> {
         if let Some(lease) = lease {
             let mut buffer = ExecutionBuffer::new(len, lease).map_err(|_| {
-                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
             for _ in 0..len {
                 buffer.push_reserved(T::default());
@@ -83,31 +86,35 @@ impl CallLayouts {
         let mut count = 0_usize;
         for callable in &interface.callables {
             if !callable.validate() {
-                return Err(VMError::InvalidMetadata);
+                return Err(VMError::Trap(VmTrap::InvalidMetadata));
             }
             count = count
                 .checked_add(callable.arguments.nodes.len())
                 .and_then(|count| count.checked_add(callable.results.nodes.len()))
-                .ok_or(VMError::InvalidMetadata)?;
+                .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         }
         let mut plan = ExecutionMemoryPlan::array::<CallableLayout>(interface.callables.len())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(
             ExecutionMemoryPlan::array::<CallNodeLayoutV1>(count)
-                .map_err(VMError::AllocationDeferred)?,
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let owner_bytes =
             norito::core::owned_arc_allocation_bytes::<CallLayoutsData>().map_err(|_| {
-                VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+                VMError::Deferred(VmDeferral::AllocationDeferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow,
+                ))
             })?;
         plan.include_child(
-            ExecutionMemoryPlan::array::<u8>(owner_bytes).map_err(VMError::AllocationDeferred)?,
+            ExecutionMemoryPlan::array::<u8>(owner_bytes)
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut lease = budget
             .map(|budget| {
-                ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)
+                ExecutionMemoryLease::reserve(budget, plan)
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
             })
             .transpose()?;
         let mut callables = Storage::new(interface.callables.len(), lease.as_mut())?;
@@ -119,14 +126,14 @@ impl CallLayouts {
             let argument_words = callable
                 .arguments
                 .analyze_into(&mut nodes.values_mut()[arguments..offset])
-                .ok_or(VMError::InvalidMetadata)?
+                .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?
                 .word_count();
             let results = offset;
             offset += callable.results.nodes.len();
             let result_words = callable
                 .results
                 .analyze_into(&mut nodes.values_mut()[results..offset])
-                .ok_or(VMError::InvalidMetadata)?
+                .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?
                 .word_count();
             callables.values_mut()[index] = CallableLayout {
                 frame: CallFrameShape {
@@ -153,15 +160,19 @@ impl CallLayouts {
             .values()
             .get(index)
             .copied()
-            .ok_or(VMError::DecodeError)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))
     }
     pub(super) fn node(&self, offset: usize, index: usize) -> Result<CallNodeLayoutV1, VMError> {
         self.0
             .nodes
             .values()
-            .get(offset.checked_add(index).ok_or(VMError::DecodeError)?)
+            .get(
+                offset
+                    .checked_add(index)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            )
             .copied()
-            .ok_or(VMError::DecodeError)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))
     }
     pub(crate) fn try_retain(&self) -> bool {
         self.0.reservation.try_retain()

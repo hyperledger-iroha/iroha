@@ -369,7 +369,24 @@ fn gateway_probe_rejects_cross_origin_head_and_get_redirects() {
         let origin_addr = origin.local_addr().expect("probe origin address");
         let server = std::thread::spawn(move || {
             let (mut stream, _) = origin.accept().expect("accept probe request");
-            let response = format!("HTTP/1.1 {status} X\r\nLocation: {location}\r\n\r\n");
+            // Answer only after the whole request head arrived, with an explicit empty body,
+            // so the client never sees a response before it finished sending.
+            stream
+                .set_nonblocking(false)
+                .expect("blocking probe connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+                .expect("probe read timeout");
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                let read = std::io::Read::read(&mut stream, &mut byte).expect("read probe request");
+                assert_eq!(read, 1, "probe request ended before its header terminator");
+                head.push(byte[0]);
+            }
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
             std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
         });
         let response = probe_headers_via_http(&GatewayProbeRequest {

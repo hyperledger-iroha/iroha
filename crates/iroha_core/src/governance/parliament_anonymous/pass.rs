@@ -87,13 +87,6 @@ pub(crate) enum GovernancePassItemV1 {
         body: ParliamentBody,
     },
     /// One production Parliament certificate's effect.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "G3 lists production enactments from slice 5; this release certifies no production attempt"
-        )
-    )]
     EnactParliament {
         due_ms: u64,
         attempt: GovernanceAttemptId,

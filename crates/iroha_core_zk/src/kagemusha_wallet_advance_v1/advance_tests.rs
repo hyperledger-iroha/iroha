@@ -119,6 +119,47 @@ impl
 }
 
 #[test]
+fn fresh_local_policy_refuses_before_selection_and_selected_retry_skips_a_later_list() {
+    let (device, fixture, slot, bootstrap) = bootstrapped_device(ANDROID, 0x4b);
+    let mut provider = device.open();
+    let head = current(&mut provider, &slot);
+    let next = next_capsule(&fixture, &bootstrap);
+    let request = advance_request(&head, &next);
+    let signed = device.platform.with(|state| state.sign_calls);
+    let blocked = KagemushaWalletProviderErrorV1::Invalid {
+        field: "future locally blocked counterparty",
+    };
+    assert_eq!(
+        provider.advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| Err(
+            blocked
+        )),
+        Err(blocked)
+    );
+    assert_eq!(
+        provider.lookup(&slot, &request.operation_id),
+        Ok(KagemushaWalletLookupV1::Unknown)
+    );
+    assert_eq!(device.platform.with(|state| state.sign_calls), signed);
+    device.platform.with(|state| state.sign_unavailable = true);
+    assert!(matches!(
+        provider.advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| Ok(())),
+        Ok(KagemushaWalletAdvanceOutcomeV1::Pending { .. })
+    ));
+    device.platform.with(|state| state.sign_unavailable = false);
+    let recovered = provider
+        .advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| {
+            panic!("new local policy cannot prevent selected completion")
+        })
+        .unwrap();
+    let retained = provider
+        .advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| {
+            panic!("new local policy cannot prevent exact output retry")
+        })
+        .unwrap();
+    assert_eq!(released(retained), released(recovered));
+}
+
+#[test]
 fn wallet_advance_v1_advance_g1_capsule_interface() {
     let f = wallet_fixture(0x70);
     let bootstrap = bootstrap_capsule(&f);
@@ -774,6 +815,22 @@ fn wallet_advance_v1_advance_retries_older_operations_while_one_is_pending() {
         )))
     );
     device.platform.with(|state| state.sign_unavailable = false);
+    // An older retry has a different operation owner. Only the incumbent can
+    // produce the pending receipt, even when the requested output is archived.
+    assert!(matches!(
+        provider.advance_with_local_policy(
+            &slot,
+            &TestOwnerV1,
+            &FailingOwnerV1 { body: true },
+            &bootstrap_request,
+            |_| panic!("archived retry performed a fresh selection"),
+        ),
+        Ok(KagemushaWalletAdvanceOutcomeV1::Archived(_))
+    ));
+    assert!(matches!(
+        provider.status(&slot),
+        Ok(KagemushaWalletSlotStatusV1::Released(_))
+    ));
     released(
         provider
             .advance(&slot, &TestOwnerV1, &request)
@@ -1241,6 +1298,91 @@ fn wallet_advance_v1_advance_ballast_helpers() {
         provider.reserve_capacity(KagemushaWalletCapacityClassV1::Growth, 100, 0),
         Ok(false)
     );
+}
+
+#[test]
+fn anchored_selected_approval_refusal_precedes_signing_and_recovery_never_reselects() {
+    use std::cell::Cell;
+    struct Owner {
+        selections: Cell<usize>,
+        allow_selected: Cell<bool>,
+    }
+    impl
+        KagemushaWalletTransitionOwnerV1<
+            KagemushaWalletRecoveryCapsuleV1,
+            KagemushaWalletCompletionRecordV1,
+        > for Owner
+    {
+        fn before_selection(
+            &self,
+            _: &KagemushaWalletRecoveryCapsuleV1,
+        ) -> Result<(), KagemushaWalletProviderErrorV1> {
+            self.selections.set(self.selections.get() + 1);
+            Ok(())
+        }
+        fn require_selected(
+            &self,
+            capsule: &KagemushaWalletRecoveryCapsuleV1,
+            marker: &KagemushaWalletMarkerRecordV1,
+        ) -> Result<(), KagemushaWalletProviderErrorV1> {
+            capsule.require_marker(marker.marker())?;
+            self.allow_selected
+                .get()
+                .then_some(())
+                .ok_or(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "missing protected selected receipt",
+                })
+        }
+        fn receipt_body(
+            &self,
+            capsule: &KagemushaWalletRecoveryCapsuleV1,
+            digest: &[u8; 32],
+        ) -> Result<Vec<u8>, KagemushaWalletProviderErrorV1> {
+            TestOwnerV1.receipt_body(capsule, digest)
+        }
+        fn assemble(
+            &self,
+            capsule: &KagemushaWalletRecoveryCapsuleV1,
+            digest: &[u8; 32],
+            signature: &KagemushaDeviceSignatureV1,
+        ) -> Result<KagemushaWalletCompletionRecordV1, KagemushaWalletProviderErrorV1> {
+            TestOwnerV1.assemble(capsule, digest, signature)
+        }
+        fn require_completion(
+            &self,
+            capsule: &KagemushaWalletRecoveryCapsuleV1,
+            record: &KagemushaWalletCompletionRecordV1,
+        ) -> Result<(), KagemushaWalletProviderErrorV1> {
+            TestOwnerV1.require_completion(capsule, record)
+        }
+    }
+    let (device, fixture, slot) = enrolled_device(ANDROID, 0x83);
+    let owner = Owner {
+        selections: Cell::new(0),
+        allow_selected: Cell::new(false),
+    };
+    let mut provider = device.open();
+    let request = advance_request(&current(&mut provider, &slot), &bootstrap_capsule(&fixture));
+    assert!(matches!(
+        provider.advance(&slot, &owner, &request),
+        Ok(KagemushaWalletAdvanceOutcomeV1::Pending { .. })
+    ));
+    assert_eq!(owner.selections.get(), 1);
+    assert_eq!(device.platform.with(|s| s.sign_calls), 0);
+    drop(provider);
+    let mut reopened = device.open();
+    assert!(matches!(
+        reopened.reconcile(&slot, &owner),
+        Ok(KagemushaWalletSlotStatusV1::Pending(_))
+    ));
+    assert_eq!(device.platform.with(|s| s.sign_calls), 0);
+    owner.allow_selected.set(true);
+    assert!(matches!(
+        reopened.reconcile(&slot, &owner),
+        Ok(KagemushaWalletSlotStatusV1::Released(_))
+    ));
+    assert_eq!(owner.selections.get(), 1);
+    assert_eq!(device.platform.with(|s| s.sign_calls), 1);
 }
 
 /// Probe completion refusal without changing body assembly or signing behavior.

@@ -24,6 +24,41 @@ mod readiness;
 mod renewal;
 use owned::PeerProcesses;
 
+#[cfg(test)]
+#[derive(Default)]
+pub(in crate::managed) struct FixturePeers(PeerProcesses);
+
+#[cfg(test)]
+impl FixturePeers {
+    pub(in crate::managed) fn spawn(&mut self, command: &mut Command) -> Result<()> {
+        self.0
+            .children
+            .push(Arc::new(std::sync::Mutex::new(command.spawn()?)));
+        Ok(())
+    }
+
+    pub(in crate::managed) fn prove_ready(&self, prepared: &PreparedLocalnet) -> Result<()> {
+        if self.0.children.len() != 4 {
+            return Err(Error::Invalid(
+                "fixture requires four owned validators".into(),
+            ));
+        }
+        readiness::prove(
+            prepared,
+            Instant::now(),
+            Duration::from_secs(90),
+            &AtomicBool::new(false),
+            &readiness::Progress::default(),
+        )
+        .map(|_| ())
+        .map_err(|failure| Error::Invalid(failure.message()))
+    }
+
+    pub(in crate::managed) fn stop(&mut self) -> Result<()> {
+        self.0.stop()
+    }
+}
+
 /// Exercise the production lexical custody scope with genuine renderer fixtures.
 #[cfg(test)]
 pub(in crate::managed) fn test_with_renewal_custody<T>(
@@ -31,7 +66,10 @@ pub(in crate::managed) fn test_with_renewal_custody<T>(
     provider: iroha_data_model::sorafs::capacity::ProviderId,
     action: impl FnOnce(&mut super::ManagedStreamTokenCustody) -> Result<T>,
 ) -> Result<T> {
-    renewal::with_custody(prepared, provider, action)
+    renewal::with_custody(
+        super::ManagedStreamTokenCustody::open(prepared, provider),
+        action,
+    )
 }
 
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
@@ -200,9 +238,10 @@ pub fn run_worker(
             )
         })?;
     let mut service_expiry: Option<maintenance::Observation> = None;
-    let mut refresh: Option<
+    let mut refresh: Option<(
+        usize,
         mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
-    > = None;
+    )> = None;
     let mut attachment_attempted = false;
     loop {
         if status.phase == ManagedPhase::Starting
@@ -434,12 +473,14 @@ pub fn run_worker(
         {
             let result = refresh
                 .as_ref()
-                .and_then(|receiver| match receiver.try_recv() {
-                    Ok(result) => Some(result),
+                .and_then(|(slot, receiver)| match receiver.try_recv() {
+                    Ok(result) => Some((*slot, result)),
                     Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        Some((*slot, Err(progress.unconfirmed())))
+                    }
                 });
-            if let Some(result) = result {
+            if let Some((slot, result)) = result {
                 refresh = None;
                 // The old observation wins over queued success; a slow refresh cannot bridge
                 // an interval in which the worker had no current authenticated observation.
@@ -455,7 +496,7 @@ pub fn run_worker(
                 match result {
                     Ok(next) if next.current().unwrap_or(false) => *observation = next,
                     _ => {
-                        if observation.retry().is_err() {
+                        if observation.retry(slot).is_err() {
                             return fail_worker(
                                 &directory,
                                 &mut status,
@@ -467,22 +508,44 @@ pub fn run_worker(
                     }
                 }
             }
-            if refresh.is_none() && observation.due().unwrap_or(true) {
+            if refresh.is_none()
+                && let Some(slot) = observation.due_slot().map_err(|error| {
+                    close_worker_error(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                        error,
+                    )
+                })?
+            {
                 let next = (|| -> Result<_> {
-                    let (selection, turn) = observation.begin(Arc::clone(&cancelled))?;
-                    let live = processes.gateway(selection.provider())?;
+                    let (selection, turn) = observation.begin(slot, Arc::clone(&cancelled))?;
+                    let live = processes.gateways()?;
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
                     processes.spawn_refresh(move || {
-                        let _ =
-                            sender.send(maintenance::refresh(&selected, selection, live, &turn));
+                        let result = maintenance::refresh(&selected, selection, live, &turn);
+                        if let Err(failure) = &result {
+                            use std::io::Write as _;
+                            // Retain the closed phase and physical budget of a refused turn.
+                            // Client-controlled response bodies never enter supervisor logs.
+                            let _ = writeln!(
+                                std::io::stderr().lock(),
+                                "generated service refresh refused slot={slot} elapsed_ms={} budget_ms={} failure={failure:?}",
+                                turn.started.elapsed().as_millis(),
+                                turn.timeout.as_millis(),
+                            );
+                        }
+                        let _ = sender.send(result);
                     })?;
                     Ok(receiver)
                 })();
                 match next {
-                    Ok(receiver) => refresh = Some(receiver),
+                    Ok(receiver) => refresh = Some((slot, receiver)),
                     Err(_) => {
-                        if observation.retry().is_err() {
+                        if observation.retry(slot).is_err() {
                             return fail_worker(
                                 &directory,
                                 &mut status,

@@ -1,5 +1,6 @@
 //! ZK verify syscalls must accept only `&NoritoBytes` envelopes. Wrong types are rejected.
 use ivm::{IVM, IVMHost, Memory, PointerType, host::DefaultHost, syscalls};
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -26,7 +27,7 @@ fn reject_non_norito_bytes_pointer_type() {
     ] {
         let res = host.syscall(num, &mut vm);
         assert!(
-            matches!(res, Err(ivm::VMError::NoritoInvalid)),
+            matches!(res, Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))),
             "expected NoritoInvalid for 0x{num:02x}"
         );
     }

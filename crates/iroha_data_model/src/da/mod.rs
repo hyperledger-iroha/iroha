@@ -4,6 +4,11 @@
 //! manifest generation, replication metadata) described in `specs/da/ingest_plan.md`. The actual
 //! networking/storage plumbing lives outside the data model; these structures exist purely for
 //! Norito encoding, schema documentation, and cross-crate integration.
+/// Protocol geometry shared by DA manifests, transport and proof verification.
+pub use sorafs_manifest::da::{
+    MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_PAYLOAD_BYTES, MIN_CHUNK_SIZE_BYTES,
+};
+
 /// Commitment structures embedded into blocks and RPC responses.
 pub mod commitment;
 /// Confidential-compute lane policies.
@@ -30,8 +35,9 @@ pub mod prelude {
             DA_PIN_SCOPE_SIGNING_DOMAIN_V1, DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyError,
             DaIngestAdmissionPolicyV1, DaIngestAuthorizationV1, DaIngestReceipt, DaIngestRequest,
             DaIngestRequestIntentV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1,
-            DaPinScopeSignatureV1, DaPinScopeV1, DaStripeLayout, MAX_DA_INGEST_ADMISSION_LANES_V1,
-            MAX_DA_INGEST_ADMISSION_PRODUCERS_V1, MAX_DA_INGEST_ADMISSION_WINDOWS_V1,
+            DaPinScopeProposalV1, DaPinScopeSignatureV1, DaPinScopeV1, DaStripeLayout,
+            MAX_DA_INGEST_ADMISSION_LANES_V1, MAX_DA_INGEST_ADMISSION_PRODUCERS_V1,
+            MAX_DA_INGEST_ADMISSION_WINDOWS_V1,
         },
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         pin_intent::{DaPinIntent, DaPinIntentBundle, DaPinIntentWithLocation},

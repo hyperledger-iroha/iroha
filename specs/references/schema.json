@@ -3456,6 +3456,151 @@
       }
     ]
   },
+  "BallotBodyContextV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "election_attempt_id",
+        "type": "BodyElectionAttemptId"
+      },
+      {
+        "name": "body_role",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "BallotClosureRecordV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "proposal_content_id",
+        "type": "ProposalContentId"
+      },
+      {
+        "name": "proposal_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "election_attempt_id",
+        "type": "BodyElectionAttemptId"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "body_role",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "seats",
+        "type": "u16"
+      },
+      {
+        "name": "profile_id",
+        "type": "ProofProfileIdV1"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Digest512"
+      },
+      {
+        "name": "list_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "registration_mapping_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "opening_anchor",
+        "type": "GovernanceAnchorV1"
+      },
+      {
+        "name": "casting_clock_height",
+        "type": "u64"
+      },
+      {
+        "name": "casting_clock_timestamp_ms",
+        "type": "u64"
+      },
+      {
+        "name": "casting_window_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closing_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closure_anchor",
+        "type": "GovernanceAnchorV1"
+      },
+      {
+        "name": "corpus_root",
+        "type": "Digest512"
+      },
+      {
+        "name": "accepted_ballots",
+        "type": "u32"
+      },
+      {
+        "name": "aye",
+        "type": "u32"
+      },
+      {
+        "name": "nay",
+        "type": "u32"
+      },
+      {
+        "name": "abstain",
+        "type": "u32"
+      },
+      {
+        "name": "outcome",
+        "type": "BallotOutcomeV1"
+      },
+      {
+        "name": "narrow",
+        "type": "bool"
+      }
+    ]
+  },
+  "BallotOutcomeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "approved"
+      },
+      {
+        "discriminant": 1,
+        "tag": "rejected"
+      },
+      {
+        "discriminant": 2,
+        "tag": "no_quorum"
+      }
+    ]
+  },
+  "BallotScopeV1": "Array<u8, 64>",
   "BeaconEpochBindingV1": {
     "Enum": [
       {
@@ -3855,6 +4000,8 @@
     ]
   },
   "BlockSubscriptionRequest": "NonZero<u64>",
+  "BodyElectionAttemptId": "Array<u8, 32>",
+  "BodyInstanceId": "Array<u8, 32>",
   "BondCallTerms": {
     "Struct": [
       {
@@ -5368,6 +5515,46 @@
       }
     ]
   },
+  "CastingClockEstablishedV1": {
+    "Struct": [
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "casting_window_ms",
+        "type": "u64"
+      },
+      {
+        "name": "closing_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "CastingOpenedV1": {
+    "Struct": [
+      {
+        "name": "body_context",
+        "type": "BallotBodyContextV1"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Digest512"
+      },
+      {
+        "name": "opening_at_ms",
+        "type": "u64"
+      }
+    ]
+  },
   "CertifiedResultScope": {
     "Enum": [
       {
@@ -6737,7 +6924,7 @@
       },
       {
         "name": "chunk_root",
-        "type": "Hash"
+        "type": "BlobDigest"
       },
       {
         "name": "proof_digest",
@@ -6838,6 +7025,10 @@
       {
         "name": "queued_at_unix",
         "type": "u64"
+      },
+      {
+        "name": "retention_policy",
+        "type": "RetentionPolicy"
       },
       {
         "name": "rent_quote",
@@ -7025,7 +7216,7 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "MerkleSha256"
+        "tag": "SorafsPorBlake3"
       }
     ]
   },
@@ -7591,6 +7782,38 @@
     ]
   },
   "DefinitionId": "Array<u8, 32>",
+  "DeliberationPhaseV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Orientation"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Evidence"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Questions"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Responses"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Deliberation"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Reflection"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Vote"
+      }
+    ]
+  },
   "DiagnosticTraceStatus": {
     "Struct": [
       {
@@ -7611,6 +7834,7 @@
       }
     ]
   },
+  "Digest512": "Array<u8, 64>",
   "DirectContractDeploymentOriginV1": {
     "Struct": [
       {
@@ -8868,6 +9092,26 @@
       }
     ]
   },
+  "ExecutionOutputC10V1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "ExecutionSourceC10V1"
+      },
+      {
+        "name": "result",
+        "type": "TransactionResultC10V1"
+      },
+      {
+        "name": "completions",
+        "type": "Vec<InvocationCompletionV1>"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "Option<TriggerLifecycleEffectsV1>"
+      }
+    ]
+  },
   "ExecutionOutputPolicyV1": {
     "Struct": [
       {
@@ -8931,6 +9175,16 @@
         "discriminant": 5,
         "tag": "time_with_lifecycle",
         "type": "TimeExecutionOutputV2"
+      },
+      {
+        "discriminant": 6,
+        "tag": "governance_block_start",
+        "type": "GovernanceBlockStartOutputV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "c10",
+        "type": "ExecutionOutputC10V1"
       }
     ]
   },
@@ -8951,6 +9205,49 @@
       {
         "name": "verified_at_height",
         "type": "u64"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "network",
+        "type": "u32"
+      },
+      {
+        "discriminant": 1,
+        "tag": "pipeline",
+        "type": "ExecutionSourceC10V1::Pipeline"
+      },
+      {
+        "discriminant": 2,
+        "tag": "time",
+        "type": "ExecutionSourceC10V1::Time"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1::Pipeline": {
+    "Struct": [
+      {
+        "name": "invocation",
+        "type": "PipelineInvocationV1"
+      },
+      {
+        "name": "failure_root",
+        "type": "Option<TriggerFailureRootV1>"
+      }
+    ]
+  },
+  "ExecutionSourceC10V1::Time": {
+    "Struct": [
+      {
+        "name": "invocation",
+        "type": "TimeInvocationV1"
+      },
+      {
+        "name": "failure_root",
+        "type": "Option<TriggerFailureRootV1>"
       }
     ]
   },
@@ -12890,7 +13187,51 @@
     ]
   },
   "GoldilocksDigest384V1": "Array<u8, 48>",
+  "GovernanceAnchorV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "position",
+        "type": "u32"
+      },
+      {
+        "name": "timestamp_ms",
+        "type": "u64"
+      }
+    ]
+  },
   "GovernanceAttemptId": "Array<u8, 32>",
+  "GovernanceAttemptStatusV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Active"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Certified"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Rejected"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Enacted"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Superseded"
+      },
+      {
+        "discriminant": 5,
+        "tag": "ExecutionFailed"
+      }
+    ]
+  },
   "GovernanceBallotAccepted": {
     "Struct": [
       {
@@ -12928,6 +13269,52 @@
       {
         "name": "reason",
         "type": "String"
+      }
+    ]
+  },
+  "GovernanceBlockStartEventV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "sealed_credential_list_published",
+        "type": "SealedCredentialListPublishedV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "casting_opened",
+        "type": "CastingOpenedV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "casting_clock_established",
+        "type": "CastingClockEstablishedV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ballot_closed",
+        "type": "BallotClosureRecordV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "lifecycle_applied",
+        "type": "LifecycleAppliedV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "native_slot_advanced",
+        "type": "NativeSlotAdvancedV1"
+      }
+    ]
+  },
+  "GovernanceBlockStartOutputV1": {
+    "Struct": [
+      {
+        "name": "anchor",
+        "type": "GovernanceOutputAnchorV1"
+      },
+      {
+        "name": "event",
+        "type": "GovernanceBlockStartEventV1"
       }
     ]
   },
@@ -13183,6 +13570,121 @@
       }
     ]
   },
+  "GovernanceLifecycleItemV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "draw_generation",
+        "type": "GovernanceLifecycleItemV1::DrawGeneration"
+      },
+      {
+        "discriminant": 1,
+        "tag": "start_qualification"
+      },
+      {
+        "discriminant": 2,
+        "tag": "end_qualification"
+      },
+      {
+        "discriminant": 3,
+        "tag": "advance_phase",
+        "type": "GovernanceLifecycleItemV1::AdvancePhase"
+      },
+      {
+        "discriminant": 4,
+        "tag": "reject_exhausted",
+        "type": "GovernanceLifecycleItemV1::RejectExhausted"
+      },
+      {
+        "discriminant": 5,
+        "tag": "close_invitations",
+        "type": "GovernanceLifecycleItemV1::CloseInvitations"
+      },
+      {
+        "discriminant": 6,
+        "tag": "conclude_finding",
+        "type": "GovernanceLifecycleItemV1::ConcludeFinding"
+      },
+      {
+        "discriminant": 7,
+        "tag": "close_ballot",
+        "type": "GovernanceLifecycleItemV1::CloseBallot"
+      },
+      {
+        "discriminant": 8,
+        "tag": "open_ballot",
+        "type": "GovernanceLifecycleItemV1::OpenBallot"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::AdvancePhase": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "phase",
+        "type": "DeliberationPhaseV1"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::CloseBallot": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::CloseInvitations": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "election",
+        "type": "BodyElectionAttemptId"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::ConcludeFinding": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      },
+      {
+        "name": "instance",
+        "type": "BodyInstanceId"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::DrawGeneration": {
+    "Struct": [
+      {
+        "name": "slot",
+        "type": "u64"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::OpenBallot": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "ParliamentBody"
+      }
+    ]
+  },
+  "GovernanceLifecycleItemV1::RejectExhausted": {
+    "Struct": [
+      {
+        "name": "slot",
+        "type": "u64"
+      }
+    ]
+  },
   "GovernanceLockCreated": {
     "Struct": [
       {
@@ -13359,6 +13861,32 @@
       },
       {
         "name": "rejected",
+        "type": "u64"
+      }
+    ]
+  },
+  "GovernanceOutputAnchorV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "casting_clock_prelude",
+        "type": "GovernanceOutputAnchorV1::CastingClockPrelude"
+      },
+      {
+        "discriminant": 1,
+        "tag": "pass",
+        "type": "GovernanceAnchorV1"
+      }
+    ]
+  },
+  "GovernanceOutputAnchorV1::CastingClockPrelude": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "timestamp_ms",
         "type": "u64"
       }
     ]
@@ -13580,6 +14108,62 @@
       {
         "discriminant": 4,
         "tag": "Restitution"
+      }
+    ]
+  },
+  "GovernanceStageV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Qualification"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Rules"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Agenda"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Interest"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Review"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Coordination"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Mpc"
+      },
+      {
+        "discriminant": 7,
+        "tag": "Fma"
+      },
+      {
+        "discriminant": 8,
+        "tag": "Oversight"
+      },
+      {
+        "discriminant": 9,
+        "tag": "PolicyJury"
+      },
+      {
+        "discriminant": 10,
+        "tag": "ConfirmationJury"
+      },
+      {
+        "discriminant": 11,
+        "tag": "Certification"
+      },
+      {
+        "discriminant": 12,
+        "tag": "Enactment"
       }
     ]
   },
@@ -14247,7 +14831,222 @@
       }
     ]
   },
+  "IvmAdmissionErrorC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "MissingMaxCycles"
+      },
+      {
+        "discriminant": 1,
+        "tag": "UnsupportedVersion",
+        "type": "UnsupportedVersionInfo"
+      },
+      {
+        "discriminant": 2,
+        "tag": "UnsupportedFeatureBits",
+        "type": "u8"
+      },
+      {
+        "discriminant": 3,
+        "tag": "UnsupportedAbiVersion",
+        "type": "u8"
+      },
+      {
+        "discriminant": 4,
+        "tag": "AbiVersionNotActive",
+        "type": "u8"
+      },
+      {
+        "discriminant": 5,
+        "tag": "MaxCyclesExceedsUpperBound",
+        "type": "MaxCyclesExceedsUpperBoundInfo"
+      },
+      {
+        "discriminant": 6,
+        "tag": "MaxCyclesWithoutZk",
+        "type": "u64"
+      },
+      {
+        "discriminant": 7,
+        "tag": "DecodedInstructionCountExceeded",
+        "type": "DecodedInstructionLimitInfo"
+      },
+      {
+        "discriminant": 8,
+        "tag": "DecodedCodeSizeExceeded",
+        "type": "DecodedCodeSizeLimitInfo"
+      },
+      {
+        "discriminant": 9,
+        "tag": "BytecodeDecodingFailed",
+        "type": "String"
+      },
+      {
+        "discriminant": 10,
+        "tag": "ManifestCodeHashMismatch",
+        "type": "ManifestCodeHashMismatchInfo"
+      },
+      {
+        "discriminant": 11,
+        "tag": "ManifestAbiHashMismatch",
+        "type": "ManifestAbiHashMismatchInfo"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ManifestCodeHashMissing"
+      },
+      {
+        "discriminant": 13,
+        "tag": "ManifestAbiHashMissing"
+      },
+      {
+        "discriminant": 14,
+        "tag": "ManifestMalformed"
+      },
+      {
+        "discriminant": 15,
+        "tag": "ArtifactAbiHashMismatch",
+        "type": "ArtifactAbiHashMismatchInfo"
+      },
+      {
+        "discriminant": 16,
+        "tag": "GenericSyscallNotAllowed",
+        "type": "u32"
+      }
+    ]
+  },
   "IvmBytecode": "Vec<u8>",
+  "IvmFaultC10V1": {
+    "Struct": [
+      {
+        "name": "kind",
+        "type": "IvmFaultKindC10V1"
+      },
+      {
+        "name": "site",
+        "type": "IvmFaultSiteV1"
+      }
+    ]
+  },
+  "IvmFaultKindC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "OutOfGas"
+      },
+      {
+        "discriminant": 1,
+        "tag": "MemoryLimitExceeded"
+      },
+      {
+        "discriminant": 2,
+        "tag": "MemoryAccessViolation"
+      },
+      {
+        "discriminant": 3,
+        "tag": "MisalignedAccess"
+      },
+      {
+        "discriminant": 4,
+        "tag": "MemoryOutOfBounds"
+      },
+      {
+        "discriminant": 5,
+        "tag": "DecodeError"
+      },
+      {
+        "discriminant": 6,
+        "tag": "InvalidOpcode"
+      },
+      {
+        "discriminant": 7,
+        "tag": "UnknownSyscall"
+      },
+      {
+        "discriminant": 8,
+        "tag": "UnsupportedSyscall"
+      },
+      {
+        "discriminant": 9,
+        "tag": "GasCostOverflow"
+      },
+      {
+        "discriminant": 10,
+        "tag": "Numeric",
+        "type": "NumericFaultC10V1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "PointerAbi",
+        "type": "PointerAbiFaultV1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "AssertionFailed"
+      },
+      {
+        "discriminant": 13,
+        "tag": "ExceededMaxCycles"
+      },
+      {
+        "discriminant": 14,
+        "tag": "InvalidMetadata"
+      },
+      {
+        "discriminant": 15,
+        "tag": "MissingHalt"
+      },
+      {
+        "discriminant": 16,
+        "tag": "NullifierAlreadyUsed"
+      },
+      {
+        "discriminant": 17,
+        "tag": "PermissionDenied"
+      },
+      {
+        "discriminant": 18,
+        "tag": "PrivacyViolation"
+      },
+      {
+        "discriminant": 19,
+        "tag": "RegisterOutOfBounds"
+      },
+      {
+        "discriminant": 20,
+        "tag": "NoritoInvalid"
+      },
+      {
+        "discriminant": 21,
+        "tag": "AbiTypeNotAllowed"
+      },
+      {
+        "discriminant": 22,
+        "tag": "HostOutputItemsExceeded"
+      },
+      {
+        "discriminant": 23,
+        "tag": "HostOutputBytesExceeded"
+      },
+      {
+        "discriminant": 24,
+        "tag": "AmxBudgetExceeded"
+      },
+      {
+        "discriminant": 25,
+        "tag": "ReentrantCall"
+      },
+      {
+        "discriminant": 26,
+        "tag": "CallDepthExceeded"
+      },
+      {
+        "discriminant": 27,
+        "tag": "ControlFlowViolation"
+      }
+    ]
+  },
   "IvmFaultKindV1": {
     "Enum": [
       {
@@ -15115,6 +15914,46 @@
     ]
   },
   "LaneId": "u32",
+  "LifecycleAppliedV1": {
+    "Struct": [
+      {
+        "name": "governance_attempt_id",
+        "type": "GovernanceAttemptId"
+      },
+      {
+        "name": "item",
+        "type": "GovernanceLifecycleItemV1"
+      },
+      {
+        "name": "status",
+        "type": "GovernanceAttemptStatusV1"
+      },
+      {
+        "name": "stage",
+        "type": "GovernanceStageV1"
+      },
+      {
+        "name": "attempt_state_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "board",
+        "type": "Option<LifecycleBoardDigestV1>"
+      }
+    ]
+  },
+  "LifecycleBoardDigestV1": {
+    "Struct": [
+      {
+        "name": "scope",
+        "type": "BallotScopeV1"
+      },
+      {
+        "name": "record_digest",
+        "type": "Digest512"
+      }
+    ]
+  },
   "ManifestAbiHashMismatchInfo": {
     "Struct": [
       {
@@ -19064,6 +19903,22 @@
       }
     ]
   },
+  "NativeSlotAdvancedV1": {
+    "Struct": [
+      {
+        "name": "target_height",
+        "type": "u64"
+      },
+      {
+        "name": "cursor_height",
+        "type": "u64"
+      },
+      {
+        "name": "ticket_height",
+        "type": "u64"
+      }
+    ]
+  },
   "NetworkExecutionOutputV1": {
     "Struct": [
       {
@@ -19878,6 +20733,66 @@
       }
     ]
   },
+  "NumericFaultC10V1": {
+    "Enum": [
+      {
+        "discriminant": 1,
+        "tag": "MantissaOverflow"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ScaleOverflow"
+      },
+      {
+        "discriminant": 3,
+        "tag": "DivisionByZero"
+      },
+      {
+        "discriminant": 4,
+        "tag": "RepeatingDecimal"
+      },
+      {
+        "discriminant": 5,
+        "tag": "ExactDivisionScaleOverflow"
+      },
+      {
+        "discriminant": 6,
+        "tag": "InvalidScale"
+      },
+      {
+        "discriminant": 7,
+        "tag": "InexactConversion"
+      },
+      {
+        "discriminant": 8,
+        "tag": "NegativeQuantity"
+      },
+      {
+        "discriminant": 9,
+        "tag": "QuantityUnderflow"
+      },
+      {
+        "discriminant": 10,
+        "tag": "InvalidRoundingMode"
+      },
+      {
+        "discriminant": 11,
+        "tag": "InvalidFailureMode"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ReservedRegisterNonZero"
+      },
+      {
+        "discriminant": 13,
+        "tag": "NegativeSquareRoot"
+      },
+      {
+        "discriminant": 14,
+        "tag": "RegisterIntegerOverflow"
+      }
+    ]
+  },
   "NumericFaultV1": {
     "Enum": [
       {
@@ -20263,6 +21178,9 @@
   "Option<LaneId>": {
     "Option": "LaneId"
   },
+  "Option<LifecycleBoardDigestV1>": {
+    "Option": "LifecycleBoardDigestV1"
+  },
   "Option<ManifestAliasBinding>": {
     "Option": "ManifestAliasBinding"
   },
@@ -20538,6 +21456,9 @@
   },
   "Option<TriggerId>": {
     "Option": "TriggerId"
+  },
+  "Option<TriggerLifecycleEffectsV1>": {
+    "Option": "TriggerLifecycleEffectsV1"
   },
   "Option<TriggerLifecycleRetryStateV1>": {
     "Option": "TriggerLifecycleRetryStateV1"
@@ -21936,6 +22857,50 @@
       }
     ]
   },
+  "ParliamentBody": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "RulesCommittee"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AgendaCouncil"
+      },
+      {
+        "discriminant": 2,
+        "tag": "InterestPanel"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ReviewPanel"
+      },
+      {
+        "discriminant": 4,
+        "tag": "CoordinationCouncil"
+      },
+      {
+        "discriminant": 5,
+        "tag": "MpcCommittee"
+      },
+      {
+        "discriminant": 6,
+        "tag": "FmaCommittee"
+      },
+      {
+        "discriminant": 7,
+        "tag": "OversightCommittee"
+      },
+      {
+        "discriminant": 8,
+        "tag": "PolicyJury"
+      },
+      {
+        "discriminant": 9,
+        "tag": "ConfirmationJury"
+      }
+    ]
+  },
   "ParliamentCandidateTestingPolicyV1": {
     "Struct": [
       {
@@ -23284,6 +24249,58 @@
         "discriminant": 3,
         "tag": "excluded",
         "type": "PorTerminalExcludedKindV1"
+      }
+    ]
+  },
+  "PortablePrefixFrameV1": {
+    "Struct": [
+      {
+        "name": "certificate",
+        "type": "SumeragiCommitCertificateV1"
+      },
+      {
+        "name": "availability",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "executed_parent_header",
+        "type": "BlockHeader"
+      },
+      {
+        "name": "parent_da_commitments",
+        "type": "Option<DaCommitmentBundle>"
+      },
+      {
+        "name": "parent_da_pin_intents",
+        "type": "Option<DaPinIntentBundle>"
+      },
+      {
+        "name": "rows",
+        "type": "Vec<PortablePrefixRowV1>"
+      }
+    ]
+  },
+  "PortablePrefixRowV1": {
+    "Struct": [
+      {
+        "name": "instance",
+        "type": "Hash32"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Hash32"
+      },
+      {
+        "name": "index",
+        "type": "u32"
+      },
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
       }
     ]
   },
@@ -27839,6 +28856,12 @@
       "ok": "Vec<DataTriggerStep>"
     }
   },
+  "Result<Vec<DataTriggerStep>, TransactionRejectionReasonC10V1>": {
+    "Result": {
+      "err": "TransactionRejectionReasonC10V1",
+      "ok": "Vec<DataTriggerStep>"
+    }
+  },
   "RetentionPolicy": {
     "Struct": [
       {
@@ -30444,6 +31467,42 @@
       {
         "name": "event",
         "type": "AssetDefinitionEvent"
+      }
+    ]
+  },
+  "SealedCredentialListBytesV1": {
+    "Struct": [
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "SealedCredentialListPublishedV1": {
+    "Struct": [
+      {
+        "name": "body_context",
+        "type": "BallotBodyContextV1"
+      },
+      {
+        "name": "body_instance_id",
+        "type": "BodyInstanceId"
+      },
+      {
+        "name": "roster_root",
+        "type": "Digest512"
+      },
+      {
+        "name": "list_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "registration_mapping_digest",
+        "type": "Digest512"
+      },
+      {
+        "name": "sealed_list_bytes",
+        "type": "SealedCredentialListBytesV1"
       }
     ]
   },
@@ -37165,9 +38224,51 @@
       }
     ]
   },
+  "TransactionRejectionReasonC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "AccountDoesNotExist",
+        "type": "FindError"
+      },
+      {
+        "discriminant": 1,
+        "tag": "LimitCheck",
+        "type": "TransactionLimitError"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Validation",
+        "type": "ValidationFailC10V1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "InstructionExecution",
+        "type": "InstructionExecutionFail"
+      },
+      {
+        "discriminant": 4,
+        "tag": "TriggerExecution",
+        "type": "TriggerExecutionFail"
+      },
+      {
+        "discriminant": 5,
+        "tag": "AnonymousBallot",
+        "type": "AnonymousBallotRejectionV1"
+      }
+    ]
+  },
   "TransactionResult": {
     "Tuple": [
       "Result<Vec<DataTriggerStep>, TransactionRejectionReason>",
+      "Vec<AssetBatchTransferOutcome>",
+      "Option<NexusFeeReceipt>",
+      "ContractEmissionsV1"
+    ]
+  },
+  "TransactionResultC10V1": {
+    "Tuple": [
+      "Result<Vec<DataTriggerStep>, TransactionRejectionReasonC10V1>",
       "Vec<AssetBatchTransferOutcome>",
       "Option<NexusFeeReceipt>",
       "ContractEmissionsV1"
@@ -38123,6 +39224,59 @@
       }
     ]
   },
+  "ValidationFailC10V1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "NotPermitted",
+        "type": "String"
+      },
+      {
+        "discriminant": 1,
+        "tag": "IvmAdmission",
+        "type": "IvmAdmissionErrorC10V1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "InstructionFailed",
+        "type": "InstructionExecutionError"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ContractRejected",
+        "type": "ContractRejection"
+      },
+      {
+        "discriminant": 4,
+        "tag": "IvmFault",
+        "type": "IvmFaultC10V1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "QueryFailed",
+        "type": "QueryExecutionFail"
+      },
+      {
+        "discriminant": 6,
+        "tag": "AxtReject",
+        "type": "AxtRejectContext"
+      },
+      {
+        "discriminant": 7,
+        "tag": "SettlementReplay",
+        "type": "SettlementReplayV1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "TooComplex"
+      },
+      {
+        "discriminant": 9,
+        "tag": "InternalError",
+        "type": "String"
+      }
+    ]
+  },
   "ValidatorCommitteeMemberV1": {
     "Struct": [
       {
@@ -38874,6 +40028,9 @@
   },
   "Vec<PipelineEventBox>": {
     "Vec": "PipelineEventBox"
+  },
+  "Vec<PortablePrefixRowV1>": {
+    "Vec": "PortablePrefixRowV1"
   },
   "Vec<PrivacyAcceptedMediumDispositionV1>": {
     "Vec": "PrivacyAcceptedMediumDispositionV1"

@@ -9,7 +9,7 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     query::error::QueryExecutionFail,
-    transaction::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 
 fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
@@ -229,22 +229,21 @@ pub fn signed_calls(
         Item = (
             HashOf<TransactionEntrypoint>,
             &SignedTransaction,
-            &TransactionResult,
+            iroha_data_model::block::execution_output::TransactionResultRef<'_>,
         ),
     >,
     QueryExecutionFail,
 > {
     block.validate_output_merkle_cache().map_err(invalid)?;
     Ok(block.execution_outputs().iter().filter_map(|output| {
-        let output = output.network()?;
-        let source = block.network_entrypoint_at(output.input_index as usize)?;
+        let source = block.network_entrypoint_at(output.network_index()? as usize)?;
         let signed = match source {
             TransactionEntrypoint::External(signed) => signed,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
             TransactionEntrypoint::SealedCommitment(_)
             | TransactionEntrypoint::AnonymousBallot(_) => return None,
         };
-        Some((source.hash(), signed, &output.result))
+        Some((source.hash(), signed, output.result()))
     }))
 }
 
@@ -297,7 +296,9 @@ mod tests {
             time::{TimeEvent, TimeInterval},
             trigger_completed::TriggerCompletedOutcome,
         },
-        transaction::{FeePaymentIntent, TransactionBuilder, signed::ExecutionStep},
+        transaction::{
+            FeePaymentIntent, TransactionBuilder, TransactionResult, signed::ExecutionStep,
+        },
         trigger::DataTriggerStep,
     };
 

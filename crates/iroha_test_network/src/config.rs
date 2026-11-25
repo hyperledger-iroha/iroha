@@ -1398,7 +1398,9 @@ pub(crate) fn validate_genesis_with_runtime_config(
 fn first_genesis_execution_error(
     outputs: &[iroha_data_model::block::execution_output::ExecutionOutputV1],
 ) -> Option<String> {
-    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    use iroha_data_model::block::execution_output::{
+        ExecutionOutputV1, ExecutionSourceC10V1, TransactionRejectionRef,
+    };
 
     outputs.iter().enumerate().find_map(|(index, output)| {
         let error = output.result().as_ref().err()?;
@@ -1416,8 +1418,20 @@ fn first_genesis_execution_error(
             ExecutionOutputV1::GovernanceBlockStart(_) => {
                 format!("governance block-start output#{index}")
             }
+            ExecutionOutputV1::C10(row) => match &row.source {
+                ExecutionSourceC10V1::Network(index) => format!("tx#{index}"),
+                ExecutionSourceC10V1::Pipeline { .. } => format!("pipeline output#{index}"),
+                ExecutionSourceC10V1::Time { .. } => format!("time output#{index}"),
+            },
         };
-        Some(format!("{source}: {error}; details: {error:?}"))
+        Some(match error {
+            TransactionRejectionRef::Baseline(reason) => {
+                format!("{source}: {reason}; details: {reason:?}")
+            }
+            TransactionRejectionRef::C10(reason) => {
+                format!("{source}: {reason}; details: C10({reason:?})")
+            }
+        })
     })
 }
 
@@ -1821,6 +1835,16 @@ mod tests {
         ];
         let detail = "LimitCheck(TransactionLimitError { reason: \"execution output exceeds consensus byte limit\" })";
         for (rejected, expected_source) in cases {
+            let c10 = rejected
+                .clone()
+                .into_c10_output_limit()
+                .expect("C10 limit row");
+            assert_eq!(
+                first_genesis_execution_error(&[success.clone(), lifecycle_success.clone(), c10]),
+                Some(format!(
+                    "{expected_source}: Failed to validate transaction limits; details: C10({detail})"
+                ))
+            );
             let outputs = [
                 success.clone(),
                 lifecycle_success.clone(),
@@ -3282,9 +3306,12 @@ mod tests {
             };
             assert_eq!(rejection.output_index, expected_rejection_index);
             assert!(
-                matches!(rejection.reason.as_ref(), TransactionRejectionReason::Validation(
-                ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(cause)))
-                if cause.as_ref() == expected_cause),
+                matches!(
+                    rejection.reason.as_borrowed().baseline(),
+                    Some(TransactionRejectionReason::Validation(
+                        ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(cause))
+                    )) if cause.as_ref() == expected_cause
+                ),
                 "unexpected staking rejection: {report:#}"
             );
             assert!(
@@ -3407,13 +3434,13 @@ mod tests {
             lane_id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "alpha".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let policy1 = DaProofPolicy {
             lane_id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
             dataspace_id: DataSpaceId::new(7),
             alias: "beta".to_string(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy0, policy1]);
         let nexus = super::resolve_preexec_nexus_config(None, Some(&bundle))

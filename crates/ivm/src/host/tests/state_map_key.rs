@@ -1,6 +1,7 @@
 //! Exact scalar/tuple key identity, canonical bytes and original-budget refusal.
 
 use super::*;
+use crate::error::VmDeferral;
 use ivm_abi::state_value::StateValueRecordV1;
 
 fn encoded(ty: &Embedded, atoms: Vec<Atom>) -> Vec<u8> {
@@ -216,7 +217,10 @@ fn key_decode_refuses_before_copying_and_retries_the_original_pool() {
     let baseline = pool.reserved_bytes();
     pool.set_limit_bytes(baseline);
     let error = validate_key_record(&vm, &Embedded::Bool, &key).unwrap_err();
-    assert!(matches!(error, VMError::AllocationDeferred(_)));
+    assert!(matches!(
+        error,
+        VMError::Deferred(VmDeferral::AllocationDeferred(_))
+    ));
     assert_eq!(error.metered_gas(), None);
     assert_eq!(key.as_ptr(), original);
     assert_eq!(pool.reserved_bytes(), baseline);

@@ -35,8 +35,8 @@ getrandom = { workspace = true }
 sha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-# Structural block construction for genuine-ballot wire/result roundtrip tests.
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api"] }
+# Structural block construction and genuine exact-quorum certificates for ballot evidence tests.
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }
 # Explicit native stack, arena mapping and shared fatal page of the diagnostic example.
 libc = "0.2.177"
 # The fixture generator diagnoses its deliberately late-invalid proof through the backend.

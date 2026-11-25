@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -63,7 +64,8 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
       governanceTag: "da.custom",
     },
     metadata: { note: "hello-world" },
-    compression: "Zstd",
+    compression: "Gzip",
+    compressedPayload: gzipSync(PAYLOAD),
   });
 
   const signingDigest = computeDaIngestSigningDigest(request);
@@ -79,7 +81,7 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
   assert.equal(request.network_id, NETWORK_ID.toString());
   assert.equal(request.owner, OWNER);
   assert.deepEqual(request.client_blob_id, [Array.from(expectedBlobId.values())]);
-  assert.equal(request.payload, PAYLOAD.toString("base64"));
+  assert.equal(request.payload, gzipSync(PAYLOAD).toString("base64"));
   assert.equal(request.total_size, PAYLOAD.length);
   assert.equal(request.chunk_size, chunkSize);
   assert.equal(request.lane_id, 5);
@@ -101,7 +103,7 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
     storage_class: { type: "Cold", value: null },
     governance_tag: ["da.custom"],
   });
-  assert.equal(request.compression, "Zstd");
+  assert.deepEqual(request.compression, { kind: "Gzip", value: null });
   assert.equal(request.norito_manifest, null);
   assert.deepEqual(request.metadata.items, [
     {
@@ -145,7 +147,7 @@ test("DA signing digest rejects pre-release requests with omitted V1 fields", ()
       "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
     signatureHex: "aa".repeat(64),
   });
-  assert.equal(request.compression, "Identity");
+  assert.deepEqual(request.compression, { kind: "Identity", value: null });
   assert.equal(request.norito_manifest, null);
 
   for (const path of [
@@ -164,59 +166,44 @@ test("DA signing digest rejects pre-release requests with omitted V1 fields", ()
   }
 });
 
-test("DA intent digest matches the shared Rust protocol vector", () => {
-  const vectorPrivateKey = Buffer.alloc(32, 0x19);
-  const vectorOwner = AccountAddress.fromAccount({
-    publicKey: Buffer.from(ed25519.getPublicKey(vectorPrivateKey)),
-  }).toI105();
-  const vectorPayload = Buffer.from("hello data availability");
-  const digest = computeDaIngestSigningDigest({
-    network_id: NETWORK_ID.toString(),
-    owner: vectorOwner,
-    client_blob_id: [
-      Array.from({ length: 32 }, (_, index) => (0x11 + index) & 0xff),
-    ],
-    lane_id: 2,
-    epoch: 42,
-    sequence: 7,
-    blob_class: { class: "TaikaiSegment", value: null },
-    codec: ["cmaf"],
-    erasure_profile: {
-      data_shards: 8,
-      parity_shards: 4,
-      row_parity_stripes: 2,
-      chunk_alignment: 12,
-      fec_scheme: { scheme: "Rs12_10", value: null },
+test("DA intent digest and signature match the shared Rust protocol vectors", async () => {
+  const vectors = JSON.parse(await fs.readFile(
+    new URL("../../../fixtures/da/ingest/request_signing_v1.json", import.meta.url), "utf8",
+  ));
+  const privateKey = Buffer.alloc(32, 0x19);
+  const owner = AccountAddress.fromAccount({ publicKey: Buffer.from(ed25519.getPublicKey(privateKey)) }).toI105();
+  const input = {
+    networkId: NETWORK_ID, owner, privateKey, payload: Buffer.from("hello data availability"),
+    clientBlobId: Buffer.from(Array.from({ length: 32 }, (_, index) => 0x11 + index)),
+    laneId: 2, epoch: 42, sequence: 7, blobClass: "TaikaiSegment", codec: "cmaf",
+    erasureProfile: { dataShards: 8, parityShards: 4, rowParityStripes: 2, chunkAlignment: 12, fecScheme: "Rs12_10" },
+    retentionPolicy: {
+      hotRetentionSecs: 86_400, coldRetentionSecs: 30 * 86_400,
+      requiredReplicas: 4, storageClass: "Hot", governanceTag: "da.test",
     },
-    retention_policy: {
-      hot_retention_secs: 86_400,
-      cold_retention_secs: 30 * 86_400,
-      required_replicas: 4,
-      storage_class: { type: "Hot", value: null },
-      governance_tag: ["da.test"],
-    },
-    chunk_size: 1 << 20,
-    total_size: 23,
-    payload_hash: [Array.from(blake3(vectorPayload))],
-    compression: "Identity",
-    norito_manifest: Buffer.from([0xaa, 0xbb, 0xcc]).toString("base64"),
-    payload: vectorPayload.toString("base64"),
-    metadata: {
-      items: [
-        {
-          key: "content_type",
-          value: Buffer.from("video/mp4").toString("base64"),
-          visibility: { visibility: "Public", value: null },
-          encryption: { cipher: "None", params: null },
-        },
-      ],
-    },
-  });
-
-  assert.equal(
-    digest.toString("hex").toUpperCase(),
-    "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA",
-  );
+    chunkSize: 1 << 20, noritoManifest: Buffer.from([0xaa, 0xbb, 0xcc]),
+    metadata: { content_type: "video/mp4" },
+  };
+  for (const vector of vectors) {
+    const wire = Buffer.from(vector.wire_base64, "base64");
+    const { request, artifacts } = buildDaIngestRequest({
+      ...input, compression: vector.compression,
+      compressedPayload: vector.compression === "Identity" ? undefined : wire,
+    });
+    assert.equal(request.payload, vector.wire_base64);
+    assert.equal(artifacts.signingDigestHex, vector.authorization_digest_hex);
+    assert.equal(computeDaIngestSigningDigest(request).toString("hex").toUpperCase(), vector.authorization_digest_hex);
+    assert.equal(artifacts.signatureHex, vector.signature_hex);
+    assert.deepEqual(request.signatures, [{ signer: vector.signer, signature: vector.signature_hex }]);
+    assert.equal(artifacts.signerPublicKey, vector.signer);
+    const prepared = buildDaIngestRequest({
+      ...input, privateKey: undefined, signerPublicKey: vector.signer, signatureHex: vector.signature_hex,
+      compression: vector.compression, compressedPayload: vector.compression === "Identity" ? undefined : wire,
+    });
+    assert.deepEqual(prepared.request.signatures, request.signatures);
+  }
+  assert.throws(() => buildDaIngestRequest({ ...input, signerPublicKey: `ed0120${"41".repeat(32)}` }),
+    /must match the signing private key/u);
 });
 
 test("generateDaProofSummary normalizes native output for JS callers", () => {

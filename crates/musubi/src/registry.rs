@@ -23,7 +23,8 @@ use crate::{
         PublicationArchiveRegistrationTerminalV1, PublicationArchiveRegistrationV1,
         PublicationBackend, PublicationBackendError, PublicationBackendFailureClass,
         PublicationCarSource, PublicationEngine, PublicationError, PublicationFinalEvidenceV1,
-        PublicationOperationIdV1, PublicationProviderRegistrationCheckpointAdvanceV1,
+        PublicationOperationIdV1, PublicationPhaseV1,
+        PublicationProviderRegistrationCheckpointAdvanceV1,
         PublicationProviderRegistrationCheckpointV1, PublicationReadbackEvidenceV1,
         PublicationRegisteredArchiveV1, PublicationReleaseAbsenceEvidenceV1,
         PublicationReleasePreparationFloorV1, PublicationReleaseSubmissionAdvanceV1,
@@ -71,11 +72,12 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 mod provider_inventory;
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
+const MAX_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";
 /// Retry classification for a redacted registry failure.
@@ -410,7 +412,7 @@ impl RegistryReadClientV1 {
             || !client.endpoint().username().is_empty()
             || client.endpoint().password().is_some()
             || timeout == Duration::ZERO
-            || timeout > Duration::from_secs(60)
+            || timeout > MAX_REGISTRY_REQUEST_TIMEOUT
             || account_chain_discriminant == 0
             || client.account().controller.single_signatory()
                 != Some(client.key_pair().public_key())
@@ -512,7 +514,8 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     ///
     /// Publication uses this entry point so the signer, private runtime client, and finalized
     /// registry reader all derive from the same bounded file image instead of reopening a path
-    /// after authenticated storage coordination has started.
+    /// after authenticated storage coordination has started. An omitted request timeout uses the
+    /// shorter of the platform default and the registry's one-minute ceiling.
     pub(crate) fn load_from_config_bytes(
         path: &Path,
         bytes: &[u8],
@@ -522,7 +525,19 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         }
         let (configuration, _) = Config::load_bytes_with_musubi_publication(path, bytes)
             .map_err(|_| invalid_public_config())?;
-        let timeout = configuration.torii_request_timeout;
+        let mut timeout = configuration.torii_request_timeout;
+        // The platform default also covers routed Torii requests. Registry reads have a
+        // shorter ceiling. Keep an explicit out-of-range request a configuration error.
+        if timeout > MAX_REGISTRY_REQUEST_TIMEOUT {
+            let source = std::str::from_utf8(bytes).map_err(|_| invalid_public_config())?;
+            let table = source
+                .parse::<toml::Table>()
+                .map_err(|_| invalid_public_config())?;
+            if table.contains_key("torii_request_timeout_ms") {
+                return Err(invalid_public_config());
+            }
+            timeout = MAX_REGISTRY_REQUEST_TIMEOUT;
+        }
         let account_chain_discriminant = configuration.account_chain_discriminant;
         Self::new(
             &AsyncClient::builder(configuration)
@@ -861,7 +876,7 @@ impl RegistrySigningClientV1 {
         let account_chain_discriminant = configuration.account_chain_discriminant;
         configuration.torii_request_timeout = configuration
             .torii_request_timeout
-            .min(Duration::from_secs(60));
+            .min(MAX_REGISTRY_REQUEST_TIMEOUT);
         let client = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
             Client::new(configuration).map_err(|_| {
@@ -2298,7 +2313,9 @@ impl PublicationPollPolicyV1 {
         Ok(())
     }
 }
-/// Resume with bounded exponential backoff, preserving pending state when the budget expires.
+/// Resume with bounded exponential backoff. After one minute, return at the next durable
+/// transition or backend response so a slow operation can continue in a later command.
+/// An in-flight backend call retains its own deadline.
 ///
 /// # Errors
 ///
@@ -2311,40 +2328,60 @@ pub fn resume_with_bounded_polling(
     backend: &mut dyn PublicationBackend,
     policy: PublicationPollPolicyV1,
 ) -> Result<PublicationAdvanceV1, PublicationError> {
+    const POLL_TURN: Duration = Duration::from_secs(60);
+    let start = Instant::now();
+    poll_publication(
+        policy,
+        || engine.advance_once(operation_id, source, backend),
+        || engine.journal_phase(operation_id),
+        || POLL_TURN.saturating_sub(start.elapsed()),
+        thread::sleep,
+    )
+}
+
+fn poll_publication(
+    policy: PublicationPollPolicyV1,
+    mut advance: impl FnMut() -> Result<PublicationAdvanceV1, PublicationError>,
+    journal_phase: impl FnOnce() -> Result<PublicationPhaseV1, PublicationError>,
+    remaining: impl Fn() -> Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<PublicationAdvanceV1, PublicationError> {
     policy.validate()?;
     let mut delay = policy.initial_delay;
-    let mut last_pending = None;
-    let mut last_retryable = None;
-    for attempt in 0..policy.max_attempts {
-        match engine.resume(operation_id, source, backend) {
-            Ok(PublicationAdvanceV1::Pending(phase)) => {
-                last_pending = Some(PublicationAdvanceV1::Pending(phase));
-                last_retryable = None;
-            }
-            Ok(result) => return Ok(result),
+    let mut attempt = 1;
+    loop {
+        let result = advance();
+        let left = remaining();
+        let pending_native_operation = match &result {
+            Ok(PublicationAdvanceV1::Progressed(_)) if !left.is_zero() => continue,
+            Ok(PublicationAdvanceV1::Pending(_)) => false,
             Err(PublicationError::Backend(error))
                 if error.class() == PublicationBackendFailureClass::Retryable =>
             {
-                last_pending = None;
-                last_retryable = Some(error);
+                error.is_pending_native_operation()
             }
-            Err(error) => return Err(error),
+            _ => return result,
+        };
+        if pending_native_operation {
+            delay = policy.initial_delay;
         }
-        if attempt + 1 < policy.max_attempts {
-            thread::sleep(delay);
-            delay = delay.saturating_mul(2).min(policy.max_delay);
+        if attempt < policy.max_attempts && delay < left {
+            sleep(delay);
+            if !remaining().is_zero() {
+                attempt += 1;
+                if !pending_native_operation {
+                    delay = delay.saturating_mul(2).min(policy.max_delay);
+                }
+                continue;
+            }
         }
+        // Only an authenticated native operation wait may use the validated journal to report progress.
+        return if pending_native_operation {
+            journal_phase().map(PublicationAdvanceV1::Pending)
+        } else {
+            result
+        };
     }
-    last_retryable.map_or_else(
-        || {
-            last_pending.ok_or_else(|| {
-                PublicationError::InvalidJournal(
-                    "publication polling completed without an observable result".to_owned(),
-                )
-            })
-        },
-        |error| Err(PublicationError::Backend(error)),
-    )
 }
 fn first_page(limit: u32) -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
@@ -3004,6 +3041,58 @@ private_key = "{}"
             client.account_chain_discriminant()
         );
     }
+    #[test]
+    fn generated_registry_reader_and_signer_share_the_bounded_default() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("client.toml");
+        let identity = test_network_id(0x15);
+        fs::write(
+            temp.path().join("genesis.expected_hash"),
+            format!("{identity}\n"),
+        )
+        .unwrap();
+        let source = authenticated_reader_config("http://127.0.0.1:8080/")
+            .replace(
+                &format!("network_id = \"{identity}\""),
+                "network_id_file = \"genesis.expected_hash\"",
+            )
+            .replace("profile = \"taira\"", "chain_discriminant = 753");
+        let default = source.replace("torii_request_timeout_ms = 2000\n", "");
+        let (sdk, _) =
+            Config::load_bytes_with_musubi_publication(&path, default.as_bytes()).unwrap();
+        assert_eq!(
+            sdk.torii_request_timeout,
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT
+        );
+        for (image, expected) in [
+            (&default, Duration::from_secs(60)),
+            (&source, Duration::from_secs(2)),
+        ] {
+            let reader =
+                RegistryReadClientV1::load_from_config_bytes(&path, image.as_bytes()).unwrap();
+            let (signer, _) = RegistrySigningClientV1::load_with_publication_config_bytes(
+                &path,
+                image.as_bytes(),
+            )
+            .unwrap();
+            let signing_reader = signer.authenticated_reader().unwrap();
+            assert_eq!(reader.timeout, expected);
+            assert_eq!(signing_reader.timeout, expected);
+            assert_eq!(reader.client.torii_request_timeout(), expected);
+            assert_eq!(reader.network_id(), identity);
+            assert_eq!(reader.client.account(), signer.authority());
+            assert_eq!(reader.account_chain_discriminant(), 753);
+        }
+        // An explicitly requested platform-sized deadline retains its independent refusal.
+        let explicit = source.replace(
+            "torii_request_timeout_ms = 2000",
+            "torii_request_timeout_ms = 70000",
+        );
+        let refused =
+            RegistryReadClientV1::load_from_config_bytes(&path, explicit.as_bytes()).unwrap_err();
+        assert_eq!(refused.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+    }
+
     #[test]
     fn authenticated_config_requires_network_context_without_changing_universal_identity() {
         let path = Path::new("authenticated-reader-network-context-test.toml");
@@ -4877,5 +4966,156 @@ private_key = "{}"
         .validate()
         .expect_err("sub-minute bound is mandatory");
         assert!(matches!(error, PublicationError::InvalidJournal(_)));
+    }
+    #[test]
+    fn authenticated_storage_wait_uses_bounded_short_polls_and_reports_the_journal_phase() {
+        let policy = PublicationPollPolicyV1::default();
+        let mut calls = 0;
+        let mut delays = Vec::new();
+        let result = poll_publication(
+            policy,
+            || {
+                calls += 1;
+                if calls < 4 {
+                    Ok(PublicationAdvanceV1::Pending(
+                        PublicationPhaseV1::SeedIngress,
+                    ))
+                } else {
+                    Err(PublicationError::Backend(
+                        PublicationBackendError::pending_native_operation(),
+                    ))
+                }
+            },
+            || Ok(PublicationPhaseV1::ArchiveRegistration),
+            || Duration::MAX,
+            |delay| delays.push(delay),
+        )
+        .unwrap();
+        assert_eq!(calls, policy.max_attempts);
+        assert_eq!(delays.len(), usize::from(calls - 1));
+        assert_eq!(
+            &delays[..3],
+            &[
+                policy.initial_delay,
+                policy.initial_delay * 2,
+                policy.initial_delay * 4
+            ]
+        );
+        assert!(
+            delays[3..]
+                .iter()
+                .all(|delay| *delay == policy.initial_delay)
+        );
+        assert_eq!(
+            result,
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ArchiveRegistration)
+        );
+    }
+
+    #[test]
+    fn slow_publication_yields_its_last_durable_transition() {
+        let remaining = std::cell::Cell::new(Duration::from_secs(60));
+        let mut calls = 0;
+        let result = poll_publication(
+            PublicationPollPolicyV1::default(),
+            || {
+                calls += 1;
+                let phase = match calls {
+                    1 => PublicationPhaseV1::ArchiveRegistration,
+                    2 => {
+                        remaining.set(Duration::ZERO);
+                        PublicationPhaseV1::Replication
+                    }
+                    _ => panic!("next backend operation started after the polling turn"),
+                };
+                Ok(PublicationAdvanceV1::Progressed(phase))
+            },
+            || panic!("durable progress already identifies the persisted phase"),
+            || remaining.get(),
+            |_| panic!("durable progress needs no backoff"),
+        )
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(
+            result,
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::Replication)
+        );
+    }
+
+    #[test]
+    fn elapsed_poll_backoff_preserves_the_original_response() {
+        let policy = PublicationPollPolicyV1::default();
+        for (error, authenticated) in [
+            (PublicationBackendError::pending_native_operation(), true),
+            (
+                PublicationBackendError::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY"),
+                false,
+            ),
+        ] {
+            let remaining = std::cell::Cell::new(Duration::from_secs(60));
+            let mut calls = 0;
+            let result = poll_publication(
+                policy,
+                || {
+                    calls += 1;
+                    Err(PublicationError::Backend(error.clone()))
+                },
+                || {
+                    assert!(authenticated);
+                    Ok(PublicationPhaseV1::Replication)
+                },
+                || remaining.get(),
+                |delay| {
+                    assert_eq!(delay, policy.initial_delay);
+                    remaining.set(Duration::ZERO);
+                },
+            );
+            assert_eq!(calls, 1);
+            if authenticated {
+                assert_eq!(
+                    result.unwrap(),
+                    PublicationAdvanceV1::Pending(PublicationPhaseV1::Replication)
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(PublicationError::Backend(original)) if original == error)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unconfirmed_storage_errors_keep_their_original_failure_and_backoff() {
+        let policy = PublicationPollPolicyV1 {
+            max_attempts: 4,
+            ..Default::default()
+        };
+        let mut delays = Vec::new();
+        let generic = PublicationBackendError::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY");
+        let result = poll_publication(
+            policy,
+            || Err(PublicationError::Backend(generic.clone())),
+            || panic!("generic failure cannot report progress"),
+            || Duration::MAX,
+            |delay| delays.push(delay),
+        );
+        assert!(matches!(result, Err(PublicationError::Backend(error)) if error == generic));
+        assert_eq!(
+            delays,
+            [
+                policy.initial_delay,
+                policy.initial_delay * 2,
+                policy.initial_delay * 4
+            ]
+        );
+        let rejected = PublicationBackendError::permanent("MUSUBI_PUBLICATION_OPERATION_BUSY");
+        let result = poll_publication(
+            policy,
+            || Err(PublicationError::Backend(rejected.clone())),
+            || panic!("rejection cannot report progress"),
+            || Duration::MAX,
+            |_| panic!("permanent failure cannot poll"),
+        );
+        assert!(matches!(result, Err(PublicationError::Backend(error)) if error == rejected));
     }
 }

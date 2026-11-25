@@ -3217,3 +3217,121 @@ async fn ballot_zk_v1_rejects_partial_lock_hints() {
 include!("ballot_v1_strictness_tests.rs");
 include!("ballotproof_shape_tests.rs");
 include!("norito_frame_tests.rs");
+
+#[tokio::test]
+async fn anonymous_parliament_drafts_frame_only_the_requested_registered_instructions() {
+    use crate::tests_runtime_handlers::mk_native_app_state_for_tests;
+    use axum::{
+        extract::{ConnectInfo, State},
+        http::HeaderMap,
+    };
+    use iroha_data_model::governance::{
+        anonymous_ballot::{
+            AnonymousParliamentTransitionV1, CreateAnonymousParliamentAttemptV1,
+            CredentialCommitmentV1, CredentialRegistrationV1, RegisterParliamentCredentialV1,
+            RegistrationAuthorizationV1, RegistrationProofBytesV1,
+            SubmitAnonymousParliamentTransitionV1,
+        },
+        types::{BodyElectionAttemptId, GovernanceAttemptId},
+    };
+    let app = mk_native_app_state_for_tests();
+    let remote = ConnectInfo("127.0.0.1:44123".parse().unwrap());
+    let attempt = CreateAnonymousParliamentAttemptV1 {
+        proposal: ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: ALICE_ID.clone(),
+            contract_address: sample_contract_address(),
+            code_hash: ContractCodeHash::new([1; 32]),
+            abi_hash: ContractAbiHash::new([2; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        }),
+        attempt_sequence: 0,
+    };
+    let attempt_id = attempt.governance_attempt_id();
+    let transition = SubmitAnonymousParliamentTransitionV1 {
+        governance_attempt_id: attempt_id,
+        transition: AnonymousParliamentTransitionV1::RegisterInitialSortition,
+    };
+    let registration = RegisterParliamentCredentialV1 {
+        governance_attempt_id: attempt_id,
+        election_attempt_id: BodyElectionAttemptId::new([3; 32]),
+        registration: CredentialRegistrationV1 {
+            commitment: CredentialCommitmentV1::new([4; 128]),
+            authorization: RegistrationAuthorizationV1::new([5; 64]),
+            proof: RegistrationProofBytesV1::new(vec![6; 160_148]).unwrap(),
+        },
+    };
+    let attempts = anonymous_drafts::attempt(
+        State(app.clone()),
+        HeaderMap::new(),
+        remote,
+        NoritoJson(attempt.clone()),
+    )
+    .await
+    .unwrap()
+    .0;
+    let transitions = anonymous_drafts::transition(
+        State(app.clone()),
+        HeaderMap::new(),
+        remote,
+        NoritoJson(transition.clone()),
+    )
+    .await
+    .unwrap()
+    .0;
+    let registrations = anonymous_drafts::credential(
+        State(app.clone()),
+        HeaderMap::new(),
+        remote,
+        NoritoJson(registration.clone()),
+    )
+    .await
+    .unwrap()
+    .0;
+    for (draft, expected) in [
+        (attempts, InstructionBox::from(attempt.clone())),
+        (transitions, transition.clone().into()),
+        (registrations, registration.clone().into()),
+    ] {
+        let (wire_id, frame) =
+            iroha_data_model::isi::framed_instruction_payload(&expected).unwrap();
+        assert_eq!(draft.wire_id, wire_id);
+        assert_eq!(hex::decode(draft.payload_hex).unwrap(), frame);
+    }
+    let mut bad_attempt = attempt;
+    bad_attempt.attempt_sequence = MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1;
+    assert!(
+        anonymous_drafts::attempt(
+            State(app.clone()),
+            HeaderMap::new(),
+            remote,
+            NoritoJson(bad_attempt)
+        )
+        .await
+        .is_err()
+    );
+    let mut bad_transition = transition;
+    bad_transition.governance_attempt_id = GovernanceAttemptId::new([0; 32]);
+    assert!(
+        anonymous_drafts::transition(
+            State(app.clone()),
+            HeaderMap::new(),
+            remote,
+            NoritoJson(bad_transition)
+        )
+        .await
+        .is_err()
+    );
+    let mut bad_registration = registration;
+    bad_registration.election_attempt_id = BodyElectionAttemptId::new([0; 32]);
+    assert!(
+        anonymous_drafts::credential(
+            State(app),
+            HeaderMap::new(),
+            remote,
+            NoritoJson(bad_registration)
+        )
+        .await
+        .is_err()
+    );
+}

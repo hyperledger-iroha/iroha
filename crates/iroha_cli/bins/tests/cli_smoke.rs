@@ -3046,156 +3046,180 @@ fn da_submit_no_submit_emits_request_artifacts() {
 #[allow(clippy::too_many_lines)]
 fn iroha_da_submit_records_pdp_commitment_receipt() {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use core::convert::TryFrom;
+    use httpmock::prelude::*;
     use iroha_crypto::Signature;
     use iroha_data_model::da::prelude::{
-        BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId,
+        BlobDigest, DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1, DaPinScopeV1,
+        DaProofScheme, DaRentQuote, DaStripeLayout, StorageTicketId,
     };
-    use iroha_model_base::topology::LaneId;
-    use norito::json::{Map as JsonMap, Value};
-    use sorafs_manifest::{
-        BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId,
-        pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
-    };
+    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
     use torii_mock_support::{TempDir, write_client_config};
-    fn fixed_digest(seed: u8) -> BlobDigest {
-        let mut bytes = [0u8; 32];
-        for (idx, byte) in bytes.iter_mut().enumerate() {
-            let offset = u8::try_from(idx).expect("digest length fits in u8");
-            *byte = seed.wrapping_add(offset);
-        }
-        BlobDigest::new(bytes)
-    }
-    let chunk_profile = ChunkingProfileV1 {
-        profile_id: ProfileId(0),
-        namespace: "inline".to_string(),
-        name: "inline".to_string(),
-        semver: "0.0.0".to_string(),
-        min_size: 64 * 1024,
-        target_size: 64 * 1024,
-        max_size: 64 * 1024,
-        break_mask: 1,
-        multihash_code: BLAKE3_256_MULTIHASH_CODE,
-        aliases: vec!["inline.inline@0.0.0".to_string()],
-    };
-    let pdp_tree = PdpMerkleTreeV1::from_bytes(b"cli pdp commitment fixture")
-        .expect("build canonical PDP fixture tree");
-    let pdp_commitment = PdpCommitmentV1::from_tree(
-        &pdp_tree,
-        *fixed_digest(0x90).as_bytes(),
-        chunk_profile,
-        24,
-        1_701_800_000,
-    )
-    .expect("build canonical PDP commitment fixture");
-    let mut receipt = DaIngestReceipt {
-        client_blob_id: fixed_digest(0xA0),
-        lane_id: LaneId::new(42),
-        epoch: 7,
-        blob_hash: fixed_digest(0xA1),
-        chunk_root: fixed_digest(0xA2),
-        manifest_hash: fixed_digest(0xA3),
-        storage_ticket: StorageTicketId::new(*fixed_digest(0xA4).as_bytes()),
-        pdp_commitment: None,
-        stripe_layout: DaStripeLayout {
-            total_stripes: 1,
-            shards_per_stripe: 1,
-            row_parity_stripes: 0,
-        },
-        queued_at_unix: 1_701_800_123,
-        rent_quote: DaRentQuote::default(),
-        operator_signature: Signature::try_from_bytes(&[0x11; 64])
-            .expect("checked CLI DA receipt operator signature fixture"),
-    };
-    let pdp_bytes = norito::to_bytes(&pdp_commitment).expect("encode commitment");
-    let pdp_header = BASE64.encode(&pdp_bytes);
-    receipt.pdp_commitment = Some(pdp_bytes.clone());
-    let receipt_body = norito::to_bytes(&receipt).expect("encode receipt");
+
+    let server = MockServer::start();
     let temp_dir = TempDir::new("cli_da_submit_pdp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, "http://localhost").expect("write config");
-    let metadata_path = temp_dir.path().join("metadata.json");
-    let metadata_contents = norito::json!({
-        "purpose": "test",
-        "owner": "alice"
-    });
-    let metadata_json = norito::json::to_string(&metadata_contents).expect("serialize metadata");
-    fs::write(&metadata_path, metadata_json).expect("write metadata");
+    write_client_config(&config_path, &server.base_url()).expect("write config");
+    let payload = b"payload-bytes";
     let payload_path = temp_dir.path().join("payload.bin");
-    fs::write(&payload_path, b"payload-bytes").expect("write payload");
+    fs::write(&payload_path, payload).expect("write payload");
+    let metadata_path = temp_dir.path().join("metadata.json");
+    fs::write(&metadata_path, br#"{"purpose":"test","owner":"alice"}"#).expect("write metadata");
     let artifact_dir = temp_dir.path().join("artifacts");
-    let blob_override = "ab".repeat(32);
-    let fixture_path = temp_dir.path().join("receipt_fixture.json");
-    let mut fixture_headers = JsonMap::new();
-    fixture_headers.insert(
-        "sora-pdp-commitment".to_string(),
-        Value::from(pdp_header.clone()),
-    );
-    let mut fixture_map = JsonMap::new();
-    fixture_map.insert(
-        "receipt_base64".to_string(),
-        Value::from(BASE64.encode(&receipt_body)),
-    );
-    fixture_map.insert("headers".to_string(), Value::Object(fixture_headers));
-    let fixture = Value::Object(fixture_map);
-    let fixture_json = norito::json::to_string(&fixture).expect("serialize receipt fixture");
-    fs::write(&fixture_path, fixture_json).expect("write fixture");
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "da",
-            "submit",
-            "--payload",
-            payload_path.to_str().expect("payload path"),
-            "--artifact-dir",
-            artifact_dir.to_str().expect("artifact dir"),
-            "--lane-id",
-            "42",
-            "--epoch",
-            "7",
-            "--sequence",
-            "17",
-            "--client-blob-id",
-            &blob_override,
-            "--metadata-json",
-            metadata_path.to_str().expect("metadata path"),
-        ])
-        .arg("--receipt-fixture")
-        .arg(fixture_path.to_str().expect("fixture path"))
+    let submit = || {
+        let mut cmd = command();
+        cmd.arg("--config")
+            .arg(&config_path)
+            .args(["app", "da", "submit", "--payload"])
+            .arg(&payload_path)
+            .arg("--artifact-dir")
+            .arg(&artifact_dir)
+            .args([
+                "--lane-id",
+                "42",
+                "--epoch",
+                "7",
+                "--sequence",
+                "17",
+                "--client-blob-id",
+            ])
+            .arg("ab".repeat(32))
+            .arg("--metadata-json")
+            .arg(&metadata_path);
+        cmd
+    };
+    let prepared = submit()
+        .arg("--no-submit")
         .output()
-        .expect("invoke iroha da submit");
+        .expect("prepare CLI request");
+    assert!(
+        prepared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prepared.stderr)
+    );
+    let read_request = || -> DaIngestRequest {
+        norito::json::from_slice(
+            &fs::read(artifact_dir.join("da_request.json")).expect("read request"),
+        )
+        .expect("decode CLI request")
+    };
+    let request = read_request();
+    request.verify_signatures().expect("signed prepare request");
+    assert!(request.pin_scope_signatures.is_empty());
+    assert_eq!(request.payload.as_slice(), payload.as_slice());
+
+    let operator =
+        KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519).expect("receipt operator");
+    let manifest = [0x90; 32];
+    let sealed_at = 1_701_800_123;
+    // A sub-MiB source uses the minimum 32 PDP samples.
+    let (root, pdp) = sorafs_manifest::da::source_commitments(
+        payload,
+        request.chunk_size,
+        manifest,
+        32,
+        sealed_at,
+    )
+    .expect("source commitments");
+    let pdp_bytes = norito::encode_canonical(&pdp).expect("encode canonical commitment");
+    let header = BASE64.encode(&pdp_bytes);
+    let mut receipt = DaIngestReceipt {
+        client_blob_id: request.client_blob_id,
+        lane_id: request.lane_id,
+        epoch: request.epoch,
+        blob_hash: request.payload_hash,
+        chunk_root: BlobDigest::new(root),
+        manifest_hash: BlobDigest::new(manifest),
+        storage_ticket: StorageTicketId::new([0xA4; 32]),
+        pdp_commitment: Some(pdp_bytes.clone()),
+        retention_policy: request.retention_policy.clone(),
+        stripe_layout: DaStripeLayout {
+            total_stripes: 1,
+            shards_per_stripe: u32::from(request.erasure_profile.data_shards)
+                + u32::from(request.erasure_profile.parity_shards),
+            row_parity_stripes: request.erasure_profile.row_parity_stripes,
+        },
+        queued_at_unix: sealed_at,
+        rent_quote: DaRentQuote::default(),
+        operator_signature: DaIngestReceipt::signature_placeholder(),
+    };
+    receipt.operator_signature = Signature::try_new(
+        operator.private_key(),
+        &receipt
+            .operator_signing_bytes(request.sequence)
+            .expect("receipt transcript"),
+    )
+    .expect("sign receipt");
+    let scope = DaPinScopeProposalV1::new(
+        DaPinScopeV1::new(
+            &request.authorization(),
+            receipt.storage_ticket,
+            ManifestDigest::new(manifest),
+            None,
+        ),
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    );
+    let producer = KeyPair::from_private_key(ALICE_PRIVATE_KEY.parse().expect("producer key"))
+        .expect("producer");
+    let mut approved = request.clone();
+    approved
+        .try_add_pin_scope_signature(&scope, &producer)
+        .expect("expected scope witness");
+    let mock_phase = |body: &DaIngestRequest, status: &str, duplicate: bool| {
+        let receipt_value = norito::json::to_value(&receipt).expect("receipt JSON");
+        let scope_value = norito::json::to_value(&scope).expect("pin scope JSON");
+        let response = norito::json!({"status": status, "duplicate": duplicate, "receipt": receipt_value, "pin_scope": scope_value});
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/da/ingest")
+                .header_exists("X-Iroha-Account")
+                .header_exists("X-Iroha-Signature")
+                .header_exists("X-Iroha-Nonce")
+                .header_exists("X-Iroha-Timestamp-Ms")
+                .body(norito::json::to_string(body).expect("expected exact HTTP body"));
+            then.status(202)
+                .header("Content-Type", "application/json")
+                .header("sora-pdp-commitment", &header)
+                .body(norito::json::to_vec(&response).expect("encode signed HTTP response"));
+        })
+    };
+    let prepare = mock_phase(&request, "pending_pin_authorization", false);
+    let finalize = mock_phase(&approved, "accepted", true);
+    let output = submit()
+        .arg("--operator-public-key")
+        .arg(operator.public_key().to_string())
+        .output()
+        .expect("run CLI two-phase submission");
     assert!(
         output.status.success(),
-        "expected da submit to succeed, stderr: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let receipt_json_path = artifact_dir.join("da_receipt.json");
-    let receipt_json =
-        fs::read_to_string(&receipt_json_path).expect("read da_receipt.json contents");
-    let value: Value = norito::json::from_str(&receipt_json).expect("parse receipt JSON");
-    let pdp_json = value
-        .get("pdp_commitment")
-        .and_then(Value::as_str)
-        .expect("pdp_commitment field");
-    assert_eq!(pdp_json, BASE64.encode(&pdp_bytes));
-    let receipt_norito_path = artifact_dir.join("da_receipt.norito");
-    let receipt_bytes = fs::read(&receipt_norito_path).expect("read da_receipt.norito contents");
-    let archived = norito::from_bytes::<DaIngestReceipt>(&receipt_bytes).expect("decode receipt");
-    let decoded = archived.deserialize();
+    prepare.assert_calls(1);
+    finalize.assert_calls(1);
+    assert_eq!(read_request(), approved);
+    let json: DaIngestReceipt = norito::json::from_slice(
+        &fs::read(artifact_dir.join("da_receipt.json")).expect("read JSON receipt"),
+    )
+    .expect("decode JSON receipt");
+    assert_eq!(json, receipt);
+    let binary = fs::read(artifact_dir.join("da_receipt.norito")).expect("read binary receipt");
     assert_eq!(
-        decoded.pdp_commitment.as_deref(),
-        Some(pdp_bytes.as_slice())
+        binary,
+        norito::to_bytes(&receipt).expect("encoded response receipt")
     );
-    let headers_path = artifact_dir.join("da_response_headers.json");
-    let headers_json = fs::read_to_string(&headers_path).expect("read header json");
-    let headers_value: Value = norito::json::from_str(&headers_json).expect("parse header json");
-    let stored_header = headers_value
-        .get("sora-pdp-commitment")
-        .and_then(Value::as_str)
-        .expect("sora-pdp-commitment header");
-    assert_eq!(stored_header, pdp_header);
+    let archived = norito::from_bytes::<DaIngestReceipt>(&binary).expect("decode binary receipt");
+    assert_eq!(archived.deserialize(), receipt);
+    let persisted: Value = norito::json::from_slice(
+        &fs::read(artifact_dir.join("da_response_headers.json")).expect("read response headers"),
+    )
+    .expect("decode response headers");
+    assert_eq!(
+        persisted.get("sora-pdp-commitment").and_then(Value::as_str),
+        Some(header.as_str())
+    );
+    assert_eq!(json.pdp_commitment.as_deref(), Some(pdp_bytes.as_slice()));
 }
 #[test]
 fn da_rent_quote_outputs_summary_and_json() {

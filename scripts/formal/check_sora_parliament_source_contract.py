@@ -1589,7 +1589,7 @@ def require_block_start_construction(state: str) -> None:
     # its invocation binds exactly the original four State Cell sources.
     owners = (
         (path, "pub(super) fn construct_acquired_block<'state, R>(", "impl State", (lint,),
-         "original writers and armed continuation", "36d2a42e18c4d4e0c5a124f1cad40b1690b2d596040811faf202c4ae619bfd2d"),
+         "original writers and armed continuation", "b75e1add31aafeb3f6afc4b6cfbd44ae44d94bc65c71377ba051b9c2e6958a74"),
         (path, "fn finish_state_block_construction<R>(", None, ("#[inline(never)]",),
          "bounded borrowed finish", "aa4f6e7dd39969dd98751ac40f7f1b87bd4664a960a937cd8ccadc99487831b1"),
         (acquisition_path, "macro_rules! runtime_cells", None, (),
@@ -1611,7 +1611,7 @@ def require_block_start_construction(state: str) -> None:
         (state_path, "pub struct StateBlock<'state>", None, (),
          "original armed State owner", "ee7a37d3566f8a3fad4f005953b388cb00aeb4324a49d8243cfb5c0e755b3cd9"),
         (state_path, "pub struct StateBlockFields<'state>", None, (fields_lint,),
-         "original armed State owner fields and paired cfg", "3daab44a8e81091a260aad5b4b843b14903e4929e40bf883996425bc71247f54"),
+         "original armed State owner fields and paired cfg", "bca75572b944299dd5c5bae8e9d13b768594d1b318d39f8660d83ffeca646bfe"),
         (state_path, "fn from_fields(", "impl<'state> StateBlock<'state>", (),
          "original armed State owner", "098683d5a1eef932becc2dc383c875f30a3bea4b6f2dcebb15bc3022b8cd21ce"),
         (state_path, "impl mv::BlockRetirement for StateBlock<'_>", None, (),
@@ -1634,11 +1634,12 @@ def require_block_start_construction(state: str) -> None:
     # This still trusts the surrounding Rust crate/dependency resolver/compiler;
     # it is not a complete semantic proof of arbitrary Rust programs.
     for location, expected in (
-        (path, "cabcd14a5126e6496321ffc104ddf98e18c3b7bf45554e32100cdd594a1a56c2"),
+        (path, "f229b4d21acd99b6c349a6a10bc709d20d49c0e206db9d0cb20b9363ff886a68"),
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
-        (hydration_path, "30b0ad1d1de3e74e938da7501266250fa09e94358060a05c1f622feaae6c9670"),
+        # Optional proposal selection reads the existing hydration result with try_read().
+        (hydration_path, "9c22d1de740ba0c367d60a7a74673def99e1d03408698fda6a82b15f787e035d"),
     ):
         if rust_token_digest(sources[location]) != expected:
             raise RuntimeError(f"{location}: start construction changed its defining module tokens")
@@ -1732,6 +1733,21 @@ def require_anonymous_ballot_public_route() -> None:
     paths = tuple(re.findall(r'"(/v1/gov/anonymous-ballots[^"\n]*)"', strip_rust_comments(catalog)))
     if paths != tuple(row[2] for row in every):
         raise RuntimeError(f"{catalog_path}: anonymous-ballot route path set changed")
+    draft_rows = (("ATTEMPT", "attempts"), ("TRANSITION", "transitions"), ("CREDENTIAL", "credentials"))
+    draft_ids = tuple("GOV_ANONYMOUS_PARLIAMENT_" + tag + "_DRAFT" for tag, _ in draft_rows)
+    observed = tuple(re.findall(r"\bGOV_ANONYMOUS_PARLIAMENT_[A-Z_]+\b", mask_rust(catalog)))
+    if observed != draft_ids + draft_ids:
+        raise RuntimeError(f"{catalog_path}: authenticated anonymous Parliament draft set changed")
+    for (tag, segment), descriptor_id in zip(draft_rows, draft_ids):
+        owner = tag.lower()
+        path = f"/v1/gov/anonymous-parliament/{segment}/draft"
+        descriptor = (f'pub const {descriptor_id}: RouteDescriptor = app_signed_post('
+                      f'"governance.anonymous_parliament.{owner}.draft", "{path}", );')
+        mount = (f"{descriptor_id} => canonical_account_post(gov::anonymous_drafts::{owner}, "
+                 "app_state, runtime_governance_body_limit);")
+        if (compact_rust(strip_rust_comments(catalog)).count(compact_rust(descriptor)) != 1
+                or compact_rust(torii).count(compact_rust(mount)) != 1):
+            raise RuntimeError(f"{torii_path}: {descriptor_id} requires its bounded authenticated mount")
     gov_path = "crates/iroha_torii/src/gov.rs"
     gov = read(gov_path)
     for tag, operation, path, handler, owner in ANONYMOUS_BALLOT_PUBLIC_READS:
@@ -2024,12 +2040,83 @@ def require_block_start_phase_call_order(state: str) -> None:
     positions = [compact.find(token) for token in ordered]
     if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
         raise RuntimeError(f"{state_path}: start phases must finish before the original continuation")
+    require_block_start_world_transition_refusals(located, compact)
     # Region matching alone cannot rule out an outer conditional, substituted
     # closure, or early successful return around intact call text. Pin the whole
     # reviewed entry bodies with literal-preserving tokens; changes need review.
     if (rust_token_digest(wrapper_source) != "36d421b3f6c6311c4a41af89ad1982e9f9c9647fed5c27659b86b219487c8ca8"
-            or rust_token_digest(constructor) != "56bab9a2caa1dd208a8ba5c1f366d0fa65204b73609781b9d8aec36f4b488872"):
+            or rust_token_digest(constructor) != BLOCK_START_CONSTRUCTOR_DIGEST):
         raise RuntimeError(f"{state_path}: start phases changed their reviewed complete entry bodies")
+
+
+# Complete reviewed start constructor after its world-transition callee began
+# returning the start error itself (N14 migration refusals); see the explicit
+# post-Parliament checks in `require_block_start_world_transition_refusals`.
+BLOCK_START_CONSTRUCTOR_DIGEST = "4aee46509bbc3ca8cd7fea904f4591f83544f16e29d038b332114e7eb76219b5"
+
+
+def require_block_start_world_transition_refusals(located: str, constructor: str) -> None:
+    """World transitions follow Parliament and keep migration refusals local and typed.
+
+    The constructor no longer maps the callee's storage refusal: the callee now
+    returns `StateBlockStartError<E>` itself because a selected migration stage can
+    also defer locally. Bind that one post-Parliament call, its sibling order, and
+    the callee's three-way mapping, so a local migration deferral cannot become a
+    policy verdict on the block and no refusal can be swallowed. `constructor` is
+    the comment- and literal-masked compact constructor body checked above.
+    """
+    state_path = "crates/iroha_core/src/state.rs"
+    tail = compact_rust("""
+        crate::smartcontracts::isi::sccp::pause_lifecycle::lapse_after_enactments(&mut sb)
+            .map_err(StateBlockStartError::Storage)?;
+        let current_slot =
+            current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)?;
+        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_confidential_policies(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
+        sb.start_of_block_effects_applied = true;
+    """)
+    if constructor.count(tail) != 1 or constructor.count("apply_block_start_world_transitions(") != 1:
+        raise RuntimeError(
+            f"{state_path}: start phases must propagate world-transition refusals after Parliament"
+        )
+    transitions = compact_rust(strip_rust_comments(rust_item(
+        located, "    fn apply_block_start_world_transitions<E: std::fmt::Debug>(", state_path,
+    )))
+    signature = compact_rust("""
+        fn apply_block_start_world_transitions<E: std::fmt::Debug>(
+            sb: &mut StateBlock<'_>,
+            now_h: u64,
+            current_slot: u64,
+        ) -> Result<(), StateBlockStartError<E>> {
+    """)
+    stages = compact_rust("""
+            crate::runtime::migration::run_stages(&mut fields.world, now_h, &mut context).map_err(
+                |error| match error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                    ) => StateBlockStartError::ExecutionDeferred(original),
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(reason),
+                    ) => StateBlockStartError::Policy(reason),
+                    crate::runtime::migration::MigrationBoundaryError::Storage(original) => {
+                        StateBlockStartError::Storage(original)
+                    }
+                },
+            )?;
+    """)
+    expire = "crate::runtime::containment::expire_due(&mutwtx,now_h,now_ms);"
+    referenda = "letto_open:Vec<(String,u64,u64)>=wtx"
+    if (not transitions.startswith(signature) or transitions.count(stages) != 1
+            or transitions.count("run_stages(") != 1
+            or not 0 <= transitions.find(expire) < transitions.find(stages) < transitions.find(referenda)):
+        raise RuntimeError(
+            f"{state_path}: start phases must keep migration refusals local and typed before governance referenda"
+        )
 
 
 def require_governance_start_dispatch(dispatch: str) -> None:
@@ -2601,6 +2688,423 @@ def require_publication_kura_cleanup(publication: str) -> None:
             raise RuntimeError(f"{tests_path}: original Kura native cleanup regression is disconnected")
 
 
+# The only World storage refusals a migration barrier may suspend on, and the only
+# `LocalStateStorage` refusals a suspended original may retry. Both sites must agree.
+N14_RETRYABLE_WORLD_STORAGE = (
+    "mv::storage::AdmittedStorageError::Busy { .. }"
+    " | mv::storage::AdmittedStorageError::Allocation(_)"
+    " | mv::storage::AdmittedStorageError::Allocator { .. }"
+)
+
+N14_RESUME_BARRIER = """
+pub(crate) fn resume_barrier(
+    world: &mut WorldBlock<'_>,
+    height: u64,
+    progress: &mut BarrierProgress,
+) -> MigrationBoundaryResult<()> {
+    if world.runtime_migrations.iter().next().is_none() {
+        return Ok(());
+    }
+    let catalog = release_catalog().map_err(|error| {
+        MigrationBoundaryError::Execution(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string()),
+        )
+    })?;
+    let held = scratch::barrier_census(world, progress.completed_through)?;
+    for entry in held.entries() {
+        let id = entry.id;
+        let Some(migration) = catalog.migration(&id).copied() else {
+            progress.completed_through = Some(id);
+            continue;
+        };
+        if entry.barrier_holds {
+            migration.code.barrier(world, held.cursor(entry))?;
+        } else if matches!(
+            entry.status,
+            MigrationStatusV1::CutOver(_) | MigrationStatusV1::Drained(_)
+        ) && migration.code.stale(world)
+        {
+            iroha_logger::error!(
+                migration = %id,
+                "a write reached the old storage after the cutover; the drain stops"
+            );
+            world
+                .runtime_migrations
+                .get_mut(&id)
+                .expect("selected engine-owned migration record remains present")
+                .status = MigrationStatusV1::StaleWrite(height);
+        }
+        progress.completed_through = Some(id);
+    }
+    Ok(())
+}
+"""
+
+N14_TABLE_BARRIER = """
+    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) -> MigrationBoundaryResult<()> {
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        let (source, successor) = (self.pair.block)(world);
+        let mut child = successor.try_transaction().map_err(|original| {
+            MigrationBoundaryError::Storage(crate::state::StateStorageAdmissionError::World(
+                mv::storage::AdmittedStorageError::Planning(original),
+            ))
+        })?;
+        (self.barrier)(
+            BarrierStorage {
+                scratch: Scratch { budget: &budget },
+                source: SourceChanges { storage: source },
+                successor: BarrierSuccessor {
+                    storage: &mut child,
+                },
+            },
+            cursor,
+        )?;
+        child.apply();
+        Ok(())
+    }
+"""
+
+N14_SUSPENSION_NOTICE_OWNERS = (
+    ("    pub(crate) fn finish_suspension(&mut self) {", """
+    pub(crate) fn finish_suspension(&mut self) {
+        let Some(Phase::Suspending(slot)) = self.phase.as_mut() else {
+            panic!("original suspension slot required");
+        };
+        slot.suspend();
+        let Some(Phase::Suspending(slot)) = self.phase.take() else {
+            unreachable!()
+        };
+        let (original, cleanup) = slot.into_suspended();
+        self.phase = Some(Phase::Suspended(original));
+        self.suspension_cleanup = cleanup;
+    }
+    """),
+    ("    pub(crate) fn finish_resumption(&mut self) {", """
+    pub(crate) fn finish_resumption(&mut self) {
+        let Some(Phase::Resuming(slot)) = self.phase.as_mut() else {
+            panic!("prepared original resumption slot required");
+        };
+        assert!(slot.is_resumed());
+        let original = slot.take_block();
+        let Some(Phase::Resuming(slot)) = self.phase.take() else {
+            unreachable!()
+        };
+        self.phase = Some(Phase::Executing(original));
+        self.resumption_cleanup = Some(slot);
+    }
+    """),
+    ("    pub(crate) fn recover_resumption(&mut self) {", """
+    pub(crate) fn recover_resumption(&mut self) {
+        let original = match self.phase.as_mut() {
+            Some(Phase::Suspended(_)) => return,
+            Some(Phase::Resuming(slot)) => slot.recover_suspended(),
+            _ => panic!("original suspended or resuming field required"),
+        };
+        let Some(Phase::Resuming(slot)) = self.phase.take() else {
+            unreachable!()
+        };
+        self.phase = Some(Phase::Suspended(original));
+        self.resumption_cleanup = Some(slot);
+    }
+    """),
+    ("    pub(crate) fn retire_suspension_cleanup(&mut self) {", """
+    pub(crate) fn retire_suspension_cleanup(&mut self) {
+        assert!(matches!(
+            self.phase,
+            Some(Phase::Suspended(_) | Phase::Frozen(_) | Phase::Reading(_))
+        ));
+        drop(self.resumption_cleanup.take());
+        drop(std::mem::take(&mut self.suspension_cleanup));
+    }
+    """),
+)
+
+
+def require_publication_barrier_suspension(publication: str) -> None:
+    """Bind the resumable N14 migration barrier to the one retained original publisher.
+
+    The completed World tail is retained before the barrier can refuse, and the
+    non-World fields freeze once before it. Only a local barrier deferral or a
+    reviewed World storage refusal suspends the original executing World; a
+    rejection or any other refusal stays terminal. A retry first reacquires that
+    same World against the original State and predecessor generation under the
+    commit fence, then resumes only the barrier's unfinished suffix and folds the
+    accumulator once. A failed barrier callback discards its successor child.
+    Partial reacquisition recovers before any suspension, resumption or non-World
+    freeze notice retires, and those notices stay in their original slots until
+    the attempt's fences are released. This is a structural obligation; the
+    native publication migration tests own the executable codec, pool,
+    contention, changed-predecessor, dropped-owner and prefix regressions.
+    """
+    path = "crates/iroha_core/src/state/publication.rs"
+    storage_retry = compact_rust(N14_RETRYABLE_WORLD_STORAGE)
+    engine = compact_rust(strip_rust_comments(rust_item(publication, "    fn try_publish_inner(", path)))
+    cleanup = compact_rust("""
+        let mut result = self.attempt_original_publication(&mut original);
+        if original.world_suspended && !original.irreversible {
+            let fields = self.fields.as_mut().expect("original completed tail");
+            fields.world.recover_resumption();
+            fields.world.retire_suspension_cleanup();
+            fields.canonical_runtime.retire_frozen_cleanup();
+            fields.native_execution_tip.retire_frozen_cleanup();
+            fields.prev_commit_topology.retire_frozen_cleanup();
+            fields.commit_topology.retire_frozen_cleanup();
+            fields.transactions.retire_frozen_cleanup();
+        }
+        if original.fields_frozen && !original.irreversible {
+            self.recover_original_publication_fields();
+            self.retire_original_publication_notices();
+    """)
+    if (engine.count(cleanup) != 1 or engine.count(".recover_resumption();") != 1
+            or engine.count(".retire_suspension_cleanup();") != 1
+            or engine.count(".retire_frozen_cleanup();") != 5):
+        raise RuntimeError(
+            f"{path}: a suspended original must recover every partial reacquisition before its notices"
+        )
+    retry = compact_rust("""
+        let retryable = (original.fields_frozen || original.world_suspended)
+            && !original.irreversible
+            && matches!(
+                &error,
+                TransactionsBlockError::ExecutionDeferred(_)
+                    | TransactionsBlockError::CaptureDeferred(_)
+                    | TransactionsBlockError::CheckpointDeferred(_)
+                    | TransactionsBlockError::CheckpointReadDeferred(_)
+                    | TransactionsBlockError::BlockHashesBusy(_)
+                    | TransactionsBlockError::PublicationBusy(_)
+                    | TransactionsBlockError::MembershipAdmission(
+                        storage_transactions::MembershipAdmissionError::Busy(_)
+                    )
+                    | TransactionsBlockError::LocalStateStorage(
+                        StateStorageAdmissionError::World(
+    """) + storage_retry + compact_rust("""
+                        )
+                    )
+            );
+        if retryable {
+    """)
+    if engine.count(retry) != 1 or engine.count("letretryable=") != 1:
+        raise RuntimeError(f"{path}: only reviewed local refusals of a reversible original may retry")
+
+    attempt = compact_rust(strip_rust_comments(rust_item(
+        publication, "    fn attempt_original_publication(", path,
+    )))
+    resumption = compact_rust("""
+        fn attempt_original_publication(
+            &mut self,
+            original: &mut StatePublication<'state>,
+        ) -> Result<(), TransactionsBlockError> {
+            self.require_storage_admission()
+                .map_err(TransactionsBlockError::LocalStateStorage)?;
+            if original.world_suspended {
+                let _commit = original.commit_fence.lock();
+                let generation = self.state_ref.state_view_generation();
+                if !generation.is_multiple_of(2) || original.predecessor_generation != Some(generation)
+                {
+                    return Err(TransactionsBlockError::SnapshotObservationChanged);
+                }
+                let fields = self.fields.as_mut().expect("original suspended tail");
+                fields
+                    .world
+                    .install_suspended_resumption(&fields.state_ref.world);
+                fields
+                    .world
+                    .try_resume()
+                    .map_err(original_preparation_error)?;
+                fields.world.finish_resumption();
+                original.world_suspended = false;
+            }
+            let StatePublication {
+                capture_policy,
+                geometry_cleanup,
+                effect_cleanup,
+                lifecycle_index_releases,
+                publication_notice,
+                world_effects,
+                non_world_frozen,
+                world_suspended,
+                barrier_progress,
+                world_cut,
+    """)
+    if not attempt.startswith(resumption):
+        raise RuntimeError(
+            f"{path}: a suspended original must reacquire its exact World before any other step"
+        )
+    barrier = compact_rust("""
+                        TransactionsBlockError::ExecutionDeferred(reason)
+                    }
+                }
+            })?;
+            *world_effects = Some(effects);
+        }
+        if !*fields_frozen {
+            if !*non_world_frozen {
+                canonical_runtime.begin_freeze();
+                native_execution_tip.begin_freeze();
+                prev_committed_topology.begin_freeze();
+                committed_topology.begin_freeze();
+                transactions.finish_freeze()?;
+                canonical_runtime.finish_freeze();
+                native_execution_tip.finish_freeze();
+                prev_committed_topology.finish_freeze();
+                committed_topology.finish_freeze();
+                *non_world_frozen = true;
+            }
+            if let Err(error) =
+                crate::runtime::migration::resume_barrier(world, block_height, barrier_progress)
+            {
+                let retryable = match &error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(_),
+                    ) => true,
+                    crate::runtime::migration::MigrationBoundaryError::Storage(
+                        StateStorageAdmissionError::World(
+    """) + storage_retry + compact_rust("""
+                            ,
+                        ),
+                    ) => true,
+                    _ => false,
+                };
+                if retryable {
+                    world.begin_suspension();
+                    world.finish_suspension();
+                    *world_suspended = true;
+                }
+                return Err(match error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                    ) => TransactionsBlockError::ExecutionDeferred(original),
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(_),
+                    ) => TransactionsBlockError::WorldCommitPreparation,
+                    crate::runtime::migration::MigrationBoundaryError::Storage(original) => {
+                        TransactionsBlockError::LocalStateStorage(original)
+                    }
+                });
+            }
+            if !crate::runtime::keyed_state::selected(world.runtime_selection.get()) {
+                world
+                    .advance_state_accumulator(_curr_block.is_genesis())
+                    .map_err(|error| {
+                        error!(
+                            block_height,
+                            ?error,
+                            "failed to advance the World state accumulator"
+                        );
+                        TransactionsBlockError::WorldCommitPreparation
+                    })?;
+            }
+            world.begin_freeze();
+            world.finish_freeze();
+            *fields_frozen = true;
+        }
+        if !*runtime_checkpoint_prepared {
+    """)
+    if attempt.count(barrier) != 1:
+        raise RuntimeError(
+            f"{path}: only a local barrier refusal may suspend the retained World tail before its freeze"
+        )
+
+    publication_code = mask_rust(publication)
+    code = compact_rust(publication_code)
+    for token, expected in (
+        ("crate::runtime::migration::resume_barrier(", 1), ("migration::barrier(", 0),
+        ("BarrierProgress::default()", 1), (".begin_suspension();", 1),
+        (".finish_suspension();", 1), (".install_suspended_resumption(", 1),
+        (".try_resume()", 1), (".finish_resumption();", 1), (".recover_resumption();", 1),
+        (".retire_suspension_cleanup();", 1), ("observe_tail(", 1),
+        ("#[cfg(test)]migration_tests::observe_tail();leteffects=", 1),
+    ):
+        if code.count(token) != expected:
+            raise RuntimeError(f"{path}: N14 barrier owner {token!r} must occur {expected} time(s)")
+    # Like the Musubi success markers, each N14 marker has no other live mention.
+    for marker, owners in (
+        ("world_suspended", (
+            "world_suspended:bool,", "world_suspended:false,",
+            "iforiginal.world_suspended&&!original.irreversible{",
+            "(original.fields_frozen||original.world_suspended)&&!original.irreversible&&",
+            "iforiginal.world_suspended{let_commit=original.commit_fence.lock();",
+            "fields.world.finish_resumption();original.world_suspended=false;}",
+            ",non_world_frozen,world_suspended,barrier_progress,",
+            "world.finish_suspension();*world_suspended=true;}",
+        )),
+        ("non_world_frozen", (
+            "non_world_frozen:bool,", "non_world_frozen:false,",
+            ",world_effects,non_world_frozen,world_suspended,",
+            "if!*non_world_frozen{canonical_runtime.begin_freeze();",
+            "committed_topology.finish_freeze();*non_world_frozen=true;}",
+        )),
+        ("barrier_progress", (
+            "barrier_progress:crate::runtime::migration::BarrierProgress,",
+            "barrier_progress:crate::runtime::migration::BarrierProgress::default(),",
+            ",world_suspended,barrier_progress,world_cut,",
+            "crate::runtime::migration::resume_barrier(world,block_height,barrier_progress)",
+        )),
+    ):
+        mentions = re.findall(rf"(?<![A-Za-z0-9_]){marker}(?![A-Za-z0-9_])", publication_code)
+        if len(mentions) != len(owners) or any(code.count(owner) != 1 for owner in owners):
+            raise RuntimeError(f"{path}: N14 marker {marker!r} must stay with its reviewed owners")
+
+    # Barrier progress advances only after one migration completes, and the census
+    # skips exactly that completed prefix. Its cursor is private to the engine.
+    migration_path = "crates/iroha_core/src/runtime/migration.rs"
+    migration = read(migration_path)
+    resume = compact_rust(strip_rust_comments(unconditional_rust_item(
+        migration, "pub(crate) fn resume_barrier(", migration_path,
+    )))
+    migration_code = compact_rust(strip_rust_comments(migration))
+    if (resume != compact_rust(N14_RESUME_BARRIER)
+            or migration_code.count(
+                "#[derive(Default)]pub(crate)structBarrierProgress{completed_through:Option<DefinitionId>,}"
+            ) != 1
+            or migration_code.count("completed_through") != 4):
+        raise RuntimeError(f"{migration_path}: barrier progress must advance only after each migration completes")
+    scratch_path = "crates/iroha_core/src/runtime/migration/scratch.rs"
+    census = compact_rust(strip_rust_comments(rust_item(
+        read(scratch_path), "pub(super) fn barrier_census(", scratch_path,
+    )))
+    if (census.count(
+            "completed_through.is_none_or(|done|**id>done)&&selection.active.binary_search(id).is_ok()"
+        ) != 1 or census.count("completed_through") != 2):
+        raise RuntimeError(f"{scratch_path}: the barrier census must skip exactly the completed prefix")
+    storage_path = "crates/iroha_core/src/runtime/migration/storage.rs"
+    table_barrier = compact_rust(strip_rust_comments(rust_item(
+        read(storage_path),
+        "    fn barrier(&self, world: &mut WorldBlock<'_>, cursor: &[u8]) -> MigrationBoundaryResult<()> {",
+        storage_path,
+    )))
+    if table_barrier != compact_rust(N14_TABLE_BARRIER):
+        raise RuntimeError(f"{storage_path}: a refused barrier callback must discard its successor child")
+
+    # Suspension/resumption notices stay in their own slots until every sibling and
+    # fence is free; frozen retirement also retires a completed resumption's slot.
+    frozen_path = "crates/iroha_core/src/state/block_field/frozen.rs"
+    retire = compact_rust(strip_rust_comments(rust_item(
+        read(frozen_path), "    pub(crate) fn retire_frozen_cleanup(&mut self) {", frozen_path,
+    )))
+    if retire != compact_rust("""
+        pub(crate) fn retire_frozen_cleanup(&mut self) {
+            assert!(!self.released, "field was terminally released");
+            assert!(
+                matches!(self.phase, Some(Phase::Frozen(_) | Phase::Reading(_))),
+                "complete original frozen field required"
+            );
+            self.retire_suspension_cleanup();
+            drop(self.retry_cleanup.take());
+            drop(std::mem::take(&mut self.freeze_cleanup));
+        }
+    """):
+        raise RuntimeError(f"{frozen_path}: frozen retirement must also retire suspension notices")
+    suspended_path = "crates/iroha_core/src/state/block_field/suspended.rs"
+    suspended = read(suspended_path)
+    for declaration, expected in N14_SUSPENSION_NOTICE_OWNERS:
+        item = compact_rust(strip_rust_comments(rust_item(suspended, declaration, suspended_path)))
+        if item != compact_rust(expected):
+            raise RuntimeError(
+                f"{suspended_path}: suspension notices must stay in their original slots until retirement"
+            )
+
+
 def require_parliament_commit_publication(state: str) -> None:
     """Publish Parliament metrics only from the retained State owner, once, after publication."""
     state_path = "crates/iroha_core/src/state.rs"
@@ -3024,11 +3528,20 @@ impl<'state> StateBlock<'state> {
         raise RuntimeError(f"{path}: Parliament telemetry must follow successful canonical publication")
     if compact.count(".record_committed_parliament_transition(") != 1:
         raise RuntimeError(f"{path}: Parliament commit must have one exact transition-metric publisher")
+    # The N14 resumable barrier follows every earlier explanatory check, so each
+    # retains its own diagnostic; its new invariants are explicit before the pin.
+    require_publication_barrier_suspension(read(path))
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "0151c2d761e7d12ae7cce57ea9d3cf5c34eb1eebbbb44595e27d284449b3fd65":
+    if rust_token_digest(original_attempt) != ORIGINAL_PUBLICATION_OWNER_DIGEST:
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
+
+
+# Complete reviewed attempt owner after the N14 resumable barrier; its new
+# suspension, progress and retry invariants are explicit in
+# `require_publication_barrier_suspension` before this whole-owner pin.
+ORIGINAL_PUBLICATION_OWNER_DIGEST = "35ad3a67d27a542ddfb0ee6b22c7ccee29e07867c74545ec203d8ce6e7606b5d"
 
 
 EPOCH_BEACON_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon.rs"
@@ -4688,6 +5201,7 @@ def require_signed_deferred_authority_and_native_fees(
     require(authority_path, recursive, (
         "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
+        "crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)",
         "MultisigInstructionBox::Propose(proposal)",
         "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "MultisigInstructionBox::Approve(approval)",
@@ -5384,7 +5898,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "bf50f2241f9b843f938b734426fc60aed2e9877588201e5231986fb684a34a82":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "fa9b3d69ccbdec58af9c70cfd757d7b5a6a55583417d6c387cf11ea88db71c87":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):

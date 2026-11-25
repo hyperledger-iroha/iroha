@@ -30,7 +30,7 @@ pub(crate) async fn install(network: &Network, epoch: u64) -> Result<()> {
     Ok(())
 }
 
-fn policy_for(
+pub(crate) fn policy_for(
     status: LaneLifecycleStatusV1,
     producer: AccountId,
     epoch: u64,

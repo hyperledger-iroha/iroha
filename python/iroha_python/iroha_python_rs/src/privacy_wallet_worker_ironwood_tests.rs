@@ -1288,8 +1288,18 @@ mod ironwood {
         let network = *chain.network_id().as_bytes();
         let paid = execute(&public_action(POOL), network, false);
         let paid_statement = statement(&paid);
-        let transaction = hex::encode(paid.hash_as_entrypoint().as_ref());
-        assert_eq!(chain.commit(vec![paid]), vec![true]);
+        let paid_hash = paid.hash_as_entrypoint();
+        let transaction = hex::encode(paid_hash.as_ref());
+        let preceding = chain.sign(
+            &merchant_signer,
+            [iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "before merchant payment".into(),
+            )
+            .into()],
+            now,
+        );
+        assert_eq!(chain.commit(vec![preceding, paid]), vec![true, true]);
         {
             let view = chain.state().view();
             assert_eq!(
@@ -1473,6 +1483,23 @@ mod ironwood {
             receipt["receipts"][0]["receipt_identity"]
         );
         assert_eq!(receipt["receipts"].as_array().unwrap().len(), 1);
+        let note = &receipt["receipts"][0];
+        let input_hash = |row: &Value| {
+            let index = usize::try_from(row["input_index"].as_u64()?).ok()?;
+            authenticated_page
+                .tip()
+                .block()
+                .external_signed_transaction_at(index)
+                .map(|(hash, _)| hash)
+        };
+        assert_eq!(note["input_index"].as_u64(), Some(1));
+        assert_eq!(input_hash(note), Some(paid_hash));
+        let mut wrong_input = note.clone();
+        wrong_input
+            .as_object_mut()
+            .unwrap()
+            .insert("input_index".into(), Value::from(0u64));
+        assert_ne!(input_hash(&wrong_input), Some(paid_hash));
         assert_eq!(receipt["receipts"][0]["height"].as_u64(), Some(start + 1));
         assert_eq!(
             receipt["receipts"][0]["amount_decimal"].as_str(),

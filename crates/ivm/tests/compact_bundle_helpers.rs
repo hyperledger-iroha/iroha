@@ -1,4 +1,5 @@
 use ivm::{IVM, VMError};
+use ivm_abi::error::VmTrap;
 #[test]
 fn memory_compact_bundle_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -90,7 +91,7 @@ fn memory_compact_bundle_rejects_non_addresses() {
     for invalid in [vm.memory.stack_top(), u64::MAX] {
         assert!(matches!(
             ivm::merkle_utils::memory_compact_bundle(&mut vm.memory, invalid, None),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
 }

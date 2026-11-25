@@ -42,7 +42,7 @@ const PUBLICATION_START: [&str; 4] = ["localnet", "up", "local", "--with-storage
 pub(in crate::mochi) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
     // The config-free deployment fixture intentionally uses Standard. A fresh store is
     // required to select storage services without replacing any retained generation.
-    let mut harness = Harness::new(kagami)?;
+    let mut harness = Harness::new(kagami)?.with_smoke_start_budget();
     let result = (|| {
         let started = harness.command(&PUBLICATION_START)?;
         super::require_phase(&started, "ready", 4)?;

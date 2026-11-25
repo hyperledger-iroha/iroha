@@ -212,7 +212,13 @@ fn execute(
     );
     let committed = setup.chain.committed(height);
     assert_eq!(committed.block().external_transactions().count(), 1);
-    assert_eq!(committed.block().output_error(0), expected);
+    assert_eq!(
+        committed
+            .block()
+            .output_error(0)
+            .map(|reason| reason.baseline().expect("baseline KAGEMUSHA fixture")),
+        expected
+    );
     hash
 }
 

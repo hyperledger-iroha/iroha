@@ -436,7 +436,7 @@ mod canonical_output_inclusion_tests {
             .unwrap()
             .insert("merge_inclusion".into(), norito::json::Value::Null);
         assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
-        let result = committed.result().clone();
+        let result = committed.output.network().unwrap().result.clone();
         let old = RetiredCommitted {
             block_hash: committed.block_hash,
             entrypoint_hash: committed.entrypoint_hash,
@@ -571,7 +571,7 @@ mod fault_injection_tests {
             let original_proof = tx.output_proof.clone();
 
             tx.swap_result();
-            assert!(tx.result().0.is_err());
+            assert!(tx.result().is_err());
             assert_ne!(tx.output_hash, original_hash);
             assert_eq!(tx.output_hash, HashOf::new(&tx.output));
             assert_eq!(tx.output.trigger_lifecycle(), output.trigger_lifecycle());
@@ -614,7 +614,7 @@ mod fault_injection_tests {
         let old_hash = tx.output_hash;
         let proof = tx.output_proof.clone();
         tx.swap_result();
-        assert!(tx.result().0.is_err());
+        assert!(tx.result().is_err());
         assert_eq!(tx.result().batch_transfer_outcomes(), [outcome]);
         assert_ne!(tx.output_hash, old_hash);
         assert_eq!(tx.output_hash, HashOf::new(&tx.output));
@@ -902,6 +902,37 @@ mod tests {
         );
         let decoded: QueryOutputBatchBox = json::from_value(as_value).expect("deserialize batch");
         assert_eq!(decoded, batch);
+    }
+    #[test]
+    fn compact_query_response_preserves_the_same_frame_on_every_target() {
+        let response = QueryResponse::Iterable(QueryOutput::new(
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
+                Vec::new(),
+            )),
+            0,
+            None,
+        ));
+        let original = hex::decode(concat!(
+            "4e5254300000e355612278fe789c7adaa6a2ff18189b002c000000000000004b",
+            "be859bff3bd2fd0200000000000000000100000027171601000000000000000d",
+            "160000000800000000000000000a0108000000000000000001000100",
+        ))
+        .expect("compact empty committed-transaction response");
+        assert_eq!(norito::encode_canonical(&response).unwrap(), original);
+        assert_eq!(
+            norito::decode_canonical::<QueryResponse>(&original).unwrap(),
+            response
+        );
+
+        let start = norito::core::Header::SIZE;
+        for padding_len in [0, 7, 9, 16] {
+            let mut malformed = original.clone();
+            malformed.splice(start..start + 8, vec![0; padding_len]);
+            assert!(norito::decode_canonical::<QueryResponse>(&malformed).is_err());
+        }
+        let mut nonzero = original;
+        nonzero[start + 7] = 1;
+        assert!(norito::decode_canonical::<QueryResponse>(&nonzero).is_err());
     }
     #[test]
     fn query_response_iterable_json_roundtrip() {

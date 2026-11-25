@@ -339,6 +339,15 @@ fn output_identity(path: &Path) -> Result<PathBuf> {
 /// Archive, manifest, and optional hybrid-envelope publication outputs.
 #[derive(clap::Args, Debug)]
 pub struct PackArgs {
+    /// Absolute Unix-second deadline for paid pin retention. Core registers or
+    /// approves the manifest only when this is more than 24 hours (86 400 s) after
+    /// that block's time, because its automatic replication order must end first;
+    /// pack refuses a deadline within 24 hours of now.
+    #[arg(long = "pin-retention-epoch")]
+    pub pin_retention_epoch: u64,
+    /// Number of provider replicas requested by the manifest.
+    #[arg(long = "pin-min-replicas", default_value_t = 3)]
+    pub pin_min_replicas: u16,
     /// Payload path (file or directory) to package into a CAR archive.
     pub input: PathBuf,
     /// Path to write the Norito manifest (`.to`). If omitted, no manifest file is emitted.
@@ -378,6 +387,8 @@ impl PackArgs {
     #[allow(clippy::too_many_lines)]
     fn pack(self) -> Result<String> {
         let PackArgs {
+            pin_retention_epoch,
+            pin_min_replicas,
             input,
             manifest_out,
             car_out,
@@ -387,6 +398,21 @@ impl PackArgs {
             hybrid_recipient_x25519,
             hybrid_recipient_kyber,
         } = self;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .wrap_err("system clock precedes Unix epoch")?
+            .as_secs();
+        // Core builds an automatic replication order at registration, or at council
+        // approval when that is required; its 24-hour ingest deadline must precede
+        // the retention epoch.
+        let minimum = now.saturating_add(u64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ));
+        if pin_retention_epoch <= minimum || pin_min_replicas == 0 {
+            return Err(eyre!(
+                "pin retention must be a future absolute Unix deadline more than 24 hours away (Core refuses an earlier one at registration) and replicas must be positive"
+            ));
+        }
         let descriptor = chunker_registry::default_descriptor();
         let (plan, payload) = build_pack_plan(&input, descriptor.profile)?;
         if plan.chunk_profile != descriptor.profile {
@@ -447,9 +473,9 @@ impl PackArgs {
             .car_digest(car_archive_digest)
             .car_size(car_stats.car_size)
             .pin_policy(PinPolicy {
-                min_replicas: 3,
+                min_replicas: pin_min_replicas,
                 storage_class: ManifestStorageClass::Hot,
-                retention_epoch: 86_400,
+                retention_epoch: pin_retention_epoch,
             })
             .governance(GovernanceProofs::default());
         if !metadata.is_empty() {
@@ -1052,6 +1078,62 @@ mod tests {
     }
 
     #[test]
+    fn toolkit_pack_requires_explicit_future_pin_deadline() {
+        let base = ["iroha", "app", "sorafs", "toolkit", "pack", "unopened-path"];
+        assert!(crate::Args::try_parse_from(base).is_err());
+        assert!(
+            crate::Args::try_parse_from(base.into_iter().chain([
+                "--pin-retention-epoch",
+                "4000000000",
+                "--pin-min-replicas",
+                "3"
+            ]))
+            .is_ok()
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after Unix epoch")
+            .as_secs();
+        for (pin_retention_epoch, pin_min_replicas) in
+            [(86_400, 3), (now + 3_600, 3), (4_000_000_000, 0)]
+        {
+            let args = PackArgs {
+                pin_retention_epoch,
+                pin_min_replicas,
+                input: PathBuf::from("unopened-path"),
+                manifest_out: None,
+                car_out: None,
+                json_out: None,
+                hybrid_envelope_out: None,
+                hybrid_envelope_json_out: None,
+                hybrid_recipient_x25519: None,
+                hybrid_recipient_kyber: None,
+            };
+            assert!(
+                args.pack()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("future absolute Unix")
+            );
+        }
+        // Two days out passes the policy check; only the absent input then refuses.
+        let accepted = PackArgs {
+            pin_retention_epoch: now + 2 * 86_400,
+            pin_min_replicas: 3,
+            input: PathBuf::from("unopened-path"),
+            manifest_out: None,
+            car_out: None,
+            json_out: None,
+            hybrid_envelope_out: None,
+            hybrid_envelope_json_out: None,
+            hybrid_recipient_x25519: None,
+            hybrid_recipient_kyber: None,
+        };
+        let error = accepted.pack().unwrap_err().to_string();
+        assert!(!error.contains("future absolute Unix"), "{error}");
+    }
+
+    #[test]
     fn toolkit_pack_emits_manifest_and_report() {
         let temp = TempDir::new().expect("temp dir");
         let payload_path = temp.path().join("payload.bin");
@@ -1060,6 +1142,8 @@ mod tests {
         let car_path = temp.path().join("payload.car");
         let json_path = temp.path().join("report.json");
         let args = PackArgs {
+            pin_retention_epoch: 4_000_000_000,
+            pin_min_replicas: 3,
             input: payload_path,
             manifest_out: Some(manifest_path.clone()),
             car_out: Some(car_path.clone()),
@@ -1075,6 +1159,8 @@ mod tests {
         let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
         let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
         assert_eq!(manifest.content_length, 13);
+        assert_eq!(manifest.pin_policy.min_replicas, 3);
+        assert_eq!(manifest.pin_policy.retention_epoch, 4_000_000_000);
         let car_bytes = fs::read(&car_path).expect("read CAR archive");
         assert_eq!(manifest.car_size, car_bytes.len() as u64);
         let archive_digest = *blake3::hash(&car_bytes).as_bytes();
@@ -1159,6 +1245,8 @@ mod tests {
         let car_path = temp.path().join("payload.car");
         let report_path = temp.path().join("report.json");
         let args = PackArgs {
+            pin_retention_epoch: 4_000_000_000,
+            pin_min_replicas: 3,
             input: site,
             manifest_out: Some(manifest_path.clone()),
             car_out: Some(car_path.clone()),

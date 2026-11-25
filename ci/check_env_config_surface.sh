@@ -47,9 +47,14 @@ if [[ -n "${base_commit}" ]]; then
 			echo "env-config guard: ENV_CONFIG_GUARD_ALLOW=1 set; skipping new-production-toggle detection." >&2
 		else
 			new_prod="$(
-				BASE_JSON="${base_json}" HEAD_JSON="${tmp_json}" python3 - <<'PY'
+				BASE_JSON="${base_json}" HEAD_JSON="${tmp_json}" BASE_COMMIT="${base_commit}" python3 - <<'PY'
+import importlib.util
 import json
 import os
+import subprocess
+import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 base_path = Path(os.environ["BASE_JSON"])
@@ -81,6 +86,58 @@ def first_context(entry: dict) -> str:
     return f"{loc} — {context}" if context else loc
 
 
+def base_source(name: str) -> bytes | None:
+    """Read only an in-repository source's selected-base Git blob."""
+    relative = Path(name)
+    if (relative.is_absolute() or ".." in relative.parts or not relative.is_file()
+            or not relative.resolve().is_relative_to(Path.cwd())):
+        return None
+    result = subprocess.run(
+        ["git", "show", f"{os.environ['BASE_COMMIT']}:{relative.as_posix()}"],
+        capture_output=True, check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+scanner_path = Path("scripts/inventory_env_toggles.py")
+scanner_bytes = base_source(scanner_path.as_posix())
+scanner_unchanged = scanner_bytes is not None and scanner_bytes == scanner_path.read_bytes()
+
+
+def inherited_production_references(name: str, rows: list[dict]) -> bool:
+    """Reclassify base bytes instead of trusting a stale inventory or changed source."""
+    if not scanner_unchanged or not rows:
+        return False
+    try:
+        spec = importlib.util.spec_from_file_location("iroha_env_base_inventory", scanner_path)
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        with tempfile.TemporaryDirectory(prefix="iroha-env-base-") as temporary:
+            root = Path(temporary)
+            scanner.REPO_ROOT = root
+            base_refs = []
+            for path in sorted({row.get("path", "") for row in rows}):
+                original = base_source(path)
+                if original is None:
+                    return False
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(original)
+                base_refs.extend(scanner.extract_references(destination))
+            observed = Counter((ref.path.as_posix(), ref.context.strip())
+                               for ref in base_refs if ref.name == name and ref.scope == "prod")
+            expected = Counter((row.get("path", ""), row.get("context", "").strip())
+                               for row in rows)
+            return bool(expected) and all(observed[key] >= count for key, count in expected.items())
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+# Reconstruct omitted references with the unchanged repository classifier and
+# original Git blobs. Every current production reference must retain its exact
+# path/context and production classification in the base. Unrelated edits may
+# differ; new references, test-to-production moves and classifier changes refuse.
 new_prod = []
 for name, entry in head.get("variables", {}).items():
     head_prod = prod_count(head, name)
@@ -88,6 +145,11 @@ for name, entry in head.get("variables", {}).items():
         continue
     base_prod = prod_count(base, name)
     if base_prod <= 0:
+        production_rows = [row for row in entry.get("paths", []) if row.get("scope") == "prod"]
+        if inherited_production_references(name, production_rows):
+            print(f"env-config guard: {name} is already present in reclassified base source.",
+                  file=sys.stderr)
+            continue
         new_prod.append((name, head_prod, first_context(entry)))
 
 for name, count, context in sorted(new_prod):

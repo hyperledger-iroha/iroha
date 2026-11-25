@@ -1528,6 +1528,136 @@ impl RuntimeApiRouterFixture {
         self.router.shutdown().await;
     }
 }
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn c10_manifest_http_requires_the_original_account_and_exact_representation() {
+    use iroha_core::{
+        smartcontracts::Execute as _,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractBytes,
+        ivm_c10::{
+            ContractManifestC10V1, RegisterSmartContractCodeC10V1,
+            manifest::{REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1},
+        },
+        smart_contract::ContractArtifactId,
+    };
+
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    let key = config.genesis_key.clone();
+    config.chain_id = ChainId::from("c10-manifest-torii");
+    let chain = CertifiedTestChain::start(config).unwrap();
+    let caller = chain.genesis_account();
+    let network = chain.network_id();
+    iroha_core::runtime::activate_additions_for_testing(
+        &chain.state().world,
+        "iroha.runtime.ivm_c10.v1",
+    )
+    .unwrap();
+    let (code, manifest) = kotodama_lang::compiler::Compiler::new_c10()
+        .compile_source_with_manifest(
+            "seiyaku QueryFixture { view fn amount() authorize(anyone) -> int { return 4; } }",
+        )
+        .unwrap();
+    let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
+    let signing = crate::routing::manifest_signing_test_support::ManifestSigningFixture::new(1);
+    let manifest = ContractManifestC10V1::try_from(manifest)
+        .unwrap()
+        .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+        .unwrap();
+    chain.setup_world_at(2_000, |tx| {
+        RegisterSmartContractBytes { artifact_id, code }
+            .execute(caller, tx)
+            .unwrap();
+        RegisterSmartContractCodeC10V1 {
+            artifact_id,
+            manifest: manifest.clone(),
+        }
+        .execute(caller, tx)
+        .unwrap();
+    });
+    let host_profile = *chain
+        .state()
+        .world_view()
+        .c10_contract_profiles()
+        .get(&artifact_id)
+        .unwrap();
+    let fixture = RuntimeApiRouterFixture::with_runtime(
+        "c10-manifest-torii",
+        Arc::clone(chain.kura()),
+        Arc::clone(chain.state()),
+        ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
+    );
+    let uri: axum::http::Uri = format!(
+        "/v1/contracts/artifacts/0/{}",
+        hex::encode(artifact_id.code_hash.as_ref())
+    )
+    .parse()
+    .unwrap();
+    for (signed, accept, status) in [
+        (
+            false,
+            REGISTERED_MANIFEST_MEDIA_TYPE,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (true, "application/json", StatusCode::NOT_FOUND),
+        (true, REGISTERED_MANIFEST_MEDIA_TYPE, StatusCode::OK),
+        (true, "application/json;q=0, application/vnd.iroha.c10-manifest.v1+json;q=0.8", StatusCode::OK),
+    ] {
+        let mut request = Request::builder()
+            .method(HttpMethod::GET)
+            .uri(uri.clone())
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .unwrap();
+        if signed {
+            request.headers_mut().extend(signed_network_app_headers(
+                &network,
+                caller,
+                &key,
+                &HttpMethod::GET,
+                &uri,
+                &[],
+            ));
+        }
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let response = fixture.router.clone().oneshot(request).await.unwrap();
+        let actual = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(actual, status, "{}", String::from_utf8_lossy(&body));
+        if status.is_success() {
+            assert_eq!(
+                headers[axum::http::header::CONTENT_TYPE].to_str().unwrap(),
+                format!("{REGISTERED_MANIFEST_MEDIA_TYPE}; charset=utf-8")
+            );
+            assert!(
+                headers
+                    .get_all(axum::http::header::VARY)
+                    .iter()
+                    .any(|v| v == "Accept")
+            );
+            assert_eq!(
+                norito::json::from_slice::<RegisteredManifestC10V1>(&body).unwrap(),
+                RegisteredManifestC10V1 {
+                    network_id: network,
+                    artifact_id,
+                    manifest: manifest.clone(),
+                    host_profile
+                }
+            );
+        }
+    }
+    fixture.shutdown().await;
+}
 #[tokio::test]
 async fn node_capabilities_http_bootstraps_without_registered_account() {
     // An unsigned caller needs no registered account to discover the node.

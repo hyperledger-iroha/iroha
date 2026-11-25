@@ -1,5 +1,5 @@
 //! Bounded source excerpts and terminal-cell underlines from immutable snapshots.
-mod widths;
+use crate::display_width;
 
 use super::SourceSpan;
 use crate::source::SourceFile;
@@ -56,7 +56,7 @@ fn display_character(character: char, column: usize, at_left_edge: bool) -> (Str
         let width = TAB_WIDTH - column % TAB_WIDTH;
         return (" ".repeat(width), width);
     }
-    let width = widths::width(character);
+    let width = display_width::width(character);
     // Joining, direction, and variation controls must not reinterpret neighbouring cells.
     // Unicode line separators and non-ASCII spaces other than the
     // ideographic space are shown escaped too: they are rejected source
@@ -175,9 +175,9 @@ mod tests {
             "\n    1 | e\u{301} 日本\n      |   ^^^^"
         );
         assert_eq!(excerpt(text, 1, 3), "\n    1 | e\u{301} 日本\n      | ^");
-        assert_eq!(widths::width('\u{3099}'), 0);
-        assert_eq!(widths::width('日'), 2);
-        assert_eq!(widths::width('a'), 1);
+        assert_eq!(display_width::width('\u{3099}'), 0);
+        assert_eq!(display_width::width('日'), 2);
+        assert_eq!(display_width::width('a'), 1);
     }
 
     #[test]

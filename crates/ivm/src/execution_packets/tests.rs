@@ -1,6 +1,7 @@
 //! Native ownership, exact ordinary execution and closed component boundaries.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::{IVM, TraceMode, execution_memory::ExecutionMemoryLease, instruction::wide};
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
@@ -48,11 +49,9 @@ fn executed_child_calls(contract: &PreparedContract, ordinary: &IVM) -> usize {
         .iter()
         .filter(|pc| {
             let relative_pc = pc.checked_sub(contract.instruction_entry_pc()).unwrap();
-            let instructions = contract.decoded();
-            let index = instructions
-                .binary_search_by_key(&relative_pc, |instruction| instruction.pc)
-                .unwrap();
-            let instruction = instructions[index].inst;
+            let instructions = contract.instructions();
+            let index = instructions.index_of(relative_pc).unwrap();
+            let instruction = instructions.get(index).unwrap().inst;
             let opcode = crate::instruction::wide::opcode(instruction);
             opcode == crate::instruction::wide::control::JALS
                 || (opcode == crate::instruction::wide::control::JAL
@@ -133,7 +132,7 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
         .entry_pc;
     let root_words = output
         .artifact()
-        .decoded()
+        .instructions()
         .iter()
         .filter(|op| op.pc >= entry_pc)
         .count();
@@ -326,7 +325,7 @@ fn child_calls_are_local_component_refusal_and_do_not_change_ordinary_validity()
         64,
     );
     let child_calls = contract
-        .decoded()
+        .instructions()
         .iter()
         .filter(|op| match wide::opcode(op.inst) {
             wide::control::JAL => wide::rd(op.inst) == 1,
@@ -407,11 +406,11 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
     );
     drop(parent);
     for (contract, gas, expected) in [
-        (unit(), 0, VMError::OutOfGas),
+        (unit(), 0, VMError::Trap(VmTrap::OutOfGas)),
         (
             contract("seiyaku S { view fn main() authorize(anyone) { } }", 1),
             10_000,
-            VMError::ExceededMaxCycles,
+            VMError::Trap(VmTrap::ExceededMaxCycles),
         ),
     ] {
         let mut parent = super::tests::parent(&budget);
@@ -421,11 +420,13 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
                 expected
             ),
             (
-                Err(CaptureError::Execution(VMError::OutOfGas)),
-                VMError::OutOfGas
+                Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas))),
+                VMError::Trap(VmTrap::OutOfGas)
             ) | (
-                Err(CaptureError::Execution(VMError::ExceededMaxCycles)),
-                VMError::ExceededMaxCycles,
+                Err(CaptureError::Execution(VMError::Trap(
+                    VmTrap::ExceededMaxCycles
+                ))),
+                VMError::Trap(VmTrap::ExceededMaxCycles),
             )
         ));
         assert_eq!(budget.reserved_bytes(), 0);

@@ -1,6 +1,7 @@
 //! Exact trace preparation, cleanup and original-owner boundary regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr},
@@ -63,9 +64,9 @@ fn initial_pc_and_full_delta_refusal_precedes_all_guest_changes() {
         original.set_limit_bytes(0);
         assert!(matches!(
             vm.begin_trace_invocation(),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::ExceedsLimit { .. }
-            ))
+            )))
         ));
         assert_eq!(state(&vm), before);
         assert!(vm.pc_trace.as_slice().is_empty());
@@ -73,7 +74,7 @@ fn initial_pc_and_full_delta_refusal_precedes_all_guest_changes() {
         assert_eq!(original.reserved_bytes(), bytes);
         original.set_limit_bytes(LIMIT);
         let invocation = vm.begin_trace_invocation().unwrap();
-        vm.record_trace_prefetch(&invocation).unwrap();
+        vm.record_trace_prefetch(&invocation);
         vm.finish_trace_invocation(invocation);
         assert_eq!(state(&vm), before);
         drop(vm);
@@ -86,7 +87,7 @@ fn tail_refusal_and_unwind_cancel_only_unobserved_credit_and_keep_original_error
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::DeltaRegisters, true);
     let invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     let word = encode_ri(a::ADDI, 7, 7, 1);
     let before = state(&vm);
     let outcome = vm.prepare_trace_instruction(&invocation, word, |_| {
@@ -94,9 +95,12 @@ fn tail_refusal_and_unwind_cancel_only_unobserved_credit_and_keep_original_error
         let Err(refusal) = original.try_reserve_bytes(1) else {
             panic!("original pool must refuse after limit shrinks to live credit");
         };
-        Err::<(), _>(VMError::AllocationDeferred(refusal))
+        Err::<(), _>(VMError::Deferred(VmDeferral::AllocationDeferred(refusal)))
     });
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. })) = outcome
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    }))) = outcome
     else {
         panic!("original tail refusal");
     };
@@ -128,7 +132,7 @@ fn tail_refusal_and_unwind_cancel_only_unobserved_credit_and_keep_original_error
     vm.cycles = 1;
     let mut last = 0;
     vm.publish_trace_cycles(&invocation, &mut last).unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     assert_eq!(vm.delta_trace.entry(1).unwrap().changes, &[(7, 1, false)]);
     assert_eq!(last, 1);
     vm.finish_trace_invocation(invocation);
@@ -140,7 +144,7 @@ fn completed_cycle_batch_records_changes_once_then_padding_uses_no_change_span()
         let original = AllocationBudget::new(LIMIT);
         let mut vm = loaded(&original, TraceMode::DeltaRegisters, true);
         let invocation = vm.begin_trace_invocation().unwrap();
-        vm.record_trace_prefetch(&invocation).unwrap();
+        vm.record_trace_prefetch(&invocation);
         vm.prepare_trace_instruction(&invocation, encode_rr(opcode, 7, 5, 6), |_| Ok(()))
             .unwrap();
         vm.registers.set(7, 17);
@@ -159,7 +163,7 @@ fn completed_cycle_batch_records_changes_once_then_padding_uses_no_change_span()
                 .skip(1)
                 .all(|row| row.changes.is_empty())
         );
-        vm.record_trace_prefetch(&invocation).unwrap();
+        vm.record_trace_prefetch(&invocation);
         assert_eq!(vm.delta_trace.entry(1).unwrap().changes, &[(7, 17, false)]);
         // Terminal instruction's unused future runtime row stays unused.
         vm.prepare_trace_instruction(&invocation, encode_halt(), |_| Ok(()))
@@ -185,32 +189,26 @@ fn completed_cycle_batch_records_changes_once_then_padding_uses_no_change_span()
 }
 
 #[test]
-fn non_zk_mode_mutation_cannot_append_or_repair_a_foreign_pending_batch() {
+fn a_new_trace_mode_admits_its_own_first_row_from_the_original_pool() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::DeltaRegisters, false);
-    let original_invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&original_invocation).unwrap();
-    vm.prepare_trace_instruction(&original_invocation, encode_halt(), |_| Ok(()))
+    let first = vm.begin_trace_invocation().unwrap();
+    vm.record_trace_prefetch(&first);
+    vm.prepare_trace_instruction(&first, encode_halt(), |_| Ok(()))
         .unwrap();
+    vm.finish_trace_invocation(first);
+    assert_eq!(vm.delta_trace.len(), 1);
     vm.set_trace_mode(TraceMode::PcOnly);
-    let newer = vm.begin_trace_invocation().unwrap();
+    let second = vm.begin_trace_invocation().unwrap();
     let retained = original.reserved_bytes();
     original.set_limit_bytes(0);
-    assert!(
-        matches!(vm.record_trace_prefetch(&original_invocation), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
-            crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
-    );
-    assert!(
-        matches!(vm.prepare_trace_instruction(&original_invocation, encode_halt(), |_| Ok(())), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
-            crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
-    );
-    vm.finish_trace_invocation(original_invocation);
-    vm.record_trace_prefetch(&newer).unwrap();
+    vm.record_trace_prefetch(&second);
     assert_eq!(vm.pc_trace.as_slice(), &[vm.pc]);
+    assert!(vm.delta_trace.is_empty());
     assert_eq!(original.reserved_bytes(), retained);
-    vm.finish_trace_invocation(newer);
+    vm.finish_trace_invocation(second);
+    drop(vm);
+    assert_eq!(original.reserved_bytes(), 0);
 }
 
 #[test]
@@ -218,7 +216,7 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::DeltaRegisters, true);
     let invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     vm.prepare_trace_instruction(&invocation, encode_ri(a::ADDI, 7, 7, 1), |_| Ok(()))
         .unwrap();
     vm.with_trace_scope(|vm, scope| vm.pc_trace.prepare(4, scope))
@@ -250,7 +248,7 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
     assert_eq!(copies.pcs.as_slice(), &[99]);
     assert!(matches!(
         vm.begin_trace_invocation(),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     drop(copies);
     assert_eq!(original.reserved_bytes(), before - demand);
@@ -264,7 +262,7 @@ fn original_scope_validation_precedes_clone_and_partial_copy_keeps_original_cred
     let foreign = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::DeltaRegisters, true);
     let invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     vm.prepare_trace_instruction(&invocation, encode_ri(a::ADDI, 7, 7, 1), |_| Ok(()))
         .unwrap();
     vm.registers.set(7, 41);
@@ -272,16 +270,16 @@ fn original_scope_validation_precedes_clone_and_partial_copy_keeps_original_cred
     vm.pc += 4;
     let mut last = 0;
     vm.publish_trace_cycles(&invocation, &mut last).unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     vm.prepare_trace_instruction(&invocation, encode_halt(), |_| Ok(()))
         .unwrap();
     let before = original.reserved_bytes();
     foreign.with_deferred_refund_notifications(|scope| {
         assert!(matches!(
             vm.try_clone_trace_storage(Some(scope)),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
-            ))
+            )))
         ));
     });
     assert_eq!(foreign.reserved_bytes(), 0);
@@ -295,7 +293,7 @@ fn original_scope_validation_precedes_clone_and_partial_copy_keeps_original_cred
     let outcome = original
         .with_deferred_refund_notifications(|scope| vm.try_clone_trace_storage(Some(scope)));
     assert!(
-        matches!(outcome, Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == runtime_bytes)
+        matches!(outcome, Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == runtime_bytes)
     );
     assert_eq!(original.reserved_bytes(), before);
     assert_eq!(vm.delta_trace.len(), 2);
@@ -332,7 +330,7 @@ fn no_observation_preflight_skips_destination_geometry_and_retains_no_backing() 
 }
 
 #[test]
-fn no_observation_tail_refusal_panic_and_policy_checks_preserve_their_precedence() {
+fn no_observation_tail_preserves_the_original_refusal_panic_and_privacy_trap() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::Off, false);
     let invocation = vm.begin_trace_invocation().unwrap();
@@ -341,8 +339,8 @@ fn no_observation_tail_refusal_panic_and_policy_checks_preserve_their_precedence
     let refusal = original.try_reserve_bytes(1).unwrap_err();
     assert!(
         matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |_| {
-            Err::<(), _>(VMError::AllocationDeferred(refusal.clone()))
-        }), Err(VMError::AllocationDeferred(__actual_error_field)) if __actual_error_field == (refusal))
+            Err::<(), _>(VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone())))
+        }), Err(VMError::Deferred(VmDeferral::AllocationDeferred(__actual_error_field))) if __actual_error_field == (refusal))
     );
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ =
@@ -359,39 +357,28 @@ fn no_observation_tail_refusal_panic_and_policy_checks_preserve_their_precedence
     vm.prepare_trace_instruction(&invocation, encode_halt(), |_| Ok(()))
         .unwrap();
     assert!(matches!(
-        vm.prepare_trace_instruction(&invocation, encode_halt(), |vm| {
-            vm.set_trace_mode(TraceMode::PcOnly);
-            Err::<(), _>(VMError::PrivacyViolation)
+        vm.prepare_trace_instruction(&invocation, encode_halt(), |_| {
+            Err::<(), _>(VMError::Trap(VmTrap::PrivacyViolation))
         }),
-        Err(VMError::PrivacyViolation)
+        Err(VMError::Trap(VmTrap::PrivacyViolation))
     ));
-    let mut called = false;
-    assert!(
-        matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |_| {
-            called = true;
-            Ok(())
-        }), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
-            crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
-    );
-    assert!(!called);
+    assert_eq!(state(&vm), before);
     vm.finish_trace_invocation(invocation);
 }
 
 #[test]
-fn no_observation_successful_tail_cannot_authorize_a_replaced_policy() {
+fn unobserved_tail_preserves_its_return_value_and_original_pool() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::Off, false);
     let invocation = vm.begin_trace_invocation().unwrap();
     let retained = original.reserved_bytes();
-    assert!(
-        matches!(vm.prepare_trace_instruction(&invocation, encode_halt(), |vm| {
-            vm.set_trace_mode(TraceMode::DeltaRegisters);
-            Ok(())
-        }), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
-            crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
-    );
+    let result = vm
+        .prepare_trace_instruction(&invocation, encode_halt(), |vm| {
+            assert!(vm.memory.allocation_budget().unwrap().same_pool(&original));
+            Ok(37)
+        })
+        .unwrap();
+    assert_eq!(result, 37);
     assert_eq!(original.reserved_bytes(), retained);
     assert!(vm.delta_trace.is_empty());
     vm.finish_trace_invocation(invocation);
@@ -402,12 +389,12 @@ fn pc_only_admission_does_not_classify_delta_destinations() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::PcOnly, false);
     let invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     // The public opcode is already checked by the run loop. As above, the
     // helper-only sentinel must never reach the unused delta classifier.
     vm.prepare_trace_instruction(&invocation, 0, |_| Ok(()))
         .unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
+    vm.record_trace_prefetch(&invocation);
     assert_eq!(vm.pc_trace.as_slice(), &[vm.pc, vm.pc]);
     assert_eq!(vm.trace_log.allocated_bytes().unwrap(), 0);
     assert_eq!(vm.delta_trace.allocated_bytes().unwrap(), 0);
@@ -433,7 +420,11 @@ fn fresh_child_uses_original_pool_and_refuses_before_parent_effects() {
     else {
         panic!("original pool must be exhausted");
     };
-    let VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. }) = refusal else {
+    let VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    })) = refusal
+    else {
         panic!("fresh child must preserve original capacity refusal");
     };
     assert_eq!(release, expected);
@@ -489,44 +480,37 @@ fn fresh_standalone_child_stays_unfunded_and_capture_checks_vm_owner() {
     parent.delta_trace = zk::DeltaTraceLog::new(Some(&foreign));
     assert!(matches!(
         parent.try_runtime_trace_capture(),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
-        ))
+        )))
     ));
     assert_eq!(foreign.reserved_bytes(), 0);
 }
 
 #[test]
-fn invocation_scope_fixes_collection_while_unscoped_tokens_follow_configuration() {
-    let owner_unavailable = |result: Result<(), VMError>| {
-        matches!(
-            result,
-            Err(VMError::ExecutionDeferred(
-                crate::error::ExecutionDeferral::TraceOwnerUnavailable
-            ))
-        )
-    };
+fn invocation_captures_its_admitted_cycle_policy() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = loaded(&original, TraceMode::Off, true);
-
-    // Without a scope, ownership tracks the VM configuration on every check.
-    let unscoped = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&unscoped).unwrap();
-    vm.zk_trace_enabled = false;
-    assert!(owner_unavailable(vm.record_trace_prefetch(&unscoped)));
-    vm.zk_trace_enabled = true;
-    vm.record_trace_prefetch(&unscoped).unwrap();
-    vm.finish_trace_invocation(unscoped);
-
-    // An installed invocation scope fixes the policy the token was admitted under.
-    let _scope = zk::RegLoggerGuard::install(vm.reg_log.clone());
-    let scoped = vm.begin_trace_invocation().unwrap();
-    vm.zk_trace_enabled = false;
-    vm.record_trace_prefetch(&scoped).unwrap();
-    vm.prepare_trace_instruction(&scoped, encode_halt(), |_| Ok(()))
+    let enabled = vm.begin_trace_invocation().unwrap();
+    assert!(enabled.cycles);
+    vm.prepare_trace_instruction(&enabled, encode_halt(), |_| Ok(()))
         .unwrap();
-    vm.zk_trace_enabled = true;
+    vm.finish_trace_invocation(enabled);
+    {
+        let _disabled_scope = zk::RegLoggerGuard::install(None);
+        let masked = vm.begin_trace_invocation().unwrap();
+        assert!(!masked.cycles);
+        vm.finish_trace_invocation(masked);
+    }
     vm.set_max_cycles(0);
-    assert!(owner_unavailable(vm.record_trace_prefetch(&scoped)));
-    vm.finish_trace_invocation(scoped);
+    let unbounded = vm.begin_trace_invocation().unwrap();
+    assert!(!unbounded.cycles);
+    vm.finish_trace_invocation(unbounded);
+    vm.set_max_cycles(64);
+    vm.set_zk_trace_enabled(false);
+    let disabled = vm.begin_trace_invocation().unwrap();
+    assert!(!disabled.cycles);
+    vm.finish_trace_invocation(disabled);
+    drop(vm);
+    assert_eq!(original.reserved_bytes(), 0);
 }

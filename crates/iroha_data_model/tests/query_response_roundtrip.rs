@@ -61,8 +61,9 @@ fn checked_da_pin_intent(
             .expect("valid deterministic query-response DA key");
     let authorization = checked_da_authorization(lane_id, epoch, sequence);
     let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
-    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-        .expect("sign deterministic query-response DA pin scope");
+    let scope_authorization =
+        DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+            .expect("sign deterministic query-response DA pin scope");
     DaPinIntent::new(authorization, scope_authorization)
 }
 fn checked_random_account_id() -> iroha_data_model::AccountId {

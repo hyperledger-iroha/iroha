@@ -55,6 +55,82 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Name,
+        reason: "Canonical codec name for a definition-owned carrier table and the immutable names of its selected kernel, host, commitment profile and catalog services.",
+        literals: &[
+            r"carrier:compact-v1:",
+            r"iroha.kernel.generic_carriers.v1",
+            r"iroha.keyed-state.carrier-radix-blake3.v1",
+            r"iroha.runtime.child_admin.v1",
+            r"iroha.runtime.generic_carrier_artifacts.v1",
+            r"iroha.runtime.generic_carriers.v1",
+            r"ivm.generic_carriers.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Instruction wire identifiers bound by the child administration and generic artifact catalog interfaces.",
+        literals: &[
+            r"iroha.runtime.child_admin.attest.v1",
+            r"iroha.runtime.child_admin.authorize.v1",
+            r"iroha.runtime.generic_carrier.stage_artifact.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Immutable definition closures for carrier kernel execution, physical backing invariants, the selected keyed commitment profile and child administration.",
+        literals: &[
+            r"iroha carrier keyed State commitment profile v1",
+            r"iroha:kernel:generic-carriers:v1:compact-schema-bound-record:strict-byte-key-order:descriptor-ivm:sole-original-external-instructions:public-methods-no-caller-identity:original-signed-fee-and-actual-gas-including-semantic-rejection:no-captured-deferred-reveal-or-contract-relay:capability-storage:existing-corehost-ordered-rollback:keyed-state",
+            r"iroha:runtime:carrier-backing:v1:definition-id:bare-key:canonical-record",
+            r"iroha:runtime:child-admin:v1:genesis-root-explicit-threshold-policy-nonce-sole-native-signed-source-schedule-cancel-rotate",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Canonical identity of a compact carrier schema used to name its virtual table codec.",
+        literals: &[r"iroha:runtime:carrier-schema:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Digest of the recursive storage codec graph in the baseline structural evidence fixture.",
+        literals: &[r"iroha:runtime:structural-storage-evidence:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Fingerprint of the sole original external child-administration instruction and the policy, plan and signing preimages checked for its authorization.",
+        literals: &[
+            r"iroha:runtime:child-admin:direct-instruction:v1\0",
+            r"iroha:runtime:child-admin:plan:v1\0",
+            r"iroha:runtime:child-admin:policy:v1\0",
+            r"iroha:runtime:child-admin:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Pins the reviewed offline inventory of implementation source units and their owners for a retirement candidate.",
+        literals: &[r"iroha:runtime:reviewed-source-ownership:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Source-access contract bytes of the sealed point lookup and ordered scan capabilities included in a migration adapter identity.",
+        literals: &[
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-point",
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-point-and-scan",
+            r"table-migration.v1/original-refusal/fixed-original-scratch/source-scan",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Unknown semantic projection name passed to the storage-layout refusal test.",
+        literals: &[r"iroha:state:unowned-test-projection:v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Exact canonical request of the one-use original signed anonymous runtime creator; transient source binding, never a commitment over World content or a governance authority",
+        literals: &[r"iroha:parliament:runtime-creator:v1\0"],
+    },
+    OtherDomains {
         usage: Use::LocalArtifact,
         reason: "Original portable checkpoint proof-file custody: the ordered file digest binds canonical certificates, proposal prefix rows and parent DA bundles, not serialized State; every frame still requires the signed-genesis-rooted finality verifier before admitting omitted bodies",
         literals: &[r"iroha-checkpoint-prefix-files-v1"],
@@ -68,6 +144,14 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.runtime.obligation.contract.register.v1",
             r"iroha.runtime.retirement.finalize.v1",
             r"iroha.runtime.retirement.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "The C10 contract-code and trigger registration wire IDs identify instruction layouts. Each is a dispatch name and computes no State digest.",
+        literals: &[
+            r"iroha.smart_contract.code.c10.register.v1",
+            r"iroha.trigger.c10.register.v1",
         ],
     },
     OtherDomains {
@@ -153,6 +237,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         reason: "Exact wire identities of the anonymous Parliament family's three interfaces (attempt creation, transition submission and credential registration), including their built-in dispatch entries and the addition that claims them. Each selects an instruction layout; neither an identifier nor its registration computes a digest or grants the instruction authority",
         literals: &[
             r"iroha.governance.parliament.anonymous.attempt.create.v1",
+            r"iroha.governance.parliament.anonymous.runtime_upgrade.create.v1",
             r"iroha.governance.parliament.anonymous.transition.submit.v1",
             r"iroha.governance.parliament.credential.register.v1",
         ],
@@ -178,6 +263,19 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Record,
         reason: "Role prefix of the SHA-256 digests of one KAGEMUSHA suffix Unload record; the active ledger does not admit suffix Unload.",
         literals: &[r"iroha:kagemusha:wallet:suffix-unload:v1:"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "KAGEMUSHA Spartan module name, instruction wire IDs and Norito payload schema names for verifier installation, activation and Unload.",
+        literals: &[
+            r"iroha.kagemusha.spartan.Activate.v1",
+            r"iroha.kagemusha.spartan.InstallPrograms.v1",
+            r"iroha.kagemusha.spartan.Unload.v1",
+            r"iroha.kagemusha.spartan.activate.v1",
+            r"iroha.kagemusha.spartan.programs.install.v1",
+            r"iroha.kagemusha.spartan.unload.v1",
+            r"iroha.kagemusha.spartan.v1",
+        ],
     },
     OtherDomains {
         usage: Use::Name,
@@ -677,6 +775,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:da:commitment-merkle:commitment:v1\0",
             r"iroha:da:commitment-merkle:internal:v1\0",
             r"iroha:da:commitment-merkle:leaf:v1\0",
+            r"iroha:da:commitment-record:v1\0",
             r"iroha:da:pin-intent-merkle:commitment:v1\0",
             r"iroha:da:pin-intent-merkle:internal:v1\0",
             r"iroha:da:pin-intent-merkle:leaf:v1\0",
@@ -791,6 +890,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:time-invocation:v1\0",
             r"iroha:time-trigger:execution:v1\0",
             r"iroha:trigger-use:action:v1\0",
+            r"iroha:trigger:c10:stored-action:v1\0",
             r"iroha:tx-gossip-target-seed:v2\0",
             r"iroha:validator-committee-beacon-session:v1",
             r"iroha:validator-election:v1",
@@ -1289,6 +1389,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
+        reason: "Identifies the native replication order for one Musubi archive ID and paid manifest digest",
+        literals: &[r"iroha:musubi:native-replication-order:v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
         reason: "Musubi registry instruction identifiers, release and attestation digests and signing preimages",
         literals: &[
             r"iroha.musubi.archive-id.v1",
@@ -1658,6 +1763,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.dataspace.restricted_read_delegation.v1",
             r"iroha.events.data.ironwood.v1",
             r"iroha.events.data.v1",
+            r"iroha.events.ivm_c10.v1",
             r"iroha.game_partition.v1",
             r"iroha.governance.parliament.anonymous.v1",
             r"iroha.ironwood.identity-cutover.v1",
@@ -1668,6 +1774,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.permission.content_publish.v1",
             r"iroha.runtime.deferred_consent.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
+            r"iroha.runtime.ivm_c10.v1",
+            r"iroha.runtime.ivm_c10.v1:ExecutionOutputC10V1:TransactionResultC10V1:EventBoxC10V1:profile-bound-dispatch-v1",
             r"iroha.runtime.lifecycle.v1",
             r"iroha.sorafs.authority_governance.v1",
             r"iroha.world.lthash16.v1",
@@ -1697,6 +1805,14 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:startup-floor:v1\0",
             r"iroha:runtime:support-attestation:v1\0",
             r"iroha:runtime:terminal-effect:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Media and subprotocol names for the signed C10 manifest and negotiated event stream",
+        literals: &[
+            r"application/vnd.iroha.c10-manifest.v1+json",
+            r"iroha.events.c10.norito.v1",
         ],
     },
     OtherDomains {

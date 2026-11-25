@@ -113,6 +113,9 @@ pub(crate) fn seed_due_index(block: &mut super::WorldBlock<'_>) {
     }
 }
 
+#[cfg(feature = "iroha-core-tests")]
+mod test_fixtures;
+
 /// The credentials World keeps for the accepted assignments `accepted` of one election, in
 /// assignment order. An accepted assignment without a stored credential is left out, and the
 /// reducer refuses the incomplete set.

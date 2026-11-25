@@ -62,6 +62,7 @@ use errors::TryWriteError;
 mod state_snapshot_decode_error_tests {
     use super::*;
     use crate::state::deserialize::StateRestoreError;
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn snapshot_reader_preserves_local_resource_errors_and_format_errors() {
@@ -70,11 +71,9 @@ mod state_snapshot_decode_error_tests {
             TryReadError::Serialization(json::Error::InvalidUtf8)
         ));
         assert!(matches!(
-            TryReadError::from(StateRestoreError::VmInitialization(
-                ivm::VMError::ExecutionDeferred(
-                    ivm::error::ExecutionDeferral::AllocationUnavailable
-                )
-            )),
+            TryReadError::from(StateRestoreError::VmInitialization(ivm::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable)
+            ))),
             TryReadError::StateVmInitialization(_)
         ));
         assert!(matches!(
@@ -570,9 +569,9 @@ const SNAPSHOT_FAST_MANIFEST_FILE_NAME: &str = "snapshot.fast.norito";
 /// Name of the Merkle metadata accompanying the snapshot file.
 const SNAPSHOT_MERKLE_FILE_NAME: &str = "snapshot.merkle.json";
 /// Directory containing immutable, digest-named complete generations.
-const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
+pub(crate) const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 /// Atomically replaced canonical pointer to one immutable generation.
-const SNAPSHOT_CURRENT_FILE_NAME: &str = "current";
+pub(crate) const SNAPSHOT_CURRENT_FILE_NAME: &str = "current";
 const SNAPSHOT_DIGEST_MAX_BYTES: u64 = 65;
 const SNAPSHOT_CURRENT_MAX_BYTES: u64 = SNAPSHOT_DIGEST_MAX_BYTES;
 const SNAPSHOT_SIGNATURE_MAX_BYTES: u64 = 16 * 1024;
@@ -5284,7 +5283,7 @@ fn try_write_snapshot_payload_with_limit_locked(
 }
 
 #[cfg(test)]
-fn try_write_snapshot(
+pub(crate) fn try_write_snapshot(
     state: &State,
     store_dir: impl AsRef<Path>,
     signing_key: &KeyPair,

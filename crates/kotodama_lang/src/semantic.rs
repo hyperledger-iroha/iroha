@@ -10085,12 +10085,6 @@ fn analyze_match_expression(
     expected: Option<&Type>,
     boundary: bool,
 ) -> Result<TypedExpr, SemanticError> {
-    if arms.is_empty() {
-        return Err(SemanticError {
-            code: "E_MATCH_EMPTY",
-            message: "match requires exhaustive arms".into(),
-        });
-    }
     let mut seen = HashSet::new();
     let mut seen_codes = HashSet::new();
     let mut checked = Vec::with_capacity(arms.len());
@@ -10111,21 +10105,63 @@ fn analyze_match_expression(
         }
         checked.push((arm, pattern, binding));
     }
-    let exhaustive = match resolve_struct_type(&value.ty) {
-        Type::Option(_) => {
-            seen.contains(&SumVariant::OptionSome) && seen.contains(&SumVariant::OptionNone)
+    let mut missing = Vec::new();
+    // A nominal pattern carries the author's visible namespace, including imported aliases.
+    let nominal_namespace = arms.first().and_then(|arm| match &arm.pattern.variant {
+        SumVariant::Nominal { namespace, .. } => Some(namespace.as_str()),
+        _ => None,
+    });
+    let mut add_nominal = |identity: &str, name: &str, code: u32| {
+        if !seen_codes.contains(&code) {
+            let namespace = nominal_namespace
+                .unwrap_or_else(|| identity.rsplit("::").next().unwrap_or(identity));
+            missing.push(format!("{namespace}::{name}"));
         }
-        Type::Result(_, _) => {
-            seen.contains(&SumVariant::ResultOk) && seen.contains(&SumVariant::ResultErr)
-        }
-        Type::Enum(descriptor) => checked.len() == descriptor.variants.len(),
-        Type::ErrorEnum(descriptor) => checked.len() == descriptor.variants.len(),
-        _ => false,
     };
-    if !exhaustive {
+    match resolve_struct_type(&value.ty) {
+        Type::Enum(descriptor) if seen_codes.len() < descriptor.variants.len() => {
+            for variant in &descriptor.variants {
+                add_nominal(&descriptor.identity, &variant.name, variant.code);
+            }
+        }
+        Type::ErrorEnum(descriptor) if seen_codes.len() < descriptor.variants.len() => {
+            for variant in &descriptor.variants {
+                add_nominal(&descriptor.identity, &variant.name, variant.code);
+            }
+        }
+        ty @ (Type::Option(_) | Type::Result(_, _)) if seen.len() < 2 => {
+            let patterns = if matches!(ty, Type::Option(_)) {
+                [
+                    (SumVariant::OptionSome, "Option::some(_)"),
+                    (SumVariant::OptionNone, "Option::none"),
+                ]
+            } else {
+                [
+                    (SumVariant::ResultOk, "Result::ok(_)"),
+                    (SumVariant::ResultErr, "Result::err(_)"),
+                ]
+            };
+            missing.extend(
+                patterns
+                    .into_iter()
+                    .filter(|(variant, _)| !seen.contains(variant))
+                    .map(|(_, name)| name.to_owned()),
+            );
+        }
+        _ => {}
+    }
+    if arms.is_empty() || !missing.is_empty() {
+        let mut message = "match must cover every namespaced variant of its value".to_owned();
+        if !missing.is_empty() {
+            message.push_str(&format!("; missing {}", missing.join(", ")));
+        }
         return Err(SemanticError {
-            code: "E_MATCH_NON_EXHAUSTIVE",
-            message: "match must cover every namespaced variant of its value".into(),
+            code: if arms.is_empty() {
+                "E_MATCH_EMPTY"
+            } else {
+                "E_MATCH_NON_EXHAUSTIVE"
+            },
+            message,
         });
     }
     let inferred = if let Some(expected) = expected {

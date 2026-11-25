@@ -4,6 +4,7 @@
 //! change. State-owned logs reserve from the same finite execution pool and copy
 //! templates by partitioning their original prepaid parent reservation.
 
+use crate::error::VmDeferral;
 use std::{fmt, ops::Deref};
 
 use iroha_allocation::AllocationBudget;
@@ -83,13 +84,13 @@ impl ReadLog {
             .ok_or_else(unavailable)?
             .max(4);
         let plan = ExecutionMemoryPlan::array::<AccessRange>(count)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let rows = match &self.active_budget {
             Some(budget) => {
                 // Both arrays remain charged through allocation, diagnostic
                 // validation, publication and the old backing's deallocation.
                 let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 Rows::funded_copy(&self.rows, count, &mut lease)?
             }
             None => self.rows.local_copy(count)?,
@@ -122,7 +123,8 @@ impl ReadLog {
     }
 
     pub(super) fn memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
-        ExecutionMemoryPlan::array::<AccessRange>(self.len()).map_err(VMError::AllocationDeferred)
+        ExecutionMemoryPlan::array::<AccessRange>(self.len())
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
 
     pub(super) fn try_copy(
@@ -139,7 +141,7 @@ impl ReadLog {
                     parent.partition(plan).map_err(|_| unavailable())?
                 }
                 None => ExecutionMemoryLease::reserve(budget, plan)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             };
             Rows::funded_copy(&self.rows, self.len(), &mut lease)?
         } else {
@@ -251,7 +253,9 @@ impl fmt::Debug for Rows {
 }
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 #[cfg(test)]

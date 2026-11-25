@@ -14,7 +14,7 @@ fn policy_fixture(count: usize) -> SignedBlock {
                 } else {
                     "é漢🙂".repeat(i)
                 },
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
             })
             .collect(),
     );

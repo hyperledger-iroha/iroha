@@ -17,7 +17,10 @@ fn core_query_account_filter_retains_original_vm_pool_until_input_is_dropped() {
     let error = CoreQueryAccountFilter::decode(&vm, pointer)
         .err()
         .expect("local refusal");
-    assert!(matches!(error, ivm::VMError::AllocationDeferred(_)));
+    assert!(matches!(
+        error,
+        ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_))
+    ));
     assert_eq!(error.metered_gas(), None);
     assert_eq!(pool.reserved_bytes(), baseline);
     pool.set_limit_bytes(256 * 1024 * 1024);
@@ -49,7 +52,7 @@ fn core_query_account_filter_rejects_wrong_pointer_and_noncanonical_account() {
         let pointer = store_tlv(&mut vm, pointer_type, &bytes);
         assert!(matches!(
             CoreQueryAccountFilter::decode(&vm, pointer),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ));
     }
 }

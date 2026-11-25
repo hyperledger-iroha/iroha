@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        '492a38531cbbe853c8cdb043b34e3293e52be32f75d31e2e71c13899696a608e',
+        '8221c2be0f512b9a477092041783273350c06583ca35948894ffd71c5ec42999',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -347,14 +347,16 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
         b'fn invocation_alias_decoding_preserves_read_deferral_before_test_failure()',
         b'let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);',
-        # VMError has no PartialEq; the exact deferral payload is compared.
+        # A local refusal retains its original allocation details through the host.
         b'assert!(match (host.invoke_entrypoint(&mut vm, false), refusal) {\n'
         b'            (\n'
-        b'                Err(ivm::VMError::AllocationDeferred(actual)),\n'
-        b'                ivm::VMError::AllocationDeferred(expected),\n'
+        b'                Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual))),\n'
+        b'                ivm::VMError::Deferred(VmDeferral::AllocationDeferred(expected)),\n'
         b'            ) => actual == expected,',
         b'assert_eq!(host.last_test_error(), None);',
         b'assert_eq!(budget.reserved_bytes(), occupied);',
+        b'Err(ivm::VMError::Trap(VmTrap::AssertionFailed)),',
+        b'host.configure_trace(&mut vm, TraceMode::PcOnly);',
         b'fn multifile_suite_discovers_and_executes_included_tests_with_local_modules()',
         b'temp.write("src/unrelated.ko", "this file is deliberately invalid");',
         b'fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file()',

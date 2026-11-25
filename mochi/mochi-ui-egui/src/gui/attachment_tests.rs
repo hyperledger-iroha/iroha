@@ -1,9 +1,9 @@
 //! Attachment failure selection and completed-evidence regressions.
 
 use super::*;
-use iroha_deploy::managed::{Error as ManagedError, InstalledRuntime};
+use iroha_deploy::managed::{InstalledRuntime, ManagedStore};
 
-fn workspace() -> (tempfile::TempDir, DeveloperWorkspace) {
+fn workspace() -> (tempfile::TempDir, DeveloperWorkspace, InstalledRuntime) {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
     let bin = temporary.path().join("bin");
@@ -16,32 +16,25 @@ fn workspace() -> (tempfile::TempDir, DeveloperWorkspace) {
         )
         .unwrap();
     }
+    let runtime = InstalledRuntime::from_directory(&bin).unwrap();
     let workspace = DeveloperWorkspace::with_runtime(
         &temporary.path().join("state"),
         &project,
-        InstalledRuntime::from_directory(&bin).unwrap(),
+        runtime.clone(),
     )
     .unwrap();
-    (temporary, workspace)
+    (temporary, workspace, runtime)
 }
 
-fn prepare_selected(workspace: &DeveloperWorkspace) -> ManagedNetwork {
-    // As in mochi-core's workspace tests, the native test executable is not Kagami's
-    // worker. Genuine preparation reaches an owned-child exit during listener handoff; this
-    // fixture never reports a ready localnet or an authenticated remote attachment.
-    let failure = workspace.create_localnet("original").unwrap_err();
-    let expected = format!(
-        "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
-        ManagedError::Timeout(Duration::from_secs(30))
+fn prepare_selected(workspace: &DeveloperWorkspace, runtime: &InstalledRuntime) -> ManagedNetwork {
+    let store = ManagedStore::open(workspace.state_root()).unwrap();
+    let request = runtime.localnet_request("original", Duration::from_secs(30));
+    let prepared = store.prepare_stopped_fixture(&request).unwrap();
+    assert_eq!(
+        store.status("original").unwrap().phase,
+        ManagedPhase::Stopped
     );
-    assert!(
-        matches!(
-            failure.downcast_ref::<ManagedError>(),
-            Some(ManagedError::Invalid(message)) if message == &expected
-        ),
-        "genuine preparation must retain the owned worker's listener handoff failure: {failure}"
-    );
-    workspace.select("original").unwrap();
+    assert_eq!(workspace.select("original").unwrap(), prepared.context);
     workspace.network(None).unwrap()
 }
 
@@ -129,7 +122,7 @@ fn fail_invalid_alias(desktop: &mut Desktop, replaced: bool) {
 
 #[test]
 fn attachment_failure_preserves_exact_selection_and_refuses_replacement() {
-    let (_temporary, workspace) = workspace();
+    let (_temporary, workspace, runtime) = workspace();
     let mut desktop = Desktop::model(workspace.resolve_path(std::path::Path::new(".")));
     desktop.workspace = Some(workspace.clone());
     seed_completed_evidence(&mut desktop);
@@ -139,7 +132,7 @@ fn attachment_failure_preserves_exact_selection_and_refuses_replacement() {
     assert!(workspace.contexts().unwrap().is_empty());
     assert_eq!(workspace.selected_name().unwrap(), None);
 
-    let original = prepare_selected(&workspace);
+    let original = prepare_selected(&workspace, &runtime);
     // A current store default is not authority to select it after an uncaptured failure.
     fail_invalid_alias(&mut desktop, false);
     assert!(desktop.selected.is_none());
@@ -197,7 +190,7 @@ fn attachment_failure_preserves_exact_selection_and_refuses_replacement() {
     // Keep the original UI capture while another frontend resets and recreates its name.
     // Name-based recovery would adopt this genuine replacement and fail the assertions.
     workspace.reset(&original).unwrap();
-    let replacement = prepare_selected(&workspace);
+    let replacement = prepare_selected(&workspace, &runtime);
     assert_ne!(replacement.prepared(), original.prepared());
     seed_completed_evidence(&mut desktop);
     fail_invalid_alias(&mut desktop, true);

@@ -10,6 +10,32 @@ fn fixture() -> (tempfile::TempDir, OwnerDirectory) {
     (temporary, owner)
 }
 
+#[test]
+fn replay_seeks_within_its_original_without_moving_other_cursors() {
+    let (_temporary, directory) = fixture();
+    let mut stage = directory.stage_output("verified").unwrap();
+    stage.write_all(b"abcde").unwrap();
+    {
+        let mut first = stage.reader().unwrap();
+        let mut other = stage.reader().unwrap();
+        assert_eq!(first.seek(SeekFrom::End(-2)).unwrap(), 3);
+        let mut bytes = [0; 2];
+        first.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"de");
+        assert_eq!(first.read(&mut bytes).unwrap(), 0);
+        assert!(first.seek(SeekFrom::Current(1)).is_err());
+        assert!(first.seek(SeekFrom::Current(i64::MIN)).is_err());
+        assert!(first.seek(SeekFrom::Start(u64::MAX)).is_err());
+        assert_eq!(first.stream_position().unwrap(), 5);
+        first.rewind().unwrap();
+        first.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"ab");
+        other.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"ab");
+    }
+    assert_eq!(stage.stream_position().unwrap(), 5);
+}
+
 fn grant(path: &Path, rights: &str) {
     let status = Command::new("icacls")
         .arg(path)
@@ -349,6 +375,7 @@ fn native_stage_replay_rejects_actual_extent_change_against_initial_snapshot() {
         // Public callers receive neither this handle nor concurrent writer authority.
         stage.inner.file().set_len(1).unwrap();
         assert_eq!(stage.inner.identity().unwrap(), identity);
+        assert!(replay.rewind().is_err());
         assert!(replay.read(&mut [0; 8]).is_err());
     }
     let path = stage.path().to_owned();

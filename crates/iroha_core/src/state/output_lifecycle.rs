@@ -8,6 +8,7 @@ use crate::smartcontracts::isi::triggers::set::lifecycle_journal::{
 use crate::state::StateReadOnly;
 use iroha_allocation::{AllocationCharge, ChargedBuffer, ChargedBufferError};
 use iroha_data_model::block::execution_output::*;
+use mv::storage::StorageReadOnly as _;
 
 pub(super) type Ledger = ChargedBuffer<AllocationCharge>;
 
@@ -60,13 +61,17 @@ pub(super) fn internal_source(
 ) -> Result<InternalSource, ExecutionAttemptError<String>> {
     let pool = state.execution_budget();
     let maximum = state.callback_output_byte_limit();
-    let mut source = state.world.triggers.transaction();
+    let world: &mut crate::state::WorldBlockFields<'_> = &mut state.world;
+    let mut source = world.triggers.transaction();
     source
         .enable_selected_lifecycle_journal(pool, limits(maximum), height)
         .map_err(|_| {
             ExecutionAttemptError::Deferred(ivm::ExecutionDeferral::AllocationUnavailable.into())
         })?;
-    let snapshot = source.lifecycle_source_snapshot(id);
+    let snapshot = match world.c10_triggers.get(id) {
+        Some(row) => source.lifecycle_c10_snapshot(row),
+        None => source.lifecycle_source_snapshot(id),
+    };
     match source.lifecycle_failure() {
         Some(LifecycleJournalFailure::Allocation(_)) => {
             return Err(ExecutionAttemptError::Deferred(
@@ -188,6 +193,10 @@ pub(super) fn cover(row: ExecutionOutputV1, trace: TriggerLifecycleEffectsV1) ->
                 execution,
                 trigger_lifecycle: trace,
             })
+        }
+        ExecutionOutputV1::C10(mut row) if row.trigger_lifecycle.is_none() => {
+            row.trigger_lifecycle = Some(trace);
+            ExecutionOutputV1::C10(row)
         }
         _ => unreachable!("capture wraps the original unwrapped execution exactly once"),
     }

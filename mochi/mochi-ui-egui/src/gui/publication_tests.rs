@@ -307,7 +307,7 @@ fn completed_publication_survives_automatic_observation_until_explicit_selection
     );
     desktop.peer = 3;
     desktop.logs = "original context log".into();
-    desktop.activity.push_back("original context event".into());
+    push_activity(&mut desktop.activity, "original context event".into());
     desktop.reset_intent = true;
 
     desktop.spawn_task(|| {

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::encoding::wide as enc;
+use crate::error::VmTrap;
 
 #[test]
 fn borrowed_scan_preserves_repeated_full_width_ids_and_sorted_first_selection() {
@@ -30,9 +31,9 @@ fn borrowed_scan_preserves_repeated_full_width_ids_and_sorted_first_selection() 
     bytes.pop();
     assert!(matches!(
         program_syscall_numbers(&bytes),
-        Err(ProgramAnalysisError::Decode(
-            crate::VMError::MemoryAccessViolation { .. }
-        ))
+        Err(ProgramAnalysisError::Decode(crate::VMError::Trap(
+            VmTrap::MemoryAccessViolation { .. }
+        )))
     ));
 }
 

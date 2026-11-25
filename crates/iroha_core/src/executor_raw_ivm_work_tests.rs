@@ -6,6 +6,7 @@ mod raw_ivm_work {
     use ivm::pointer_abi::PointerType;
     use ivm_abi::baseline::encoding::wide;
     use ivm_abi::baseline::instruction::wide as opcode;
+    use ivm_abi::error::VmTrap;
 
     const GAS: u64 = 50_000_000;
 
@@ -172,7 +173,10 @@ mod raw_ivm_work {
                 signed_limit.min(block_limit - already_used)
             };
             let (vm_result, expected_gas, _) = run_vm(&program, effective);
-            assert!(matches!(vm_result, Err(ivm::VMError::OutOfGas)));
+            assert!(matches!(
+                vm_result,
+                Err(ivm::VMError::Trap(VmTrap::OutOfGas))
+            ));
             assert!((1..=effective).contains(&expected_gas));
             let state = fixture();
             let transaction = signed(&state, &program, signed_limit);

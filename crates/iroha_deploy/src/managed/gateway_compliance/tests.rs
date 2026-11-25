@@ -71,6 +71,8 @@ enum Observation {
     Empty,
     Candidate { ack: bool },
     Promoted,
+    PromotedSuccessor,
+    SuccessorCandidate,
     ForeignPolicy,
     ForeignCandidate,
     ForeignHead,
@@ -85,6 +87,7 @@ enum RetainedChange {
 enum Step {
     Status(Observation),
     Mutation(Mutation, bool),
+    SuccessorMutation(Mutation),
     ChangeAfterStatus(Observation, RetainedChange),
     ChangeDuringAckReply,
 }
@@ -155,6 +158,10 @@ impl RuntimeHttp {
                             .unwrap()
                             .pop_front()
                             .ok_or_else(|| io::Error::other("unexpected compliance HTTP retry"))?;
+                        let (action, sequence) = match action {
+                            Step::SuccessorMutation(kind) => (Step::Mutation(kind, false), 2),
+                            single => (single, 1),
+                        };
                         let (action, change) = match action {
                             Step::ChangeAfterStatus(observation, change) => {
                                 (Step::Status(observation), Some(change))
@@ -185,7 +192,7 @@ impl RuntimeHttp {
                                 // This read happens while the real SDK request is in flight. The
                                 // original must already be durable, before any mutation dispatch.
                                 let catalog: GatewayComplianceCatalogV1 =
-                                    retained(&operation, "original.nrt");
+                                    retained_at(&operation, sequence, "original.nrt");
                                 let digest = catalog.verify(plan.trust_policy(), now, 0).unwrap();
                                 match kind {
                                     Mutation::Stage => {
@@ -194,8 +201,11 @@ impl RuntimeHttp {
                                     }
                                     Mutation::Ack => {
                                         assert_eq!(request.target.query(), None);
-                                        let ack: GatewayComplianceAcknowledgementV1 =
-                                            retained(&operation, "acknowledgement.nrt");
+                                        let ack: GatewayComplianceAcknowledgementV1 = retained_at(
+                                            &operation,
+                                            sequence,
+                                            "acknowledgement.nrt",
+                                        );
                                         ack.verify(
                                             plan.trust_policy(),
                                             digest,
@@ -244,7 +254,9 @@ impl RuntimeHttp {
                                     )
                                 })
                             }
-                            Step::ChangeAfterStatus(_, _) | Step::ChangeDuringAckReply => {
+                            Step::ChangeAfterStatus(_, _)
+                            | Step::ChangeDuringAckReply
+                            | Step::SuccessorMutation(_) => {
                                 unreachable!("fixture fault normalized above")
                             }
                         };
@@ -336,8 +348,16 @@ fn retained<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
     operation: &Path,
     name: &str,
 ) -> T {
+    retained_at(operation, 1, name)
+}
+fn retained_at<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
+    operation: &Path,
+    sequence: u64,
+    name: &str,
+) -> T {
     let directory =
-        PrivateDirectory::open_exact(operation.join("catalogs").join(catalog_name(1))).unwrap();
+        PrivateDirectory::open_exact(operation.join("catalogs").join(catalog_name(sequence)))
+            .unwrap();
     decode(&directory.read(name, MAX_RECORD_BYTES).unwrap()).unwrap()
 }
 fn catalog_status(catalog: &GatewayComplianceCatalogV1) -> GatewayComplianceCatalogStatusV1 {
@@ -380,8 +400,17 @@ fn status_fixture(
             status.accepted_acknowledgement_count = u64::from(ack);
             status.idempotency_record_count = 1 + u64::from(ack);
         }
-        Observation::Promoted => {
-            let catalog = retained(operation, "original.nrt");
+        Observation::SuccessorCandidate => {
+            status = status_fixture(Observation::Promoted, plan, operation, now);
+            status.candidate = Some(catalog_status(&retained_at(operation, 2, "original.nrt")));
+        }
+        Observation::Promoted | Observation::PromotedSuccessor => {
+            let sequence = if matches!(observation, Observation::PromotedSuccessor) {
+                2
+            } else {
+                1
+            };
+            let catalog = retained_at(operation, sequence, "original.nrt");
             let projected = catalog_status(&catalog);
             let expectation = GatewayCompliancePromoteExpectationV1 {
                 catalog_digest: catalog.payload.catalog_digest().unwrap(),
@@ -404,8 +433,17 @@ fn status_fixture(
                 projected.generated_at_unix <= now && now < projected.valid_until_unix;
             status.chain_head = Some(projected.clone());
             status.serving = Some(projected);
-            status.history_count = 1;
-            status.idempotency_record_count = 3;
+            status.history_count = sequence;
+            status.idempotency_record_count = 3 * sequence;
+            if sequence == 2 {
+                let prior = catalog_status(&retained(operation, "original.nrt"));
+                status
+                    .latest_action
+                    .as_mut()
+                    .unwrap()
+                    .previous_serving_digest_hex = Some(prior.digest_hex.clone());
+                status.previous_serving = Some(prior);
+            }
         }
         Observation::ForeignPolicy => status.policy_digest_hex = hex::encode([0xC3; 32]),
         Observation::ForeignCandidate | Observation::ForeignHead => {
@@ -1119,4 +1157,83 @@ fn joined_catalog_partial_publication_recovers_each_exact_original() {
         }
         server.finish();
     }
+}
+
+#[test]
+fn joined_catalog_material_keeps_custody_source_and_metered_admission() {
+    use crate::managed::service_authority::profile_validation_test_support as counters;
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, prepared) = fixture("joined-catalog-material");
+    let publisher = ManagedGatewayCompliance::open(&prepared, provider(&prepared)).unwrap();
+    assert!(publisher.authority.shares_original_for_read());
+
+    let measure = |joined| {
+        counters::operation_paths(|| {
+            counters::count(|| {
+                if joined {
+                    publisher.validate_catalog_read_material(deadline())
+                } else {
+                    publisher.validate_material(deadline())
+                }
+            })
+        })
+    };
+    let ((old, old_images), old_paths) = measure(false);
+    let ((new, new_images), new_paths) = measure(true);
+    old.unwrap();
+    new.unwrap();
+    assert_eq!((old_images, new_images), (2, 1));
+    assert_eq!(old_paths, new_paths);
+    assert_eq!(old_paths.len(), 4);
+    let result = |joined| measure(joined).0.0.map_err(|e| e.to_string());
+    for allocated in [64usize << 20, 0] {
+        let limits = norito::DecodeLimits::new(64 << 20, 64 << 20, 64 << 20, allocated, 64);
+        let (ordinary, old) = norito::core::with_decode_limits_measured(limits, || measure(false));
+        let (joined, new) = norito::core::with_decode_limits_measured(limits, || measure(true));
+        assert_eq!(ordinary.0.0.is_ok(), allocated > 0);
+        assert_eq!(
+            ordinary.0.0.map_err(|e| e.to_string()),
+            joined.0.0.map_err(|e| e.to_string())
+        );
+        assert_eq!(ordinary.0.1, joined.0.1);
+        assert_eq!(ordinary.1, joined.1);
+        assert_eq!(old.total_allocated_bytes(), new.total_allocated_bytes());
+        assert_eq!(old.total_elements(), new.total_elements());
+    }
+    let generation =
+        PrivateDirectory::open_exact(prepared.context.client_config.parent().unwrap()).unwrap();
+    let original = generation.read("peer3.toml", 1 << 20).unwrap();
+    let mut changed = original.to_vec();
+    changed.extend_from_slice(b"\n# changed original source\n");
+    generation
+        .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(result(false).is_err());
+    assert_eq!(result(false), result(true));
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    result(true).unwrap();
+
+    #[cfg(unix)]
+    {
+        let path = publisher.authority.directory.path().join("operation.lock");
+        let held = path.with_file_name("saved-operation.lock");
+        std::fs::rename(&path, &held).unwrap();
+        publisher
+            .authority
+            .directory
+            .write_atomic("operation.lock", b"", PublishMode::CreateNew)
+            .unwrap();
+        assert!(result(false).is_err());
+        assert_eq!(result(false), result(true));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&held, &path).unwrap();
+        result(true).unwrap();
+    }
+    assert!(
+        publisher
+            .validate_catalog_read_material(Instant::now())
+            .is_err()
+    );
 }

@@ -1,5 +1,6 @@
 //! Observe actual shared-cache backing deallocation before reservation refunds.
 
+use ivm_abi::error::VmDeferral;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::{
@@ -383,7 +384,8 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     let node_bytes =
         iroha_crypto::MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(leaf_count)
             .unwrap();
-    let memory_bytes = image_bytes + leaf_count * 32 + node_bytes + 2 * leaf_count.div_ceil(64) * 8;
+    let image_and_bitmap_bytes = image_bytes + 2 * leaf_count.div_ceil(64) * 8;
+    let tree_bytes = leaf_count * 32 + node_bytes;
     NODE_ALLOCS.store(0, SeqCst);
     NODE_LAYOUT_BYTES.store(node_bytes, SeqCst);
     // Also catch a forbidden clone allocating only the initialized ragged BFS
@@ -394,13 +396,18 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
         SeqCst,
     );
     let _observe = ObserveNodes;
-    let refused = iroha_allocation::AllocationBudget::new(memory_bytes - 1);
-    assert!(ivm::IVM::try_new_with_memory_budget(gas, &refused).is_err());
+    let refused = iroha_allocation::AllocationBudget::new(image_and_bitmap_bytes - 1);
+    assert!(matches!(
+        ivm::IVM::try_new_with_memory_budget(gas, &refused),
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
+        )))
+    ));
     assert_eq!(refused.reserved_bytes(), 0);
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
         0,
-        "root demand refused before node allocation"
+        "image demand refused before node allocation"
     );
 
     let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
@@ -411,7 +418,7 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
         0,
-        "node storage is admitted with the image and allocated by the first root request"
+        "admitting the image leaves canonical node storage unallocated"
     );
     // Code and heap together exceed half this fixed image: force the dense path.
     let code = vec![0x42; ivm::Memory::HEAP_START as usize];
@@ -426,12 +433,22 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
         0,
         "nothing commits before the first root request"
     );
-    // The first root request spends the credit the constructor retained: it
-    // needs no new pool admission and allocates the node array exactly once.
-    let admitted = budget.reserved_bytes();
-    budget.set_limit_bytes(0);
+    // The first root request admits its leaves and nodes from the image's pool.
+    // A refused request allocates no node array and leaves the dirty image retryable.
+    let before_root = budget.reserved_bytes();
+    budget.set_limit_bytes(before_root + tree_bytes - 1);
+    assert!(matches!(
+        vm.memory.root(),
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }
+        ))) if requested_bytes == tree_bytes
+    ));
+    assert_eq!(budget.reserved_bytes(), before_root);
+    assert!(!vm.memory.merkle_storage_allocated());
+    assert_eq!(NODE_ALLOCS.load(SeqCst), 0);
+    budget.set_limit_bytes(before_root + tree_bytes);
     let template_root = vm.memory.root().unwrap();
-    assert_eq!(budget.reserved_bytes(), admitted);
+    assert_eq!(budget.reserved_bytes(), before_root + tree_bytes);
     budget.set_limit_bytes(256 * 1024 * 1024);
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
@@ -450,7 +467,7 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     budget.set_limit_bytes(0);
     assert!(matches!(
         vm.memory.store_u8(ivm::Memory::HEAP_START, 0xa5),
-        Err(ivm::VMError::AllocationDeferred(_))
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     // Only the one-byte write payload needs new credit; the existing log row,
     // bitmaps, leaves and canonical nodes already own their backing.
@@ -529,7 +546,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         0,
         "admission precedes actual backing allocation"
     );
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(budget.reserved_bytes(), base);
     assert!(matches!(vm.memory.load_u8(ivm::Memory::STACK_START), Ok(0)));
@@ -560,7 +580,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         .memory
         .store_bytes(ivm::Memory::STACK_START + 4 * 32, &[0x5a; PAYLOAD]);
     assert_eq!(stop_log_requests(), 2);
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(LOG_ROW_POINTER.load(SeqCst), original_rows);
     assert_eq!(budget.reserved_bytes(), occupied);
     assert!(matches!(
@@ -594,7 +617,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         3,
         "rows, one payload, then allocator refusal"
     );
-    assert!(matches!(refused, Err(ivm::VMError::ExecutionDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
+    ));
     assert_eq!(LOG_PAYLOAD_POINTER.load(SeqCst), 0);
     assert!(
         LOG_PAYLOAD_SCRUBBED.load(SeqCst),
@@ -622,7 +648,10 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         0,
         "independent clone cannot bypass original finite pool"
     );
-    assert!(matches!(refused, Err(ivm::VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        refused,
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
 
     LOG_ROW_POINTER.store(snapshot_rows, SeqCst);
     LOG_PAYLOAD_POINTER.store(snapshot[0].bytes().as_ptr() as usize, SeqCst);

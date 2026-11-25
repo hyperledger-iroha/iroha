@@ -1,4 +1,5 @@
 //! Cross-SDK golden verification for Kotodama V1 numeric frames and envelopes.
+use ivm_abi::error::VmTrap;
 #[allow(dead_code)]
 #[path = "../examples/numeric_v1_fixture.rs"]
 mod fixture_generator;
@@ -261,15 +262,23 @@ fn frame_error_category(error: NumericAbiError) -> &'static str {
 }
 fn envelope_error_category(error: VMError) -> &'static str {
     match error {
-        VMError::PointerAbiFault(PointerAbiFaultV1::PayloadHashMismatch) => "payload_hash_mismatch",
-        VMError::PointerAbiFault(PointerAbiFaultV1::WrongType) => "wrong_type",
-        VMError::PointerAbiFault(PointerAbiFaultV1::TypeNotAllowed) => "type_not_allowed",
-        VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType) => "unknown_type",
-        VMError::PointerAbiFault(PointerAbiFaultV1::InvalidEnvelopeVersion) => {
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::PayloadHashMismatch)) => {
+            "payload_hash_mismatch"
+        }
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::WrongType)) => "wrong_type",
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::TypeNotAllowed)) => {
+            "type_not_allowed"
+        }
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::UnknownType)) => "unknown_type",
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::InvalidEnvelopeVersion)) => {
             "invalid_envelope_version"
         }
-        VMError::PointerAbiFault(PointerAbiFaultV1::OversizedLength) => "oversized_length",
-        VMError::PointerAbiFault(PointerAbiFaultV1::TruncatedEnvelope) => "truncated_envelope",
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::OversizedLength)) => {
+            "oversized_length"
+        }
+        VMError::Trap(VmTrap::PointerAbiFault(PointerAbiFaultV1::TruncatedEnvelope)) => {
+            "truncated_envelope"
+        }
         other => panic!("unpinned numeric envelope error: {other:?}"),
     }
 }

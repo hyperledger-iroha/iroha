@@ -209,8 +209,11 @@ fn bound_contract_validation_borrows_exact_stored_payloads_and_preserves_owned_r
         let borrowed = borrow_bound_contract_record(&transaction, &address)
             .expect("registry read")
             .expect("complete binding");
+        let registered_manifest::RegisteredManifest::Baseline(manifest) = &borrowed.manifest else {
+            panic!("expected the registered baseline manifest");
+        };
         assert!(std::ptr::eq(
-            borrowed.manifest,
+            manifest.as_ref(),
             transaction
                 .world
                 .contract_manifests

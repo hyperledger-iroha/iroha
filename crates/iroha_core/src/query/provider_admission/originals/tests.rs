@@ -117,3 +117,66 @@ fn original_intent_bounds_and_pool_refusal_never_enter_the_callback() {
     );
     assert!(!called.get());
 }
+
+#[test]
+fn genesis_originals_report_only_one_matching_inflight_append() {
+    use crate::sumeragi::test_chain::Signers;
+    let (mut chain, _) = chain();
+    let state = std::sync::Arc::clone(chain.state());
+    let budget = AllocationBudget::new(2 * 1024 * 1024 * 1024);
+    let proposal = chain.proposal(Some(NOW * 1000 + 1), Vec::new());
+    let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+    pending.prepare(Signers::Quorum).unwrap();
+    pending.append_prepared().unwrap();
+    {
+        let captured = state.view();
+        assert_eq!(state.committed_height(), 1);
+        for _ in 0..2 {
+            let result =
+                classify_genesis_provider_admission_originals_v1(&captured, 3, &budget, |_| {
+                    panic!("stale State entered callback")
+                });
+            assert_eq!(
+                result,
+                Err::<(), _>(GenesisProviderOriginalsReadErrorV1::StateBehind(2))
+            );
+        }
+        let rejected = || GenesisProviderOriginalsReadErrorV1::Rejected(ProviderAdmissionErrorV1);
+        assert_eq!(original_frontier(&captured, 0, true), Err(rejected()));
+        let metered = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(1 << 24, 1 << 24, 1 << 24, 1 << 25, 64),
+            || original_frontier(&captured, 3, true),
+        );
+        assert_eq!(metered, Err(rejected()));
+        assert!(
+            with_genesis_provider_admission_originals_v1(
+                &captured,
+                3,
+                &budget,
+                |_| -> Result<(), _> { panic!("independent stale read entered callback") }
+            )
+            .is_err()
+        );
+    }
+    pending.publish(Signers::Quorum).unwrap();
+    assert_eq!(
+        classify_genesis_provider_admission_originals_v1(
+            &state.view(),
+            3,
+            &budget,
+            |v| Ok(v.len())
+        ),
+        Ok(1)
+    );
+    assert_eq!(
+        classify_genesis_provider_admission_originals_v1(
+            &state.view(),
+            3,
+            &budget,
+            |_| Err::<(), _>(ProviderAdmissionErrorV1)
+        ),
+        Err(GenesisProviderOriginalsReadErrorV1::Rejected(
+            ProviderAdmissionErrorV1
+        ))
+    );
+}

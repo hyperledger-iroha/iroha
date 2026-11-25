@@ -400,6 +400,7 @@ fn typed_bare_payload_digests<T: Encode + NoritoSchema>(
     let Schema::Norito {
         nominal_name,
         layout,
+        ..
     } = schema
     else {
         return Err(LeafError::UnresolvedSchema(table));
@@ -454,6 +455,7 @@ fn typed_payload_hash<T: Encode + NoritoSchema>(
     let Schema::Norito {
         nominal_name,
         layout,
+        ..
     } = schema
     else {
         return Err(LeafError::UnresolvedSchema(table));
@@ -512,6 +514,7 @@ fn bare_payload_hash(
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => (nominal_name(), layout),
         Schema::Semantic {
             identity, layout, ..

@@ -249,8 +249,13 @@ impl Connection {
         decode(&bytes)
     }
 
-    pub(crate) fn set_deadline(&mut self, deadline: Instant) -> Result<()> {
-        self.deadline = Some(self.io_deadline().min(deadline));
+    pub(crate) fn set_listener_handoff_deadline(&mut self, deadline: Instant) -> Result<()> {
+        // The first handoff deadline comes from the original startup owner. A later
+        // sample can shorten it, including to expiry, but cannot extend it.
+        self.deadline = Some(
+            self.deadline
+                .map_or(deadline, |original| original.min(deadline)),
+        );
         remaining_io(self.io_deadline())?;
         Ok(())
     }
@@ -263,8 +268,11 @@ impl Connection {
     }
 }
 
-pub fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
-    let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
+pub fn connect_listener_handoff_until(
+    directory: &PrivateDirectory,
+    deadline: Instant,
+) -> Result<Connection> {
+    // This private endpoint carries bound listeners under the original startup deadline.
     remaining_io(deadline)?;
     let runtime = Arc::new(runtime()?);
     let address = address(directory)?;

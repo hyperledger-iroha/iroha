@@ -593,7 +593,7 @@ pub fn sha(first: usize, fam: usize, pi: usize, gfam: usize, messages: &[Fp]) ->
                 &row,
                 &vec![crate::uniform::Term {
                     src: crate::uniform::Src::Own(piece.cell),
-                    coef,
+                    coef: coef.into(),
                 }],
             );
         }

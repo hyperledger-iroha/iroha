@@ -7316,7 +7316,7 @@ state_test! { sync autoscale_elastic_lane_config_uses_policy_dataspace_and_manag
 }
 #[test]
 fn autoscale_elastic_lane_config_inherits_public_base_profile_and_rejects_restricted_base() {
-    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), shard_id: None, dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::MerkleSha256, manifest_policy: DaManifestPolicy::Strict, confidential_compute: None, scheduler: Some(LaneSchedulerPolicy::new(Some(NonZeroU64::new(2400).expect("positive capacity")), None)), settlement_buffer: None, metadata: BTreeMap::new(), } };
+    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), shard_id: None, dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::SorafsPorBlake3, manifest_policy: DaManifestPolicy::Strict, confidential_compute: None, scheduler: Some(LaneSchedulerPolicy::new(Some(NonZeroU64::new(2400).expect("positive capacity")), None)), settlement_buffer: None, metadata: BTreeMap::new(), } };
     base_lane
         .metadata
         .insert("security.profile".to_owned(), "strict".to_owned());
@@ -12909,7 +12909,7 @@ fn assert_lane_state_retained_on_rejected_dataspace_change(route: LaneDataspaceC
     );
     {
         let mut commitments = state.da_commitments.write();
-        let_row! { record = DaCommitmentRecord::new( reset_lane, 1, 0, BlobDigest::new([0xAA; 32]), ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+        let_row! { record = DaCommitmentRecord::new( reset_lane, 1, 0, BlobDigest::new([0xAA; 32]), ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
         commitments.insert(
             &record,
             DaCommitmentLocation {
@@ -13668,8 +13668,8 @@ fn sample_da_commitment_record(
         sequence,
         BlobDigest::new([tag; 32]),
         ManifestDigest::new([tag.wrapping_add(1); 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([tag.wrapping_add(2); 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([tag.wrapping_add(2); 32]),
         None,
         RetentionClass::default(),
         StorageTicketId::new([tag.wrapping_add(3); 32]),
@@ -16530,8 +16530,8 @@ state_test! { sync da_shard_cursors_guard_regressions
     state
         .ensure_da_indexes_hydrated()
         .expect("hydrate DA indexes before advancing");
-    let_row! { advance = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 4, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
-    let_row! { regress = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 4, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xDD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xFF; 32]), checked_da_ack_signature(0x22), ) };
+    let_row! { advance = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 4, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { regress = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 4, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xDD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xFF; 32]), checked_da_ack_signature(0x22), ) };
     state
         .advance_da_shard_cursors_from_bundle(3, std::slice::from_ref(&advance))
         .expect("initial advance should succeed");
@@ -16560,8 +16560,8 @@ state_test! { sync da_receipt_cursors_guard_regressions
     state
         .ensure_da_indexes_hydrated()
         .expect("hydrate DA indexes before advancing");
-    let_row! { advance = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(1), 2, 3, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
-    let_row! { regress = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(1), 2, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xDD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xFF; 32]), checked_da_ack_signature(0x22), ) };
+    let_row! { advance = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(1), 2, 3, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { regress = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(1), 2, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xDD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xFF; 32]), checked_da_ack_signature(0x22), ) };
     state
         .advance_da_receipt_cursors_from_bundle(5, std::slice::from_ref(&advance))
         .expect("receipt cursor advance should succeed");
@@ -16629,7 +16629,7 @@ state_test! { sync missing_shard_cursor_blocks_touched_lane_when_da_bundle_prese
         ..Default::default()
     });
     let keypair = crate::state::checked_keypair();
-    let_row! { bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( lane1.id, 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), )]) };
+    let_row! { bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( lane1.id, 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), )]) };
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_payload: SignedBlock = new_block.into();
     let mut state_block = state.block(signed_payload.header());
@@ -16658,7 +16658,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_manifest_reuse
         })
         .expect("apply Nexus catalog for duplicate manifest test");
     let keypair = crate::state::checked_keypair();
-    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB1; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC1; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD1; 32]), checked_da_ack_signature(0xE1), ) };
+    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB1; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xC1; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD1; 32]), checked_da_ack_signature(0xE1), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first.clone()]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
@@ -16667,7 +16667,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_manifest_reuse
         hashes.push(first_block.hash());
         hashes.commit_for_tests();
     }
-    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xA2; 32]), first.manifest_hash, DaProofScheme::MerkleSha256, Hash::prehashed([0xC2; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD2; 32]), checked_da_ack_signature(0xE2), ) };
+    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xA2; 32]), first.manifest_hash, DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xC2; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD2; 32]), checked_da_ack_signature(0xE2), ) };
     let_row! { second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&first_block)) .with_da_commitments(Some(DaCommitmentBundle::new(vec![second]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     let state_block = state.block(second_block.header());
     let_row! { err = state_block .validate_da_shard_cursors(&second_block) .expect_err("manifest reuse across committed blocks must fail") };
@@ -16697,7 +16697,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_storage_ticket_re
         })
         .expect("apply Nexus catalog for duplicate ticket test");
     let keypair = crate::state::checked_keypair();
-    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x11; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x31; 32]), None, RetentionClass::default(), StorageTicketId::new([0x41; 32]), checked_da_ack_signature(0x51), ) };
+    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x11; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x31; 32]), None, RetentionClass::default(), StorageTicketId::new([0x41; 32]), checked_da_ack_signature(0x51), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first.clone()]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
@@ -16706,7 +16706,7 @@ state_test! { sync validate_da_shard_cursors_rejects_committed_storage_ticket_re
         hashes.push(first_block.hash());
         hashes.commit_for_tests();
     }
-    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0x12; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x22; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x32; 32]), None, RetentionClass::default(), first.storage_ticket, checked_da_ack_signature(0x52), ) };
+    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0x12; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x22; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x32; 32]), None, RetentionClass::default(), first.storage_ticket, checked_da_ack_signature(0x52), ) };
     let_row! { second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&first_block)) .with_da_commitments(Some(DaCommitmentBundle::new(vec![second]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     let state_block = state.block(second_block.header());
     let_row! { err = state_block .validate_da_shard_cursors(&second_block) .expect_err("storage ticket reuse across committed blocks must fail") };
@@ -16736,7 +16736,7 @@ state_test! { sync validate_da_shard_cursors_rejects_da_receipt_sequence_gap
         })
         .expect("apply Nexus catalog for receipt cursor gap test");
     let keypair = crate::state::checked_keypair();
-    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x81; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x83; 32]), None, RetentionClass::default(), StorageTicketId::new([0x84; 32]), checked_da_ack_signature(0x85), ) };
+    let_row! { first = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x81; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x83; 32]), None, RetentionClass::default(), StorageTicketId::new([0x84; 32]), checked_da_ack_signature(0x85), ) };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![first]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");
@@ -16745,7 +16745,7 @@ state_test! { sync validate_da_shard_cursors_rejects_da_receipt_sequence_gap
         hashes.push(first_block.hash());
         hashes.commit_for_tests();
     }
-    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 3, BlobDigest::new([0x91; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x92; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x93; 32]), None, RetentionClass::default(), StorageTicketId::new([0x94; 32]), checked_da_ack_signature(0x95), ) };
+    let_row! { second = DaCommitmentRecord::new( LaneId::new(0), 1, 3, BlobDigest::new([0x91; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x92; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x93; 32]), None, RetentionClass::default(), StorageTicketId::new([0x94; 32]), checked_da_ack_signature(0x95), ) };
     let_row! { second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&first_block)) .with_da_commitments(Some(DaCommitmentBundle::new(vec![second]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     let state_block = state.block(second_block.header());
     let_row! { err = state_block .validate_da_shard_cursors(&second_block) .expect_err("receipt sequence gaps across committed blocks must fail") };
@@ -16763,7 +16763,7 @@ state_test! { sync validate_da_shard_cursors_rejects_da_receipt_sequence_gap
 state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active_indexes
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 0, 0, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 0, 0, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
     let key = DaCommitmentKey::from_record(&record);
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -16831,7 +16831,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     });
     state.configure_test_runtime_defaults();
     let keypair = crate::state::checked_keypair();
-    let_row! { first_bundle = DaCommitmentBundle::new(vec![ DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ), DaCommitmentRecord::new( LaneId::new(1), 1, 2, BlobDigest::new([0xAB; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEF; 32]), checked_da_ack_signature(0x12), ), ]) };
+    let_row! { first_bundle = DaCommitmentBundle::new(vec![ DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ), DaCommitmentRecord::new( LaneId::new(1), 1, 2, BlobDigest::new([0xAB; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCD; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEF; 32]), checked_da_ack_signature(0x12), ), ]) };
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
     kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_first.clone()))
@@ -16841,7 +16841,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
         hashes.push(signed_first.hash());
         hashes.commit_for_tests();
     }
-    let_row! { second_bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( LaneId::new(1), 2, 0, BlobDigest::new([0xAC; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBD; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCE; 32]), None, RetentionClass::default(), StorageTicketId::new([0xF0; 32]), checked_da_ack_signature(0x13), )]) };
+    let_row! { second_bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( LaneId::new(1), 2, 0, BlobDigest::new([0xAC; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBD; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCE; 32]), None, RetentionClass::default(), StorageTicketId::new([0xF0; 32]), checked_da_ack_signature(0x13), )]) };
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_second: SignedBlock = second_block.into();
     kura.store_block(crate::block::reserve_block_for_tests().initialize(signed_second.clone()))
@@ -16889,8 +16889,8 @@ fn hydrate_da_indexes_replays_multi_shard_bundle() {
         ..Default::default()
     });
     state.configure_test_runtime_defaults();
-    let_row! { lane_zero_record = DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
-    let_row! { lane_one_record = DaCommitmentRecord::new( LaneId::new(1), 3, 7, BlobDigest::new([0x10; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x32; 32]), None, RetentionClass::default(), StorageTicketId::new([0x54; 32]), checked_da_ack_signature(0x65), ) };
+    let_row! { lane_zero_record = DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { lane_one_record = DaCommitmentRecord::new( LaneId::new(1), 3, 7, BlobDigest::new([0x10; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x32; 32]), None, RetentionClass::default(), StorageTicketId::new([0x54; 32]), checked_da_ack_signature(0x65), ) };
     let bundle = DaCommitmentBundle::new(vec![lane_zero_record.clone(), lane_one_record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -16940,7 +16940,7 @@ state_test! { sync hydrate_da_indexes_replaces_stale_snapshot_state
             ..Default::default()
         })
         .expect("apply Nexus catalog for shard gating test");
-    let_row! { committed_record = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
+    let_row! { committed_record = DaCommitmentRecord::new( LaneId::new(0), 1, 1, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
     let bundle = DaCommitmentBundle::new(vec![committed_record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -16952,7 +16952,7 @@ state_test! { sync hydrate_da_indexes_replaces_stale_snapshot_state
         hashes.push(signed_payload.hash());
         hashes.commit_for_tests();
     }
-    let_row! { stale_record = DaCommitmentRecord::new( LaneId::new(0), 9, 9, BlobDigest::new([0x10; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x30; 32]), None, RetentionClass::default(), StorageTicketId::new([0x50; 32]), checked_da_ack_signature(0x60), ) };
+    let_row! { stale_record = DaCommitmentRecord::new( LaneId::new(0), 9, 9, BlobDigest::new([0x10; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x30; 32]), None, RetentionClass::default(), StorageTicketId::new([0x50; 32]), checked_da_ack_signature(0x60), ) };
     state
         .advance_da_shard_cursors_from_bundle(42, std::slice::from_ref(&stale_record))
         .expect("seed stale cursor");
@@ -16989,7 +16989,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
             ..Default::default()
         })
         .expect("apply Nexus catalog before commitment replay");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 4, 9, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC3; 32]), None, RetentionClass::default(), StorageTicketId::new([0xE5; 32]), checked_da_ack_signature(0xF6), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 4, 9, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xC3; 32]), None, RetentionClass::default(), StorageTicketId::new([0xE5; 32]), checked_da_ack_signature(0xF6), ) };
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -17060,7 +17060,7 @@ state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
     );
     let kura = Arc::clone(&state.kura);
     let keypair = crate::state::checked_keypair();
-    let_row! { make_record = |lane_id: LaneId, sequence: u64| { let lane_byte = u8::try_from(lane_id.as_u32()).unwrap_or(0x7F); let sequence_byte = u8::try_from(sequence).unwrap_or(0x7F); let tag = lane_byte .wrapping_mul(17) .wrapping_add(sequence_byte) .max(1); DaCommitmentRecord::new( lane_id, 1, sequence, BlobDigest::new([0xA0 ^ tag; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB0 ^ tag; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC0 ^ tag; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD0 ^ tag; 32]), checked_da_ack_signature(0xE0 ^ tag), ) } };
+    let_row! { make_record = |lane_id: LaneId, sequence: u64| { let lane_byte = u8::try_from(lane_id.as_u32()).unwrap_or(0x7F); let sequence_byte = u8::try_from(sequence).unwrap_or(0x7F); let tag = lane_byte .wrapping_mul(17) .wrapping_add(sequence_byte) .max(1); DaCommitmentRecord::new( lane_id, 1, sequence, BlobDigest::new([0xA0 ^ tag; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB0 ^ tag; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xC0 ^ tag; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD0 ^ tag; 32]), checked_da_ack_signature(0xE0 ^ tag), ) } };
     let first_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(0), 1)]);
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
@@ -17117,7 +17117,7 @@ state_test! { sync da_shard_cursor_journal_persists_snapshot
             ..Default::default()
         })
         .expect("apply Nexus catalog for cursor regression test");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     state
         .advance_da_shard_cursors_from_bundle(1, std::slice::from_ref(&record))
         .expect("advance cursor");
@@ -17148,7 +17148,7 @@ state_test! { sync apply_without_execution_persists_da_shard_cursor_journal_in_b
             ..Default::default()
         })
         .expect("apply Nexus catalog for apply persistence test");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(Vec::new()) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -17676,7 +17676,7 @@ state_test! { sync hydrate_da_indexes_restore_from_journal_without_blocks
             ..Default::default()
         })
         .expect("apply Nexus catalog for commitment pruning test");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 2, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     state
         .advance_da_shard_cursors_from_bundle(5, std::slice::from_ref(&record))
         .expect("advance cursor");
@@ -17723,7 +17723,7 @@ state_test! { sync hydrate_da_indexes_skip_ahead_journal_entries
                 ..Default::default()
             })
             .expect("apply Nexus catalog for journal seed");
-        let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 3, 4, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+        let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 3, 4, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
         state
             .advance_da_shard_cursors_from_bundle(5, std::slice::from_ref(&record))
             .expect("advance cursor");
@@ -17771,7 +17771,7 @@ state_test! { sync apply_without_execution_retains_filtered_da_bundle_without_un
             ..Default::default()
         })
         .expect("apply Nexus catalog for apply-path DA cursor test");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC3; 32]), None, RetentionClass::default(), StorageTicketId::new([0xE5; 32]), checked_da_ack_signature(0xF6), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xC3; 32]), None, RetentionClass::default(), StorageTicketId::new([0xE5; 32]), checked_da_ack_signature(0xF6), ) };
     let bundle = DaCommitmentBundle::new(vec![record]);
     let keypair = crate::state::checked_keypair();
     let_row! { mut block: SignedBlock = BlockBuilder::new(Vec::new()) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
@@ -17875,7 +17875,7 @@ state_test! { sync da_commitment_unknown_lane_fails_before_cursor_telemetry
             ..Default::default()
         })
         .expect("apply Nexus catalog for unknown-lane telemetry test");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 0, 0, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 0, 0, BlobDigest::new([0x01; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0x03; 32]), None, RetentionClass::default(), StorageTicketId::new([0x05; 32]), checked_da_ack_signature(0x06), ) };
     let bundle = DaCommitmentBundle::new(vec![record]);
     let keypair = crate::state::checked_keypair();
     let_row! { block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
@@ -17910,7 +17910,7 @@ state_test! { sync da_shard_cursor_stale_records_telemetry
         })
         .expect("apply Nexus catalog for stale cursor telemetry test");
     let keypair = crate::state::checked_keypair();
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     state
         .ensure_da_indexes_hydrated()
         .expect("hydrate empty DA cursor index before seeding stale cursor");
@@ -17956,7 +17956,7 @@ state_test! { sync da_shard_cursor_advance_sets_zero_lag
             ..Default::default()
         })
         .expect("configure nexus");
-    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 2, 4, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = DaCommitmentRecord::new( LaneId::new(0), 2, 4, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     state
         .advance_da_shard_cursors_from_bundle(5, &[record])
         .expect("advance cursor");
@@ -18037,7 +18037,7 @@ constructor_world.sccp_committee_generations.allocation_budget().clone(), constr
         Some(7),
         "hydration reads the actual canonical confidential policy"
     );
-    let_row! { record = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
+    let_row! { record = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { signed_block: SignedBlock = BlockBuilder::new(Vec::new()) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
@@ -26470,10 +26470,10 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .expect("original callback source starts recording before block effects");
         ValidBlock::execute_recorded_component_outputs(&mut source, &mut state_block, &recorder)
             .expect("original signed callback completes with an ordinary rejection");
-        let err = source.output_error(0).expect("trigger must fail to execute");
+        let err = source.output_error(0).expect("trigger must fail to execute").baseline().expect("baseline trigger fixture");
         assert!(
             matches!(
-                &err,
+                err,
                 TransactionRejectionReason::Validation(
                     ValidationFail::InstructionFailed(InstructionExecutionError::Find(
                         FindError::Domain(domain),
@@ -28404,10 +28404,10 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
     let_row! { register_trigger = Register::trigger(Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), )) };
     let register_tx = chain.sign(&ALICE_KEYPAIR, [register_trigger.into()], 1);
     assert_eq!(chain.commit(vec![register_tx]), vec![true]);
-    let reg_err = chain.committed(2).block().output_error(0).cloned();
+    let reg_err = chain.committed(2).block().output_error(0).map(|error| error.baseline().expect("baseline trigger fixture").clone());
     let exec_tx = chain.sign(&ALICE_KEYPAIR, [ExecuteTrigger::new(trigger_id.clone()).into()], 1001);
     assert_eq!(chain.commit(vec![exec_tx]), vec![false]);
-    let exec_err = chain.committed(3).block().output_error(0).cloned();
+    let exec_err = chain.committed(3).block().output_error(0).map(|error| error.baseline().expect("baseline trigger fixture").clone());
     let view = chain.state().view();
     let asset_exists = view.world.asset_definition(&asset_definition_id).is_ok();
     let trigger_present = view.world.triggers().ids().get(&trigger_id).is_some();

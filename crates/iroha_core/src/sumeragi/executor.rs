@@ -242,6 +242,7 @@ fn archive_publication_deferral(original: PublicationDeferral) -> PublicationErr
 
 /// One State publication awaiting durable archive capture and its remaining notifications.
 struct PendingCommit {
+    event_block: iroha_data_model::block::SharedSignedBlock,
     telemetry_origin: CommitTelemetryOrigin,
     native_contexts: PreparedNativeContext,
     header: iroha_sumeragi::message::BlockHeader,
@@ -3551,6 +3552,7 @@ impl<'s> Worker<'s> {
             unreachable!("original prepared owner")
         };
         self.pending_commit = Some(PendingCommit {
+            event_block: committed.shared().clone(),
             telemetry_origin: live
                 .telemetry_origin
                 .expect("original prepared telemetry origin"),
@@ -3677,6 +3679,7 @@ impl<'s> Worker<'s> {
         }
         self.admit_scheduled(height.saturating_add(1));
         self.admit_scheduled(height.saturating_add(2));
+        self.state.publish_c10_event_block(pending.event_block);
         for event in pending.events {
             let _ = self.context.events.send(event);
         }
@@ -3973,6 +3976,7 @@ impl<'s> Worker<'s> {
                 proposed_time
             },
         };
+        let mut include_da = true;
         while !selected.is_empty() || !merges.merges.is_empty() {
             if let Err(error) = payload::recheck_progress_for_proposal(
                 &current_view,
@@ -4013,6 +4017,7 @@ impl<'s> Worker<'s> {
                 self.assembly_parent_service
                     .as_ref()
                     .map(|(_, prepared)| prepared),
+                include_da,
             ) {
                 Ok(block) => block,
                 Err(error) => {
@@ -4043,6 +4048,10 @@ impl<'s> Worker<'s> {
                         proposal_admission: None,
                     });
                     return self.finish_payload_build();
+                }
+                Ok(_) if block.da_commitments().is_some() => {
+                    // Retry the entire ordinary selection before reducing its paid work.
+                    include_da = false;
                 }
                 Ok(_) if !selected.is_empty() => {
                     selected.pop();

@@ -42,6 +42,10 @@ pub mod bundle_archive;
 pub mod chunk_store_cli;
 pub mod chunker_registry;
 mod chunker_registry_data;
+#[cfg(feature = "manifest")]
+pub mod da_payload;
+#[cfg(feature = "manifest")]
+pub mod da_recovery;
 #[cfg(windows)]
 mod directory_plan_windows;
 #[cfg(all(test, windows))]
@@ -2983,15 +2987,8 @@ pub struct StoredChunk {
     pub length: u32,
     pub blake3: [u8; 32],
 }
-/// Size of a PoR sampling segment (bytes).
-pub const POR_SEGMENT_SIZE: usize = 64 * 1024;
-/// Size of a PoR sampling leaf (bytes).
-pub const POR_LEAF_SIZE: usize = 4 * 1024;
-const POR_LEAF_DOMAIN: &[u8] = b"sorafs:por:leaf:v1";
-const POR_SEGMENT_DOMAIN: &[u8] = b"sorafs:por:segment:v1";
-const POR_CHUNK_DOMAIN: &[u8] = b"sorafs:por:chunk:v1";
-const POR_CHUNK_NODE_DOMAIN: &[u8] = b"sorafs:por:chunk-node:v1";
-const POR_ROOT_DOMAIN: &[u8] = b"sorafs:por:root-merkle:v1";
+pub use sorafs_chunker::por::{POR_LEAF_SIZE, POR_SEGMENT_SIZE};
+use sorafs_chunker::por::{hash_chunk, hash_chunk_node, hash_leaf, hash_segment};
 fn try_reserve_store<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -3271,7 +3268,11 @@ impl PorMerkleTree {
                         context: "PoR segment leaf coverage",
                     });
                 }
-                let recomputed_segment = hash_segment_from_entries(segment)?;
+                let recomputed_segment = hash_segment(
+                    segment.offset,
+                    segment.length,
+                    segment.leaves.iter().map(|leaf| &leaf.digest),
+                );
                 if recomputed_segment != segment.digest {
                     return Err(ChunkStoreError::PorInvariant {
                         context: "PoR segment commitment",
@@ -3293,7 +3294,14 @@ impl PorMerkleTree {
                 u64::try_from(chunk_index).map_err(|_| ChunkStoreError::PorInvariant {
                     context: "PoR chunk index width",
                 })?;
-            if hash_chunk_from_entries(chunk_index_u64, chunk)? != chunk.root {
+            if hash_chunk(
+                chunk_index_u64,
+                chunk.offset,
+                chunk.length,
+                &chunk.chunk_digest,
+                chunk.segments.iter().map(|segment| &segment.digest),
+            ) != chunk.root
+            {
                 return Err(ChunkStoreError::PorInvariant {
                     context: "PoR chunk commitment",
                 });
@@ -3641,12 +3649,6 @@ impl PorMerkleTree {
         let segment_count = bytes.len().div_ceil(POR_SEGMENT_SIZE);
         let mut segments = Vec::new();
         try_reserve_store(&mut segments, segment_count, "PoR chunk segments")?;
-        let mut segment_hashes = Vec::new();
-        try_reserve_store(
-            &mut segment_hashes,
-            segment_count,
-            "PoR chunk segment roots",
-        )?;
         let mut segment_start = 0usize;
         let mut next_leaf_index = first_leaf_index;
         while segment_start < bytes.len() {
@@ -3660,8 +3662,6 @@ impl PorMerkleTree {
             let leaf_count = segment_len.div_ceil(POR_LEAF_SIZE);
             let mut leaves = Vec::new();
             try_reserve_store(&mut leaves, leaf_count, "PoR segment leaves")?;
-            let mut leaf_hashes = Vec::new();
-            try_reserve_store(&mut leaf_hashes, leaf_count, "PoR segment leaf roots")?;
             let mut leaf_start = segment_start;
             while leaf_start < segment_end {
                 let leaf_len = (segment_end - leaf_start).min(POR_LEAF_SIZE);
@@ -3699,7 +3699,6 @@ impl PorMerkleTree {
                         .ok_or(ChunkStoreError::PorCountOverflow {
                             context: "PoR canonical flat leaf index",
                         })?;
-                leaf_hashes.push(digest);
                 leaf_start = leaf_end;
             }
             let segment_relative_offset =
@@ -3715,14 +3714,17 @@ impl PorMerkleTree {
                 u32::try_from(segment_len).map_err(|_| ChunkStoreError::PorInvariant {
                     context: "PoR segment length width",
                 })?;
-            let segment_digest = hash_segment(segment_offset, segment_length, &leaf_hashes);
+            let segment_digest = hash_segment(
+                segment_offset,
+                segment_length,
+                leaves.iter().map(|leaf| &leaf.digest),
+            );
             segments.push(PorSegment {
                 offset: segment_offset,
                 length: segment_length,
                 digest: segment_digest,
                 leaves,
             });
-            segment_hashes.push(segment_digest);
             segment_start = segment_end;
         }
         let chunk_index_u64 =
@@ -3734,7 +3736,7 @@ impl PorMerkleTree {
             chunk_offset,
             chunk_length,
             &chunk_digest,
-            &segment_hashes,
+            segments.iter().map(|segment| &segment.digest),
         );
         Ok((
             PorChunkTree {
@@ -3967,7 +3969,7 @@ impl PorProof {
         let recomputed_segment = hash_segment(
             self.segment_offset,
             self.segment_length,
-            &self.segment_leaves,
+            self.segment_leaves.iter(),
         );
         if recomputed_segment != self.segment_digest {
             return false;
@@ -3981,7 +3983,7 @@ impl PorProof {
             self.chunk_offset,
             self.chunk_length,
             &self.chunk_digest,
-            &self.chunk_segments,
+            self.chunk_segments.iter(),
         );
         if recomputed_chunk != self.chunk_root {
             return false;
@@ -3990,92 +3992,12 @@ impl PorProof {
             .is_some_and(|recomputed_root| &recomputed_root == expected_root)
     }
 }
-fn hash_leaf(flat_index: u64, offset: u64, bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_LEAF_DOMAIN);
-    hasher.update(&flat_index.to_le_bytes());
-    hasher.update(&offset.to_le_bytes());
-    hasher.update(&(bytes.len() as u32).to_le_bytes());
-    hasher.update(bytes);
-    hasher.finalize().into()
-}
-fn hash_segment(offset: u64, length: u32, leaves: &[[u8; 32]]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_SEGMENT_DOMAIN);
-    hasher.update(&offset.to_le_bytes());
-    hasher.update(&length.to_le_bytes());
-    hasher.update(&(leaves.len() as u64).to_le_bytes());
-    for digest in leaves {
-        hasher.update(digest);
-    }
-    hasher.finalize().into()
-}
-fn hash_segment_from_entries(segment: &PorSegment) -> Result<[u8; 32], ChunkStoreError> {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_SEGMENT_DOMAIN);
-    hasher.update(&segment.offset.to_le_bytes());
-    hasher.update(&segment.length.to_le_bytes());
-    let leaf_count =
-        u64::try_from(segment.leaves.len()).map_err(|_| ChunkStoreError::PorCountOverflow {
-            context: "PoR segment commitment leaf count",
-        })?;
-    hasher.update(&leaf_count.to_le_bytes());
-    for leaf in &segment.leaves {
-        hasher.update(&leaf.digest);
-    }
-    Ok(hasher.finalize().into())
-}
-fn hash_chunk(
-    index: u64,
-    offset: u64,
-    length: u32,
-    chunk_digest: &[u8; 32],
-    segments: &[[u8; 32]],
-) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_CHUNK_DOMAIN);
-    hasher.update(&index.to_le_bytes());
-    hasher.update(&offset.to_le_bytes());
-    hasher.update(&length.to_le_bytes());
-    hasher.update(chunk_digest);
-    hasher.update(&(segments.len() as u64).to_le_bytes());
-    for digest in segments {
-        hasher.update(digest);
-    }
-    hasher.finalize().into()
-}
-fn hash_chunk_from_entries(index: u64, chunk: &PorChunkTree) -> Result<[u8; 32], ChunkStoreError> {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_CHUNK_DOMAIN);
-    hasher.update(&index.to_le_bytes());
-    hasher.update(&chunk.offset.to_le_bytes());
-    hasher.update(&chunk.length.to_le_bytes());
-    hasher.update(&chunk.chunk_digest);
-    let segment_count =
-        u64::try_from(chunk.segments.len()).map_err(|_| ChunkStoreError::PorCountOverflow {
-            context: "PoR chunk commitment segment count",
-        })?;
-    hasher.update(&segment_count.to_le_bytes());
-    for segment in &chunk.segments {
-        hasher.update(&segment.digest);
-    }
-    Ok(hasher.finalize().into())
-}
 fn chunk_merkle_depth(chunk_count: usize) -> usize {
     if chunk_count <= 1 {
         0
     } else {
         usize::BITS as usize - (chunk_count - 1).leading_zeros() as usize
     }
-}
-fn hash_chunk_node(level: u32, parent_index: u64, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_CHUNK_NODE_DOMAIN);
-    hasher.update(&level.to_le_bytes());
-    hasher.update(&parent_index.to_le_bytes());
-    hasher.update(left);
-    hasher.update(right);
-    hasher.finalize().into()
 }
 fn build_chunk_merkle_levels(
     chunk_roots: &[[u8; 32]],
@@ -4158,13 +4080,12 @@ fn hash_root(
             context: "PoR root leaf population",
         });
     }
-    let mut hasher = Hasher::new();
-    hasher.update(POR_ROOT_DOMAIN);
-    hasher.update(&total_len.to_le_bytes());
-    hasher.update(&chunk_count.to_le_bytes());
-    hasher.update(&leaf_count.to_le_bytes());
-    hasher.update(chunk_tree_root);
-    Ok(hasher.finalize().into())
+    Ok(sorafs_chunker::por::hash_root(
+        total_len,
+        chunk_count,
+        leaf_count,
+        chunk_tree_root,
+    ))
 }
 /// Deterministic, allocation-bounded iterator over unique PoR sample indices.
 ///
@@ -7091,7 +7012,8 @@ mod tests {
                     leaf_roots.push(leaf.digest);
                 }
                 assert_eq!(segment_total as u32, segment.length);
-                let expected_segment = hash_segment(segment.offset, segment.length, &leaf_roots);
+                let expected_segment =
+                    hash_segment(segment.offset, segment.length, leaf_roots.iter());
                 assert_eq!(segment.digest, expected_segment);
                 chunk_total += segment.length as u64;
                 segment_roots.push(segment.digest);
@@ -7102,7 +7024,7 @@ mod tests {
                 chunk.offset,
                 chunk.length,
                 &chunk.chunk_digest,
-                &segment_roots,
+                segment_roots.iter(),
             );
             assert_eq!(chunk.root, expected_chunk);
             expected_chunk_roots.push(chunk.root);

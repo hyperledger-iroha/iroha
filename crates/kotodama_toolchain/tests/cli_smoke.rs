@@ -634,3 +634,132 @@ fn koto_build_named_runtime_profile_smoke() {
     assert_eq!(admitted.metadata.abi_version, 1);
     assert_eq!(admitted.manifest.abi_hash, Some(admitted.abi_hash));
 }
+
+#[test]
+fn trace_flag_and_subcommand_share_the_selected_baseline_execution() {
+    let source = build_dir("trace_switch").join("trace.ko");
+    fs::write(&source, "seiyaku TraceForms { #[test] fn smoke() { test::assert(true); } #[test] fn second() { test::assert(true); } }").unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_koto"))
+            .arg("test")
+            .args(args)
+            .arg(&source)
+            .output()
+            .expect("run the koto test driver")
+    };
+    let human = run(&["--trace"]);
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let report = String::from_utf8(human.stdout).unwrap();
+    assert!(report.contains("trace smoke") && report.contains("trace second"));
+    let options = ["--format", "json", "--filter", "smoke", "--exact"];
+    let named = run(&[&["trace"][..], &options].concat());
+    let flag = run(&[&["--trace"][..], &options].concat());
+    assert!(named.status.success() && flag.status.success());
+    assert_eq!(flag.stdout, named.stdout);
+    let lines = std::str::from_utf8(&flag.stdout).unwrap();
+    assert!(!lines.is_empty());
+    for line in lines.lines() {
+        let step: norito::json::Value = norito::json::from_str(line).unwrap();
+        assert_eq!(
+            step.get("test").and_then(norito::json::Value::as_str),
+            Some("smoke")
+        );
+        assert!(step.get("pc").is_some());
+    }
+    for args in [
+        &["--trace", "--exact"][..],
+        &["--trace", "--format", "junit"],
+        &["coverage", "--trace"],
+        &["--trace", "trace"],
+    ] {
+        assert_eq!(run(args).status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn tests_and_traces_execute_the_selected_profile() {
+    let directory = build_dir("trace_profiles");
+    let source = directory.join("Case.ko");
+    fs::write(
+        &source,
+        r#"誓約 Case {
+        view fn answer() authorize(anyone) -> int { 42 }
+        #[test] fn calls_answer() {
+            let value = test::invoke_kotoage(言挙げ: "answer", arguments: {});
+            test::assert_eq(actual: value, expected: 42);
+        }
+    }"#,
+    )
+    .unwrap();
+    for (name, width) in [("abi-v1", 256), ("iroha.ivm.c10.v1", 32)] {
+        let result = Command::new(env!("CARGO_BIN_EXE_koto"))
+            .args(["test", "trace", "--format", "json", "--host-profile", name])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output = String::from_utf8(result.stdout).unwrap();
+        let steps = output
+            .lines()
+            .map(|line| norito::json::from_str::<norito::json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            steps
+                .iter()
+                .flat_map(|step| step["changed_registers"].as_array().unwrap())
+                .all(|change| change["register"].as_u64().unwrap() < width),
+            "{name}"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["function"].as_str() == Some("answer")),
+            "{name}"
+        );
+    }
+    let lifecycle_source = fs::read_to_string(&source).unwrap().replace(
+        "view fn answer",
+        "言挙げ fn register(bytes request) authorize(anyone) { ledger::runtime::register_obligation(request); }
+        view fn answer",
+    );
+    fs::write(&source, lifecycle_source).unwrap();
+    let lifecycle = Command::new(env!("CARGO_BIN_EXE_koto"))
+        .args([
+            "test",
+            "run",
+            "--host-profile",
+            "iroha.ivm.runtime_lifecycle.v1",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        lifecycle.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lifecycle.stderr)
+    );
+}
+
+#[test]
+fn default_build_refuses_c10_trace_bound_before_writing_output() {
+    let directory = build_dir("refused_baseline_trace_bound");
+    let result = Command::new(env!("CARGO_BIN_EXE_koto"))
+        .args(["build", "--zk", "--zk-trace-cycles", "42", "--out"])
+        .arg(directory.join("never.to"))
+        .arg(example("10_meta_header.ko"))
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("abi-v1 uses a cycle ceiling of 1000000")
+    );
+    assert!(!directory.join("never.to").exists());
+}

@@ -389,8 +389,9 @@ mod tests {
             ),
             None,
         );
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-            .expect("sign deterministic DA query pin scope");
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+                .expect("sign deterministic DA query pin scope");
         DaPinIntent::new(authorization, scope_authorization)
     }
     fn store_with_records() -> DaPinStore {

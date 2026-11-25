@@ -93,6 +93,8 @@ macro_rules! impl_aos_decode_from_slice {
 }
 pub(crate) use impl_aos_decode_from_slice;
 
+/// Explicit threshold administration of independently founded child roots.
+pub mod child_runtime;
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -101,6 +103,7 @@ pub mod endorsement;
 pub mod governance;
 /// Ministry agenda intake instructions.
 pub mod ministry;
+pub mod runtime_carrier;
 /// Typed one-time SoraFS successor repair instruction.
 pub mod sorafs_repair;
 pub mod taira_activation;
@@ -226,8 +229,17 @@ macro_rules! impl_direct_instruction_box {
     };
 }
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
+impl_direct_instruction_box!(
+    crate::ivm_c10::RegisterSmartContractCodeC10V1,
+    crate::ivm_c10::RegisterTriggerC10V1,
+);
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
+impl_direct_instruction_box!(
+    crate::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    crate::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1,
+    crate::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1,
+);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1);
@@ -291,6 +303,7 @@ impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovem
 impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
 impl_direct_instruction_box!(
     crate::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1,
+    crate::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1,
     crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1,
     crate::governance::anonymous_ballot::RegisterParliamentCredentialV1,
 );
@@ -436,6 +449,9 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 impl_direct_instruction_box!(crate::isi::sorafs_repair::ApplySorafsRepairV1);
 impl_direct_instruction_box!(crate::isi::taira_activation::ScheduleTairaTimeIronwoodV1);
 impl_direct_instruction_box!(crate::isi::taira_read_scope::ScheduleTairaReadScopeV1);
+impl_direct_instruction_box!(crate::isi::child_runtime::AuthorizeChildRuntimeActionV1);
+impl_direct_instruction_box!(crate::isi::child_runtime::AttestChildRuntimeSupportV1);
+impl_direct_instruction_box!(crate::isi::runtime_carrier::StageRuntimeCarrierArtifactV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
@@ -1026,6 +1042,82 @@ pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&str, Vec<u
     };
     write_result.ok()?;
     complete.then_some((entry.wire_id, payload))
+}
+/// Encode one instruction into its wire ID and exact envelope payload in an explicit layout.
+///
+/// [`norito::core::WireLayout::Compact`] returns the Norito frame of
+/// [`framed_instruction_payload`]; [`norito::core::WireLayout::Dense`] returns the bare dense
+/// payload a dense envelope carries, with no nested header (`norito.md`, "Dense layout"). An
+/// opaque envelope returns its payload only in the layout it was decoded from, because its bytes
+/// are never interpreted.
+///
+/// `None` means an unregistered instruction type, the fixed layout (no envelope is framed with
+/// fixed-width lengths) or a payload that cannot be encoded.
+#[must_use]
+pub fn instruction_payload_with_layout(
+    instr: &InstructionBox,
+    layout: norito::core::WireLayout,
+) -> Option<(&str, Vec<u8>)> {
+    match layout {
+        norito::core::WireLayout::Fixed => None,
+        norito::core::WireLayout::Compact => {
+            if instr.as_opaque().is_some_and(OpaqueInstructionV1::is_dense) {
+                return None;
+            }
+            let _current = norito::core::WireLayoutGuard::enter(layout);
+            framed_instruction_payload(instr)
+        }
+        norito::core::WireLayout::Dense => {
+            if let Some(opaque) = instr.as_opaque() {
+                return opaque
+                    .is_dense()
+                    .then(|| (opaque.wire_id(), opaque.frame().to_vec()));
+            }
+            let wire_id = instruction_wire_id(instr)?;
+            let pair = norito::codec::encode_bare_with_layout(instr, layout).ok()?;
+            let _dense = norito::core::WireLayoutGuard::enter(layout);
+            let (name, payload, used) = decode_instruction_pair_fields_from_slice(&pair).ok()?;
+            (name == wire_id && used == pair.len()).then(|| (wire_id, payload.to_vec()))
+        }
+    }
+}
+/// Strictly decode one registered instruction from its wire ID and envelope payload in an
+/// explicit layout.
+///
+/// [`norito::core::WireLayout::Compact`] decodes a Norito frame exactly as
+/// [`decode_instruction_from_pair`]; [`norito::core::WireLayout::Dense`] decodes the bare dense
+/// payload of a dense envelope, which must be consumed exactly. Unlike
+/// [`decode_instruction_envelope`], this never yields an [`OpaqueInstructionV1`]: it is the typed
+/// decoder for clients and tools, and the layout is the caller's selection, never inferred from
+/// the bytes.
+///
+/// # Errors
+/// Returns `norito::Error` for an unregistered wire ID, the fixed layout, or a payload that is
+/// not the instruction's payload in `layout`.
+pub fn decode_instruction_with_layout(
+    wire_id: &str,
+    payload: &[u8],
+    layout: norito::core::WireLayout,
+) -> Result<InstructionBox, norito::Error> {
+    match layout {
+        norito::core::WireLayout::Fixed => Err(norito::Error::UnsupportedFeature(
+            "instruction envelopes are not framed in the fixed layout",
+        )),
+        norito::core::WireLayout::Compact => decode_instruction_from_pair(wire_id, payload),
+        norito::core::WireLayout::Dense => {
+            let entry = {
+                let registry = instruction_registry();
+                registry.entry_for_wire_id(wire_id).copied()
+            }
+            .ok_or_else(|| {
+                norito::Error::Message("unknown instruction wire identifier".to_owned())
+            })?;
+            let _dense = norito::core::WireLayoutGuard::enter(layout);
+            norito::with_decode_limits(norito::canonical_decode_limits(payload.len()), || {
+                (entry.dense_ctor)(payload)
+            })
+        }
+    }
 }
 /// The static registry wire ID and exact frame of a registered instruction; `None` for an opaque
 /// envelope, which has no registry entry.

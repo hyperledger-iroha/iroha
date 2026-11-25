@@ -5,19 +5,27 @@
 //! batching challenge. The private IPA removes its accumulated H mask exactly;
 //! only its fresh (G, u) claim is exported. There is no blinding scalar in the
 //! exported claim, and native verification must decide that claim with an MSM.
+//!
+//! Each private source is a tensor, `s(u) = s(u[..D]) (x) s(u[D..])`.
+//! The general producer derives exact per-source block points before folding.
+//! A native Receive with two previously verified parents can instead compute
+//! the same leading rounds by a secret MSM on each coefficient half. The
+//! secret MSMs are variable time in the private coefficients (TODO.md G8).
 use crate::{
     fs::{ProofEntropy, Scalar, SpikeRng, Transcript},
     ipa::{Aff, Claim, F, Gens, s_vector},
 };
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
-use iroha_pasta::msm::{MemoryBudget, msm_public, msm_secret};
+use iroha_pasta::msm::{MemoryBudget, msm_public};
 use iroha_pasta::poseidon::PoseidonField;
 use iroha_pasta::{PastaAffine, PastaCurve};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const SOURCE_COUNT: usize = 4;
 pub const IO_START: usize = 160;
+/// Leading rounds whose L/R are combined from private source block points.
+const BLOCK_DEPTH: usize = 4;
 const INPUT_DOMAIN: &[u8] = b"generator-restructure/private-input/v1";
 const FOLD_DOMAIN: &[u8] = b"generator-restructure/fold/v1";
 
@@ -218,18 +226,10 @@ fn closed<S: Field>(us: &[S], point: &[S]) -> S {
 fn inner<S: Field>(a: &[S], b: &[S]) -> S {
     a.iter().zip(b).map(|(a, b)| *a * b).sum()
 }
-fn eq_weights<S: Field>(point: &[S]) -> Vec<S> {
-    let mut out = vec![S::ONE];
-    for r in point {
-        out = out
-            .into_iter()
-            .flat_map(|v| [v * (S::ONE - r), v * r])
-            .collect();
-    }
-    out
-}
+/// The private coefficients' sum over the installed generators, through the
+/// variable-time secret MSM (`ipa::secret_msm`).
 fn msm<C: PastaCurve>(s: &[F<C>], g: &[Aff<C>]) -> C {
-    msm_secret::<C>(s, g, MemoryBudget::DEFAULT).expect("bounded generator restructuring MSM")
+    crate::ipa::secret_msm::<C>(s, g)
 }
 
 /// The exact claim decision, also required for the fresh exported claim.
@@ -243,6 +243,201 @@ pub fn decide<C: PastaCurve>(gens: &Gens<C>, claim: &Claim<C>) -> bool {
             .is_ok_and(|g| g == C::from(claim.g))
 }
 
+/// A private source's block points: entry `j` is `<s(us[depth..]), G_j>` for the
+/// `j`-th of the `2^depth` equal public index blocks `G_j` of the generator prefix.
+type Blocks<C> = Zeroizing<Vec<Aff<C>>>;
+
+/// Evaluate a private lineage challenge vector's tail on every public generator
+/// block, one variable-time secret MSM of the same private weights per block.
+fn source_blocks<C: PastaCurve>(
+    gens: &Gens<C>,
+    us: &[F<C>],
+    depth: usize,
+) -> Result<Blocks<C>, &'static str> {
+    if us.is_empty() || us.len() >= usize::BITS as usize || depth > us.len() {
+        return Err("generator source dimension");
+    }
+    let bases = gens
+        .g
+        .get(..1usize << us.len())
+        .ok_or("generator source dimension")?;
+    let weights = Zeroizing::new(s_vector(&us[depth..]));
+    let mut sums = Zeroizing::new(Vec::with_capacity(1 << depth));
+    for block in bases.chunks_exact(weights.len()) {
+        sums.push(
+            iroha_pasta::msm::msm_secret_cancellable::<C>(
+                &weights,
+                block,
+                MemoryBudget::DEFAULT,
+                &iroha_pasta::msm::SharedMemoryBudget::process_default(),
+                None,
+            )
+            .map_err(|_| "generator source resource bound")?,
+        );
+    }
+    let mut blocks = Zeroizing::new(vec![Aff::<C>::default(); sums.len()]);
+    C::batch_normalize(&sums, &mut blocks[..]);
+    Ok(blocks)
+}
+
+/// The source point `<s(us), G>`: the blocks weighted by the private head tensor.
+fn recombine<C: PastaCurve>(blocks: &[Aff<C>], us: &[F<C>]) -> Aff<C> {
+    let head = Zeroizing::new(s_vector(&us[..blocks.len().ilog2() as usize]));
+    msm::<C>(&head, blocks).to_affine()
+}
+
+fn check_private_sources<C: PastaCurve>(
+    gens: &Gens<C>,
+    k: usize,
+    sources: &[Claim<C>],
+    depth: usize,
+) -> Result<Vec<Blocks<C>>, &'static str> {
+    let mut checked = Vec::with_capacity(sources.len());
+    for claim in sources {
+        if claim.us.len() != k {
+            return Err("wallet predecessor generator claim");
+        }
+        let blocks = source_blocks(gens, &claim.us, depth)?;
+        if recombine::<C>(&blocks, &claim.us) != claim.g {
+            return Err("wallet predecessor generator claim");
+        }
+        checked.push(blocks);
+    }
+    Ok(checked)
+}
+
+/// Derive an incoming source point locally from its block points.
+fn corrected_source<C: PastaCurve>(
+    gens: &Gens<C>,
+    k: usize,
+    us: &[F<C>],
+    depth: usize,
+    blocks: &mut Vec<Blocks<C>>,
+) -> Result<Claim<C>, &'static str> {
+    if us.len() != k {
+        return Err("generator source dimension");
+    }
+    let source = source_blocks(gens, us, depth)?;
+    let g = recombine::<C>(&source, us);
+    blocks.push(source);
+    Ok(Claim { g, us: us.to_vec() })
+}
+
+/// Construct the four sources from the public operation shape. A single-parent
+/// operation repeats its two checked slots. The general Receive path derives both incoming points
+/// locally, including when its total verifier must record a Burn.
+pub(crate) fn prove_predecessors<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    parents: [Claim<C>; 2],
+    incoming: Option<[&[F<C>]; 2]>,
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    if !gens.g.len().is_power_of_two() || gens.g.len() < 2 {
+        return Err("generator source dimension");
+    }
+    let k = gens.g.len().ilog2() as usize;
+    let depth = BLOCK_DEPTH.min(k);
+    let mut blocks = check_private_sources(gens, k, &parents, depth)?;
+    let [own, inherited] = parents;
+    let [peer, peer_inherited] = match incoming {
+        Some([own, inherited]) => [
+            corrected_source(gens, k, own, depth, &mut blocks)?,
+            corrected_source(gens, k, inherited, depth, &mut blocks)?,
+        ],
+        None => {
+            blocks.extend_from_within(..2);
+            [own.clone(), inherited.clone()]
+        }
+    };
+    prove_checked_with_rng(
+        gens,
+        relation,
+        vec![own, inherited, peer, peer_inherited],
+        &blocks,
+        depth,
+        &mut entropy.stream(purpose),
+    )
+}
+
+/// Reuse the points already decided by the native verifier for both proofs.
+pub(crate) fn prove_verified_predecessors<C: PastaCurve>(
+    verified: crate::native::engine::VerifiedCurveInputs<'_, C>,
+    relation: [u8; 32],
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    let (gens, [head, incoming]) = verified.into_parts();
+    let claims = |(proof, trace): (&crate::spartan::Proof<C>, &crate::verifier::Trace<C>)| {
+        let own = Claim {
+            g: proof.ipa.g_final,
+            us: trace.us.clone(),
+        };
+        let inherited = crate::full::inherited_generator_claim(trace, gens)?;
+        Ok::<_, &'static str>([own, inherited])
+    };
+    fold_verified_points(
+        gens,
+        relation,
+        claims(head)?,
+        claims(incoming)?,
+        entropy,
+        purpose,
+    )
+}
+
+fn fold_verified_points<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    parents: [Claim<C>; 2],
+    incoming: [Claim<C>; 2],
+    entropy: &ProofEntropy,
+    purpose: &[u8],
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    if !gens.g.len().is_power_of_two() || gens.g.len() < 2 {
+        return Err("generator source dimension");
+    }
+    let k = gens.g.len().ilog2() as usize;
+    if parents
+        .iter()
+        .chain(&incoming)
+        .any(|claim| claim.us.len() != k)
+    {
+        return Err("verified generator source dimension");
+    }
+    let sources = parents.iter().chain(&incoming).cloned().collect();
+    if let Some(proved) = prove_rounds(
+        gens,
+        relation,
+        sources,
+        None,
+        BLOCK_DEPTH.min(k),
+        &mut entropy.stream(purpose),
+    ) {
+        return Ok(proved);
+    }
+    crate::prof::time("verified generator fold exact recovery", || {
+        prove_predecessors(
+            gens,
+            relation,
+            parents,
+            Some([&incoming[0].us, &incoming[1].us]),
+            entropy,
+            purpose,
+        )
+    })
+}
+
 /// Fresh operation entropy is mandatory at production call sites.
 pub fn prove<C: PastaCurve>(
     gens: &Gens<C>,
@@ -250,7 +445,7 @@ pub fn prove<C: PastaCurve>(
     sources: Vec<Claim<C>>,
     entropy: &ProofEntropy,
     purpose: &[u8],
-) -> (Fold<C>, Trace<C>)
+) -> Result<(Fold<C>, Trace<C>), &'static str>
 where
     F<C>: Scalar,
 {
@@ -261,18 +456,192 @@ pub(crate) fn prove_with_rng<C: PastaCurve>(
     relation: [u8; 32],
     sources: Vec<Claim<C>>,
     rng: &mut SpikeRng,
-) -> (Fold<C>, Trace<C>)
+) -> Result<(Fold<C>, Trace<C>), &'static str>
 where
     F<C>: Scalar,
 {
-    assert_eq!(sources.len(), SOURCE_COUNT);
+    prove_with_rng_at(gens, relation, sources, BLOCK_DEPTH, rng)
+}
+fn prove_with_rng_at<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    sources: Vec<Claim<C>>,
+    depth: usize,
+    rng: &mut SpikeRng,
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    if sources.len() != SOURCE_COUNT {
+        return Err("generator source count");
+    }
+    let k = sources[0].us.len();
+    if k == 0 || k >= usize::BITS as usize || (1usize << k) > gens.g.len() {
+        return Err("generator source dimension");
+    }
+    let depth = depth.min(k);
+    let blocks = check_private_sources(gens, k, &sources, depth)?;
+    prove_checked_with_rng(gens, relation, sources, &blocks, depth, rng)
+}
+
+/// Add one private source's weighted tensor. A row index selects the product
+/// of the high challenge bits, and a column index selects the low bits.
+fn add_weighted_source<S: Field + Zeroize>(coeff: &mut [S], us: &[S], weight: S) {
+    use rayon::prelude::*;
+    let (high, low) = us.split_at(us.len() / 2);
+    let high = Zeroizing::new(s_vector(high));
+    let low = Zeroizing::new(s_vector(low));
+    assert_eq!(coeff.len(), high.len() * low.len());
+    coeff
+        .par_chunks_mut(low.len())
+        .zip(high.par_iter())
+        .for_each(|(row, prefix)| {
+            let scale = Zeroizing::new(weight * prefix);
+            for (value, suffix) in row.iter_mut().zip(low.iter()) {
+                *value += *scale * suffix;
+            }
+        });
+}
+
+/// The folding state before a leading round `r`, with `c` the earlier round
+/// challenges. Source `i` folds to `weights[i] s(us_i[r..])`, the generators to
+/// `sum_beta c^beta G_beta` over the `2^r` leading blocks, and `b` to
+/// `b_scale eq(point[r..])`.
+struct Leading<'a, C: PastaCurve> {
+    sources: &'a [Claim<C>],
+    blocks: &'a [Blocks<C>],
+    weights: &'a [F<C>],
+    b_scale: F<C>,
+    point: &'a [F<C>],
+    zeta: F<C>,
+}
+
+/// One leading round's exact L and R from the source block points, with the
+/// same masks: `<coeff_lo, g_hi>` takes, per source, `weight c^beta s(tail)[delta]`
+/// on the block with this round's bit set, and `<coeff_hi, g_lo>` takes the extra
+/// factor `u_ir` on the block with it clear. Both inner products with `b` close
+/// in `O(k)` because every folded vector is still a tensor.
+fn leading_round<C: PastaCurve>(
+    gens: &Gens<C>,
+    state: &Leading<'_, C>,
+    c: &[F<C>],
+    masks: [F<C>; 2],
+) -> (Aff<C>, Aff<C>) {
+    let round = c.len();
+    let depth = state.blocks[0].len().ilog2() as usize;
+    let below = depth - round - 1;
+    let prefix = Zeroizing::new(s_vector(c));
+    let terms = state.sources.len() << (depth - 1);
+    let mut scalars: [Zeroizing<Vec<F<C>>>; 2] =
+        std::array::from_fn(|_| Zeroizing::new(Vec::with_capacity(terms + 2)));
+    let mut bases: [Zeroizing<Vec<Aff<C>>>; 2] =
+        std::array::from_fn(|_| Zeroizing::new(Vec::with_capacity(terms + 2)));
+    let mut inner = Zeroizing::new([F::<C>::ZERO; 2]);
+    let r = state.point[round];
+    for ((source, blocks), weight) in state.sources.iter().zip(state.blocks).zip(state.weights) {
+        let side = Zeroizing::new([*weight, *weight * source.us[round]]);
+        let tail = Zeroizing::new(s_vector(&source.us[round + 1..depth]));
+        let rest = Zeroizing::new(
+            state.b_scale * closed(&source.us[round + 1..], &state.point[round + 1..]),
+        );
+        inner[0] += side[0] * r * *rest;
+        inner[1] += side[1] * (F::<C>::ONE - r) * *rest;
+        for (beta, c_beta) in prefix.iter().enumerate() {
+            for (delta, t) in tail.iter().enumerate() {
+                let low = (beta << (depth - round)) | delta;
+                let scale = Zeroizing::new(*c_beta * t);
+                for (j, index) in [low | (1 << below), low].into_iter().enumerate() {
+                    scalars[j].push(side[j] * *scale);
+                    bases[j].push(blocks[index]);
+                }
+            }
+        }
+    }
+    for j in 0..2 {
+        scalars[j].extend([inner[j] * state.zeta, masks[j]]);
+        bases[j].extend([gens.u, gens.h]);
+    }
+    (
+        msm::<C>(&scalars[0], &bases[0]).to_affine(),
+        msm::<C>(&scalars[1], &bases[1]).to_affine(),
+    )
+}
+
+/// One leading round's exact L and R from the batched coefficient halves and the
+/// generators `g` folded so far, with the same masks. Source `i` gives the low
+/// half `weights[i] s(us_i[round + 1..])` and the high half its `us_i[round]`
+/// multiple; `half` holds one of them at a time. Both inner products with `b`
+/// close per source exactly as in [`leading_round`].
+fn batched_round<C: PastaCurve>(
+    gens: &Gens<C>,
+    state: &Leading<'_, C>,
+    round: usize,
+    g: &[Aff<C>],
+    half: &mut [F<C>],
+    masks: [F<C>; 2],
+) -> (Aff<C>, Aff<C>) {
+    let h = g.len() / 2;
+    let coeff = &mut half[..h];
+    let r = state.point[round];
+    let u = C::from(gens.u) * state.zeta;
+    // `<coeff_lo, g_hi>` with `<coeff_lo, b_hi>`, then `<coeff_hi, g_lo>` with `<coeff_hi, b_lo>`.
+    let lr: [Aff<C>; 2] = std::array::from_fn(|j| {
+        coeff.fill(F::<C>::ZERO);
+        let mut inner = Zeroizing::new(F::<C>::ZERO);
+        for (source, weight) in state.sources.iter().zip(state.weights) {
+            let side = Zeroizing::new(if j == 0 {
+                *weight
+            } else {
+                *weight * source.us[round]
+            });
+            let rest = Zeroizing::new(
+                state.b_scale * closed(&source.us[round + 1..], &state.point[round + 1..]),
+            );
+            let other = if j == 0 { r } else { F::<C>::ONE - r };
+            *inner += *side * other * *rest;
+            add_weighted_source(coeff, &source.us[round + 1..], *side);
+        }
+        let bases = if j == 0 { &g[h..] } else { &g[..h] };
+        (msm::<C>(coeff, bases) + u * *inner + C::from(gens.h) * masks[j]).to_affine()
+    });
+    (lr[0], lr[1])
+}
+
+fn prove_checked_with_rng<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    sources: Vec<Claim<C>>,
+    blocks: &[Blocks<C>],
+    depth: usize,
+    rng: &mut SpikeRng,
+) -> Result<(Fold<C>, Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    Ok(
+        prove_rounds(gens, relation, sources, Some(blocks), depth, rng)
+            .expect("fresh restructuring verifies"),
+    )
+}
+
+/// Run every round. With block points the sources are already decided and the
+/// leading rounds combine those points. Without them the source points are
+/// claims: the leading rounds take the batched coefficient halves against the
+/// folded generators, and `None` reports that the closing equation refused the
+/// claims.
+fn prove_rounds<C: PastaCurve>(
+    gens: &Gens<C>,
+    relation: [u8; 32],
+    sources: Vec<Claim<C>>,
+    blocks: Option<&[Blocks<C>]>,
+    depth: usize,
+    rng: &mut SpikeRng,
+) -> Option<(Fold<C>, Trace<C>)>
+where
+    F<C>: Scalar,
+{
     let k = sources[0].us.len();
     let n = 1usize << k;
-    assert!(k > 0 && n <= gens.g.len());
-    assert!(
-        sources.iter().all(|s| s.us.len() == k && decide(gens, s)),
-        "exact source generator claims"
-    );
     let masks = (0..1 + 2 * k).map(|_| rng.scalar()).collect::<Vec<_>>();
     let digest = input_digest::<C>(&relation, &sources, &masks);
     let d = d_open(gens, digest, masks[0]).to_affine();
@@ -284,13 +653,11 @@ where
     let mut ch = vec![];
     let mu = challenge(&mut t, &mut ch, true);
     let mut commitment = C::identity();
-    let mut coeff = Zeroizing::new(vec![F::<C>::ZERO; n]);
+    let mut weights = Zeroizing::new(Vec::with_capacity(sources.len()));
     let mut weight = F::<C>::ONE;
     for s in &sources {
         commitment += C::from(s.g) * weight;
-        for (x, v) in coeff.iter_mut().zip(s_vector(&s.us)) {
-            *x += weight * v;
-        }
+        weights.push(weight);
         weight *= mu;
     }
     t.point(b"C-star", &commitment.to_affine());
@@ -298,32 +665,83 @@ where
         .map(|_| challenge(&mut t, &mut ch, false))
         .collect::<Vec<_>>();
     let zeta = challenge(&mut t, &mut ch, true);
-    let mut b = Zeroizing::new(eq_weights(&point));
-    let u = C::from(gens.u) * zeta;
     let mut g = Zeroizing::new(gens.g[..n].to_vec());
     let mut lr = vec![];
     let mut us = vec![];
-    for round in 0..k {
+    let mut b_scale = Zeroizing::new(F::<C>::ONE);
+    // The batched rounds' only coefficient storage: one half of the first round.
+    let mut half = Zeroizing::new(vec![
+        F::<C>::ZERO;
+        if blocks.is_none() && depth > 0 {
+            n / 2
+        } else {
+            0
+        }
+    ]);
+    for round in 0..depth {
+        let state = Leading {
+            sources: &sources,
+            blocks: blocks.unwrap_or(&[]),
+            weights: &weights,
+            b_scale: *b_scale,
+            point: &point,
+            zeta,
+        };
+        let round_masks = [masks[1 + 2 * round], masks[2 + 2 * round]];
+        let (l, r) = if blocks.is_some() {
+            leading_round(gens, &state, &us, round_masks)
+        } else {
+            batched_round(gens, &state, round, &g, &mut half, round_masks)
+        };
+        t.point(b"L", &l);
+        t.point(b"R", &r);
+        let challenge = challenge(&mut t, &mut ch, true);
+        us.push(challenge);
+        for (weight, s) in weights.iter_mut().zip(&sources) {
+            *weight *= challenge + s.us[round];
+        }
+        *b_scale *= F::<C>::ONE - point[round] + challenge * point[round];
+        let half = iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
+        g.truncate(half);
+        lr.push((l, r));
+    }
+    drop(half);
+    // Materialize only the folded `n >> depth` vectors for the remaining rounds.
+    let mut coeff = Zeroizing::new(vec![F::<C>::ZERO; n >> depth]);
+    for (s, weight) in sources.iter().zip(weights.iter()) {
+        add_weighted_source(&mut coeff, &s.us[depth..], *weight);
+    }
+    let mut b = Zeroizing::new(crate::grid::eq_table(&point[depth..]));
+    for value in b.iter_mut() {
+        *value *= *b_scale;
+    }
+    let u = C::from(gens.u) * zeta;
+    for round in depth..k {
         let h = coeff.len() / 2;
-        let l = msm::<C>(&coeff[..h], &g[h..])
+        let l = (msm::<C>(&coeff[..h], &g[h..])
             + u * inner(&coeff[..h], &b[h..])
-            + C::from(gens.h) * masks[1 + 2 * round];
-        let r = msm::<C>(&coeff[h..], &g[..h])
+            + C::from(gens.h) * masks[1 + 2 * round])
+            .to_affine();
+        let r = (msm::<C>(&coeff[h..], &g[..h])
             + u * inner(&coeff[h..], &b[..h])
-            + C::from(gens.h) * masks[2 + 2 * round];
-        t.point(b"L", &l.to_affine());
-        t.point(b"R", &r.to_affine());
+            + C::from(gens.h) * masks[2 + 2 * round])
+            .to_affine();
+        t.point(b"L", &l);
+        t.point(b"R", &r);
         let challenge = challenge(&mut t, &mut ch, true);
         us.push(challenge);
         for j in 0..h {
             coeff[j] = challenge * coeff[j] + coeff[j + h];
             b[j] = b[j] + challenge * b[j + h];
-            g[j] = (C::from(g[j]) + C::from(g[j + h]) * challenge).to_affine();
         }
+        // Only the installed generators and the exported output.us challenges
+        // enter this fold. Private coefficients go through the (variable-time)
+        // secret MSM and the H masks use constant-time scalar multiplication.
+        iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
         coeff.truncate(h);
         b.truncate(h);
         g.truncate(h);
-        lr.push((l.to_affine(), r.to_affine()));
+        lr.push((l, r));
     }
     let fold = Fold {
         sources,
@@ -333,8 +751,8 @@ where
         c: coeff[0],
         output: Claim { us, g: g[0] },
     };
-    let trace = trace(gens, relation, &fold).expect("fresh restructuring verifies");
-    (fold, trace)
+    let trace = trace(gens, relation, &fold)?;
+    Some((fold, trace))
 }
 
 /// Reconstruct every transcript and equation. Does not decide the output MSM;
@@ -467,6 +885,9 @@ pub fn verify<C: PastaCurve>(gens: &Gens<C>, relation: [u8; 32], fold: &Fold<C>)
 mod scalar;
 pub use scalar::{ScalarPorts, append_scalar};
 
+#[cfg(test)]
+#[path = "generator_claim_blocks_tests.rs"]
+mod blocks_tests;
 #[cfg(test)]
 #[path = "generator_claim_tests.rs"]
 mod tests;

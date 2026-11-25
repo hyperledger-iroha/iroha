@@ -6,6 +6,7 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, Memory, PointerType, ProgramMetadata, syscalls};
+use ivm_abi::error::VmTrap;
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -80,7 +81,7 @@ fn execute_instruction_rejects_retired_blob_carriers_without_register_mutation()
         assert!(
             matches!(
                 host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm,),
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "{label} Blob carrier must be rejected before instruction dispatch"
         );
@@ -134,7 +135,10 @@ fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
     vm.set_register(11, p_asset);
     vm.set_register(12, p_amount);
     let res = host.syscall(syscalls::SYSCALL_MINT_ASSET, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }
 #[test]
 fn mint_asset_rejects_corrupted_accountid_hash() {
@@ -177,7 +181,10 @@ fn mint_asset_rejects_corrupted_accountid_hash() {
     vm.set_register(11, p_assetdef);
     vm.set_register(12, p_amount);
     let res = host.syscall(syscalls::SYSCALL_MINT_ASSET, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }
 #[test]
 fn mint_asset_rejects_unknown_typeid() {
@@ -220,7 +227,10 @@ fn mint_asset_rejects_unknown_typeid() {
     vm.set_register(11, p_bad);
     vm.set_register(12, p_amount);
     let res = host.syscall(syscalls::SYSCALL_MINT_ASSET, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }
 #[test]
 fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
@@ -265,7 +275,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
             matches!(
                 local_contract_debug_host(authority.clone())
                     .syscall(syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES, &mut vm),
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "{label} must fail provenance validation"
         );
@@ -284,7 +294,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
                 syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                 &mut code_vm,
             ),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ),
         "an arbitrary code offset is not a loader-authenticated literal"
     );
@@ -306,7 +316,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
                 syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                 &mut partial_vm,
             ),
-            Err(ivm::VMError::NoritoInvalid)
+            Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
         ),
         "the complete envelope must be inside one owned HEAP allocation"
     );
@@ -316,17 +326,17 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
         (
             "wrong nominal pointer type",
             build_tlv(PointerType::Blob as u16, 1, &payload, false),
-            ivm::VMError::NoritoInvalid,
+            ivm::VMError::Trap(VmTrap::NoritoInvalid),
         ),
         (
             "corrupted payload digest",
             corrupted,
-            ivm::VMError::NoritoInvalid,
+            ivm::VMError::Trap(VmTrap::NoritoInvalid),
         ),
         (
             "malformed Norito request",
             build_tlv(PointerType::NoritoBytes as u16, 1, b"not a request", false),
-            ivm::VMError::DecodeError,
+            ivm::VMError::Trap(VmTrap::DecodeError),
         ),
     ] {
         let mut vm = IVM::new(1_000);
@@ -340,9 +350,12 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
             matches!(
                 (actual, expected),
                 (
-                    Err(ivm::VMError::NoritoInvalid),
-                    ivm::VMError::NoritoInvalid
-                ) | (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+                    Err(ivm::VMError::Trap(VmTrap::NoritoInvalid)),
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                ) | (
+                    Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+                    ivm::VMError::Trap(VmTrap::DecodeError)
+                )
             ),
             "{label} must fail closed"
         );

@@ -5,10 +5,10 @@ use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
-    ProgramMetadata, mock_wsv::WsvHost,
+    mock_wsv::WsvHost,
 };
 use ivm_abi::arguments::encode_argument_record_from_json;
-use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::collections::BTreeMap;
 fn fixture_account(hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
@@ -29,19 +29,14 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
     let src = include_str!("../../kotodama_lang/src/samples/dex_simple.ko");
-    let compiler = KotodamaCompiler::new();
+    let options = CompilerOptions::default();
+    let profile = options.target_profile()?;
+    let compiler = Compiler::new_with_options(options);
     let bytecode = compiler.compile_source(src).expect("compile dex_simple");
-    let metadata = ProgramMetadata::parse(&bytecode).expect("parse dex_simple metadata");
-    let swap = metadata
-        .contract_interface
-        .as_ref()
-        .expect("dex_simple contract interface")
-        .entrypoints
-        .iter()
-        .find(|entrypoint| entrypoint.name == "swap")
-        .expect("swap entrypoint descriptor");
-    let entrypoint_pc =
-        u64::try_from(metadata.prefix_len()).expect("program prefix fits u64") + swap.entry_pc;
+    let contract = ivm::prepare_contract_for_profile(bytecode.into(), profile)?;
+    let swap = contract
+        .entrypoint_descriptor("swap")
+        .expect("compiled entrypoint");
     // 2) Prepare a tiny world with Alice (trader), Pool account, and two assets
     let alice =
         fixture_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
@@ -100,13 +95,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4) Create the VM, attach the host, and select the public wrapper.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-    vm.load_program(&bytecode).expect("load program");
-    vm.set_program_counter(entrypoint_pc)
-        .expect("select swap entrypoint");
-    // 5) Run the program and decode the pointer-backed quantity in r10.
+    vm.load_prepared(&contract)?;
+    vm.select_entrypoint("swap")?;
+    // 5) Run the program and decode the quantity from the public result table.
     vm.run().expect("run VM");
     let result = vm
-        .validate_tlv(vm.register(10))
+        .validate_tlv(vm.public_call_result_word(0)?)
         .expect("swap returned a quantity TLV");
     assert_eq!(result.type_id, PointerType::Quantity);
     let amount_out = QuantityValueV1::decode_frame(result.payload)

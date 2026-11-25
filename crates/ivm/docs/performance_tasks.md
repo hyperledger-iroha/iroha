@@ -45,8 +45,8 @@ its vector and cryptographic opcodes, and the C10 instruction set has none.
   chunks marked dirty since the last commit.
 - **Lazy Merkle storage** – *done.* Leaf digests and canonical nodes are
   allocated by the first root or path request, so an ordinary (non-ZK)
-  invocation allocates and hashes none. Their prepaid credit is still admitted
-  with the image.
+  invocation allocates and hashes none. Funded images reserve the tree's
+  storage from their original pool at that first request.
 - **CPU-accelerated leaf hashing** – *done.* Merkle leaf digests for 32‑byte
   chunks use the VM’s accelerated `sha256_compress` (Metal/CUDA/ARMv8 SHA2/x86
   SHA‑NI/scalar fallback) via a single padded block, speeding up CPU paths and

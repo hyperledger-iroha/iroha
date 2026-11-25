@@ -21,6 +21,22 @@ let requiredBridgeAbiVersion = 33
 let repositoryDirectory = packageDirectory.deletingLastPathComponent()
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path
+// A named lane keeps independent local app builds from replacing one another's bridge.
+// Reviewed release builds still require an artifact outside the source checkout.
+func isLocalIntegrationArtifactDirectory(_ directory: URL) -> Bool {
+    if directory.path == localIntegrationArtifactDirectory { return true }
+    let lane = directory.deletingLastPathComponent()
+    let lanes = repositoryDirectory.appendingPathComponent("target/norito-bridge-local/lanes", isDirectory: true)
+    guard directory.lastPathComponent == "artifacts", lane.deletingLastPathComponent().path == lanes.path else {
+        return false
+    }
+    return [lanes, lane].allSatisfy { parent in
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: parent.path) else { return false }
+        return attributes[.type] as? FileAttributeType == .typeDirectory
+            && (attributes[.ownerAccountID] as? NSNumber)?.intValue == Int(geteuid())
+            && (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700
+    }
+}
 let localUnitArtifactParent = repositoryDirectory
     .appendingPathComponent("target/qualification", isDirectory: true).path
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
@@ -156,7 +172,7 @@ if let configuredArtifactDirectory = selectedArtifactDirectory {
         guard
             resolvedURL.path != repositoryDirectory.path,
             !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/")
-                || (!requireExternalArtifact && resolvedURL.path == localIntegrationArtifactDirectory)
+                || (!requireExternalArtifact && isLocalIntegrationArtifactDirectory(resolvedURL))
         else {
             fatalError(
                 "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be outside the reviewed Iroha source tree."
@@ -504,8 +520,7 @@ func validateBridgeArtifact(at artifactRoot: URL) -> String? {
         return "error: local-unit artifacts require a macOS host."
         #endif
     }
-    let isLocalIntegration = artifactRoot.deletingLastPathComponent().path
-        == localIntegrationArtifactDirectory
+    let isLocalIntegration = isLocalIntegrationArtifactDirectory(artifactRoot.deletingLastPathComponent())
     if isLocalIntegration {
         guard !requireExternalArtifact,
             manifest["artifact_scope"] as? String == "local-integration",
@@ -557,6 +572,7 @@ irohaSwiftDependencies.append(
 // on the library so executable and test consumers inherit the native link inputs.
 irohaSwiftLinkerSettings.append(.linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Security", .when(platforms: [.iOS, .macOS])))
+irohaSwiftLinkerSettings.append(.linkedFramework("LocalAuthentication", .when(platforms: [.iOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Metal", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])))
 irohaSwiftLinkerSettings.append(.linkedFramework("Accelerate", .when(platforms: [.iOS, .macOS])))

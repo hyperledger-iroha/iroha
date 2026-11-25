@@ -248,6 +248,9 @@ fn ensure_private_instruction(
             "AMX coordinator requires the authenticated global root",
         ));
     }
+    if let Some(result) = crate::runtime::child_admin::review_scope(instruction, state) {
+        return result;
+    }
     let bootstrap = state.genesis_execution_scope.is_some();
     if !bootstrap
         && !cfg!(all(test, sumeragi_core_mutation = "HC341"))

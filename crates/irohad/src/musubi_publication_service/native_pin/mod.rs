@@ -29,12 +29,15 @@ use iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy;
 use iroha_core::{
     query::musubi_pin_outbox::{
         MusubiPinOutboxCheckAttemptFailureV1, MusubiPinOutboxCheckBindingFailureV1,
-        MusubiPinOutboxCheckExpectedV1, MusubiPinOutboxCurrentReadbackV1,
-        PendingMusubiPinOutboxCheckV1, PreparedMusubiPinOutboxCheckV1,
-        begin_musubi_pin_outbox_check_v1,
+        MusubiPinOutboxCheckErrorV1, MusubiPinOutboxCheckExpectedV1,
+        MusubiPinOutboxCurrentReadbackV1, PendingMusubiPinOutboxCheckV1,
+        PreparedMusubiPinOutboxCheckV1, begin_musubi_pin_outbox_check_v1,
     },
     queue::Queue,
-    state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
+    state::{
+        State, StateReadOnly as _, StateReadOnlyWithTransactions as _, TransactionsReadOnly as _,
+        WorldReadOnly as _, WorldStateSnapshot as _,
+    },
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -62,6 +65,13 @@ pub enum NativeMusubiPinPhaseV1 {
     RetainedPin,
     /// Original exposed pin awaits exact successful native finality/current record.
     Pin,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ArchiveOrderProgress {
+    NeedsSubmission,
+    Submitted,
+    Finalized,
 }
 
 /// Local progress or a genuine exact successful pin readback. Queue acceptance is not finality.
@@ -114,6 +124,12 @@ pub enum NativeMusubiPinCheckRefusalV1<'a> {
     Binding(&'a MusubiPinOutboxCheckBindingFailureV1),
     /// Original native finality/current-row attempt still owns the paid Check.
     Read(&'a MusubiPinOutboxCheckAttemptFailureV1),
+}
+
+#[derive(Debug)]
+enum RoundStart {
+    Started,
+    AwaitingControl(NativeMusubiPinPhaseV1),
 }
 
 #[derive(Clone, Copy)]
@@ -230,6 +246,16 @@ impl NativeMusubiPinCoordinatorV1 {
         source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
         authorization: NativePinAuthorizationV1,
     ) -> Result<()> {
+        self.prepare_selected_operation(id, context_digest, source, authorization, false)
+    }
+    pub(super) fn prepare_selected_operation(
+        &mut self,
+        id: [u8; 32],
+        context_digest: [u8; 32],
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+        authorization: NativePinAuthorizationV1,
+        includes_archive_order: bool,
+    ) -> Result<()> {
         self.reconcile_retained()?;
         ensure!(self.round.is_none(), "another native Check round is active");
         let selected_source = slot::encode_frame(source)?;
@@ -237,7 +263,8 @@ impl NativeMusubiPinCoordinatorV1 {
             ensure!(
                 original.context_digest == context_digest
                     && original.source == selected_source
-                    && original.authorization == authorization,
+                    && original.authorization == authorization
+                    && original.includes_archive_order == includes_archive_order,
                 "native pin operation changed its original source or authorization"
             );
             return Ok(());
@@ -252,6 +279,7 @@ impl NativeMusubiPinCoordinatorV1 {
                 .ok_or_else(|| eyre::eyre!("native operation ordinal overflow"))?,
             source: selected_source,
             authorization,
+            includes_archive_order,
         };
         self.store.create_operation(&operation)
     }
@@ -260,6 +288,22 @@ impl NativeMusubiPinCoordinatorV1 {
     /// # Errors
     /// Refuses incomplete or substituted custody and original resource/codec failures.
     pub fn original_operation(&self, id: [u8; 32]) -> Result<Option<NativeMusubiPinOriginalV1>> {
+        self.inspected_operation(id)?
+            .0
+            .map(|operation| {
+                let source = operation.source()?;
+                Ok(NativeMusubiPinOriginalV1 {
+                    context_digest: operation.context_digest,
+                    source,
+                    authorization: operation.authorization,
+                })
+            })
+            .transpose()
+    }
+
+    // Audit all retained operations and original slot bytes once while this exact coordinator
+    // and any active signing slot are borrowed. No result crosses a later effect or call.
+    fn inspected_operation(&self, id: [u8; 32]) -> Result<(Option<Operation>, Option<&Slot>)> {
         ensure!(id != [0; 32], "native pin operation ID is zero");
         if let Some(round) = &self.round {
             ensure!(
@@ -286,35 +330,15 @@ impl NativeMusubiPinCoordinatorV1 {
                 "another native operation owns retained custody"
             );
         }
-        self.store
-            .find_operation_with_held(id, held)?
-            .map(|operation| {
-                let source = operation.source()?;
-                Ok(NativeMusubiPinOriginalV1 {
-                    context_digest: operation.context_digest,
-                    source,
-                    authorization: operation.authorization,
-                })
-            })
-            .transpose()
+        Ok((self.store.find_operation_with_held(id, held)?, held))
     }
 
     /// Read existing exact pin finality without signing, dispatching or repairing missing files.
     /// # Errors
     /// Refuses absent/incomplete originals and preserves the native reader's current refusal.
     pub fn observe_operation(&self, id: [u8; 32]) -> Result<NativeMusubiPinProgressV1> {
-        // Audit the complete durable prefix even when this coordinator owns a live Check slot.
-        self.original_operation(id)?
-            .ok_or_else(|| eyre::eyre!("native operation is missing"))?;
-        let held = self
-            .round
-            .as_ref()
-            .and_then(|round| round.slot.as_ref())
-            .or(self.retained.as_ref());
-        let operation = self
-            .store
-            .find_operation_with_held(id, held)?
-            .ok_or_else(|| eyre::eyre!("native operation is missing"))?;
+        let (operation, held) = self.inspected_operation(id)?;
+        let operation = operation.ok_or_else(|| eyre::eyre!("native operation is missing"))?;
         if held.is_some_and(|slot| slot.request().kind == SlotKind::Pin) {
             // An owned, unexposed pin is pending custody; inspecting it never releases or repairs it.
             return Ok(NativeMusubiPinProgressV1::Pending(
@@ -383,6 +407,24 @@ impl NativeMusubiPinCoordinatorV1 {
             .as_ref()
             .map(NativeMusubiPinCheckRefusalV1::Read)
     }
+    // A missing commit is observable without turning a bound, rejected or expired Check
+    // into a pending receipt. The native verifier remains the sole source of success.
+    pub(super) fn awaiting_check_receipt(&self) -> Result<bool> {
+        let Some(round) = &self.round else {
+            return Ok(false);
+        };
+        if Instant::now() >= round.deadline || round.binding_failure.is_some() {
+            return Ok(false);
+        }
+        if let Some(refusal) = &round.read_failure {
+            if refusal.rejection() != Some(MusubiPinOutboxCheckErrorV1::NotApplied) {
+                return Ok(false);
+            }
+            let hash = refusal.signed_transaction().try_hash_as_entrypoint()?;
+            return Ok(self.state.committed_entrypoint_height(&hash).is_none());
+        }
+        Ok(round.slot.is_none() && round.pending.is_some())
+    }
     /// Read only the exact original pin's successful native result/current record, including after
     /// original authorization expiry. Missing or unprepared records never trigger creation/I/O to Queue.
     /// # Errors
@@ -430,7 +472,11 @@ impl NativeMusubiPinCoordinatorV1 {
                 deadline > Instant::now(),
                 "native pin caller deadline expired"
             );
-            self.begin_round(operation, now, deadline)?;
+            if let RoundStart::AwaitingControl(phase) =
+                self.begin_round(operation, now, deadline)?
+            {
+                return Ok(NativeMusubiPinProgressV1::Pending(phase));
+            }
         }
         let mut round = self
             .round
@@ -467,6 +513,131 @@ impl NativeMusubiPinCoordinatorV1 {
             }
         }
     }
+    /// Drive one immutable, governed purpose order after the original paid pin finalized.
+    /// A recorded submission is reconciled read-only, including an unsuccessful native output.
+    pub(super) fn issue_archive_order(
+        &mut self,
+        pin: &NativeMusubiFinalizedPinV1,
+        seed: iroha_data_model::sorafs::capacity::ProviderId,
+        clock: &mut dyn MusubiPublicationServiceClockV1,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.reconcile_retained()?;
+        ensure!(
+            self.round.is_none(),
+            "a native Check round still owns the publication"
+        );
+        let operation = self.store.operation(pin.operation_id())?;
+        self.store.require_active_operation(&operation)?;
+        let now = operation
+            .authorization
+            .check_effect_boundary(clock, deadline)?;
+        let query = pin.query();
+        let plan =
+            iroha_core::query::native_musubi_storage::plan_native_musubi_replication_order_v1(
+                &self.state.view(),
+                &self.store.original().authority,
+                (
+                    query.source.registration.archive_id,
+                    query.manifest_digest,
+                    query.finalized_height,
+                ),
+                seed,
+                now / 1_000,
+            )?;
+        let plan = plan
+            .ok_or_else(|| eyre::eyre!("issued archive order has no matching exposed original"))?;
+        let request = self.request(&operation, SlotKind::ArchiveOrder, &plan.into())?;
+        let slot = if let Some(slot) = self.store.open_slot(&operation, SlotKind::ArchiveOrder)? {
+            ensure!(
+                slot.request() == &request,
+                "native archive order differs from its original plan"
+            );
+            if slot.exposed()? {
+                // Reconciliation can recover a marker whose original write returned an error.
+                return Ok(());
+            }
+            slot
+        } else {
+            self.store.create_slot(&operation, request)?
+        };
+        self.retained = Some(slot);
+        let slot = self.retained.as_mut().expect("just retained");
+        if slot.payload()?.is_none() {
+            let payload = self.signer.prepare_control(slot.request(), now)?;
+            self.store.admit_payload(&operation, slot, &payload)?;
+            slot.retain_payload(&payload)?;
+        }
+        self.signer
+            .sign_archive_order(slot, pin, seed, clock, deadline)?;
+        operation
+            .authorization
+            .check_effect_boundary(clock, deadline)?;
+        let dispatch = slot.record_exposure()?;
+        let slot = self
+            .retained
+            .take()
+            .expect("original archive order is retained");
+        if dispatch {
+            self.dispatch(slot, &operation.authorization, clock, deadline)?;
+        }
+        Ok(())
+    }
+
+    /// Require the local original as well as native success before any source staging.
+    pub(super) fn archive_order_progress(
+        &self,
+        pin: &NativeMusubiFinalizedPinV1,
+    ) -> Result<ArchiveOrderProgress> {
+        if self.retained.as_ref().is_some_and(|slot| {
+            slot.request().kind == SlotKind::ArchiveOrder
+                && slot.request().operation == pin.operation_id()
+        }) {
+            return Ok(ArchiveOrderProgress::NeedsSubmission);
+        }
+        let operation = self.store.operation(pin.operation_id())?;
+        let Some(slot) = self.store.open_slot(&operation, SlotKind::ArchiveOrder)? else {
+            return Ok(ArchiveOrderProgress::NeedsSubmission);
+        };
+        if !slot.exposed()? {
+            return Ok(ArchiveOrderProgress::NeedsSubmission);
+        }
+        let signed = slot
+            .signed()
+            .ok_or_else(|| eyre::eyre!("original archive order signature missing"))?;
+        let entry = signed.try_hash_as_entrypoint()?;
+        let Some(height) = self.state.committed_entrypoint_height(&entry) else {
+            return Ok(ArchiveOrderProgress::Submitted);
+        };
+        let height = u64::try_from(height.get())?;
+        ensure!(
+            height >= pin.query().finalized_height,
+            "archive order predates the paid pin"
+        );
+        let query = pin.query();
+        let expected =
+            iroha_core::query::native_musubi_storage::native_musubi_replication_order_id_v1(
+                query.source.registration.archive_id,
+                query.manifest_digest,
+            );
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            eyre::bail!("original archive order has no instruction");
+        };
+        ensure!(
+            matches!(instructions.as_ref(), [instruction] if instruction.as_any()
+            .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
+            .is_some_and(|order| order.order_id == expected && order.musubi_archive == Some(query.source.registration.archive_id))),
+            "original archive order belongs to another pin"
+        );
+        super::pin_registration::require_finalized_transaction(
+            &self.state.query_view(),
+            self.state.network_id_ref(),
+            height,
+            signed,
+        )?;
+        Ok(ArchiveOrderProgress::Finalized)
+    }
+
     fn reconcile_retained(&mut self) -> Result<()> {
         if let Some(slot) = &self.retained
             && slot.signed().is_some()
@@ -476,7 +647,12 @@ impl NativeMusubiPinCoordinatorV1 {
         drop(self.retained.take());
         Ok(())
     }
-    fn begin_round(&mut self, operation: Operation, now: u64, deadline: Instant) -> Result<()> {
+    fn begin_round(
+        &mut self,
+        operation: Operation,
+        now: u64,
+        deadline: Instant,
+    ) -> Result<RoundStart> {
         require_coherent_native_tip(&self.state)?;
         let inventory = self.store.inventory(None)?;
         let pin = self.store.open_slot(&operation, SlotKind::Pin)?;
@@ -534,11 +710,22 @@ impl NativeMusubiPinCoordinatorV1 {
         };
         if let Some(kind) = control
             && let Some(slot) = self.store.open_slot(&operation, kind)?
+            && slot.exposed()?
         {
+            // Never re-expose this transaction. Once indexed, its expected current
+            // high-water has to agree with the independently selected goal above.
+            let hash = slot.into_exposed_transaction()?.try_hash_as_entrypoint()?;
             ensure!(
-                !slot.exposed()?,
+                view.transactions().get(&hash).is_none(),
                 "original native Advance remains exposed; await its exact native effect"
             );
+            return Ok(RoundStart::AwaitingControl(
+                if kind == SlotKind::Initialize {
+                    NativeMusubiPinPhaseV1::Initialize
+                } else {
+                    NativeMusubiPinPhaseV1::Advance
+                },
+            ));
         }
         let height = u64::try_from(view.block_hashes().len())?;
         ensure!(
@@ -579,7 +766,7 @@ impl NativeMusubiPinCoordinatorV1 {
             read_failure: None,
             slot: Some(slot),
         });
-        Ok(())
+        Ok(RoundStart::Started)
     }
     fn request(
         &self,

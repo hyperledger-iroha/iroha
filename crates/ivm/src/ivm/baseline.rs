@@ -14,6 +14,7 @@
 //! commitments.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use ivm_abi::baseline::{encoding::wide as bencoding, instruction::wide as bwide};
 
 mod field;
@@ -26,24 +27,32 @@ const VECTOR_BASE: usize = 32;
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
     let vl = if raw == 0 { 1 } else { raw };
     if vl > LOGICAL_VECTOR_MAX {
-        return Err(VMError::InvalidVectorLength { vector_length: vl });
+        return Err(VMError::Trap(VmTrap::InvalidVectorLength {
+            vector_length: vl,
+        }));
     }
     Ok(vl)
 }
 fn validate_vadd64_length(vl: usize) -> Result<(), VMError> {
     if vl == 0 || !vl.is_multiple_of(2) {
-        return Err(VMError::InvalidVectorLength { vector_length: vl });
+        return Err(VMError::Trap(VmTrap::InvalidVectorLength {
+            vector_length: vl,
+        }));
     }
     Ok(())
 }
 fn checked_div_i64(num: i64, denom: i64) -> Result<i64, VMError> {
-    num.checked_div(denom).ok_or(VMError::AssertionFailed)
+    num.checked_div(denom)
+        .ok_or(VMError::Trap(VmTrap::AssertionFailed))
 }
 fn checked_rem_i64(num: i64, denom: i64) -> Result<i64, VMError> {
-    num.checked_rem(denom).ok_or(VMError::AssertionFailed)
+    num.checked_rem(denom)
+        .ok_or(VMError::Trap(VmTrap::AssertionFailed))
 }
 fn checked_abs_i64(value: i64) -> Result<i64, VMError> {
-    value.checked_abs().ok_or(VMError::AssertionFailed)
+    value
+        .checked_abs()
+        .ok_or(VMError::Trap(VmTrap::AssertionFailed))
 }
 fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     let q = checked_div_i64(num, denom)?;
@@ -51,7 +60,8 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     if r == 0 {
         Ok(q)
     } else if (r > 0 && denom > 0) || (r < 0 && denom < 0) {
-        q.checked_add(1).ok_or(VMError::AssertionFailed)
+        q.checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::AssertionFailed))
     } else {
         Ok(q)
     }
@@ -74,7 +84,9 @@ fn baseline_completed_instruction_cycles(opcode: u8) -> u64 {
 /// never to host results, where `CallDepthExceeded` keeps its own meaning.
 pub(super) fn baseline_call_fault(error: VMError) -> VMError {
     match error {
-        VMError::ControlFlowViolation | VMError::CallDepthExceeded => VMError::AssertionFailed,
+        VMError::Trap(VmTrap::ControlFlowViolation) | VMError::Trap(VmTrap::CallDepthExceeded) => {
+            VMError::Trap(VmTrap::AssertionFailed)
+        }
         other => other,
     }
 }
@@ -259,9 +271,9 @@ impl SharedVmCycleBudget {
     fn ensure_healthy(&self) -> Result<(), VMError> {
         let state = self.state.lock();
         if state.closed {
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         } else if state.refused {
-            Err(VMError::ExceededMaxCycles)
+            Err(VMError::Trap(VmTrap::ExceededMaxCycles))
         } else {
             Ok(())
         }
@@ -269,11 +281,11 @@ impl SharedVmCycleBudget {
     fn reserve(&self, cycles: u64) -> Result<VmCycleReservation<'_>, VMError> {
         let mut state = self.state.lock();
         if state.closed {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         if state.refused || cycles > self.limit - state.consumed - state.reserved {
             state.refused = true;
-            return Err(VMError::ExceededMaxCycles);
+            return Err(VMError::Trap(VmTrap::ExceededMaxCycles));
         }
         state.reserved += cycles;
         Ok(VmCycleReservation {
@@ -297,7 +309,7 @@ impl VmCycleReservation<'_> {
             // A lifecycle mutation or a new opcode with an unreviewed cycle cost
             // cannot turn an inaccurate reservation into accepted execution.
             state.closed = true;
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         state.consumed += self.cycles;
         Ok(())
@@ -322,7 +334,7 @@ impl IVM {
             let tag_a = self.registers.tag(rs1);
             let tag_b = self.registers.tag(rs2);
             if tag_a != tag_b {
-                return Err(VMError::PrivacyViolation);
+                return Err(VMError::Trap(VmTrap::PrivacyViolation));
             }
             Ok(Some(tag_a))
         } else {
@@ -346,12 +358,12 @@ impl IVM {
             return Ok(fetched);
         }
         if self.prepared_required {
-            return Err(VMError::MemoryAccessViolation {
+            return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: self.pc as u32,
                 perm: Perm::EXECUTE,
-            });
+            }));
         }
-        let inst = decoder::decode(&self.memory, self.pc)?;
+        let inst = decoder::decode_guest(&mut self.memory, self.pc)?;
         Ok(FetchedOp {
             inst,
             wide_op: bwide::opcode(inst),
@@ -383,7 +395,9 @@ impl IVM {
                         malformed = true;
                     }
                 }
-                Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
+                Err(VMError::Trap(VmTrap::PrivacyViolation)) => {
+                    return Err(VMError::Trap(VmTrap::PrivacyViolation));
+                }
                 Err(error) if error.execution_deferral().is_some() => return Err(error),
                 Err(_) => malformed = true,
             }
@@ -396,7 +410,7 @@ impl IVM {
             payload_lengths[1],
             payload_lengths[2],
         )
-        .ok_or(VMError::GasCostOverflow)?;
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))?;
         self.debit_gas(extra_gas)?;
         Ok(true)
     }
@@ -408,7 +422,9 @@ impl IVM {
     ) -> Result<Option<crate::pointer_abi::Tlv<'_>>, VMError> {
         match self.validate_tlv(ptr) {
             Ok(tlv) => Ok(Some(tlv)),
-            Err(VMError::PrivacyViolation) => Err(VMError::PrivacyViolation),
+            Err(VMError::Trap(VmTrap::PrivacyViolation)) => {
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
+            }
             Err(error) if error.execution_deferral().is_some() => Err(error),
             Err(_) => Ok(None),
         }
@@ -421,7 +437,7 @@ impl IVM {
     /// remain independent. A refused shared reservation returns `ExceededMaxCycles`.
     ///
     /// A shared cycle allowance belongs to the baseline engine; a C10 image refuses it locally
-    /// with [`VMError::HostUnavailable`], since gas is its only execution budget.
+    /// with [`crate::error::VmDeferral::HostUnavailable`], since gas is its only execution budget.
     pub fn run_with_host_and_cycle_budget(
         &mut self,
         host: &mut dyn IVMHost,
@@ -450,7 +466,7 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.last_diagnostic = None;
         if self.engine() != IvmEngine::Baseline {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         if self
             .baseline
@@ -464,7 +480,7 @@ impl IVM {
             if let Some(active) = &self.baseline.active_cycle_budget {
                 active.state.lock().closed = true;
             }
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         shared.ensure_healthy()?;
         let previous = self.baseline.active_cycle_budget.replace(shared);
@@ -483,19 +499,20 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.last_diagnostic = None;
         self.ensure_complete_program_image()?;
-        // TODO: the baseline's proof-trace producers (register authentication logs over the
-        // 256-register file, delta-register traces, diagnostic step records and native execution
-        // packets) are not reconstructed. They are refused locally instead of recording C10-shaped
-        // observations of a baseline execution; consensus execution never requests them.
+        // Delta-register traces (`TraceMode::DeltaRegisters`) record the baseline's own
+        // 256-register geometry, as the anchor did; like PC traces they only observe.
+        // TODO: the baseline's other proof-trace producers (register authentication logs over the
+        // 256-register file, diagnostic step records and native execution packets) are not
+        // reconstructed. They are refused locally instead of recording C10-shaped observations of
+        // a baseline execution; consensus execution never requests them.
         if (self.zk_mode && self.zk_trace_enabled)
             || zk::scoped_reg_logger_enabled() == Some(true)
-            || self.trace_mode == TraceMode::DeltaRegisters
             || self.native_packets.is_some()
             || recorder.is_some()
         {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            ));
+            )));
         }
         // Keep a local reference through host callbacks/lifecycle changes. This
         // owner never comes from program bytes or a warmed runtime template.
@@ -523,9 +540,9 @@ impl IVM {
         self.baseline.constraints.clear();
         if !self.zk_mode && (self.registers.has_private() || !self.private_memory_bytes.is_empty())
         {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let invocation_trace = self.begin_trace_invocation()?;
         self.last_diagnostic = None;
@@ -578,12 +595,12 @@ impl IVM {
                     break;
                 }
                 if unlikely(self.pc == self.memory.code_len()) {
-                    return Err(VMError::MissingHalt);
+                    return Err(VMError::Trap(VmTrap::MissingHalt));
                 }
                 if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
-                    return Err(VMError::ExceededMaxCycles);
+                    return Err(VMError::Trap(VmTrap::ExceededMaxCycles));
                 }
-                self.record_trace_prefetch(&invocation_trace)?;
+                self.record_trace_prefetch(&invocation_trace);
                 if let Some(recorder) = recorder.as_deref_mut() {
                     pending_step = Some(recorder.begin_step(self.diagnostic_step_state())?);
                     self.memory
@@ -597,7 +614,9 @@ impl IVM {
                 let length = WIDE_INSTRUCTION_LEN;
                 let wide_op = fetched.wide_op;
                 if !bwide::is_valid_opcode(wide_op) {
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                    return Err(VMError::Trap(VmTrap::InvalidOpcode(
+                        (instr & 0xFFFF) as u16,
+                    )));
                 }
                 // Determine the gas cost for this operation and deduct it.
                 // Scale vector op costs by the current logical vector length.
@@ -606,13 +625,15 @@ impl IVM {
                     wide_op,
                     self.baseline.vector_length,
                 ) else {
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                    return Err(VMError::Trap(VmTrap::InvalidOpcode(
+                        (instr & 0xFFFF) as u16,
+                    )));
                 };
                 if let Some(step) = pending_step.as_mut() {
                     step.priced(cost);
                 }
                 if unlikely(self.gas_remaining < cost) {
-                    return Err(VMError::OutOfGas);
+                    return Err(VMError::Trap(VmTrap::OutOfGas));
                 }
                 let prepared_host_log =
                     self.prepare_trace_instruction(&invocation_trace, instr, |vm| {
@@ -655,7 +676,7 @@ impl IVM {
                     bwide::system::SCALL => {
                         let imm8 = bwide::imm8(instr) as u8 as u32;
                         if !host_allows_syscall_masked(host, self.syscall_policy(), imm8) {
-                            return Err(VMError::UnknownSyscall(imm8));
+                            return Err(VMError::Trap(VmTrap::UnknownSyscall(imm8)));
                         }
                         self.execute_syscall_with_register_log(
                             host,
@@ -669,7 +690,7 @@ impl IVM {
                     bwide::system::SYSTEM => {
                         let number = bencoding::decode_syscallx(instr);
                         if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
-                            return Err(VMError::UnknownSyscall(number));
+                            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
                         }
                         self.execute_syscall_with_register_log(
                             host,
@@ -864,7 +885,7 @@ impl IVM {
                         let tag = self.baseline_match_tags(rs1, rs2)?;
                         let denom = self.registers.get(rs2);
                         if denom == 0 {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::Trap(VmTrap::AssertionFailed));
                         }
                         let val = self.registers.get(rs1) / denom;
                         self.registers.set(rd, val);
@@ -896,7 +917,7 @@ impl IVM {
                         let tag = self.baseline_match_tags(rs1, rs2)?;
                         let denom = self.registers.get(rs2);
                         if denom == 0 {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::Trap(VmTrap::AssertionFailed));
                         }
                         let val = self.registers.get(rs1) % denom;
                         self.registers.set(rd, val);
@@ -962,7 +983,7 @@ impl IVM {
                         let src = bwide::rs1(instr);
                         let cond = bwide::rs2(instr);
                         if self.zk_mode && self.registers.tag(cond) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if self.registers.get(cond) != 0 {
                             let val = self.registers.get(src);
@@ -1229,7 +1250,7 @@ impl IVM {
                         let cond = bwide::rs1(instr);
                         let imm = i64::from(bwide::imm8(instr)) as u64;
                         if self.zk_mode && self.registers.tag(cond) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if self.registers.get(cond) != 0 {
                             self.registers.set(rd, imm);
@@ -1249,9 +1270,9 @@ impl IVM {
                             .entries()
                             .get(index)
                             .copied()
-                            .ok_or(VMError::InvalidMetadata)?
+                            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?
                         else {
-                            return Err(VMError::InvalidMetadata);
+                            return Err(VMError::Trap(VmTrap::InvalidMetadata));
                         };
                         self.registers.set(rd, pointer);
                         if self.zk_mode {
@@ -1269,9 +1290,9 @@ impl IVM {
                             .entries()
                             .get(index)
                             .copied()
-                            .ok_or(VMError::InvalidMetadata)?
+                            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?
                         else {
-                            return Err(VMError::InvalidMetadata);
+                            return Err(VMError::Trap(VmTrap::InvalidMetadata));
                         };
                         self.registers.set(rd, value);
                         if self.zk_mode {
@@ -1286,10 +1307,13 @@ impl IVM {
                         let base = bwide::rs1(instr);
                         let imm = i64::from(i16::from(bwide::imm8(instr)));
                         if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                        let value = self.memory.load_u64(addr)?;
+                        let value = u64::from_le_bytes(
+                            self.memory
+                                .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)?,
+                        );
                         let tag = self.memory_load_privacy_tag(addr, 8)?;
                         self.memory.diagnostic_classify_last_access(
                             addr,
@@ -1307,22 +1331,27 @@ impl IVM {
                     }
                     bwide::memory::LOAD128 => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let rd_lo = bwide::rd(instr);
                         let base = bwide::rs1(instr);
                         let rd_hi = bwide::rs2(instr);
                         if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if rd_lo >= 256 || rd_hi >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let addr = self.registers.get(base);
                         if !addr.is_multiple_of(16) {
-                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                                addr: addr as u32,
+                            }));
                         }
-                        let value = self.memory.load_u128(addr)?;
+                        let value = u128::from_le_bytes(
+                            self.memory
+                                .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)?,
+                        );
                         let tag = self.memory_load_privacy_tag(addr, 16)?;
                         self.memory.diagnostic_classify_last_access(
                             addr,
@@ -1345,7 +1374,7 @@ impl IVM {
                         let rs = bwide::rs1(instr);
                         let imm = i64::from(i16::from(bwide::imm8(instr)));
                         if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                         let value = self.registers.get(rs);
@@ -1360,20 +1389,22 @@ impl IVM {
                     }
                     bwide::memory::STORE128 => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let base = bwide::rd(instr);
                         let rs_lo = bwide::rs1(instr);
                         let rs_hi = bwide::rs2(instr);
                         if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if rs_lo >= 256 || rs_hi >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let addr = self.registers.get(base);
                         if !addr.is_multiple_of(16) {
-                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                                addr: addr as u32,
+                            }));
                         }
                         let lo = self.registers.get(rs_lo);
                         let hi = self.registers.get(rs_hi);
@@ -1389,7 +1420,7 @@ impl IVM {
                     }
                     bwide::control::HALT => {
                         if self.strict_return_integrity {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::Trap(VmTrap::AssertionFailed));
                         }
                         self.halted = true;
                         self.cycles += 1;
@@ -1400,7 +1431,7 @@ impl IVM {
                     }
                     bwide::crypto::SETVL => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         self.baseline.vector_length = setvl_length(bwide::rs2(instr))?;
                         self.pc = self.pc.wrapping_add(length);
@@ -1409,7 +1440,7 @@ impl IVM {
                     }
                     bwide::crypto::VADD32 | bwide::crypto::VADD64 => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
@@ -1417,7 +1448,7 @@ impl IVM {
                         let rs = VECTOR_BASE + bwide::rs1(instr) * stride;
                         let rt = VECTOR_BASE + bwide::rs2(instr) * stride;
                         if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         if wide_op == bwide::crypto::VADD64 {
                             validate_vadd64_length(vl)?;
@@ -1432,7 +1463,7 @@ impl IVM {
                                         let a_tag = self.registers.tag(rs + idx);
                                         let b_tag = self.registers.tag(rt + idx);
                                         if a_tag != b_tag {
-                                            return Err(VMError::PrivacyViolation);
+                                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                         }
                                         self.registers.set_tag(rd + idx, a_tag);
                                     }
@@ -1447,7 +1478,7 @@ impl IVM {
                                         let tag_lo = self.registers.tag(rd + lo);
                                         let tag_hi = self.registers.tag(rd + hi);
                                         if tag_lo != tag_hi {
-                                            return Err(VMError::PrivacyViolation);
+                                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                         }
                                     }
                                 }
@@ -1476,7 +1507,7 @@ impl IVM {
                                         || b_lo_tag != b_hi_tag
                                         || a_lo_tag != b_lo_tag
                                     {
-                                        return Err(VMError::PrivacyViolation);
+                                        return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                     }
                                     self.registers.set_tag(rd + lo_idx, a_lo_tag);
                                     self.registers.set_tag(rd + hi_idx, a_lo_tag);
@@ -1498,7 +1529,7 @@ impl IVM {
                                         let taga = self.registers.tag(rs + idx);
                                         let tagb = self.registers.tag(rt + idx);
                                         if taga != tagb {
-                                            return Err(VMError::PrivacyViolation);
+                                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                         }
                                         self.registers.set_tag(rd + idx, taga);
                                     }
@@ -1519,7 +1550,7 @@ impl IVM {
                                     let taga = self.registers.tag(rs + idx);
                                     let tagb = self.registers.tag(rt + idx);
                                     if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
+                                        return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                     }
                                     self.registers.set_tag(rd + idx, taga);
                                 }
@@ -1535,7 +1566,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
@@ -1554,7 +1585,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
@@ -1573,7 +1604,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
@@ -1592,7 +1623,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
@@ -1611,7 +1642,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
@@ -1630,7 +1661,7 @@ impl IVM {
                         let rt = bwide::rs1(instr);
                         let offset = i64::from(bwide::imm8(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
@@ -1647,10 +1678,10 @@ impl IVM {
                     bwide::control::JR => {
                         let rs = bwide::rd(instr);
                         if self.zk_mode && self.registers.tag(rs) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if self.strict_return_integrity {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::Trap(VmTrap::AssertionFailed));
                         }
                         self.pc = self.registers.get(rs);
                         self.cycles += 1;
@@ -1660,11 +1691,11 @@ impl IVM {
                         let rd = bwide::rd(instr);
                         let rs = bwide::rs1(instr);
                         if self.zk_mode && self.registers.tag(rs) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let imm = i64::from(bwide::imm8(instr));
                         if self.strict_return_integrity && !(rd == 0 && rs == 1 && imm == 0) {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::Trap(VmTrap::AssertionFailed));
                         }
                         let raw_target = self.registers.get(rs).wrapping_add_signed(imm);
                         let target =
@@ -1672,14 +1703,14 @@ impl IVM {
                         if self.strict_return_integrity {
                             if let Some(expected) = self.contract_return_stack.last().copied() {
                                 if target != expected {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::Trap(VmTrap::AssertionFailed));
                                 }
                             } else {
                                 if self.contract_outer_return_pc != Some(target) {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::Trap(VmTrap::AssertionFailed));
                                 }
                                 if target != self.memory.code_len() {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::Trap(VmTrap::AssertionFailed));
                                 }
                             }
                             self.finish_call().map_err(baseline_call_fault)?;
@@ -1705,7 +1736,7 @@ impl IVM {
                         let return_pc = self.pc.wrapping_add(length);
                         if self.strict_return_integrity {
                             if rd != 0 && rd != 1 {
-                                return Err(VMError::AssertionFailed);
+                                return Err(VMError::Trap(VmTrap::AssertionFailed));
                             }
                             if rd == 1 {
                                 self.begin_child_call(((self.pc as i64) + (imm * 4)) as u64)
@@ -1743,7 +1774,7 @@ impl IVM {
                     }
                     bwide::crypto::VAND => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
@@ -1751,7 +1782,7 @@ impl IVM {
                         let rs = VECTOR_BASE + bwide::rs1(instr) * stride;
                         let rt = VECTOR_BASE + bwide::rs2(instr) * stride;
                         if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let mut lane = 0usize;
                         while lane + 4 <= vl {
@@ -1763,7 +1794,7 @@ impl IVM {
                                     let taga = self.registers.tag(rs + idx);
                                     let tagb = self.registers.tag(rt + idx);
                                     if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
+                                        return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                     }
                                     self.registers.set_tag(rd + idx, taga);
                                 }
@@ -1782,7 +1813,7 @@ impl IVM {
                                 let taga = self.registers.tag(rs + idx);
                                 let tagb = self.registers.tag(rt + idx);
                                 if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
+                                    return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                 }
                                 self.registers.set_tag(rd + idx, taga);
                             }
@@ -1796,7 +1827,7 @@ impl IVM {
                     }
                     bwide::crypto::VXOR => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
@@ -1804,7 +1835,7 @@ impl IVM {
                         let rs = VECTOR_BASE + bwide::rs1(instr) * stride;
                         let rt = VECTOR_BASE + bwide::rs2(instr) * stride;
                         if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let mut lane = 0usize;
                         while lane + 4 <= vl {
@@ -1816,7 +1847,7 @@ impl IVM {
                                     let taga = self.registers.tag(rs + idx);
                                     let tagb = self.registers.tag(rt + idx);
                                     if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
+                                        return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                     }
                                     self.registers.set_tag(rd + idx, taga);
                                 }
@@ -1835,7 +1866,7 @@ impl IVM {
                                 let taga = self.registers.tag(rs + idx);
                                 let tagb = self.registers.tag(rt + idx);
                                 if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
+                                    return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                 }
                                 self.registers.set_tag(rd + idx, taga);
                             }
@@ -1849,7 +1880,7 @@ impl IVM {
                     }
                     bwide::crypto::VOR => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
@@ -1857,7 +1888,7 @@ impl IVM {
                         let rs = VECTOR_BASE + bwide::rs1(instr) * stride;
                         let rt = VECTOR_BASE + bwide::rs2(instr) * stride;
                         if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let mut lane = 0usize;
                         while lane + 4 <= vl {
@@ -1869,7 +1900,7 @@ impl IVM {
                                     let taga = self.registers.tag(rs + idx);
                                     let tagb = self.registers.tag(rt + idx);
                                     if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
+                                        return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                     }
                                     self.registers.set_tag(rd + idx, taga);
                                 }
@@ -1888,7 +1919,7 @@ impl IVM {
                                 let taga = self.registers.tag(rs + idx);
                                 let tagb = self.registers.tag(rt + idx);
                                 if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
+                                    return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                 }
                                 self.registers.set_tag(rd + idx, taga);
                             }
@@ -1902,14 +1933,14 @@ impl IVM {
                     }
                     bwide::crypto::VROT32 => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
                         let rd = VECTOR_BASE + bwide::rd(instr) * stride;
                         let rs = VECTOR_BASE + bwide::rs1(instr) * stride;
                         if rd + vl > 256 || rs + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let shift = (bwide::imm8(instr) as u8 & 0x1F) as u32;
                         let mut lane = 0usize;
@@ -1945,19 +1976,19 @@ impl IVM {
                     }
                     bwide::crypto::SHA256BLOCK => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let vl = self.baseline.vector_length.max(1);
                         let stride = vl;
                         let rd = bwide::rd(instr);
                         let ptr_reg = bwide::rs1(instr);
                         if self.zk_mode && self.registers.tag(ptr_reg) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let base = VECTOR_BASE + rd * stride;
                         let second = base + stride;
                         if second + stride > 256 || ptr_reg >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let state_lanes = stride.min(4);
                         if self.zk_mode
@@ -1965,7 +1996,7 @@ impl IVM {
                                 self.registers.tag(base + lane) || self.registers.tag(second + lane)
                             })
                         {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let addr = self.registers.get(ptr_reg);
                         self.ensure_public_memory(addr, 64)?;
@@ -2020,10 +2051,10 @@ impl IVM {
                                 || self.registers.tag(rs_state)
                                 || self.registers.tag(rs_block))
                         {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if rd >= 256 || rs_state >= 256 || rs_block >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let state_ptr = self.registers.get(rs_state);
                         let block_ptr = self.registers.get(rs_block);
@@ -2058,13 +2089,13 @@ impl IVM {
                     }
                     bwide::crypto::AESENC => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs_state = bwide::rs1(instr);
                         let rs_key = bwide::rs2(instr);
                         if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         if self.zk_mode {
                             let state_tag_lo = self.registers.tag(rs_state);
@@ -2075,7 +2106,7 @@ impl IVM {
                                 || key_tag_lo != key_tag_hi
                                 || state_tag_lo != key_tag_lo
                             {
-                                return Err(VMError::PrivacyViolation);
+                                return Err(VMError::Trap(VmTrap::PrivacyViolation));
                             }
                             self.registers.set_tag(rd, state_tag_lo);
                             self.registers.set_tag(rd + 1, state_tag_lo);
@@ -2101,13 +2132,13 @@ impl IVM {
                     }
                     bwide::crypto::AESDEC => {
                         if unlikely(!self.baseline.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::VectorExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs_state = bwide::rs1(instr);
                         let rs_key = bwide::rs2(instr);
                         if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         if self.zk_mode {
                             let state_tag_lo = self.registers.tag(rs_state);
@@ -2118,7 +2149,7 @@ impl IVM {
                                 || key_tag_lo != key_tag_hi
                                 || state_tag_lo != key_tag_lo
                             {
-                                return Err(VMError::PrivacyViolation);
+                                return Err(VMError::Trap(VmTrap::PrivacyViolation));
                             }
                             self.registers.set_tag(rd, state_tag_lo);
                             self.registers.set_tag(rd + 1, state_tag_lo);
@@ -2147,10 +2178,10 @@ impl IVM {
                         let rd = bwide::rd(instr);
                         let rs = bwide::rs1(instr);
                         if self.zk_mode && self.registers.tag(rs) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         if rd + 1 >= 256 || rs >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
+                            return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
                         }
                         let ptr = self.registers.get(rs);
                         self.ensure_public_memory(ptr, 64)?;
@@ -2180,7 +2211,7 @@ impl IVM {
                         if self.zk_mode && (self.registers.tag(rs1) || self.registers.tag(rs2)) {
                             // This legacy scalar gadget returns only 64 bits
                             // and is never a Secret<T> declassification path.
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let a = self.registers.get(rs1);
                         let b = self.registers.get(rs2);
@@ -2195,7 +2226,7 @@ impl IVM {
                     }
                     bwide::crypto::POSEIDON6 => {
                         let Some((rd, rs_base)) = bencoding::decode_poseidon6(instr) else {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         };
                         let rd = usize::from(rd);
                         let rs_base = usize::from(rs_base);
@@ -2204,7 +2235,7 @@ impl IVM {
                                 if self.registers.tag(rs_base + index) {
                                     // This legacy scalar gadget returns only
                                     // 64 bits and cannot consume Secret<T>.
-                                    return Err(VMError::PrivacyViolation);
+                                    return Err(VMError::Trap(VmTrap::PrivacyViolation));
                                 }
                             }
                         }
@@ -2226,14 +2257,14 @@ impl IVM {
                         let rs1 = bwide::rs1(instr);
                         let rs2 = bwide::rs2(instr);
                         if self.zk_mode && self.registers.tag(rs1) {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let mut fail_index = 0u64;
                         let request_ptr = self.registers.get(rs1);
                         let payload_len = match self.inspect_owned_public_tlv_header(request_ptr) {
                             Ok((payload_len, _)) => Some(payload_len),
-                            Err(VMError::PrivacyViolation) => {
-                                return Err(VMError::PrivacyViolation);
+                            Err(VMError::Trap(VmTrap::PrivacyViolation)) => {
+                                return Err(VMError::Trap(VmTrap::PrivacyViolation));
                             }
                             Err(error) if error.execution_deferral().is_some() => {
                                 return Err(error);
@@ -2276,11 +2307,11 @@ impl IVM {
                                         > crate::gas::baseline::ED25519_BATCH_MAX_ENTRIES
                                     {
                                         fail_index = u64::try_from(request.entries.len())
-                                            .map_err(|_| VMError::GasCostOverflow)?;
+                                            .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
                                         false
                                     } else {
                                         let entry_count = u64::try_from(request.entries.len())
-                                            .map_err(|_| VMError::GasCostOverflow)?;
+                                            .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
                                         self.debit_gas(
                                             crate::gas::baseline::ed25519_batch_extra_gas(
                                                 0,
@@ -2299,14 +2330,14 @@ impl IVM {
                                                         actual,
                                                         ..
                                                     } => u64::try_from(actual)
-                                                        .map_err(|_| VMError::GasCostOverflow)?,
+                                                        .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?,
                                                     crate::signature::Ed25519BatchError::InvalidEntry {
                                                         index,
                                                     }
                                                     | crate::signature::Ed25519BatchError::SignatureFailed {
                                                         index,
                                                     } => u64::try_from(index)
-                                                        .map_err(|_| VMError::GasCostOverflow)?,
+                                                        .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?,
                                                 };
                                                 false
                                             }
@@ -2338,7 +2369,7 @@ impl IVM {
                                 || self.registers.tag(rs1)
                                 || self.registers.tag(rs2))
                         {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
@@ -2386,7 +2417,7 @@ impl IVM {
                                 || self.registers.tag(rs1)
                                 || self.registers.tag(rs2))
                         {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
@@ -2434,7 +2465,7 @@ impl IVM {
                                 || self.registers.tag(rs1)
                                 || self.registers.tag(rs2))
                         {
-                            return Err(VMError::PrivacyViolation);
+                            return Err(VMError::Trap(VmTrap::PrivacyViolation));
                         }
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
@@ -2475,7 +2506,7 @@ impl IVM {
                     }
                     bwide::zk::ASSERT => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rs = bwide::rs1(instr);
                         self.zk_require_public_trap_operands(&[rs])?;
@@ -2495,7 +2526,7 @@ impl IVM {
                     }
                     bwide::zk::ASSERT_EQ => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rs1 = bwide::rs1(instr);
                         let rs2 = bwide::rs2(instr);
@@ -2518,7 +2549,7 @@ impl IVM {
                     }
                     bwide::zk::FADD => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs1 = bwide::rs1(instr);
@@ -2535,7 +2566,7 @@ impl IVM {
                     }
                     bwide::zk::FSUB => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs1 = bwide::rs1(instr);
@@ -2552,7 +2583,7 @@ impl IVM {
                     }
                     bwide::zk::FMUL => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs1 = bwide::rs1(instr);
@@ -2569,7 +2600,7 @@ impl IVM {
                     }
                     bwide::zk::FINV => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rd = bwide::rd(instr);
                         let rs = bwide::rs1(instr);
@@ -2591,7 +2622,7 @@ impl IVM {
                     }
                     bwide::zk::ASSERT_RANGE => {
                         if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
+                            return Err(VMError::Trap(VmTrap::ZkExtensionDisabled));
                         }
                         let rs = bwide::rs1(instr);
                         let imm = bwide::imm8(instr) as u8;
@@ -2636,7 +2667,9 @@ impl IVM {
                                 op_hi = wide_op,
                             );
                         }
-                        return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                        return Err(VMError::Trap(VmTrap::InvalidOpcode(
+                            (instr & 0xFFFF) as u16,
+                        )));
                     }
                 }
             }
@@ -2674,7 +2707,7 @@ impl IVM {
                 self.cycles = self.max_cycles;
                 // Padding instructions still consume gas like NOPs (cost 1 each)
                 if self.gas_remaining < remaining {
-                    return Err(VMError::OutOfGas);
+                    return Err(VMError::Trap(VmTrap::OutOfGas));
                 } else {
                     self.gas_remaining -= remaining;
                 }
@@ -2685,7 +2718,7 @@ impl IVM {
             if let Some(error) = self.contract_abort_error.clone() {
                 Err(error.into_vm_error())
             } else if self.constraint_failed {
-                Err(VMError::AssertionFailed)
+                Err(VMError::Trap(VmTrap::AssertionFailed))
             } else {
                 if self.strict_return_integrity {
                     self.call_result_word_count().map_err(baseline_call_fault)?;
@@ -2807,24 +2840,67 @@ impl IVM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
+
+    #[test]
+    fn diagnostic_deltas_trace_all_baseline_registers_with_unchanged_execution() {
+        use ivm_abi::baseline::{
+            encode_header, encoding::wide, instruction::wide::arithmetic::ADDI,
+        };
+        let mut artifact = encode_header(&ProgramMetadata::default(), 0);
+        for word in [
+            wide::encode_ri(ADDI, 200, 0, 42),
+            wide::encode_ri(ADDI, 255, 200, 1),
+            wide::encode_halt(),
+        ] {
+            artifact.extend_from_slice(&word.to_le_bytes());
+        }
+        let run = |mode| {
+            let mut vm = IVM::new(1000);
+            vm.load_program_for_profile(&artifact, IvmProfileId::BASELINE_ABI_V1)
+                .unwrap();
+            vm.set_trace_mode(mode);
+            vm.run().unwrap();
+            vm
+        };
+        let plain = run(TraceMode::Off);
+        let traced = run(TraceMode::DeltaRegisters);
+        assert_eq!(traced.register(255), 43);
+        assert_eq!(
+            plain.registers.baseline_snapshot(),
+            traced.registers.baseline_snapshot()
+        );
+        assert_eq!(
+            (plain.pc, plain.cycles, plain.remaining_gas()),
+            (traced.pc, traced.cycles, traced.remaining_gas())
+        );
+        let trace = traced.delta_register_trace();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(
+            trace.entry(0).unwrap().changes.len(),
+            crate::registers::BASELINE_REGISTER_COUNT
+        );
+        assert_eq!(trace.entry(1).unwrap().changes, &[(200, 42, false)]);
+        assert_eq!(trace.entry(2).unwrap().changes, &[(255, 43, false)]);
+    }
 
     #[test]
     fn baseline_arithmetic_traps_and_vector_bounds_are_the_anchor_rules() {
         assert!(matches!(
             checked_div_i64(1, 0),
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         ));
         assert!(matches!(
             checked_div_i64(i64::MIN, -1),
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         ));
         assert!(matches!(
             checked_rem_i64(1, 0),
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         ));
         assert!(matches!(
             checked_abs_i64(i64::MIN),
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         ));
         assert_eq!(div_ceil_i64(7, 2).unwrap(), 4);
         assert_eq!(div_ceil_i64(-7, 2).unwrap(), -3);
@@ -2832,7 +2908,9 @@ mod tests {
         assert_eq!(setvl_length(64).unwrap(), 64);
         assert!(matches!(
             setvl_length(65),
-            Err(VMError::InvalidVectorLength { vector_length: 65 })
+            Err(VMError::Trap(VmTrap::InvalidVectorLength {
+                vector_length: 65
+            }))
         ));
         assert!(validate_vadd64_length(4).is_ok());
         assert!(validate_vadd64_length(3).is_err());
@@ -2854,16 +2932,16 @@ mod tests {
     #[test]
     fn shared_call_helper_faults_take_their_baseline_spelling() {
         assert!(matches!(
-            baseline_call_fault(VMError::ControlFlowViolation),
-            VMError::AssertionFailed
+            baseline_call_fault(VMError::Trap(VmTrap::ControlFlowViolation)),
+            VMError::Trap(VmTrap::AssertionFailed)
         ));
         assert!(matches!(
-            baseline_call_fault(VMError::CallDepthExceeded),
-            VMError::AssertionFailed
+            baseline_call_fault(VMError::Trap(VmTrap::CallDepthExceeded)),
+            VMError::Trap(VmTrap::AssertionFailed)
         ));
         assert!(matches!(
-            baseline_call_fault(VMError::OutOfGas),
-            VMError::OutOfGas
+            baseline_call_fault(VMError::Trap(VmTrap::OutOfGas)),
+            VMError::Trap(VmTrap::OutOfGas)
         ));
     }
 
@@ -2911,7 +2989,7 @@ mod tests {
         assert_eq!(budget.consumed(), 2);
         assert!(matches!(
             budget.shared.reserve(2),
-            Err(VMError::ExceededMaxCycles)
+            Err(VMError::Trap(VmTrap::ExceededMaxCycles))
         ));
         assert!(budget.exhausted());
         assert!(budget.is_open());
@@ -2925,7 +3003,7 @@ mod tests {
         let fresh = VmCycleBudget::new(std::num::NonZeroU64::new(3).unwrap());
         assert!(matches!(
             vm.run_with_host_and_cycle_budget(&mut crate::host::DefaultHost::new(), &fresh),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
     }
 }

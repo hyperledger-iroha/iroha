@@ -44,7 +44,12 @@ fn evidence(client: &Client) -> ExplorerTransactionProof {
             entrypoint,
             output_hash: HashOf::new(&output),
             // Full output-tree positions need not equal the Network input position.
-            output_proof: MerkleProof::from_audit_path(1, Vec::new()),
+            output_proof: MerkleProof::from_audit_path(
+                1,
+                vec![Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"preceding governed output",
+                )))],
+            ),
             output,
         },
         certificate: ExplorerTransactionProofCertificate {
@@ -185,7 +190,7 @@ fn explorer_transaction_proof_rejects_binding_substitution_and_malformed_carrier
     let client = client_with_base_url(base_url());
     let original = evidence(&client);
     let hash = original.transaction.entrypoint_hash;
-    for mutation in 0..10 {
+    for mutation in 0..11 {
         let mut proof = original.clone();
         match mutation {
             0 => proof.version = 2,
@@ -214,6 +219,7 @@ fn explorer_transaction_proof_rejects_binding_substitution_and_malformed_carrier
                 proof.certificate.commit_qc =
                     base64::engine::general_purpose::STANDARD.encode(vec![0; 4097])
             }
+            10 => proof.transaction.output_proof = MerkleProof::from_audit_path(1, Vec::new()),
             _ => unreachable!(),
         }
         assert!(

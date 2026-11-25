@@ -1,6 +1,7 @@
 //! Original text/index custody, combined scratch admission and syntax parity.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_allocation::AllocationRefusal;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -31,7 +32,7 @@ fn combined_index_and_nfc_admission_precedes_all_backings_and_retries() {
         budget.set_limit_bytes(limit);
         assert!(matches!(
             TextIndex::from_candidates(values.into_iter(), &budget),
-            Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. }))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. })))
                 if requested_bytes == demand
         ));
         assert_eq!(
@@ -44,7 +45,7 @@ fn combined_index_and_nfc_admission_precedes_all_backings_and_retries() {
     let occupied = budget.try_reserve_bytes(1).unwrap();
     assert!(matches!(
         TextIndex::from_candidates(values.into_iter(), &budget),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
             if requested_bytes == demand
     ));
     assert_eq!(budget.reserved_bytes(), 1);

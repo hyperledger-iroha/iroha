@@ -36,6 +36,78 @@ fn certified() -> Driver {
 }
 
 #[test]
+fn runtime_proposal_binding_refusal_retains_local_authority_and_no_outcome() {
+    use iroha_data_model::{
+        governance::types::RuntimeUpgradeProposal,
+        runtime::lifecycle::{ChangeSetId, RuntimeNoticeV1, RuntimeUpgradeActionV1},
+    };
+
+    let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+        proposal_operator: iroha_test_samples::ALICE_ID.clone(),
+        action: RuntimeUpgradeActionV1::Cancel(ChangeSetId([0x67; 32])),
+        notice: RuntimeNoticeV1 {
+            blocks: 2,
+            ms: 30_000,
+            approval_cushion_ms: 0,
+        },
+        proposed_ms: test_driver::CREATED_MS,
+    });
+    let driver = Driver::for_proposal(payload, RiskTierV1::Standard);
+    let original = driver.state.clone();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let streamed = norito::core::with_decode_limits_scope(limits, || {
+        ProposalContentId::derive_checked_v1(driver.state.proposal())
+    });
+    assert_eq!(
+        streamed.unwrap(),
+        driver.state.attempt().proposal_content_id
+    );
+    let frame_len = norito::canonical_frame_len(driver.state.proposal()).unwrap();
+    let refused = norito::core::with_decode_limits_scope(limits, || {
+        driver.state.validate_proposal_bindings()
+    });
+    let Err(AnonymousParliamentErrorV1::ProposalFrame(
+        AnonymousBallotCodecErrorV1::DecodeUnavailable(original_refusal),
+    )) = refused
+    else {
+        panic!("a local proposal codec refusal must remain retryable");
+    };
+    assert_eq!(
+        original_refusal.kind(),
+        norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    assert_eq!(
+        original_refusal.resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded {
+            attempted: frame_len as u64,
+            limit: 0,
+        }
+    );
+    assert_eq!(driver.state, original);
+    assert_eq!(driver.state.execution(), None);
+    assert_eq!(driver.state.validate_proposal_bindings(), Ok(()));
+    assert_eq!(PARLIAMENT_BALLOT_QUALIFICATION_V1, None);
+}
+
+#[test]
+fn checked_identity_error_conversion_retains_the_exact_original_refusal() {
+    // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+    let payload = std::collections::BinaryHeap::from([(3_u64, 7_u64), (1, 9)]);
+    let error = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || iroha_data_model::governance::checked_fingerprint(b"test.identity", &payload),
+    )
+    .unwrap_err();
+    let original = error.local_refusal().unwrap();
+    assert_eq!(
+        AnonymousParliamentErrorV1::from(error),
+        AnonymousParliamentErrorV1::ProposalFrame(AnonymousBallotCodecErrorV1::DecodeUnavailable(
+            original
+        ))
+    );
+}
+
+#[test]
 fn restore_height_bounds_every_realized_lifecycle_fact() {
     let driver = certified();
     let height = driver.height;

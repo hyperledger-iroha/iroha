@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **1197** · Unique variables: **309**
+Total references: **1196** · Unique variables: **308**
 
 ## ADVICE_SCHEDULE (test: 1)
 
@@ -1474,10 +1474,6 @@ Total references: **1197** · Unique variables: **309**
 ## IZANAMI_ALLOW_NET (test: 1)
 
 - test: crates/izanami/src/chaos.rs — `std::env::var("IZANAMI_ALLOW_NET")`
-
-## IZANAMI_TUI_ALLOW_ZERO_SEED (prod: 1)
-
-- prod: crates/izanami/src/tui.rs — `if args.seed == Some(0) && std::env::var("IZANAMI_TUI_ALLOW_ZERO_SEED").is_err() {`
 
 ## JSONSTAGE1_CUDA_ARCH (build: 1)
 

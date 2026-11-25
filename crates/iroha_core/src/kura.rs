@@ -46,7 +46,7 @@ use iroha_data_model::{
     },
     kaigi::KaigiId,
     nexus::{LaneCatalog, LaneLifecycleParameterV1},
-    transaction::signed::{TransactionEntrypoint, TransactionResult},
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -132,6 +132,7 @@ const EVICTION_FILE_DIGEST_DOMAIN: &[u8] = b"iroha:kura:eviction-file:v1\0";
 
 include!("kura/storage_identity.rs");
 include!("kura/read_only_evidence.rs");
+include!("kura/stopped_replay_source.rs");
 include!("kura/bound_progress_and_retained_support.rs");
 #[cfg(windows)]
 include!("kura/windows_evidence.rs");
@@ -253,6 +254,8 @@ pub struct Kura {
     membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
+    /// Bounded local handoff of signed DA candidates to the native proposer.
+    pub(crate) da_proposal_queue: crate::da::proposal_queue::ProposalQueue,
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
     /// Opened canonical store-root owner used to mint descriptor-relative WAL storage.
@@ -558,7 +561,7 @@ impl Kura {
         for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
             let input_index = u32::try_from(input_index).expect("validated Network index range");
             let (_, output) = block
-                .network_output_at(input_index)
+                .network_execution_output_at(input_index)
                 .expect("validated complete Network output join");
             let hash = entrypoint.hash();
             let inserted = index
@@ -604,7 +607,7 @@ impl Kura {
                     .insert(height);
                 index.nested_associations.inserted(inserted);
             }
-            let status = output.result.is_ok();
+            let status = output.result().is_ok();
             let inserted = index
                 .inventories_by_height
                 .entry(height)
@@ -624,7 +627,7 @@ impl Kura {
                 block.hash(),
                 input_index,
                 entrypoint,
-                &output.result,
+                output.result(),
             ) {
                 Self::remove_transaction_entrypoint_height(index, height);
                 index.incomplete_heights.insert(height);
@@ -637,7 +640,7 @@ impl Kura {
 
     pub(crate) fn kaigi_signal_candidate_identity(
         entrypoint: &TransactionEntrypoint,
-        result: &TransactionResult,
+        result: iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ) -> Option<(KaigiId, AccountId)> {
         if result.as_ref().is_err() {
             return None;
@@ -692,7 +695,7 @@ impl Kura {
         block_hash: HashOf<BlockHeader>,
         network_input_index: u32,
         entrypoint: &TransactionEntrypoint,
-        result: &TransactionResult,
+        result: iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ) -> bool {
         let Some((call_id, authority)) = Self::kaigi_signal_candidate_identity(entrypoint, result)
         else {
@@ -1095,6 +1098,12 @@ impl Kura {
     /// This local storage fact never grants block or State authority.
     pub(crate) fn is_temporary_staging(&self) -> bool {
         self.temp_store_dir.is_some()
+    }
+
+    /// The original stopped-store read owner keeps its exclusive root lock alive.
+    /// Emergency mode alone is insufficient for a fixture or an unowned store.
+    pub(crate) fn is_locked_read_only_source(&self) -> bool {
+        self.emergency_fast_startup_enabled() && self._store_root_lock_file.is_some()
     }
 
     /// Initialize an authenticated Kura in an isolated temporary directory.
@@ -1526,6 +1535,7 @@ impl Kura {
             ),
             membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
+            da_proposal_queue: Default::default(),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
@@ -1756,6 +1766,7 @@ impl Kura {
                 .expect("default transaction history budget fits supported platforms"),
             ),
             resource_inventory: Arc::clone(&resource_inventory),
+            da_proposal_queue: Default::default(),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
@@ -1951,6 +1962,22 @@ impl Kura {
                 "original Kura directory custody is required for native context publication",
             ))
         }
+    }
+    /// Bind the DA queue writer to this instance's original Kura root.
+    pub(crate) fn da_proposal_root(&self) -> std::io::Result<iroha_fs::OwnerDirectory> {
+        #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
+        {
+            let root = &self.store_root_directory;
+            let owner = iroha_fs::OwnerDirectory::open(&root.canonical_path)?;
+            if owner.identity()? != iroha_fs::FileIdentity::of(&root.file)?
+                || !self.bound_storage_directory_unchanged(root)
+            {
+                return Err(std::io::Error::other("original Kura DA queue root changed"));
+            }
+            Ok(owner)
+        }
+        #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
+        Err(std::io::ErrorKind::Unsupported.into())
     }
     /// Original configured limit for each canonical native context projection.
     #[must_use]

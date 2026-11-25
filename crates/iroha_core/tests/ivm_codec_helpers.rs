@@ -9,6 +9,7 @@ use ivm::{
     EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
     EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, VMError, syscalls,
 };
+use ivm_abi::error::VmTrap;
 use std::convert::TryFrom;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -225,7 +226,7 @@ fn production_schema_host_rejects_unknown_and_malformed_inputs_for_canonical_sys
     vm.set_register(11, json_ptr);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.register(10), schema_ptr);
     assert_eq!(vm.register(11), json_ptr);
@@ -244,7 +245,7 @@ fn production_schema_host_rejects_unknown_and_malformed_inputs_for_canonical_sys
         vm.set_register(11, bytes_ptr);
         assert!(matches!(
             host.syscall(syscalls::SYSCALL_SCHEMA_DECODE, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(vm.register(10), schema_ptr);
         assert_eq!(vm.register(11), bytes_ptr);

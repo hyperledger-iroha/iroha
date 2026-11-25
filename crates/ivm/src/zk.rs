@@ -8,6 +8,7 @@
 //! after every operation. Memory events do not carry complete leaves or an
 //! authenticated tree size and are not independently verifiable proofs.
 
+use crate::error::VmDeferral;
 /// Default ZK trace bound installed when a host enables ZK mode on raw code.
 ///
 /// A ZK program's header always carries its own nonzero `max_cycles` trace bound; this default
@@ -339,7 +340,9 @@ mod tests {
     }
 }
 fn trace_allocation_error() -> crate::error::VMError {
-    crate::error::VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+    crate::error::VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::error::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn trace_vector_bytes<T>(capacity: usize) -> Result<usize, crate::error::VMError> {
     let bytes = capacity

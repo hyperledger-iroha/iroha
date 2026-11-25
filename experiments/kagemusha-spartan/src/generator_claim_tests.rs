@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     full::{NODE_DOMAIN, Pool, Wiring, constant_entries},
-    points::PointsBuilder,
+    points::{IdentityPoints, PointsBuilder},
     r1cs::{Circuit, Instance, Witness},
     uniform::{Array, UniformCircuit, constant, link, own, plus},
 };
@@ -20,6 +20,33 @@ fn sources<C: PastaCurve>(gens: &Gens<C>, k: usize) -> Vec<Claim<C>> {
         })
         .collect()
 }
+
+#[test]
+fn weighted_sources_match_the_full_tensor() {
+    fn check<S: PrimeField + Zeroize>() {
+        for k in 0..10 {
+            let mut actual = vec![S::from(7); 1 << k];
+            let mut expected = actual.clone();
+            for source in 0..SOURCE_COUNT {
+                let mut us: Vec<S> = (0..k)
+                    .map(|i| S::from((3 + i + 7 * source) as u64))
+                    .collect();
+                if source == 0 && k > 0 {
+                    us[k / 2] = S::ZERO;
+                }
+                let weight = S::from(source as u64 + 1);
+                add_weighted_source(&mut actual, &us, weight);
+                for (value, factor) in expected.iter_mut().zip(s_vector(&us)) {
+                    *value += weight * factor;
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    check::<iroha_pasta::Fp>();
+    check::<iroha_pasta::Fq>();
+}
+
 fn native<C: PastaCurve>()
 where
     F<C>: Scalar,
@@ -27,18 +54,38 @@ where
     let gens = Gens::<C>::new(16);
     let relation = [23; 32];
     let input = sources(&gens, 4);
+    for change_point in [false, true] {
+        let mut repeated = input.clone();
+        repeated[2] = repeated[0].clone();
+        if change_point {
+            repeated[2].g = repeated[1].g;
+        } else {
+            repeated[2].us = repeated[1].us.clone();
+        }
+        assert!(matches!(
+            prove_with_rng(
+                &gens,
+                relation,
+                repeated,
+                &mut SpikeRng::new(b"distinct claim")
+            ),
+            Err("wallet predecessor generator claim")
+        ));
+    }
     let (a, ta) = prove_with_rng(
         &gens,
         relation,
         input.clone(),
         &mut SpikeRng::new(b"generator private mask A"),
-    );
+    )
+    .unwrap();
     let (b, _) = prove_with_rng(
         &gens,
         relation,
         input,
         &mut SpikeRng::new(b"generator private mask B"),
-    );
+    )
+    .unwrap();
     assert!(verify(&gens, relation, &a));
     assert!(verify(&gens, relation, &b));
     assert_ne!(
@@ -68,6 +115,65 @@ fn exact_private_generator_fold_native_both_curves() {
     native::<Pallas>();
     native::<Vesta>();
 }
+#[test]
+fn private_predecessor_schedules_match_the_complete_four_source_fold() {
+    fn check<C: PastaCurve>()
+    where
+        F<C>: Scalar,
+    {
+        let gens = Gens::<C>::new(16);
+        let claims = sources(&gens, 4);
+        let relation = [17; 32];
+        let purpose = b"compare complete private fold";
+        let entropy = ProofEntropy::fresh().unwrap();
+        let unsupported = gens.prefix(15);
+        assert!(matches!(
+            prove_predecessors(
+                &unsupported,
+                relation,
+                [claims[0].clone(), claims[1].clone()],
+                None,
+                &entropy,
+                purpose,
+            ),
+            Err("generator source dimension")
+        ));
+        for joined in [false, true] {
+            let incoming = joined.then_some([claims[2].us.as_slice(), claims[3].us.as_slice()]);
+            let parents = [claims[0].clone(), claims[1].clone()];
+            let (actual, actual_trace) = prove_predecessors(
+                &gens,
+                relation,
+                parents.clone(),
+                incoming,
+                &entropy,
+                purpose,
+            )
+            .unwrap();
+            let all = if joined {
+                claims.clone()
+            } else {
+                parents.iter().chain(&parents).cloned().collect()
+            };
+            let (expected, expected_trace) =
+                prove(&gens, relation, all, &entropy, purpose).unwrap();
+            assert_eq!(actual_trace.shared, expected_trace.shared);
+            assert_eq!(actual.d, expected.d);
+            assert_eq!(actual.lr, expected.lr);
+            assert_eq!(actual.output.g, expected.output.g);
+            assert!(verify(&gens, relation, &actual));
+            let [mut wrong, other] = parents;
+            wrong.g = other.g;
+            assert!(matches!(
+                prove_predecessors(&gens, relation, [wrong, other], incoming, &entropy, purpose),
+                Err("wallet predecessor generator claim")
+            ));
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn holds<S: Scalar + PoseidonField>(b: &(UniformCircuit<S>, Instance<S>, Witness<S>)) -> bool {
     let mut v = b.2.w.clone();
     let rel =
@@ -152,7 +258,8 @@ where
         [23; 32],
         sources(&gens, 4),
         &mut SpikeRng::new(b"generator scalar circuit"),
-    );
+    )
+    .unwrap();
     let mut w = Wiring::<F<C>>::default();
     let f = w.family(0, 1);
     let shared = shared_array(&mut w, f, &tr.shared);
@@ -208,6 +315,26 @@ where
         [23; 32],
         sources(&gens, 3),
         &mut SpikeRng::new(b"generator points circuit"),
+    )
+    .unwrap();
+    // The private fold needs the native identity rule; a builder that chose
+    // hard-slot strictness cannot host it.
+    let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut w = Wiring::<C::Base>::default();
+        let f = w.family(0, 1);
+        let e_out = w.reserve();
+        let e_v = w.reserve();
+        let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
+        let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Refused);
+        let _ = pb.generator_fold(&mut pool, &gens, &fold, &tr, 0);
+    }));
+    let why = strict.expect_err("a strict builder refuses the generator fold");
+    assert!(
+        why.downcast_ref::<String>().is_some_and(
+            |m| m.contains("the private generator fold follows the native identity rule")
+        ),
+        "refused for its identity rule"
     );
     let mut fingerprint = None;
     for case in 0..4 {
@@ -240,7 +367,7 @@ where
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
         let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
         let token = pb.generator_fold(&mut pool, &gens, &fold, &tr, 0);
         let equal = pb.generator_source_equals_inherited(
             &token,
@@ -369,7 +496,8 @@ where
         relation,
         sources(&gens, 3),
         &mut SpikeRng::new(b"generator independent decision"),
-    );
+    )
+    .unwrap();
     assert!(verify(&gens, relation, &honest));
     // Preserve every committed input, mask, point and Fiat-Shamir challenge.
     // The final output G is deferred, so an adversary can solve the last group
@@ -470,7 +598,8 @@ where
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, family, "zero", &[vec![C::Base::ZERO]]);
         let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-        let mut points = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+        let mut points =
+            PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
         let output = points.generator_fold(&mut pool, &gens, fold, tr, 0);
         let mut shared_values = tr.shared.clone();
         push_point::<C>(&mut shared_values, fold.sources[0].g);

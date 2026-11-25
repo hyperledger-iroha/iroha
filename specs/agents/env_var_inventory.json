@@ -1,7 +1,7 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "total_refs": 1197,
-  "unique_vars": 309,
+  "total_refs": 1196,
+  "unique_vars": 308,
   "variables": {
     "ADVICE_SCHEDULE": {
       "counts": {
@@ -6031,18 +6031,6 @@
           "context": "std::env::var(\"IZANAMI_ALLOW_NET\")",
           "path": "crates/izanami/src/chaos.rs",
           "scope": "test"
-        }
-      ]
-    },
-    "IZANAMI_TUI_ALLOW_ZERO_SEED": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "if args.seed == Some(0) && std::env::var(\"IZANAMI_TUI_ALLOW_ZERO_SEED\").is_err() {",
-          "path": "crates/izanami/src/tui.rs",
-          "scope": "prod"
         }
       ]
     },

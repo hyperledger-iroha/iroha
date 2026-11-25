@@ -17,6 +17,7 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
 
     private val executor: HttpTransportExecutor =
         HttpTransportScope.create(builder.executor)
+    private val proofSigning = builder.proofSigning
     private val baseUri: URI = builder.baseUri
     private val allowLocalDevelopmentHttp: Boolean = builder.allowLocalDevelopmentHttp
     private val timeout: Duration? = builder.timeout
@@ -29,6 +30,7 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
             DaJson.parsePolicyBundle(DaJson.parse(it, "DA proof-policy response"), "response")
         }
 
+    @JvmOverloads
     fun listCommitments(
         request: DaModels.CommitmentListRequest = DaModels.CommitmentListRequest(),
     ): CompletableFuture<DaModels.CommitmentListResponse> =
@@ -36,6 +38,7 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
             DaJson.parseCommitmentList(DaJson.parse(it, "DA commitment response"), "response")
         }
 
+    @JvmOverloads
     fun proveCommitment(
         request: DaModels.CommitmentProofRequest = DaModels.CommitmentProofRequest(),
     ): CompletableFuture<DaModels.CommitmentProofResponse?> =
@@ -56,6 +59,7 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
             )
         }
 
+    @JvmOverloads
     fun listPinIntents(
         request: DaModels.PinIntentListRequest = DaModels.PinIntentListRequest(),
     ): CompletableFuture<DaModels.PinIntentListResponse> =
@@ -63,6 +67,7 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
             DaJson.parsePinIntentList(DaJson.parse(it, "DA pin-intent response"), "response")
         }
 
+    @JvmOverloads
     fun provePinIntent(
         request: DaModels.PinIntentQueryRequest = DaModels.PinIntentQueryRequest(),
     ): CompletableFuture<DaModels.PinIntentProof?> =
@@ -106,6 +111,15 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
         val headers = LinkedHashMap(defaultHeaders)
         ensureHeader(headers, "Accept", "application/json")
         if (body != null) ensureHeader(headers, "Content-Type", "application/json")
+        if (path in SIGNED_PROOF_PATHS) {
+            val (context, auth) = checkNotNull(proofSigning) {
+                "DA proof operations require authenticatedProofs with the network and account signer"
+            }
+            require(headers.keys.none { name -> AUTH_HEADERS.any { it.equals(name, ignoreCase = true) } }) {
+                "DA account signature headers must be generated for the exact proof request"
+            }
+            headers.putAll(auth.headers(context.networkId(), method, target, body))
+        }
         TransportSecurity.requireHttpRequestAllowed(
             "DaToriiClient",
             baseUri,
@@ -209,10 +223,16 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
     class Builder internal constructor() {
         internal var executor: HttpTransportExecutor? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
+        internal var proofSigning: Pair<LocalSigningContext, ToriiCanonicalRequestAuth>? = null
         internal var allowLocalDevelopmentHttp: Boolean = false
         internal var timeout: Duration? = Duration.ofSeconds(15)
         internal val defaultHeaders = LinkedHashMap<String, String>()
         internal val observers = ArrayList<ClientObserver>()
+
+        /** Sign each protected proof request for this network. Listings remain public. */
+        fun authenticatedProofs(context: LocalSigningContext, auth: ToriiCanonicalRequestAuth): Builder = apply {
+            proofSigning = context to auth
+        }
 
         fun executor(executor: HttpTransportExecutor): Builder {
             this.executor = executor
@@ -270,6 +290,13 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
         private const val PIN_INTENTS_PATH = "/v1/da/pin-intents"
         private const val PIN_INTENTS_PROVE_PATH = "/v1/da/pin-intents/prove"
         private const val PIN_INTENTS_VERIFY_PATH = "/v1/da/pin-intents/verify"
+        private val SIGNED_PROOF_PATHS = setOf(
+            COMMITMENTS_PROVE_PATH, COMMITMENTS_VERIFY_PATH, PIN_INTENTS_PROVE_PATH, PIN_INTENTS_VERIFY_PATH,
+        )
+        private val AUTH_HEADERS = setOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT, CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS, CanonicalRequestSigner.HEADER_NONCE,
+        )
         private const val REQUEST_MAX_BYTES = 64 * 1024
         private const val RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 

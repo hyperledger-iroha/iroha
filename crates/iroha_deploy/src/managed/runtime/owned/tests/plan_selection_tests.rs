@@ -288,3 +288,94 @@ fn discovery_tail_original_selection_preserves_active_and_owned_admission() {
     );
     fixture.processes.stop().unwrap();
 }
+
+#[test]
+fn refresh_final_provider_plans_read_originals_after_releasing_child_handles() {
+    let _resources = crate::managed::native_test_guard();
+    let Fixture {
+        mut processes,
+        gateways,
+        prepared,
+        _temporary,
+    } = fixture(false);
+    let read = OwnedGateway::release_for_plan_read(gateways);
+    assert!(
+        processes
+            .children
+            .iter()
+            .all(|child| Arc::strong_count(child) == 1)
+    );
+    let started = std::time::Instant::now();
+    let (baseline, old_captures) = count_profile_validations(|| prepared.provider_service_plans());
+    let old_elapsed = started.elapsed();
+    let started = std::time::Instant::now();
+    let ((result, checks), captures) =
+        count_profile_validations(|| profile_validation_test_support::count(|| read(&prepared)));
+    let elapsed = started.elapsed();
+    assert_eq!((old_captures, captures, checks), (1, 0, 2));
+    let actual = result.unwrap().unwrap();
+    let expected = baseline.unwrap().unwrap();
+    same(&(actual.to_vec(), actual), &(expected.to_vec(), expected));
+    eprintln!(
+        "refresh final provider plans standalone_us={} retained_us={}",
+        old_elapsed.as_micros(),
+        elapsed.as_micros()
+    );
+
+    let read = OwnedGateway::release_for_plan_read(processes.gateways().unwrap());
+    let generation =
+        PrivateDirectory::open_exact(prepared.context.client_config.parent().unwrap()).unwrap();
+    let original = generation.read("peer3.toml", 1024 * 1024).unwrap();
+    let mut changed = zeroize::Zeroizing::new(original.to_vec());
+    changed.extend_from_slice(b"\n# modified after final gateway check\n");
+    generation
+        .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(read(&prepared).is_err());
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+
+    let read = OwnedGateway::release_for_plan_read(processes.gateways().unwrap());
+    let directory = generation
+        .open_child("runtime")
+        .unwrap()
+        .open_child("service-operations")
+        .unwrap()
+        .open_child("network")
+        .unwrap()
+        .open_child("generated-service-runtime")
+        .unwrap();
+    let lock = directory.path().join("operation.lock");
+    let displaced = directory.path().join("old.lock");
+    std::fs::rename(&lock, &displaced).unwrap();
+    let replacement = directory.open_lock("operation.lock").unwrap();
+    assert_eq!(
+        std::fs::read(&lock).unwrap(),
+        std::fs::read(&displaced).unwrap()
+    );
+    assert!(read(&prepared).is_err());
+    drop(replacement);
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::rename(&displaced, &lock).unwrap();
+
+    let read = OwnedGateway::release_for_plan_read(processes.gateways().unwrap());
+    let old = DecodeBudgetContext::new(limits(64 * 1024 * 1024));
+    let new = DecodeBudgetContext::new(limits(64 * 1024 * 1024));
+    let (_, before) =
+        count_profile_validations(|| old.with(|| prepared.provider_service_plans()).unwrap());
+    let (_, after) = count_profile_validations(|| new.with(|| read(&prepared)).unwrap());
+    assert_eq!((before, after), (1, 1));
+    assert_eq!(
+        old.consumed_allocated_bytes(),
+        new.consumed_allocated_bytes()
+    );
+
+    let read = OwnedGateway::release_for_plan_read(processes.gateways().unwrap());
+    let owner = Arc::downgrade(&processes.launch.as_ref().unwrap().owner);
+    processes.stop().unwrap();
+    assert!(owner.upgrade().is_none());
+    let (result, captures) = count_profile_validations(|| read(&prepared));
+    assert!(result.unwrap().is_some());
+    assert_eq!(captures, 1);
+}

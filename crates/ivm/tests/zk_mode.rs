@@ -1,6 +1,7 @@
 use crate::common;
 use common::{assemble, assemble_zk};
 use ivm::{IVM, VMError, encoding, zk::MAX_CYCLES};
+use ivm_abi::error::VmTrap;
 #[test]
 fn test_zk_mode_padding_and_abort() {
     // Program that fails the run through the ABORT syscall.
@@ -15,7 +16,7 @@ fn test_zk_mode_padding_and_abort() {
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::AssertionFailed)),
+        matches!(res, Err(VMError::Trap(VmTrap::AssertionFailed))),
         "Abort should fail the run in normal mode"
     );
     // Only the aborting syscall executed.
@@ -26,7 +27,7 @@ fn test_zk_mode_padding_and_abort() {
     vm2.load_program(&prog).unwrap();
     let res2 = vm2.run();
     assert!(
-        matches!(res2, Err(VMError::AssertionFailed)),
+        matches!(res2, Err(VMError::Trap(VmTrap::AssertionFailed))),
         "Abort should still produce error in ZK mode"
     );
     // Execution should be padded to MAX_CYCLES cycles
@@ -51,7 +52,7 @@ fn ordinary_execution_is_bounded_by_gas_not_cycles() {
         encoding::wide::encode_offset24(ivm::instruction::wide::control::JMP, 0).to_le_bytes();
     let mut vm = IVM::new(1_000);
     vm.load_program(&assemble(&prog)).unwrap();
-    assert!(matches!(vm.run(), Err(VMError::OutOfGas)));
+    assert!(matches!(vm.run(), Err(VMError::Trap(VmTrap::OutOfGas))));
     // Each JMP costs two gas.
     assert_eq!(vm.get_cycle_count(), 500);
 }
@@ -67,7 +68,7 @@ fn test_exceed_max_cycles_error() {
     // Provide ample gas for the configured cycle limit and any padding
     vm.set_gas_limit(MAX_CYCLES + 10);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::ExceededMaxCycles)));
+    assert!(matches!(res, Err(VMError::Trap(VmTrap::ExceededMaxCycles))));
     assert_eq!(vm.get_cycle_count(), 10);
 }
 #[test]

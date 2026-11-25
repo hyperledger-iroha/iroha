@@ -130,7 +130,7 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         .expect("batch rejection");
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline batch fixture"),
             TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::Find(
                     iroha_data_model::query::error::FindError::Domain(domain)
@@ -347,7 +347,9 @@ ledger::account::set_metadata(
         .find_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
         .map(|(_, error)| error)
         .expect("the gas-capped contract call must fail");
-    let TransactionRejectionReason::Validation(ValidationFail::IvmFault(fault)) = error else {
+    let TransactionRejectionReason::Validation(ValidationFail::IvmFault(fault)) =
+        error.baseline().expect("baseline contract fixture")
+    else {
         panic!("contract VM exhaustion must retain its structured execution fault: {error:?}");
     };
     assert_eq!(
@@ -476,7 +478,13 @@ fn successful_live_batches_accumulate_parent_block_gas() {
         let results = valid
             .as_ref()
             .output_results()
-            .map(|result| result.0.clone())
+            .map(|result| {
+                result
+                    .baseline()
+                    .expect("baseline gas-cap fixture")
+                    .0
+                    .clone()
+            })
             .collect::<Vec<_>>();
         let successes = results.iter().filter(|result| result.is_ok()).count();
         let gas_limit_rejections = results

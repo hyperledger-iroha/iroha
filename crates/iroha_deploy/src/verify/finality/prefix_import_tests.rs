@@ -13,8 +13,7 @@ fn original_prefix(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Prefix, Fi
     let verified = native.verify_retained_decision(checkpoint.tip())?;
     Ok(Prefix {
         native,
-        tip: checkpoint.tip().clone(),
-        verified,
+        selection: PrefixSelection::Independent(checkpoint.tip().clone(), verified),
         start: checkpoint.height(),
     })
 }
@@ -22,13 +21,19 @@ fn original_prefix(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Prefix, Fi
 fn same_prefix(actual: &Prefix, expected: &Prefix) {
     assert_eq!(actual.start, expected.start);
     assert_eq!(actual.height(), expected.height());
-    assert_eq!(actual.tip, expected.tip);
+    assert_eq!(*actual.selection.tip(), *expected.selection.tip());
     assert_eq!(actual.members().unwrap(), expected.members().unwrap());
-    assert_eq!(actual.verified.commitment(), expected.verified.commitment());
-    assert_eq!(actual.verified.context_id(), expected.verified.context_id());
     assert_eq!(
-        actual.verified.block().encode_wire().unwrap(),
-        expected.verified.block().encode_wire().unwrap()
+        actual.selection.verified().commitment(),
+        expected.selection.verified().commitment()
+    );
+    assert_eq!(
+        actual.selection.verified().context_id(),
+        expected.selection.verified().context_id()
+    );
+    assert_eq!(
+        actual.selection.verified().block().encode_wire().unwrap(),
+        expected.selection.verified().block().encode_wire().unwrap()
     );
     assert_eq!(actual.checkpoint().unwrap(), expected.checkpoint().unwrap());
 }
@@ -47,7 +52,8 @@ fn prefix_import_preserves_native_tip_successor_and_member_witness_checks() {
         expected.push(chain.proof(height + 1)).unwrap();
         same_prefix(&actual, &expected);
         let epoch = actual
-            .verified
+            .selection
+            .verified()
             .commitment()
             .schedule
             .current
@@ -190,4 +196,45 @@ fn prefix_import_preserves_active_owner_work_and_allocation_refusal() {
     }
     same_prefix(&Prefix::new(&checkpoint).unwrap(), &expected);
     assert_eq!(checkpoint.encode_canonical().unwrap(), original_bytes);
+}
+
+#[test]
+fn cold_observation_import_is_scoped_to_its_own_checkpoint_and_decoder() {
+    let chain = Chain::constant(4, 3);
+    let checkpoint = chain.verifier_at(2).checkpoint().clone();
+    let import = |start: &mut ObservationStart| {
+        FinalityVerifier::from_checkpoint_with_validation(
+            checkpoint.clone(),
+            checkpoint.network_id(),
+            checkpoint.chain_id(),
+            None,
+            Some(start),
+        )
+        .unwrap()
+    };
+    let mut start = ObservationStart::default();
+    let selected = import(&mut start);
+    assert!(start.imported.is_some());
+    let mut actual = start.into_prefix(&selected).unwrap();
+    let mut expected = Prefix::new(&checkpoint).unwrap();
+    same_prefix(&actual, &expected);
+    actual.push(chain.proof(3)).unwrap();
+    expected.push(chain.proof(3)).unwrap();
+    same_prefix(&actual, &expected);
+
+    let mut start = ObservationStart::default();
+    let selected = import(&mut start);
+    let other = chain.verifier_at(1);
+    let fresh = start.into_prefix(&other).unwrap();
+    assert_eq!(fresh.height(), 1);
+    let mut start = ObservationStart::default();
+    let later = import(&mut start);
+    assert!(start.imported.is_some());
+    let denied = DecodeBudgetContext::new(limits(0));
+    assert!(denied.with(|| start.into_prefix(&later)).is_err());
+    assert_eq!(selected.checkpoint(), later.checkpoint());
+    let mut start = ObservationStart::default();
+    let finite = DecodeBudgetContext::new(limits(128 << 20));
+    finite.with(|| import(&mut start));
+    assert!(start.imported.is_none());
 }

@@ -123,6 +123,44 @@ fn intake_memory_bytes(relations: KagemushaWalletRuntimeCapacityV1) -> u64 {
     relations.memory_bytes.max(INTAKE_PEAK_MEMORY_BYTES)
 }
 
+pub(crate) fn blacklist_storage_required(relations: u64, original: usize) -> Result<u64, Error> {
+    let list = u64::try_from(original)
+        .ok()
+        .and_then(|n| n.checked_add(archive::METADATA_BOUND as u64))
+        .and_then(|n| n.checked_mul(2))
+        .ok_or(Error::Invalid("blacklist storage bound"))?;
+    relations
+        .checked_add(OPERATION_RESERVATION_BYTES)
+        .and_then(|n| n.checked_add(list))
+        .ok_or(Error::Invalid("blacklist storage bound"))
+}
+
+/// Preserve the monetary-operation budget while staging actual map objects, a
+/// frozen transfer input, and its bounded authenticated action-index publication.
+pub(crate) fn transfer_storage_required(payload: u64, object_count: u64) -> u64 {
+    let envelope = archive::METADATA_BOUND as u64;
+    let action_index = 2 * 258 * (index::INDEX_VALUE_LIMIT as u64 + 2 * envelope);
+    OPERATION_RESERVATION_BYTES
+        .saturating_add(
+            2u64.saturating_mul(
+                payload
+                    .saturating_add(object_count.saturating_mul(envelope))
+                    .saturating_add(action_index),
+            ),
+        )
+        .saturating_add(8 * 4096)
+}
+
+/// Space for three protected Request-plan publications, their bounded index paths, the
+/// signed original and one later monetary operation. Retrying a retained Request skips this.
+pub(crate) fn open_request_storage_required(plan_limit: u64, wire_limit: u64) -> u64 {
+    let envelope = archive::METADATA_BOUND as u64;
+    let index_path = 258 * (index::INDEX_VALUE_LIMIT as u64 + 2 * envelope);
+    OPERATION_RESERVATION_BYTES
+        + 2 * (3 * (plan_limit + index_path) + wire_limit + 64 + 5 * envelope)
+        + 3 * 8 * 4096
+}
+
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// Admit only a fresh deferred-receipt metadata publication. Exact retained reads,
     /// duplicate intake and already-completed reconciliation must not depend on this check.
@@ -165,17 +203,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// bound, so installing a list never makes the next payment fail for storage.
     pub(super) fn require_blacklist_capacity(&mut self, original: usize) -> Result<(), Error> {
         let relations = self.proofs.runtime_capacity()?;
-        let list = u64::try_from(original)
-            .ok()
-            .and_then(|bytes| bytes.checked_add(archive::METADATA_BOUND as u64))
-            .and_then(|bytes| bytes.checked_mul(2))
-            .ok_or(Error::Invalid("blacklist storage bound"))?;
         let required = KagemushaWalletRuntimeCapacityV1 {
-            storage_bytes: relations
-                .storage_bytes
-                .checked_add(OPERATION_RESERVATION_BYTES)
-                .and_then(|bytes| bytes.checked_add(list))
-                .ok_or(Error::Invalid("blacklist storage bound"))?,
+            storage_bytes: blacklist_storage_required(relations.storage_bytes, original)?,
             memory_bytes: 0,
         };
         self.check_capacity_observed(NativeAdmissionPhaseV1::Blacklist, required)

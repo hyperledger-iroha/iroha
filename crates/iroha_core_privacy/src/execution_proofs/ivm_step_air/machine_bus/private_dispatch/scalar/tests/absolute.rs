@@ -1,6 +1,7 @@
 //! Native ABS through the original private ports, including trap-sensitive input.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFixture) {
     let (program, fixture) = native(instruction, inputs);
@@ -114,13 +115,16 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
                 32,
             );
             if !funded {
-                assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+                assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
             } else if tag {
-                assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
+                assert!(matches!(
+                    outcome,
+                    Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
+                ));
             } else {
                 assert!(matches!(
                     outcome,
-                    Err(ivm::VMError::RegisterIntegerOverflow)
+                    Err(ivm::VMError::Trap(VmTrap::RegisterIntegerOverflow))
                 ));
             }
             let record = &recorder.records()[0];

@@ -1,5 +1,6 @@
 //! Ensure pre-decode cache statistics track successes and failures.
 use ivm::ivm_cache::{IvmCache, global_stats};
+use ivm_abi::error::VmTrap;
 #[test]
 fn predecode_stats_track_success_and_failure() {
     let _lease = crate::predecode_test_support::exclusive();
@@ -31,7 +32,8 @@ fn predecode_stats_track_success_and_failure() {
     assert!(
         matches!(
             err,
-            ivm::VMError::DecodeError | ivm::VMError::MemoryAccessViolation { .. }
+            ivm::VMError::Trap(VmTrap::DecodeError)
+                | ivm::VMError::Trap(VmTrap::MemoryAccessViolation { .. })
         ),
         "unexpected error variant: {err:?}"
     );

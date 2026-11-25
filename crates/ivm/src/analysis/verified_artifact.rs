@@ -36,6 +36,7 @@ pub fn analyze_verified_artifact_with_memory_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::{VMError, analysis::analyze_program_with_memory_budget};
 
     fn actual() -> (Vec<u8>, VerifiedContractArtifact) {
@@ -83,7 +84,10 @@ mod tests {
         let owner = AllocationBudget::new(0);
         let error =
             analyze_verified_artifact_with_memory_budget(&bytes, &verified, &owner).unwrap_err();
-        assert!(matches!(error.into_vm_error(), VMError::InvalidMetadata));
+        assert!(matches!(
+            error.into_vm_error(),
+            VMError::Trap(VmTrap::InvalidMetadata)
+        ));
         assert_eq!(owner.reserved_bytes(), 0);
     }
 
@@ -95,7 +99,7 @@ mod tests {
             analyze_verified_artifact_with_memory_budget(&bytes, &verified, &owner).unwrap_err();
         assert!(matches!(
             error.into_vm_error(),
-            VMError::AllocationDeferred(_)
+            VMError::Deferred(VmDeferral::AllocationDeferred(_))
         ));
         assert_eq!(owner.reserved_bytes(), 0);
         owner.set_limit_bytes(1024 * 1024);

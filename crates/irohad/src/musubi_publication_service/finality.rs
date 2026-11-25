@@ -427,12 +427,12 @@ fn validate_registration_transaction(
         }
         let Some((_, output)) = u32::try_from(input_index)
             .ok()
-            .and_then(|index| block.network_output_at(index))
+            .and_then(|index| block.network_execution_output_at(index))
         else {
             return false;
         };
         if found
-            || output.result.is_err()
+            || output.result().is_err()
             || transaction.verify_signature().is_err()
             || transaction.network_id() != Some(&query.network_id)
             || transaction.authority() != &query.registration.registered_by
@@ -1279,9 +1279,8 @@ pub mod tests {
     fn storage_preflight_never_dispatches_unfinalized_registration() {
         use super::super::storage_coordination::FinalizedRegistrationCheckedStorageBackendV1;
         use iroha_musubi_service::{
-            MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiPublicationServiceBackendErrorV1,
-            MusubiStorageCoordinationBackendV1, MusubiStorageCoordinationRequestV1,
-            MusubiStorageCoordinationResponseV1,
+            MusubiPublicationServiceBackendErrorV1, MusubiStorageCoordinationBackendV1,
+            MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
         };
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1307,30 +1306,6 @@ pub mod tests {
                 Err(MusubiPublicationServiceBackendErrorV1::Retryable)
             }
         }
-        fn request(fixture: &ReaderFixture) -> MusubiStorageCoordinationRequestV1 {
-            let query = &fixture.query;
-            let archive = &fixture.archive;
-            MusubiStorageCoordinationRequestV1 {
-                version: 1,
-                operation_id: [0x81; 32],
-                generation: 1,
-                prior_location_ids: Vec::new(),
-                network_id: query.network_id,
-                publisher: archive.registered_by.clone(),
-                commitment: archive.commitment.clone(),
-                verification_lock_digest: MusubiVerificationLockDigestV1::new([0x74; 32]),
-                staging_receipt: archive.staging_receipt.clone(),
-                expected_policy_revision: query.expected_policy_revision,
-                finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
-                    version: 1,
-                    network_id: query.network_id,
-                    transaction_hash: query.transaction_hash,
-                    snapshot: query.snapshot,
-                    registration: query.registration.clone(),
-                },
-            }
-        }
-
         let fixture = reader_fixture();
         let calls = Arc::new(AtomicUsize::new(0));
         let checked = FinalizedRegistrationCheckedStorageBackendV1::new(
@@ -1346,7 +1321,7 @@ pub mod tests {
                 request,
             )
         };
-        let exact = request(&fixture);
+        let exact = storage_authorization_tests::request(&fixture);
         exact.validate().expect("canonical coordination request");
         assert_eq!(checked.verify_current_registration(&exact), Ok(()));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1419,16 +1394,17 @@ pub mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let uncertified = reader_fixture_with_finality(false);
+        let uncertified_request = storage_authorization_tests::request(&uncertified);
         let checked_uncertified = FinalizedRegistrationCheckedStorageBackendV1::new(
             uncertified.reader.clone(),
             Box::new(MutationProbe(Arc::clone(&calls), true)),
         );
         assert_eq!(
-            checked_uncertified.verify_current_registration(&request(&uncertified)),
+            checked_uncertified.verify_current_registration(&uncertified_request),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         assert_eq!(
-            dispatch(&uncertified, &request(&uncertified)),
+            dispatch(&uncertified, &uncertified_request),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);

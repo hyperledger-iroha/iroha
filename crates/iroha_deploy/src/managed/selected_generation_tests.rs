@@ -44,20 +44,7 @@ fn runtime(root: &Path) -> InstalledRuntime {
 }
 
 fn prepare(store: &ManagedStore, request: &LocalnetRequest) -> PreparedLocalnet {
-    let directory = store.networks.ensure_child(&request.name).unwrap();
-    let _operation = acquire(&directory, "operation.lock", &request.name).unwrap();
-    let ports = LocalnetPorts::reserve().unwrap();
-    let (launcher, daemon) = request.admit_programs().unwrap().pins().unwrap();
-    generation::prepare(
-        &directory,
-        request,
-        RootKind::Global,
-        launcher,
-        daemon,
-        &ports,
-    )
-    .unwrap()
-    .prepared
+    store.prepare_stopped_fixture(request).unwrap()
 }
 
 fn require_no_startup(store: &ManagedStore, name: &str) {
@@ -107,6 +94,9 @@ fn selected_generation_replacement_is_refused_before_startup_or_selection() {
     let mut request = runtime.localnet_request("local", Duration::from_secs(30));
     request.service_profile = crate::localnet::LocalnetServiceProfile::Standard;
     let original = prepare(&store, &request);
+    assert!(store.prepare_stopped_fixture(&request).is_err());
+    assert_eq!(store.prepared("local").unwrap(), original);
+    require_no_startup(&store, "local");
     store.select("local").unwrap();
     let selection = store
         .root

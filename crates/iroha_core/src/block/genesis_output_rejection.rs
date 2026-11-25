@@ -1,8 +1,6 @@
 //! Typed first rejection retained after a failed genesis output owner is poisoned.
 
-use iroha_data_model::{
-    block::execution_output::ExecutionOutputV1, transaction::error::TransactionRejectionReason,
-};
+use iroha_data_model::block::execution_output::{ExecutionOutputV1, ProfiledTransactionRejection};
 
 /// The first rejected row in the complete canonical genesis execution-output order.
 ///
@@ -13,7 +11,7 @@ pub struct GenesisOutputRejection {
     /// Zero-based position in the ordered complete execution outputs.
     pub output_index: usize,
     /// Original typed rejection cause, retained independently of discarded output storage.
-    pub reason: Box<TransactionRejectionReason>,
+    pub reason: Box<ProfiledTransactionRejection>,
 }
 
 impl std::fmt::Display for GenesisOutputRejection {
@@ -24,7 +22,10 @@ impl std::fmt::Display for GenesisOutputRejection {
 
 impl std::error::Error for GenesisOutputRejection {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.reason.as_ref())
+        Some(match self.reason.as_ref() {
+            ProfiledTransactionRejection::Baseline(r) => r,
+            ProfiledTransactionRejection::C10(r) => r,
+        })
     }
 }
 
@@ -34,7 +35,7 @@ impl GenesisOutputRejection {
         outputs.iter().enumerate().find_map(|(output_index, row)| {
             row.result().as_ref().err().map(|reason| Self {
                 output_index,
-                reason: Box::new(reason.clone()),
+                reason: Box::new(reason.into_owned()),
             })
         })
     }

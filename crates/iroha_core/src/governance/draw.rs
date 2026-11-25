@@ -4,6 +4,9 @@ use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+mod checked;
+pub(crate) use checked::derive_bounded_body_plan_checked_v1;
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
 #[cfg(test)]
 const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
@@ -103,14 +106,10 @@ pub(crate) fn derive_attempt_body_plan_v1(
     .expect("a per-body invitation cap must admit every duplicate-free body plan")
 }
 
-/// Derive a body plan whose cross-body cap is at most `maximum_cap`, from an exact
-/// precommitted candidate snapshot, with the seat counts of `sizing`.
-///
-/// The cap is the smallest under which any allocation exists. At that cap the plan is the
-/// load-balanced selection of [`derive_attempt_body_plan_v1`] when it succeeds; otherwise
-/// every body's invitations are matched together by augmenting paths in rank order, and
-/// each body takes its best-ranked matched candidates as primaries. `None` when no cap up
-/// to `maximum_cap` admits an allocation.
+/// Test oracle for [`derive_bounded_body_plan_checked_v1`]: the same bounded plan, ranked
+/// with the infallible score. Node code derives bounded plans only through the checked
+/// entrypoint, which retains original account-encoding refusals.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn derive_bounded_body_plan_v1(
     sizing: &dyn ParliamentDrawSizingV1,
@@ -138,7 +137,15 @@ pub(crate) fn derive_bounded_body_plan_v1(
     )
 }
 
-/// The bounded plan of [`derive_bounded_body_plan_v1`] over precomputed `rankings`.
+/// Derive a body plan whose cross-body cap is at most `maximum_cap`, from an exact
+/// precommitted candidate snapshot ranked per body in `rankings`, with the seat counts of
+/// `sizing`.
+///
+/// The cap is the smallest under which any allocation exists. At that cap the plan is the
+/// load-balanced selection of [`derive_attempt_body_plan_v1`] when it succeeds; otherwise
+/// every body's invitations are matched together by augmenting paths in rank order, and
+/// each body takes its best-ranked matched candidates as primaries. `None` when no cap up
+/// to `maximum_cap` admits an allocation.
 fn bounded_plan_from_rankings(
     sizing: &dyn ParliamentDrawSizingV1,
     candidates: &[AccountId],

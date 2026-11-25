@@ -10,6 +10,7 @@ use ivm::{
     numeric::NumericFaultV1,
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use ivm_abi::state_value::StateValueKindV1;
 use kotodama_lang::compiler::Compiler;
 
@@ -86,9 +87,8 @@ fn run(program: &[u8], host: &mut dyn IVMHost) -> (IVM, Result<(), VMError>) {
     (vm, result)
 }
 fn fault(error: &VMError) -> Option<NumericFaultV1> {
-    match error {
-        VMError::NumericFault(fault) => Some(*fault),
-        VMError::Metered { source, .. } => fault(source),
+    match error.unmetered_trap() {
+        Some(VmTrap::NumericFault(fault)) => Some(*fault),
         _ => None,
     }
 }
@@ -221,7 +221,7 @@ fn borrowed_heap_state_payload_is_copied_and_invalid_envelopes_cannot_mutate_it(
     vm.set_register(11, value_ptr);
     let mut host = CoreHost::new();
     assert!(
-        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm)
+        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, vm.syscall_quote())
             .unwrap()
             > 0
     );
@@ -232,7 +232,7 @@ fn borrowed_heap_state_payload_is_copied_and_invalid_envelopes_cannot_mutate_it(
     vm.memory.store_bytes(value_ptr, &damaged).unwrap();
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(host.state_bytes("Counter"), Some(value.clone()));
     // A well-formed envelope for a different declared state schema is also invalid.
@@ -248,13 +248,13 @@ fn borrowed_heap_state_payload_is_copied_and_invalid_envelopes_cannot_mutate_it(
     vm.set_register(11, wrong_ptr);
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert_eq!(host.state_bytes("Counter"), Some(value.clone()));
     vm.set_register(10, Memory::STACK_START);
     assert!(matches!(
-        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm),
-        Err(VMError::NoritoInvalid)
+        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, vm.syscall_quote()),
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(host.state_bytes("Counter"), Some(value.clone()));
     drop(vm);

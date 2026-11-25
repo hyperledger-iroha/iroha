@@ -17,7 +17,17 @@
 //! `(k & 1, k >> 1)` and `P = sum_k eq((c0, c1), corner_k) P_k`. The fourth
 //! corner `(1, 1)` selects Load when four kinds are installed. The empty claim
 //! also sets `rho = 0`, making every kind's term zero for both the three-kind
-//! and four-kind profiles (`MatPoly::empty_claim`). Every proof
+//! and four-kind profiles (`MatPoly::empty_claim`).
+//!
+//! A five-kind profile (a later generation's ArchiveSent program) appends a
+//! third selector bit `c2` after `c1`. ArchiveSent sits at `(0, 0, 1)`; the
+//! corners `(1, 0, 1)`, `(0, 1, 1)` and `(1, 1, 1)` are reserved, so an
+//! any-kind slot forbids `c0 c2` and `c1 c2`. On the five installed corners
+//! the selectors are the indicators `(1 - c0)(1 - c1) - c2`, `c0 (1 - c1)`,
+//! `(1 - c0) c1`, `c0 c1` and `c2`: their total degree in the selector
+//! coordinates stays two, so `deg q` is the four-kind degree, and with
+//! `c2 = 0` the polynomial is exactly the four-kind one. The empty claim
+//! stays at `(1, 1, 0)` with rho zero. Every proof
 //! carries one accumulated claim on it; a native verifier checks that claim
 //! against every exact authenticated compiled program. Its cost depends on
 //! the complete selected program set; small component timings do not measure it.
@@ -29,8 +39,11 @@
 //! `t = 0..3`, and the new claim `(gamma(beta), q(beta))` at the second-phase
 //! challenge `beta` (the LogUp challenge). If an input claim is false, the
 //! committed `q` differs from `P(gamma(t))`, and `q(beta)` is false except
-//! with probability `deg q / |F|`, `deg q = 3 (b + X + Y) + 9` with `b`
-//! selector bits (plus the challenges' degrees for uniform kinds). The fresh
+//! with probability at most the degree times the full-width challenge's
+//! maximum atom (2/q on P, 1/p on S under the RP57 idealization).
+//! Here `deg q = 3 (b + X + Y) + 9` with `b` the
+//! selectors' total degree (one with two kinds, two otherwise) plus the
+//! challenges' degrees for uniform kinds. The fresh
 //! claims' points are fixed by the verified proof's transcript before the
 //! first phase; so is `r`, which ties the claim to the value the check uses.
 
@@ -57,9 +70,10 @@ pub struct Kind<F> {
     pub eval_many: Option<Box<dyn Fn(&[(&[F], &[F], &[F])]) -> Vec<(F, F, F)> + Send + Sync>>,
 }
 
-/// The combined matrix polynomial of two, three or four circuit kinds, over
+/// The combined matrix polynomial of two to five circuit kinds, over
 /// `(c0, rho, alpha, beta, x, y)`, with a second selector bit `c1` after `y`
-/// when there are three or four kinds.
+/// when there are three or more kinds and a third, `c2`, after `c1` when
+/// there are five.
 pub struct MatPoly<F> {
     pub kinds: Vec<Kind<F>>,
     pub x: usize,
@@ -71,6 +85,84 @@ pub struct MatPoly<F> {
 pub fn kind_bits(kind: usize) -> (u64, u64) {
     assert!(kind < 4, "four kinds at most");
     ((kind & 1) as u64, (kind >> 1) as u64)
+}
+
+/// The fifth kind's index, ArchiveSent. Only a five-kind polynomial has it.
+pub const ARCHIVE_SENT_KIND: usize = 4;
+/// The most kinds of one polynomial: four on `(c0, c1)`, ArchiveSent on `c2`.
+pub const MAX_KINDS: usize = 5;
+
+/// Why a kind or a triple of public selector words names no installed kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectorError {
+    /// An installed program count other than two to five.
+    Profile,
+    /// A kind index past every three-bit corner, or a non-Boolean word.
+    OutOfRange,
+    /// A Boolean corner where no installed kind sits: a reserved corner, or
+    /// ArchiveSent's corner under a generation without its program.
+    Uninstalled,
+}
+
+/// Kind `kind`'s selector corner `[c0, c1, c2]` among `installed` kinds:
+/// `kind_bits` with `c2 = 0` for the first four, `(0, 0, 1)` for ArchiveSent
+/// (installed only in a five-kind generation).
+pub fn kind_corner(installed: usize, kind: usize) -> Result<[u64; 3], SelectorError> {
+    if !(2..=MAX_KINDS).contains(&installed) {
+        return Err(SelectorError::Profile);
+    }
+    if kind >= 8 {
+        return Err(SelectorError::OutOfRange);
+    }
+    if kind >= installed {
+        return Err(SelectorError::Uninstalled);
+    }
+    if kind == ARCHIVE_SENT_KIND {
+        return Ok([0, 0, 1]);
+    }
+    let (b0, b1) = kind_bits(kind);
+    Ok([b0, b1, 0])
+}
+
+/// The installed kind that public selector words `[c0, c1, c2]` name (the
+/// native counterpart of an any-kind slot). A word of a coordinate the
+/// polynomial lacks must be zero, like an unused ordinary input.
+pub fn corner_kind<F: PrimeField>(installed: usize, words: [F; 3]) -> Result<usize, SelectorError> {
+    if !(2..=MAX_KINDS).contains(&installed) {
+        return Err(SelectorError::Profile);
+    }
+    let mut bits = [0u64; 3];
+    for (bit, word) in bits.iter_mut().zip(words) {
+        *bit = if word == F::ZERO {
+            0
+        } else if word == F::ONE {
+            1
+        } else {
+            return Err(SelectorError::OutOfRange);
+        };
+    }
+    (0..installed)
+        .find(|&kind| kind_corner(installed, kind) == Ok(bits))
+        .ok_or(SelectorError::Uninstalled)
+}
+
+/// Rows over an any-kind slot's public selector words (`c0`, `c1`, and `c2`
+/// with five kinds) that leave only installed corners, given Boolean words:
+/// fewer than four kinds forbid `c0 c1` (corner `(1, 1)` is the empty
+/// claim's), four forbid nothing, five forbid `c0 c2` and `c1 c2` (the
+/// reserved corners). Booleanity rows are the caller's.
+pub fn reserved_corner_rows<F: PrimeField>(installed: usize, words: &[Lin<F>]) -> Vec<[Lin<F>; 3]> {
+    match installed {
+        4 => Vec::new(),
+        MAX_KINDS => {
+            assert_eq!(words.len(), 3, "c0, c1 and c2");
+            vec![
+                [words[0].clone(), words[2].clone(), Vec::new()],
+                [words[1].clone(), words[2].clone(), Vec::new()],
+            ]
+        }
+        _ => vec![[words[0].clone(), words[1].clone(), Vec::new()]],
+    }
 }
 
 /// A claim `P(point) = value`.
@@ -91,30 +183,53 @@ impl<F: PrimeField> MatPoly<F> {
     }
 
     pub fn with_min_vec(kinds: Vec<Kind<F>>, x_min: usize, y_min: usize) -> Self {
-        assert!((2..=4).contains(&kinds.len()), "two to four kinds");
+        assert!((2..=MAX_KINDS).contains(&kinds.len()), "two to five kinds");
         let x = kinds.iter().map(|k| k.sx).max().unwrap().max(x_min);
         let y = kinds.iter().map(|k| k.sz).max().unwrap().max(y_min);
         MatPoly { kinds, x, y }
     }
-    /// The selector's bits: `c0`, and `c1` with three or four kinds.
+    /// The selector's bits: `c0`, `c1` with three or more kinds, `c2` with five.
     pub fn selector_bits(&self) -> usize {
+        match self.kinds.len() {
+            2 => 1,
+            3 | 4 => 2,
+            _ => 3,
+        }
+    }
+    /// The selectors' total degree in the selector coordinates: the
+    /// five-kind selectors keep the four-kind degree two (`c2` enters only
+    /// linearly, in ArchiveSent's and Receive's terms).
+    pub fn selector_degree(&self) -> usize {
         if self.kinds.len() > 2 { 2 } else { 1 }
     }
-    /// Variables: c0, rho, alpha, beta, then x and y, then c1 (three or four kinds).
+    /// Variables: c0, rho, alpha, beta, then x and y, then c1 (three or more
+    /// kinds) and c2 (five kinds).
     pub fn n(&self) -> usize {
         3 + self.selector_bits() + self.x + self.y
     }
-    /// The coordinate of the second selector bit `c1` (three or four kinds).
+    /// The coordinate of the second selector bit `c1` (three or more kinds).
     pub fn c1_at(&self) -> Option<usize> {
         (self.kinds.len() > 2).then_some(4 + self.x + self.y)
     }
-    /// The degree of `P` along a cubic curve: 3 per multilinear variable
-    /// (the selector's bits among them), 9 for rho (cubic), and 3 times the
+    /// The coordinate of the third selector bit `c2` (five kinds): last.
+    pub fn c2_at(&self) -> Option<usize> {
+        (self.kinds.len() == MAX_KINDS).then_some(5 + self.x + self.y)
+    }
+    /// The selector coordinates, c0 first: the ones an any-kind slot reads
+    /// from its verified proof's public kind words.
+    pub fn selector_coords(&self) -> Vec<usize> {
+        std::iter::once(0)
+            .chain(self.c1_at())
+            .chain(self.c2_at())
+            .collect()
+    }
+    /// The degree of `P` along a cubic curve: 3 per degree of the selectors
+    /// and per matrix variable, 9 for rho (cubic), and 3 times the
     /// challenges' degrees.
     pub fn degree(&self) -> usize {
         let da = self.kinds.iter().map(|k| k.deg.0).max().unwrap();
         let db = self.kinds.iter().map(|k| k.deg.1).max().unwrap();
-        3 * (self.selector_bits() + self.x + self.y) + 9 + 3 * da + 3 * db
+        3 * (self.selector_degree() + self.x + self.y) + 9 + 3 * da + 3 * db
     }
     /// The x and y coordinates of `point`.
     fn xy<'p>(&self, point: &'p [F]) -> (&'p [F], &'p [F]) {
@@ -133,30 +248,59 @@ impl<F: PrimeField> MatPoly<F> {
         )
     }
     /// Kind `k`'s selector at `point`: `eq((c0, c1), corner_k)`, with
-    /// `c1 = 0` when there are two kinds.
+    /// `c1 = 0` when there are two kinds. With five kinds, ArchiveSent's is
+    /// `c2` and Receive's is `eq((c0, c1), (0, 0)) - c2`: each is its corner's
+    /// indicator on the five installed corners (the reserved ones are
+    /// forbidden to fresh claims), at total degree two.
     fn selector(&self, k: usize, point: &[F]) -> F {
+        if let Some(j2) = self.c2_at() {
+            let c2 = point[j2];
+            if k == ARCHIVE_SENT_KIND {
+                return c2;
+            }
+            let (b0, b1) = kind_bits(k);
+            let c1 = point[4 + self.x + self.y];
+            let at = |c: F, b: u64| if b == 1 { c } else { F::ONE - c };
+            let s = at(point[0], b0) * at(c1, b1);
+            return if k == 0 { s - c2 } else { s };
+        }
         let (b0, b1) = kind_bits(k);
         let c1 = self.c1_at().map_or(F::ZERO, |j| point[j]);
         let at = |c: F, b: u64| if b == 1 { c } else { F::ONE - c };
         at(point[0], b0) * at(c1, b1)
     }
-    /// Kind `k`'s term at `point` from its matrices' values there:
-    /// `sel_k(c) pad_k (rho A + rho^2 B + rho^3 C)`.
-    fn kind_term(&self, k: usize, point: &[F], (a, b, cc): (F, F, F)) -> F {
+    /// Kind `k`'s selector times its padding at `point`, `sel_k(c) pad_k`.
+    /// Where it is zero the kind's term is zero, whatever its matrices are.
+    fn weight(&self, k: usize, point: &[F]) -> F {
         let kind = &self.kinds[k];
-        let rho = point[1];
         let (xs, ys) = self.xy(point);
-        let sel = self.selector(k, point);
         let pad = xs[kind.sx..]
             .iter()
             .chain(&ys[kind.sz..])
             .fold(F::ONE, |acc, v| acc * (F::ONE - v));
+        self.selector(k, point) * pad
+    }
+    /// Kind `k`'s term at `point` from its matrices' values there:
+    /// `sel_k(c) pad_k (rho A + rho^2 B + rho^3 C)`.
+    fn kind_term(&self, k: usize, point: &[F], (a, b, cc): (F, F, F)) -> F {
+        let rho = point[1];
         let rho2 = rho.square();
-        sel * pad * (rho * a + rho2 * b + rho2 * rho * cc)
+        self.weight(k, point) * (rho * a + rho2 * b + rho2 * rho * cc)
+    }
+    /// Whether kind `k`'s term is zero at every one of `points` for any
+    /// matrices: its matrices need no evaluation there. With five kinds a
+    /// history without ArchiveSent keeps `c2` zero in every claim, so
+    /// ArchiveSent's term vanishes along the whole fold curve; a fresh claim
+    /// at a kind's corner selects that kind alone. The points are public.
+    fn vanishes(&self, k: usize, points: &[impl AsRef<[F]>]) -> bool {
+        points
+            .iter()
+            .all(|p| self.weight(k, p.as_ref()).is_zero_vartime())
     }
     /// The empty claim: selector `(1, 1)` with rho zero. With three kinds
     /// the corner selects no kind; with four kinds rho zero still makes
-    /// every `rho A + rho^2 B + rho^3 C` exactly zero. A
+    /// every `rho A + rho^2 B + rho^3 C` exactly zero. With five kinds it is
+    /// the four-kind empty claim with `c2 = 0`. A
     /// Bootstrap proof's accumulator: a chain starts with nothing deferred.
     pub fn empty_claim(&self) -> Claim<F> {
         let c1 = self
@@ -170,12 +314,23 @@ impl<F: PrimeField> MatPoly<F> {
             value: F::ZERO,
         }
     }
+    /// The combined polynomial at `point`. Each kind's matrix tape is an
+    /// independent public evaluation, so the kinds run in parallel; the sum
+    /// is exact and independent of the order. A kind whose term vanishes at
+    /// `point` adds zero without evaluating its matrices.
     pub fn eval(&self, point: &[F]) -> F {
+        use rayon::prelude::*;
         (0..self.kinds.len())
+            .into_par_iter()
             .map(|k| {
                 let (ch, rx, ry) = self.kind_inputs(k, point);
+                if self.vanishes(k, &[point]) {
+                    return F::ZERO;
+                }
                 self.kind_term(k, point, (self.kinds[k].eval)(ch, rx, ry))
             })
+            .collect::<Vec<F>>()
+            .into_iter()
             .sum()
     }
     /// The degree of kind `k`'s matrices along a cubic curve: 3 per variable
@@ -205,6 +360,9 @@ impl<F: PrimeField> MatPoly<F> {
     pub fn eval_many(&self, points: &[Vec<F>]) -> Vec<F> {
         let mut total = vec![F::ZERO; points.len()];
         for k in 0..self.kinds.len() {
+            if self.vanishes(k, points) {
+                continue;
+            }
             for ((t, p), v) in total
                 .iter_mut()
                 .zip(points)
@@ -216,8 +374,8 @@ impl<F: PrimeField> MatPoly<F> {
         total
     }
     /// A verified proof's fresh point: the kind's selector bits (c0 first,
-    /// c1 last), r, its second-phase challenges (zeros for a proof without
-    /// any), its r_x and r_y padded with zeros.
+    /// then c1 and c2 last), r, its second-phase challenges (zeros for a
+    /// proof without any), its r_x and r_y padded with zeros.
     pub fn fresh_point(&self, kind: usize, r: F, ch: &[F], rx: &[F], ry: &[F]) -> Vec<F> {
         assert!(kind < self.kinds.len(), "a kind of the polynomial");
         assert_eq!(
@@ -225,7 +383,7 @@ impl<F: PrimeField> MatPoly<F> {
             (self.kinds[kind].sx, self.kinds[kind].sz),
             "the kind's variables"
         );
-        let (b0, b1) = kind_bits(kind);
+        let [b0, b1, b2] = kind_corner(self.kinds.len(), kind).expect("an installed kind");
         let mut p = vec![
             F::from(b0),
             r,
@@ -239,6 +397,9 @@ impl<F: PrimeField> MatPoly<F> {
         if self.c1_at().is_some() {
             p.push(F::from(b1));
         }
+        if self.c2_at().is_some() {
+            p.push(F::from(b2));
+        }
         assert_eq!(p.len(), self.n(), "a point of the combined space");
         p
     }
@@ -248,13 +409,15 @@ impl<F: PrimeField> MatPoly<F> {
     pub fn fixed_coords(&self, kind: usize) -> Vec<Option<F>> {
         let k = &self.kinds[kind];
         let no_ch = k.deg == (0, 0);
-        let (b0, b1) = kind_bits(kind);
+        let [b0, b1, b2] = kind_corner(self.kinds.len(), kind).expect("an installed kind");
         (0..self.n())
             .map(|j| {
                 if j == 0 {
                     Some(F::from(b0))
                 } else if Some(j) == self.c1_at() {
                     Some(F::from(b1))
+                } else if Some(j) == self.c2_at() {
+                    Some(F::from(b2))
                 } else if j == 1 {
                     None
                 } else if j < 4 {
@@ -384,7 +547,9 @@ fn extend<F: PrimeField>(vals: &[(F, F, F)], n: usize, inv: &[F]) -> Vec<(F, F, 
 /// The honest `q = P(gamma(t))` by its `deg q + 1` coefficients, from the
 /// curve's points at `t = 0..=deg q` evaluated together: each kind's
 /// matrices only at `kind_degree + 1` of them (their degree along the
-/// curve; no selector, `rho` or padding), extended to the rest.
+/// curve; no selector, `rho` or padding), extended to the rest. A kind
+/// whose term vanishes at every one of the `deg q + 1` points adds nothing
+/// to them and is not evaluated.
 pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec<F> {
     let d = poly.degree();
     let l = lagrange4::<F>();
@@ -394,6 +559,9 @@ pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec
     let inv = small_inverses::<F>(d + 1);
     let mut values = vec![F::ZERO; d + 1];
     for k in 0..poly.kinds.len() {
+        if poly.vanishes(k, &points) {
+            continue;
+        }
         let m = (poly.kind_degree(k) + 1).min(d + 1);
         let abc = extend(&poly.kind_values(k, &points[..m]), d + 1, &inv);
         for ((v, p), e) in values.iter_mut().zip(&points).zip(abc) {
@@ -538,7 +706,7 @@ pub fn fold_arrays<F: Scalar>(
                         array: qa,
                         cell: Q_C,
                     },
-                    coef: vec![-one],
+                    coef: vec![-one].into(),
                 }],
             ),
             1,
@@ -563,7 +731,7 @@ pub fn fold_arrays<F: Scalar>(
     let l = lagrange4::<F>();
     let term = |src: Src, c: F, len: usize| Term {
         src,
-        coef: vec![c; len],
+        coef: vec![c; len].into(),
     };
     let mut g_a: Vec<(Term<F>, Factor)> = Vec::new();
     for (i, li) in l.iter().enumerate() {
@@ -594,7 +762,7 @@ pub fn fold_arrays<F: Scalar>(
                         cell: Q_HT,
                         map: up,
                     },
-                    coef: vec![one; nq],
+                    coef: vec![one; nq].into(),
                 },
                 Factor::NegBeta(1),
             ),
@@ -657,11 +825,11 @@ pub fn fix_coords<F: Scalar>(
     let lin = plus(
         &vec![Term {
             src: Src::Own(C_P[node]),
-            coef: on,
+            coef: on.into(),
         }],
         &vec![Term {
             src: Src::One,
-            coef: val,
+            coef: val.into(),
         }],
     );
     w.arrays[fold.coords].rows.push(row_zero(lin, nc));
@@ -694,7 +862,7 @@ pub fn expose<F: Scalar>(w: &mut Wiring<F>, fam: usize, fold: &FoldArrays, offse
     let row = plus(
         &vec![Term {
             src: Src::Own(C_G),
-            coef: on,
+            coef: on.into(),
         }],
         &link(late, 0, to_late, -one),
     );
@@ -748,7 +916,7 @@ pub fn expose_constant<F: Scalar>(
         .collect();
     let own_on = vec![Term {
         src: Src::Own(0),
-        coef: on,
+        coef: on.into(),
     }];
     let pin = plus(&own_on, &constant(vals.iter().map(|v| -*v).collect()));
     let tie = plus(
@@ -804,6 +972,14 @@ pub fn read_output<F: Scalar>(
 #[cfg(test)]
 #[path = "deferral_decision_tests.rs"]
 mod decision_tests;
+
+#[cfg(test)]
+#[path = "deferral_selector_tests.rs"]
+mod selector_tests;
+
+#[cfg(test)]
+#[path = "deferral_vanishing_tests.rs"]
+mod vanishing_tests;
 
 #[cfg(test)]
 mod tests {

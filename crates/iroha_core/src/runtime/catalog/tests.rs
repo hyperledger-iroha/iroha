@@ -379,7 +379,7 @@ fn an_addition_adds_a_field_inside_a_nested_world_owner() {
     super::test_catalog::with_additions(&[NESTED], || {
         let catalog = release_catalog().expect("test catalog");
         let before = crate::runtime::uninstalled_world_members(&catalog.baseline).unwrap();
-        assert!(before.members.is_empty());
+        assert_eq!(before.members, ["runtime_generic_values"]);
         assert_eq!(before.nested, [("triggers", vec![NESTED_MEMBER])]);
         assert_eq!(before.nested_in("triggers"), [NESTED_MEMBER]);
         assert!(before.nested_in("accounts").is_empty());
@@ -400,12 +400,15 @@ fn an_addition_adds_a_field_inside_a_nested_world_owner() {
             .apply(&catalog.baseline, &catalog.definitions)
             .expect("the activation applies")
             .selection;
+        let uninstalled = crate::runtime::uninstalled_world_members(&after).unwrap();
         assert!(
-            crate::runtime::uninstalled_world_members(&after)
-                .unwrap()
-                .is_empty(),
-            "installing the nested field brings it back into snapshots"
+            uninstalled.nested.is_empty(),
+            "the nested field returns to snapshots"
         );
+        assert_eq!(uninstalled.members, ["runtime_generic_values"]);
+        let backing = catalog.generic_carriers.unwrap().backing;
+        assert!(!after.installed_storage.contains(&backing));
+        assert!(!catalog.executes_definition(&backing));
     });
 }
 
@@ -438,7 +441,19 @@ fn every_canonical_world_field_is_founded_or_added_storage() {
         .iter()
         .flat_map(|addition| addition.storage.values())
         .collect();
+    let carrier_backing = catalog.generic_carriers.unwrap().backing;
     for (field, storage) in &catalog.world_storage {
+        if *field == super::generic_carriers::STORAGE_OWNER {
+            assert_eq!(*storage, carrier_backing);
+            assert!(!installed.contains(storage));
+            assert!(!added.contains(storage));
+            assert!(!catalog.executes_definition(storage));
+            assert_eq!(
+                catalog.definitions[storage],
+                iroha_data_model::runtime::carrier::keyed::backing_descriptor()
+            );
+            continue;
+        }
         if added.contains(storage) {
             assert!(
                 !installed.contains(storage),
@@ -575,15 +590,21 @@ mod addition_tests {
                 expected.extend(prerequisite.definitions());
             }
         }
-        for composition in catalog.retirement_compositions.values() {
-            expected.insert(composition.services);
-            expected.extend(composition.replacements.values().copied());
-            expected.extend(composition.addition.definitions());
+        for composition in catalog
+            .retirement_compositions
+            .values()
+            .chain(catalog.c10_compositions.values())
+            .chain(catalog.child_admin_compositions.values())
+        {
+            expected.extend(composition.definitions());
         }
         for composition in catalog.contract_lifecycle_compositions.values() {
             expected.extend([composition.host, composition.registry]);
             expected.extend(composition.addition.definitions());
         }
+        // Spartan publishes a distinct native ledger implementation for each supported
+        // predecessor owner, retaining that owner's services and storage dependencies.
+        expected.extend(catalog.spartan_predecessors.values().copied());
         // The typed committed parameters are published, never part of a founded selection.
         expected.extend(catalog.parameter_definitions());
         // The keyed State profile publishes storage for the State-level owners it adopts, its
@@ -604,6 +625,25 @@ mod addition_tests {
                 .id()
                 .expect("content-publishing permission identity"),
         );
+        // The dormant carrier profile owns exactly these four definitions independently
+        // of native additions. Catalog presence cannot select or advertise any of them.
+        let carrier = catalog.generic_carriers.unwrap();
+        for id in [
+            carrier.kernel,
+            carrier.host,
+            carrier.backing,
+            carrier.commitment,
+        ] {
+            assert!(!catalog.baseline_definitions.contains(&id));
+            assert!(!catalog.executes_definition(&id));
+            assert!(
+                expected.insert(id),
+                "the carrier profile is the sole definition owner"
+            );
+        }
+        assert!(
+            !crate::runtime::attestation::release_host_profiles(catalog).contains(&carrier.host)
+        );
         // The authority service adds only its exact compiled profile and native owners
         // composed with that profile; its declared interfaces/storage are counted above.
         for (id, descriptor) in &catalog.definitions {
@@ -623,10 +663,23 @@ mod addition_tests {
                 expected.insert(*id);
             }
         }
-        assert_eq!(
-            catalog.definitions.keys().copied().collect::<BTreeSet<_>>(),
-            expected,
-            "every definition belongs to the baseline or an explicitly compiled addition"
+        let actual = catalog.definitions.keys().copied().collect::<BTreeSet<_>>();
+        assert!(
+            actual == expected,
+            "every definition belongs to the baseline or an explicitly compiled addition; \
+             {} unowned and {} missing definitions (first eight each): {:?}; {:?}",
+            actual.difference(&expected).count(),
+            expected.difference(&actual).count(),
+            actual
+                .difference(&expected)
+                .take(8)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            expected
+                .difference(&actual)
+                .take(8)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
         );
     }
 

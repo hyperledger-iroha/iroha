@@ -261,7 +261,18 @@ activation or payout, and rejection applies only to that signed envelope. The
 confirmed identity is the native consensus commit hash. There is no manual
 block-walking confirmation API.
 
-The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
+For DA writes, configure the client's local signing context for the target
+network and its canonical request credentials for the producer. `submitDaBlob`
+uses resumable 1 MiB parts for large payloads. On `pending_pin_authorization`,
+review the effective retention in the receipt. With `artifactDirectory` set,
+pass the saved `da_request.json` and `da_response.json` to
+`iroha app da authorize-pin --request da_request.json --response da_response.json --operator-public-key KEY`
+using the producer's CLI configuration and the trusted Torii receipt verification
+key. Set `submission.pinScopeSignature` to the resulting signature bytes and
+resubmit the same request. The final `accepted` status acknowledges local
+admission. Native publication supplies the independent provider evidence.
+
+Configure the client with its local network signing context and canonical account credentials for prove and verify calls. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
 `listDaPinIntents`, `proveDaPinIntent`, and `verifyDaPinIntent`. Manifest and
 storage-ticket query conveniences accept 32-byte hex, but encode the canonical
@@ -453,6 +464,42 @@ must retain and check the exact Request/admission/acknowledgement results before
 rearming. The SDK does not automatically restart a card session. Apple enforces a
 cooldown after expiry; a replacement can return `cardSessionSystemUnavailable`,
 so applications must bound any automatic retry and honor explicit user stops.
+
+The schema-3 Spartan profile (`kagemushaSpartanPaymentV3`) uses the same commands,
+chunk framing, checkpoints and resume. Its originals are bound only by the installed
+wallet. `IrohaPeerNfcProfilePolicyV1(profile: .kagemushaSpartanPaymentV3)` alone can
+read a hosted Request (tap 1), but every Payment, checkpoint, card session and
+delivery fails closed. Use the `profilePolicy` of a `KagemushaSpartanPeerNfcBindingV1`
+for the whole exchange:
+
+- **Payer.** Call `payer(wallet:sendOperationId:request:)` after the protected Send
+  of exactly that Request.
+  - The only Payment it accepts is Native's retained output of that operation, at
+    most `IrohaPeerNfcV1.maximumPaymentMessageBytes`.
+  - Native binds the Payment to the Request's signed terms. The completed Request's
+    payer wallet must be this wallet, under the snapshot's signed asset.
+  - `senderCheckpoint(sessionID:acknowledgement:)` is the durable checkpoint for
+    `run(restoredCheckpoint:)`.
+  - A CreditStatus counts only after `verifyCreditStatus(sendOperationId:request:status:)`
+    checks it against that retained Payment. This happens before the reader persists
+    or confirms it. The folded status has no readable scheme; that Native check
+    enforces it.
+- **Receiver.** Call `receiver(wallet:requestId:request:)`.
+  - It hosts only Native's own issued Request for that identity. Native's
+    issue-or-retrieve returns the exact original, even after a later head.
+  - A Payment counts at COMMIT only after `verifyPayment(_:matching:)`.
+  - The COMMIT handler's acknowledgement must come from
+    `acknowledgement(receiveOperationId:payment:)`. That is Native's
+    Payment-matched `receivedCreditStatus(requestId:receiveOperationId:payment:)`, which
+    answers only when the released Receive took exactly the delivered complete Payment
+    (at most `IrohaPeerNfcV1.maximumPaymentMessageBytes`). The request-only
+    `receivedCreditStatus(requestId:receiveOperationId:)` reads a selected operation's
+    archived status for display.
+  - A restarted card passes `durableAcknowledgement(sessionID:payment:acknowledgement:)`
+    as `restoredDurableAcknowledgement`.
+
+Wallet V1 binding is unchanged. Values validated under one binding are never accepted
+under another.
 
 Reader builds also need the Near Field Communication Tag Reading capability,
 which produces this entitlement:
@@ -2432,11 +2479,15 @@ The layout is chosen explicitly and never guessed from payload bytes:
   Each typed decoder reads a payload only in the layout it is given, and a
   signature covers the payload bytes of one layout.
 
-Instruction bodies are opaque to the Swift codec in every layout: the native
-bridge encodes and decodes them and emits current-layout frames only. A dense
-transaction therefore decodes, verifies and re-encodes in Swift down to each
-instruction's wire ID and bare payload bytes, while building a dense instruction
-from typed inputs waits for dense support in the bridge.
+Instruction bodies keep one typed form, their current-layout Norito frame, in
+every layout. A dense transaction carries each instruction's bare dense payload,
+which the native bridge (`connect_norito_transcode_instruction_v1`) decodes into
+the frame of exactly the instruction its wire ID registers and transcodes back
+when a dense payload is written. A dense transaction therefore decodes,
+verifies and re-encodes down to typed instruction frames, and a dense payload
+builds from the same frames as the current layout. Only a wire ID the bridge
+does not register stays an opaque bare payload, which encodes only in the dense
+layout it was decoded from.
 
 `NoritoDenseLayoutTests` pins every rule to the shared vectors in
 `fixtures/norito_dense/vectors.json`, and `NoritoRpcDenseFixtureTests` decodes,

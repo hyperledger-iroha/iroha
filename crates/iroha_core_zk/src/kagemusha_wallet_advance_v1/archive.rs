@@ -232,6 +232,18 @@ pub fn kagemusha_wallet_archive_object_digest_v1(bytes: &[u8]) -> [u8; 32] {
     kagemusha_wallet_provider_digest_v1("archive-object", bytes)
 }
 
+/// Largest complete E6 issuer result retained as the durable winner of one enrollment,
+/// independent of the 10,034-byte Payment envelope limit.
+pub const KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1: usize = 262_144;
+
+/// Archive key of the durable E6 winner of the enrollment whose exact retained
+/// account-authorized E5 original is `request`. The enrollment owner publishes its winner at
+/// this key and account admission reads the same key back; no other key names an E6.
+#[must_use]
+pub fn kagemusha_wallet_enrollment_result_key_v1(request: &[u8]) -> [u8; 32] {
+    kagemusha_wallet_provider_digest_v1("enrollment-issuer-result", request)
+}
+
 /// A scoped archive capability: only the provider creates it, while holding the custody lock
 /// and inside protected-storage availability brackets. It cannot reach markers or signers.
 pub struct KagemushaWalletArchiveAccessV1<'a, F: KagemushaWalletFsV1> {
@@ -460,6 +472,92 @@ where
         let result = access.retirement_failure.get().map_or(result, Err);
         let result = self.require_storage().and(result);
         self.guard_archive(slot, result)
+    }
+
+    /// Read the durable E6 winner of `slot`'s enrollment under the marker `record` that
+    /// `output_source` returned. This is the one archive answer account admission needs, and
+    /// nothing more general:
+    ///
+    /// - `request` must be the slot's exact retained account-authorized E5 original, and it
+    ///   alone derives the record key ([`kagemusha_wallet_enrollment_result_key_v1`]). No
+    ///   caller supplies a key or a bound.
+    /// - `record` must be the current durable marker before and after the read, so an answer
+    ///   never spans a changed source.
+    /// - Only the two durable copies are read. A record staged by an open call is not durable
+    ///   and is not consulted.
+    /// - Nothing is reconciled, drained, adopted, written, retired or signed. A selected
+    ///   (`Pending`) head and a Released head whose completion is lost stay exactly as they
+    ///   are, which is what lets a retained-output-only source be answered at all.
+    ///
+    /// `Ok(None)` means both copies were absent while protected storage stayed available.
+    ///
+    /// # Errors
+    /// `Unavailable` when protected storage is locked before or after, or the marker, the
+    /// retained request or a copy cannot be read; `UnavailableCustodyData` for a missing
+    /// marker or retained request, a corrupt copy or two differing valid copies; a refused
+    /// private copy unchanged; `Invalid` when `request` is not the retained E5 or `record` is
+    /// not the current marker. None of these is ever reported as absence.
+    pub(crate) fn enrollment_result_at_output_marker(
+        &self,
+        slot: &Slot,
+        record: &KagemushaWalletMarkerRecordV1,
+        request: &[u8],
+    ) -> Result<Option<PrivateArchiveBytes>, Error> {
+        self.require_storage()?;
+        let answer = (|| {
+            self.require_output_marker(slot, record)?;
+            let retained = self
+                .enrollment_record(slot)?
+                .ok_or(Error::UnavailableCustodyData {
+                    object: "enrollment request",
+                })?;
+            if retained.request.as_slice() != request {
+                return Err(Error::Invalid {
+                    field: "enrollment result request",
+                });
+            }
+            // A storage-only view of the two immutable copies: no batch, phase or probe
+            // callback, so this access can stage, publish or retire nothing.
+            let access = KagemushaWalletArchiveAccessV1 {
+                store: &self.store,
+                slot,
+                writes: &self.archive_writes,
+                batch: None,
+                probe: None,
+                observed: Cell::new(false),
+                retirement_failure: Cell::new(None),
+            };
+            let winner = access.read_record(
+                &kagemusha_wallet_enrollment_result_key_v1(request),
+                KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1,
+            )?;
+            self.require_output_marker(slot, record)?;
+            Ok(winner)
+        })();
+        self.require_storage().and(answer)
+    }
+
+    // The current durable marker of `slot` is exactly `record`. A pure read of the highest
+    // marker generation; it adopts, publishes and retires nothing.
+    fn require_output_marker(
+        &self,
+        slot: &Slot,
+        record: &KagemushaWalletMarkerRecordV1,
+    ) -> Result<(), Error> {
+        let current = super::marker::kagemusha_wallet_load_current_marker_v1(
+            &self.store,
+            slot,
+            &self.scheme_id,
+        )?
+        .ok_or(Error::UnavailableCustodyData {
+            object: "enrollment result marker",
+        })?;
+        if current.record().marker_file_digest() != record.marker_file_digest() {
+            return Err(Error::Invalid {
+                field: "enrollment result marker",
+            });
+        }
+        Ok(())
     }
 
     /// Run one state-owner archive access inside the current archive phase of `slot`.
@@ -1377,6 +1475,63 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletArchiveAccessV1<'_, F> {
         Ok(())
     }
 
+    /// Restore both copies from an independently authenticated complete content-addressed
+    /// original. Always inspect the actual copies even for a remembered successful write.
+    pub(crate) fn restore_content_record(
+        &self,
+        key: &[u8; 32],
+        bytes: &[u8],
+        maximum: usize,
+    ) -> Result<(), Error> {
+        if bytes.is_empty()
+            || bytes.len() > maximum
+            || *key != kagemusha_wallet_archive_object_digest_v1(bytes)
+        {
+            return Err(Error::Invalid {
+                field: "archive content repair binding",
+            });
+        }
+        self.settle_failed_retirement()?;
+        if self.batch.is_some_and(|batch| !batch.is_empty()) {
+            return Err(Error::Invalid {
+                field: "archive.pending_records",
+            });
+        }
+        self.writes.borrow_mut().forget(self.slot, key);
+        let mut frame = Zeroizing::new(Vec::new());
+        frame
+            .try_reserve_exact(record_limit(bytes.len())?)
+            .map_err(|_| Error::NoMemory)?;
+        frame.extend_from_slice(key);
+        frame.extend_from_slice(bytes);
+        let directory = kagemusha_wallet_archive_dir_v1(self.slot);
+        let bound = record_limit(maximum)?;
+        let mut probed = false;
+        for name in record_names(key) {
+            let outcome = match self.store().read(&directory, &name, bound) {
+                KagemushaWalletReadV1::Absent => {
+                    self.probe_before_create(&mut probed)?;
+                    self.store().write_new(&directory, &name, &frame)
+                }
+                KagemushaWalletReadV1::Present(old) => {
+                    self.store()
+                        .replace_exact(&directory, &name, &Zeroizing::new(old), &frame)
+                }
+                KagemushaWalletReadV1::Unavailable(reason) => {
+                    return Err(Error::Unavailable(reason));
+                }
+                KagemushaWalletReadV1::Oversized => {
+                    return Err(Error::UnavailableCustodyData {
+                        object: "oversized archive repair copy",
+                    });
+                }
+            };
+            kagemusha_wallet_require_published_v1(outcome)?;
+        }
+        self.writes.borrow_mut().insert(self.slot, key, *key);
+        Ok(())
+    }
+
     // Inside an archive phase, a create-new choice rests on an absent read only while protected
     // storage is available after it; one probe covers both copies of a put.
     fn probe_before_create(&self, probed: &mut bool) -> Result<(), Error> {
@@ -1638,3 +1793,7 @@ mod batch_tests;
 #[cfg(test)]
 #[path = "archive_batch_crash_tests.rs"]
 mod batch_crash_tests;
+
+#[cfg(test)]
+#[path = "archive_sent_delivery_tests.rs"]
+mod sent_delivery_tests;

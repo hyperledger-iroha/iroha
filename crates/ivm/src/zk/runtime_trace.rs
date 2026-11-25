@@ -9,6 +9,7 @@ use super::{
     delta_rows::{DeltaEntry, DeltaTraceLog, Row},
     trace_storage::{PcTraceLog, TraceRows, check_scope, overflow},
 };
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::MemoryReservation,
@@ -86,14 +87,16 @@ impl Geometry {
     fn plan(self) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::default();
         plan.include(Owner::layout())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         for child in [
             ExecutionMemoryPlan::array::<u64>(self.pcs),
             ExecutionMemoryPlan::array::<Row>(self.rows),
             ExecutionMemoryPlan::array::<Change>(self.changes),
         ] {
-            plan.include_child(child.map_err(VMError::AllocationDeferred)?)
-                .map_err(VMError::AllocationDeferred)?;
+            plan.include_child(
+                child.map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
+            )
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         Ok(plan)
     }
@@ -171,7 +174,7 @@ impl RuntimeTraceCapture {
             Some(original) => original.with_deferred_refund_notifications(|scope| {
                 check_scope(first.original, Some(scope))?;
                 let lease = ExecutionMemoryLease::reserve(original, plan)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 Self::copy_admitted(first, following, geometry, Some(lease))
             }),
             None => Self::copy_admitted(first, following, geometry, None),
@@ -284,11 +287,15 @@ fn same_original(left: Option<&AllocationBudget>, right: Option<&AllocationBudge
 }
 
 fn owner_unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::TraceOwnerUnavailable,
+    ))
 }
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 
 #[cfg(test)]

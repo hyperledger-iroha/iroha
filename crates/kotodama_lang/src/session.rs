@@ -448,7 +448,8 @@ impl CompilerSession {
         ]);
         let policy = match self.options.host_policy {
             crate::SyscallPolicy::AbiV1 => baseline,
-            crate::SyscallPolicy::AbiV1RuntimeLifecycle => iroha_crypto::Hash::new_from_chunks(&[
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle
+            | crate::SyscallPolicy::AbiV1GenericCarrier => iroha_crypto::Hash::new_from_chunks(&[
                 b"kotodama-compiler-named-host-policy-v1\0",
                 baseline.as_ref(),
                 &crate::syscalls::compute_abi_hash(self.options.host_policy),
@@ -1019,7 +1020,7 @@ impl CompilerSession {
         }
         crate::semantic::validate_linked_program(&suite_typed, self.options.force_zk)
             .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
-        let suite = self.build_typed_program(suite_typed, Some(&target.source_name))?;
+        let suite = self.build_test_harness(suite_typed, &target.source_name)?;
         let has_runtime_entrypoint = runtime_typed.items.iter().any(|item| {
             let crate::semantic::TypedItem::Function(function) = item;
             function.modifiers.kind != FunctionKind::Private
@@ -1036,6 +1037,22 @@ impl CompilerSession {
         };
         Ok(TestCompileOutput { suite, runtime })
     }
+    /// Compile the generic local harness for the selected deployment profile.
+    /// Both test drivers call this from their chain-scoped compiler worker.
+    pub(crate) fn build_test_harness(
+        &self,
+        program: TypedProgram,
+        source_name: &str,
+    ) -> Result<CompileOutput, DiagnosticBundle> {
+        if self.options.target_profile() == Ok(crate::IvmProfileId::C10_RUNTIME_LIFECYCLE) {
+            let mut options = self.options.clone();
+            options.host_policy = crate::SyscallPolicy::AbiV1;
+            return Compiler::new_with_options(options)
+                .compile_lifecycle_test_harness(program, source_name);
+        }
+        self.build_typed_program(program, Some(source_name))
+    }
+
     /// Compile a fully resolved and linked typed-HIR program inside the trusted driver.
     ///
     /// This is the only post-link code-generation entry point. It deliberately accepts no AST, so

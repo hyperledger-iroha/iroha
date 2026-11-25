@@ -495,16 +495,8 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and thirty-four additions: thirteen game
-        // partition, three Ironwood, the endorsed runtime-upgrade proposal, account
-        // signing keys, the Taira repair and activation, two SoraFS authority
-        // instructions, the five of the kernel's lifecycle State (the registration of a
-        // contract's or another obligation, its completion, the ratification of the
-        // adoption anchor and the raising of the startup floor), the two current-binding
-        // consents, the retirement of a runtime definition, the anonymous Parliament
-        // family's three interfaces and the Taira scoped-read schedule.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 444;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 444;
+        // 410 frozen assignments and 43 additions with tolerant decoding.
+        const EXPECTED_TYPED_CODEC_REGISTRARS: usize = 453;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -519,16 +511,16 @@ mod tests {
             .expect("single inventory boundary");
         assert_eq!(
             inventory.matches("_wire_id!(").count(),
-            EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             "typed codec registrations changed; update the canonical inventory and this bound together"
         );
         assert_eq!(
-            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             wire_ids::ALL.len(),
             "typed codec and wire-ID inventories must remain one-to-one"
         );
         assert_eq!(
-            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            EXPECTED_TYPED_CODEC_REGISTRARS,
             inventory.matches("built_in_wire_id!(").count()
                 + inventory.matches("governance_wire_id!(").count(),
             "source inventory and complete compiled inventory length diverged"
@@ -656,25 +648,34 @@ mod tests {
                 "iroha.game_partition.reserve_import.v1",
                 "iroha.game_partition.seed.v1",
                 crate::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1::WIRE_ID,
+                crate::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1::WIRE_ID,
                 crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1::WIRE_ID,
                 crate::governance::anonymous_ballot::RegisterParliamentCredentialV1::WIRE_ID,
                 "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
+                crate::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1::WIRE_ID,
+                crate::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1::WIRE_ID,
+                crate::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1::WIRE_ID,
                 privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
                 privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,
                 privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
                 crate::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1::WIRE_ID,
                 crate::isi::runtime_boundary::RaiseRuntimeStartupFloorV1::WIRE_ID,
+                "iroha.runtime.child_admin.attest.v1",
+                "iroha.runtime.child_admin.authorize.v1",
                 crate::isi::runtime_deferred::ProposeCurrentBindingMultisigV1::WIRE_ID,
                 crate::isi::runtime_deferred::RegisterCurrentBindingTriggerV1::WIRE_ID,
+                "iroha.runtime.generic_carrier.stage_artifact.v1",
                 crate::isi::runtime_obligation::CompleteRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_obligation::RegisterContractRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_obligation::RegisterRuntimeObligationV1::WIRE_ID,
                 crate::isi::runtime_retirement::RetireRuntimeDefinitionV1::WIRE_ID,
                 "iroha.runtime.taira_read_scope.schedule.v1",
                 "iroha.runtime.taira_time_ironwood.schedule.v1",
+                crate::ivm_c10::RegisterSmartContractCodeC10V1::WIRE_ID,
                 "iroha.sorafs.authority.attempt.create.v1",
                 "iroha.sorafs.authority.propose.v1",
                 "iroha.sorafs.bootstrap.repair.apply.v1",
+                crate::ivm_c10::RegisterTriggerC10V1::WIRE_ID,
             ],
             "instructions added after the frozen baseline changed"
         );

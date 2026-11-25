@@ -208,13 +208,13 @@ fn previous_two_build_reference(
     let minimum = parent_time.checked_add(assembly.cadence).unwrap();
     // Match the standalone assembler, which acquires and authenticates its native
     // parent service internally; the retained worker preparation is absent here.
-    let first = build_at(state, assembly, transactions, merges, minimum, None).unwrap();
+    let first = build_at(state, assembly, transactions, merges, minimum, None, true).unwrap();
     let canonical =
         ValidBlock::sumeragi_block_time_floor(&first, parent_time, assembly.cadence).unwrap();
     if canonical == first.header().creation_time() {
         first
     } else {
-        build_at(state, assembly, transactions, merges, canonical, None).unwrap()
+        build_at(state, assembly, transactions, merges, canonical, None, true).unwrap()
     }
 }
 

@@ -2,6 +2,7 @@
 use crate::common;
 use iroha_crypto::Hash;
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
+use ivm_abi::error::VmTrap;
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -34,7 +35,7 @@ fn tlv_wrong_type_id_is_rejected() {
         .run()
         .expect_err("mismatched inner TLV type should fail pointer decoding");
     assert!(
-        matches!(err, ivm::VMError::NoritoInvalid),
+        matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)),
         "expected NoritoInvalid for mismatched TLV type, got {err:?}"
     );
 }
@@ -55,5 +56,8 @@ fn tlv_expected_type_rejects_high_register_bits_without_truncation() {
         .concat(),
     );
     vm.load_program(&prog).expect("load program");
-    assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }

@@ -105,7 +105,7 @@ struct Ledger {
 impl Ledger {
     fn new(prepared: &PreparedLocalnet) -> TestResult<Self> {
         let config = prepared.context.load_client_config()?;
-        let (anchor, _, peers) = original_parent(prepared)?;
+        let (anchor, _, peers) = original_parent(prepared, false)?;
         let scope = iroha_genesis::signed_genesis_consensus_metadata(&anchor.genesis)?
             .sumeragi_context
             .root_scope;

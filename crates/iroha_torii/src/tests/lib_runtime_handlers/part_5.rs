@@ -1,3 +1,5 @@
+use iroha_data_model::block::execution_output::ProfiledTransactionRejection;
+
 include!("part_5_pipeline_cache.rs");
 include!("part_5_committed_retry.rs");
 async fn pipeline_status_response(
@@ -2186,6 +2188,43 @@ fn trigger_completion_collection_is_served_only_to_readers_of_all_ledger_data() 
 
 #[cfg(feature = "app_api")]
 #[test]
+fn trigger_completion_collection_keeps_the_c10_network_entrypoint_index() {
+    use iroha_data_model::{
+        block::execution_output::{ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1},
+        ivm_c10::TransactionResultC10V1,
+    };
+    use routing::collection_sources::trigger_completions::visit_block_rows;
+
+    let mut sample = make_persisted_data_trigger_completion_block(1, None);
+    let [ExecutionOutputV1::Network(network)] = sample.block.execution_outputs() else {
+        panic!("expected a single network output")
+    };
+    let c10 = ExecutionOutputC10V1 {
+        source: ExecutionSourceC10V1::Network(network.input_index),
+        result: TransactionResultC10V1(
+            Ok(network.result.as_ref().expect("approved fixture").clone()),
+            Vec::new(),
+            None,
+            Default::default(),
+        ),
+        completions: network.completions.clone(),
+        trigger_lifecycle: None,
+    };
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut sample.block,
+        vec![ExecutionOutputV1::C10(c10)],
+    );
+    let mut rows = Vec::new();
+    visit_block_rows(&sample.block, 1, None, |_, row| {
+        rows.push(row["entrypoint_index"].as_u64());
+        std::ops::ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert_eq!(rows, [Some(0)]);
+}
+
+#[cfg(feature = "app_api")]
+#[test]
 fn trigger_completion_block_visit_stops_and_resumes_inside_one_output() {
     use iroha_data_model::block::execution_output::{ExecutionOutputV1, InvocationCompletionV1};
     use routing::collection_sources::trigger_completions::visit_block_rows;
@@ -2864,8 +2903,10 @@ async fn canonical_outcome_preserves_exact_committed_rejection() {
         .expect("indexed rejected transaction");
     assert!(matches!(
         outcome,
-        CanonicalTransactionOutcome::Rejected { height, reason: actual }
-            if height.get() == 2 && actual == reason
+        CanonicalTransactionOutcome::Rejected {
+            height,
+            reason: ProfiledTransactionRejection::Baseline(actual),
+        } if height.get() == 2 && actual == reason
     ));
 }
 #[tokio::test]
@@ -3509,7 +3550,10 @@ async fn transaction_details_http_preserves_original_receipt_after_cold_body_rea
             )
             .unwrap();
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
-        assert_eq!(details.transaction.result(), &original_result);
+        assert_eq!(
+            details.transaction.result().baseline(),
+            Some(&original_result)
+        );
         assert_eq!(details.transaction.result().is_ok(), applied);
 
         let missing = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -5371,7 +5415,7 @@ async fn pipeline_status_checkpoint_reader_preserves_exact_rejection_and_publica
                 },
                 Err(reason) => CanonicalTransactionOutcome::Rejected {
                     height: header.height(),
-                    reason: reason.clone(),
+                    reason: ProfiledTransactionRejection::Baseline(reason.clone()),
                 },
             }
         };

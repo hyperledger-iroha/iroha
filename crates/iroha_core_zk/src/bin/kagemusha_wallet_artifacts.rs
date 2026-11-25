@@ -42,6 +42,10 @@ use reuse::{Candidates, CarrierSource, CompilerSources};
 
 #[path = "kagemusha_wallet_artifacts/inspect.rs"]
 mod inspect;
+#[path = "kagemusha_wallet_artifacts/inspect_spartan_bundle.rs"]
+mod inspect_spartan_bundle;
+#[path = "kagemusha_wallet_artifacts/spartan_manifest.rs"]
+mod spartan_manifest;
 
 #[path = "kagemusha_wallet_artifacts/builtin.rs"]
 mod builtin;
@@ -610,6 +614,97 @@ fn run(path: &str, reuse_input: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
+fn verify_spartan_sources(
+    carrier: &str,
+    scheme: &str,
+    scheme_id: &str,
+    asset: &str,
+    manifest: &str,
+    compiled: Option<&str>,
+) -> io::Result<()> {
+    use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan;
+    let original = Original::open(scheme, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, None)?;
+    let scheme = KagemushaWalletSchemeV1::decode_canonical(&original.bytes, &digest(scheme_id)?)
+        .map_err(io::Error::other)?;
+    let root = PrivateDirectory::open_exact(carrier)?;
+    let asset = digest(asset)?;
+    let manifest = digest(manifest)?;
+    let pack = root.read("verifier-pack.norito", spartan::MAX_PACK_BYTES)?;
+    let (claims, selected) = spartan::authenticated_pack_selection_any(&pack, &scheme, asset)?;
+    if selected != manifest {
+        return Err(invalid("selected Spartan manifest differs"));
+    }
+    let compiler = claims
+        .built_in_producer()
+        .ok_or_else(|| invalid("native compiler registry unavailable"))?;
+    let Some(compiled) = compiled else {
+        let kinds = match (&claims, &compiler) {
+            (
+                spartan::AuthenticatedPackManifest::Four(header),
+                spartan::CompiledPrograms::Four(pins),
+            ) if header.primary == pins.primary && header.secondary == pins.secondary => 4,
+            (
+                spartan::AuthenticatedPackManifest::Five(header),
+                spartan::CompiledPrograms::Five(pins),
+            ) if &header.programs == pins => 5,
+            _ => {
+                return Err(invalid(
+                    "selected Spartan manifest differs from compiler registry",
+                ));
+            }
+        };
+        original.recheck()?;
+        println!("SPARTAN_SOURCE_COMPILER kinds={kinds}");
+        return Ok(());
+    };
+    let compiled = Original::open(compiled, zk_spartan::native::MAX_PROGRAM_BUNDLE_BYTES, None)?;
+    spartan::verify_compiled_bundle(&root, &scheme, asset, manifest, &compiler, &compiled.bytes)?;
+    compiled.recheck()?;
+    original.recheck()?;
+    println!("SPARTAN_PROFILE_COMPLETE mode=source_verification");
+    Ok(())
+}
+
+fn encode_spartan_carrier(world: &str, scheme: &str, destination: &str) -> io::Result<()> {
+    use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::spartan::{
+        self, CompiledPrograms,
+    };
+    use iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1 as Install;
+    let world = Original::open(world, Install::MAX_BYTES, None)?;
+    let row: Install =
+        norito::decode_canonical_with_layout(&world.bytes, norito::core::WireLayout::Fixed)
+            .map_err(io::Error::other)?;
+    let original = Original::open(scheme, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, None)?;
+    let scheme = KagemushaWalletSchemeV1::decode_canonical(&original.bytes, &row.scheme)
+        .map_err(io::Error::other)?;
+    let root = PrivateDirectory::open_exact(destination)?;
+    let profile = CompiledPrograms::for_manifest(&row.manifest)
+        .ok_or_else(|| invalid("native compiler registry unavailable"))?;
+    let pins = spartan::publish(&row, &scheme, &profile, &root)?;
+    let restored = spartan::read(
+        &root,
+        pins,
+        &scheme,
+        row.asset,
+        row.manifest_digest,
+        &profile,
+    )?;
+    if restored != row {
+        return Err(invalid(
+            "published Spartan installation differs from World original",
+        ));
+    }
+    world.recheck()?;
+    original.recheck()?;
+    println!(
+        "Spartan carrier verified at {destination}, manifest {}, scheme {}, asset {}",
+        hex::encode(row.manifest_digest),
+        hex::encode(row.scheme),
+        hex::encode(row.asset)
+    );
+    Ok(())
+}
+
 fn encode_carrier(path: &str, scheme: &str, manifest: &str, destination: &str) -> io::Result<()> {
     let root = PrivateDirectory::open_exact(path)?;
     let pack = Original::open(
@@ -710,6 +805,22 @@ fn main() {
     let result = match args.as_slice() {
         [help] if help == "--help" => {
             println!(
+                "--prepare-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_ARTIFACT_CERTIFICATE"
+            );
+            println!(
+                "--verify-spartan-v2-manifest ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON ABSOLUTE_SCOPE_JSON ABSOLUTE_MANIFEST ABSOLUTE_SIGNATURE MANIFEST_DIGEST_HEX"
+            );
+            println!("--inspect-spartan-v2-bundle ABSOLUTE_BUNDLE ABSOLUTE_PUBLIC_PROFILE_JSON");
+            println!(
+                "--encode-spartan-carrier ABSOLUTE_WORLD_INSTALL ABSOLUTE_SCHEME ABSOLUTE_PRIVATE_OUTPUT"
+            );
+            println!(
+                "--spartan-source-compiler ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST"
+            );
+            println!(
+                "--verify-spartan-sources ABSOLUTE_CARRIER ABSOLUTE_SCHEME SCHEME_ID ASSET_DIGEST MANIFEST_DIGEST ABSOLUTE_FRESH_PROGRAM_BUNDLE"
+            );
+            println!(
                 "Direct time response: --issue-time-anchor ABSOLUTE_IMMUTABLE_PRIVATE_JSON. Signs the selected live wallet nonce with the delegated TimeAnchor key and current issuer UTC; Native still enforces same-boot response age and the subsequent Refresh."
             );
             println!(
@@ -746,6 +857,44 @@ fn main() {
                 manifest,
                 inspect::Encoding::from_flag(flag).expect("matched inspection command"),
             )
+        }
+        [flag, bundle, profile, scope, certificate] if flag == "--prepare-spartan-v2-manifest" => {
+            spartan_manifest::manifest(
+                bundle,
+                profile,
+                scope,
+                spartan_manifest::ManifestAction::Prepare { certificate },
+            )
+        }
+        [flag, bundle, profile, scope, manifest, signature, digest]
+            if flag == "--verify-spartan-v2-manifest" =>
+        {
+            spartan_manifest::manifest(
+                bundle,
+                profile,
+                scope,
+                spartan_manifest::ManifestAction::Verify {
+                    manifest,
+                    signature,
+                    digest,
+                },
+            )
+        }
+        [flag, bundle, profile] if flag == "--inspect-spartan-v2-bundle" => {
+            inspect_spartan_bundle::run(bundle, profile)
+        }
+        [flag, carrier, scheme, scheme_id, asset, manifest]
+            if flag == "--spartan-source-compiler" =>
+        {
+            verify_spartan_sources(carrier, scheme, scheme_id, asset, manifest, None)
+        }
+        [flag, carrier, scheme, scheme_id, asset, manifest, compiled]
+            if flag == "--verify-spartan-sources" =>
+        {
+            verify_spartan_sources(carrier, scheme, scheme_id, asset, manifest, Some(compiled))
+        }
+        [flag, world, scheme, destination] if flag == "--encode-spartan-carrier" => {
+            encode_spartan_carrier(world, scheme, destination)
         }
         [flag, path, scheme, manifest, destination] if flag == "--encode-carrier" => {
             encode_carrier(path, scheme, manifest, destination)

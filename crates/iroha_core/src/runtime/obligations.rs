@@ -327,6 +327,12 @@ pub fn step(
     instruction: &InstructionBox,
     world: &crate::state::WorldTransaction<'_, '_>,
 ) -> Option<Step> {
+    if let Some(request) = instruction.as_any().downcast_ref::<
+        iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1,
+    >() {
+        return crate::kagemusha_wallet_v1::spartan::completes_reserve(world, request)
+            .then_some(Step::Complete);
+    }
     if let Some((escrow_id, step)) = escrow_step(instruction) {
         return world
             .asset_escrows
@@ -879,12 +885,51 @@ fn binding_gap(
 ///
 /// What the predecessor already leaves unbound or disabled is no part of a live obligation's
 /// executable closure, so leaving it so blocks no change set.
-fn closure_gap(
+pub(crate) fn closure_gap(
     predecessor: &RootSelectionV1,
     successor: &RootSelectionV1,
     published: &impl DefinitionLookup,
     completions: &[&str],
     host_profiles: bool,
+) -> Option<String> {
+    check_closure(
+        predecessor,
+        successor,
+        published,
+        completions,
+        host_profiles,
+        |id| executes(predecessor, id) && !executes(successor, id),
+    )
+}
+
+/// A new liability needs every definition in its selected completion closure.
+/// A pre-existing disable cannot be grandfathered at the instant of issuance.
+pub(crate) fn can_admit_with_completion(
+    selection: &RootSelectionV1,
+    published: &impl DefinitionLookup,
+    wire: &str,
+) -> bool {
+    if !executable(selection, wire) {
+        return false;
+    }
+    let has_disable = selection
+        .restrictions
+        .iter()
+        .any(|entry| matches!(entry.restriction, RestrictionV1::Disabled(_)));
+    !has_disable
+        || check_closure(selection, selection, published, &[wire], false, |id| {
+            !executes(selection, id)
+        })
+        .is_none()
+}
+
+fn check_closure(
+    predecessor: &RootSelectionV1,
+    successor: &RootSelectionV1,
+    published: &impl DefinitionLookup,
+    completions: &[&str],
+    host_profiles: bool,
+    unavailable: impl Fn(DefinitionId) -> bool,
 ) -> Option<String> {
     let mut pending = BTreeSet::from([
         predecessor.kernel,
@@ -912,7 +957,7 @@ fn closure_gap(
         if !visited.insert(definition) {
             continue;
         }
-        if executes(predecessor, definition) && !executes(successor, definition) {
+        if unavailable(definition) {
             return Some(format!("needs {definition}, which is inactive or disabled"));
         }
         let Some(descriptor) = published.definition(&definition) else {

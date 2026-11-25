@@ -97,9 +97,16 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   addition and no new table. The threshold-key lifecycle retains its original three actions and frozen layout.
   The owner-authorized Taira SoraFS repair is a separate instruction and kernel
   (`sorafs/taira_repair_v1.md`); it does not reinterpret that lifecycle.
-  A storage descriptor likewise names only its
-  value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
-  field registry the same way). This release declares the following additions, in activation order:
+  A storage descriptor likewise names only its value's nominal type. The independent
+  `runtime_baseline_storage_layouts.tsv` release-evidence fixture pins the recursive key and value
+  schema of every storage definition installed by the baseline, using the typed State authority
+  registry. Semantic projections include their owned DTO shape; separate projection/DTO conformance
+  tests cover their manual encoders. The guard refuses a projection without an evidence owner and
+  does not prove arbitrary manual serializer semantics. These local hashes do not change
+  definition IDs or State commitments, and their initial capture does not qualify an older
+  release. A layout change requires the existing codec to remain or a governed storage successor
+  and migration; regenerating this fixture does not authorize it. This release declares the
+  following additions, in activation order:
   `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the
   six `iroha.game_partition.*.v1` instructions and the `world.game_partitions` table. Operator
   drafting and node-owned support signing refuse newly selecting its export definitions
@@ -169,6 +176,17 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   a restore still holds. `runtime::SELECTION_AWARE_OWNERS` lists the owners whose reader applies
   the selection, a test requires every nested owner of the World to be listed, and the catalog
   refuses an addition whose field has no such member.
+
+## Independently governed child roots
+
+The new dormant `iroha.runtime.child_admin.v1` addition carries explicit threshold
+administration for an independently signed data space root. Its canonical authority
+cell starts empty; only the original authenticated signed-genesis foundation installs
+revision-one administrators. Direct signed action certificates bind the entire root,
+policy and nonce; common activation still requires every validator's release support.
+The [child-admin contract](runtime/child_admin_v1.md) defines the source boundary,
+rotation, immutable foundation, lineage and remaining qualification. Existing children
+have no inferred administrator or live initialization path.
 
 ## Envelopes
 
@@ -478,8 +496,21 @@ are refused as before.
 
 - **Declaration.** A release compiles a migration as native code
   (`runtime::catalog::migrations`): the old and successor World fields, the cursor's codec, the
-  rows a stage moves, and four handlers. The catalog publishes one migration definition per
-  migration and execution services profile it compiles. This release declares none.
+  rows a stage moves, and four handlers. A sealed engine adapter binds the declared fields before
+  calling a handler; handlers receive storage capabilities, never the World or an MV writer.
+  Their fixed scratch capability admits exact backing from the original World execution pool;
+  the engine uses the same pool for its ordered stage census and barrier cursor arena. These
+  charges remain with the actual buffers until destruction. Persistent cursor and map storage,
+  child context/catalog copies and nested callback codec graphs still require separate ownership;
+  fixed scratch does not establish complete migration funding or qualification.
+  The first adapter supports one source table and one successor table. Source point lookup and
+  scans have distinct static rights, the stage writes only its successor, the barrier reads the
+  original source journal and updates the successor, and the drain can only remove source rows.
+  Catalog preflight refuses undeclared fields, reversed roles and unsupported shapes. The access
+  contract is part of each new migration's native reference closure. The catalog publishes one
+  migration definition per migration and execution services profile it compiles. This release
+  declares none; broader instruction storage capabilities and additional migration shapes remain
+  open.
 - **Start.** A change set installs the successor storage and activates the migration. Its record
   in `world.runtime_migrations` (`MigrationRecordV1`: status, cursor, stages, rows) starts
   `Running`. At the start of every block, after the height's change sets and containment leases,
@@ -492,10 +523,24 @@ are refused as before.
   instructions, hooks and the block's tail writes. When no old row lies after the cursor the
   record is `Complete`, and the barrier keeps holding.
 - **Suspension and faults.** Closing a migration's admission suspends its stages and lifting the
-  restriction resumes them; the cursor and the barrier stay in place. A stage that fails writes
-  nothing and faults the migration: no further stage runs, the barrier keeps holding, and a
-  change set that deactivates it and activates a replacement over the same storage and cursor
-  hands the cursor over.
+  restriction resumes them; the cursor and the barrier stay in place. A deterministic copying
+  stage rejection discards that stage's World child before a fresh child records `Faulted`,
+  preserving the prior cursor and counts. No further stage runs, the barrier keeps holding, and
+  a change set that deactivates it and activates a replacement over the same storage and cursor
+  hands the cursor over. A local codec, allocation or storage refusal retains its original typed
+  cause instead of recording `Faulted`. At block start it discards the enclosing unpublished
+  State block, including earlier migration children; successful children alone contribute their
+  quantity observations.
+- **Publication retry.** Each barrier mutates an existing successor transaction while borrowing
+  the original source Block journal. Refusal rolls back that child. The publisher retains the
+  exact completed tail and successful barrier prefix, freezes final non-World fields once, and
+  suspends the original mutable World journals before returning a retryable local refusal.
+  All physical writers and enclosing publication fences are released. Retry reacquires the same
+  owners and checks their original predecessors before resuming the unfinished barrier; it
+  repeats neither the tail nor successful sibling barriers. Ordinary frozen journals never
+  regain mutation authority. Changed predecessors require recovery, and other pre-freeze failures
+  retain their terminal behavior. Only a completed barrier advances the accumulator and reaches
+  final World freeze and publication.
 - **Cutover.** A change set restricts the migration to completion only, with the transitions
   that move the release's readers and writers to the successor (including the execution services
   profile, when a block hook writes the old storage). It activates only once the record is
@@ -517,11 +562,34 @@ are refused as before.
   --step start|cut-over|retire --effective-height <height> --qualification <hex>`), and endorses,
   proposes and attests it like any change set.
 
+The typed migration and mutable-suspension paths are now one source candidate; their combined
+compiled execution tests remain pending. No production migration is declared. TODO: qualify the
+combined MV and State retry owners and fund each concrete adapter's callback and scratch graph
+before claiming migration readiness.
+
 A storage definition names the definition a release founded or added the field with. A field
 whose definition an identity cutover replaced is migrated by a migration compiled against the
 successor definition. Because the baseline bundle declares every baseline table, retiring a
 baseline table also means replacing that bundle, which lapses while an escrow or AMX
 participation is live.
+
+The separate generic-carrier candidate validates bounded canonical records and keys by borrowing
+their original bytes. Container validation constructs no value tree; account leaves reuse the
+native public-key parser and serialized multisig policy relation. Schema identities stream the
+same canonical frame, and enclosing decoder refusals retain their original classification.
+`runtime::generic_carriers::capability` separately checks every selected dynamic interface,
+implementation and virtual storage owner against the shared invocation contract. It rejects native
+wire-ID and storage-namespace collisions and ignores unselected publications. Its opaque result is
+only a descriptor-language observation: closure authentication, original artifact availability,
+release qualification, support attestation and activation remain separate. The catalog continues
+to refuse the candidate profiles and artifact-staging addition pending qualification; this helper
+does not change the native release-support API. The separate selection-aware support reader uses
+the original published table and retains both scheduled and target publications when checking a
+successor. Attestation, block start and snapshot startup use that reader, with current qualification
+refusals preserved. Local codec refusals remain unfinished attempts; Torii returns its existing
+service-unavailable response, and restore does not hide an unsupported selection by choosing an
+older snapshot. This support reader does not replace the pre-existing change-set projection's
+general encoding and allocation error boundaries.
 
 ## Checkpoint records
 
@@ -557,8 +625,13 @@ All `n` validators sign, never a quorum. A node derives the adoption record from
 certified history (`checkpoint::attest_anchor`, `attest_floor`, over `CertifiedChain`): for the
 anchor, that it is the upgrade checkpoint the node was configured to adopt at, the block, the
 World root the predecessor certified after it, the root the first foundation block executed on,
-the committee of that height and the founded selection; for a floor, the block, its committed
-time and that the node holds the checkpoint.
+the committee of that height and the founded selection. Floor signing consumes a sealed owner
+of the exact retained checkpoint's complete-State restore and certified catch-up to the stopped
+store's tip. The owner retains original artifact and journal handles through signing, authenticates
+H against H+1, replays the complete suffix and checks the final cold root. Its execution context
+comes from original signed genesis; its signer must belong to the replayed current committee.
+Artifact inventory and offline report DTOs cannot supply that evidence. This new stopped-store
+corridor still requires combined-candidate validation.
 
 `checkpoint::history_boundary` is the height at or below which no release re-executes a block:
 the highest boundary in force. Kura retains the highest authenticated boundary in its private,
@@ -573,10 +646,14 @@ authenticated checkpoint refuses a store with a boundary instead of copying and 
 
 - **Operations.** `POST /v1/runtime/boundaries/anchor/attest` has a node derive the adoption
   record from its own store and return it with its statement; `POST
-  /v1/runtime/boundaries/floor/attest` with `{ height }` has it state the floor at a checkpoint
-  it holds from its own history (the block and committed time it stores there) and return it
-  with its statement. The validator key never leaves the node. `iroha ops runtime boundary
-  anchor-statement` and `floor-statement --height <h>` print a node's statement;
+  /v1/runtime/boundaries/floor/attest` with `{ height }` checks its certified history and retained
+  checkpoint inventory, then refuses with the missing restore/catch-up evidence requirement.
+  The explicit stopped-node command `iroha3d --config <config> --attest-runtime-floor <h>` instead
+  restores exactly H and signs only after successful certified replay. It keeps the original Kura
+  lock through signing, changes only the private replay copy, and prints the same floor-statement
+  JSON accepted by `raise-floor`. It is separate from the non-signing `--check-replay` command.
+  The validator key never leaves the node. `iroha ops runtime boundary anchor-statement` prints
+  the anchor statement; `floor-statement --height <h>` currently reports that refusal;
   `ratify-anchor --statement <file>...` and `raise-floor --statement <file>...` check that every
   statement names one record and verifies for it, from distinct validators, and submit the
   instruction. `GET /v1/runtime/boundaries` (`iroha ops runtime boundary list`) shows the
@@ -688,7 +765,9 @@ waiting out its notice, and removes the other checkpoints. A root without a comm
 produces and keeps none. A node holds a checkpoint at `h` when an entry of its checkpoint store
 at `h` has a manifest that verifies under its snapshot key and names its chain and network, and
 five canonical artifacts whose payload matches the signed digest
-(`snapshot::checkpoints::SnapshotCheckpoints`); only then does it sign a floor at `h`.
+(`snapshot::checkpoints::SnapshotCheckpoints`). This is artifact inventory only. Signing additionally
+requires the exact restore and replay owner above; a genesis snapshot at H=1 requires genesis replay
+and cannot produce that owner.
 
 The configured writer is also owned by synchronous certified startup replay. If Kura append survives
 without a capture or acknowledgement, replay prepares the certified block's original frozen overlay,
@@ -733,14 +812,80 @@ and every child in the parent's authenticated permanent private-root registry. A
 receipt blocks coverage. A child proof must match the registry's original genesis authority and
 exact current certified cursor; a proof cannot nominate its own committee or root. This is
 statement coverage, not permission to remove source. The current producer does not emit claims
-about unknown definitions, and the independently signed child-admin upgrade corridor remains
-unimplemented. Stored-value codecs, checkpoint readers, proof verifiers and descriptors stay live.
-Exact native-code coverage additionally requires receipts for every compiled alias and every alias
-retained in the parent State that shares the module and archived reference-source identity. A
-single retired ID cannot hide a live service-composed alias. This still does not prove the absence
-of unknown aliases retained only by a child root, or shared Rust dependencies. Current-candidate
-tests, authenticated child-local alias coverage, reviewed source ownership and a real oldest-floor
-restart after source removal remain qualification work.
+about unknown definitions. The signed-genesis child-admin corridor is implemented in source;
+same-candidate execution and real-network qualification remain open. Existing children acquire no
+inferred authority or live initialization path. Stored-value codecs, checkpoint readers, proof
+verifiers and descriptors stay live.
+The original native-code statement verifier requires receipts for every compiled alias and every
+alias retained in the parent State that shares the module and archived reference-source identity.
+A single retired ID cannot hide a live service-composed alias. The offline source candidate below
+also includes retained child-local aliases; current-candidate checks and a real oldest-floor restart
+after source removal remain qualification work.
+
+`runtime::source_ownership` validates a bounded, explicitly scoped local source inventory against
+an independently reviewed manifest digest. It binds each canonical relative path to its exact
+length, SHA-256 preimage and native module/reference-source owners. A removal proposal must name
+the exact union of those native owners; every reviewed retained decoder, checkpoint reader,
+proof/certificate verifier, storage, descriptor, profile, migration or other dependency refuses
+the proposal. Read-only native file handles retain original path and file custody for subsequent
+preimage checks, including unrequested files in the reviewed scope. This validates review data;
+it neither discovers complete repository ownership nor establishes retirement authority. Its
+opaque result cannot be imported from a report, does not authorize deletion and performs no
+source writes.
+
+`runtime::retirement::source_candidate` joins those original source handles to State-owned
+`OriginalRetirementCut` observations. A cut is acquired internally and checks the selection,
+permanent registry, complete definition table and complete retirement table against their original
+certified owner. The LtHash path uses the existing cold complete-World/pre-tail reconstruction.
+The separate native and carrier keyed-profile path retains the original execution tree, matches its
+tip/result/schema, checks exact selected native census codecs, and compares every typed original
+against a bounded allocation-free complete-table visit. It never substitutes the published tail
+tree for the execution tree. These paths use State's original finite pool for their retained owners
+and codec controls; descriptor identities stream without a copied output frame. Callers cannot
+replace public query-view fields inside this opaque observation. A missing original native cut or
+published-only keyed restoration requires actual native replay before this reader can proceed.
+New source paths still require current-candidate qualification. The parent must
+be Global, and one child cut must match each permanent registry entry's exact network, chain,
+scope, instance and current certified cursor in registry order; missing, extra, stale or unanchored
+future child views refuse the join. Genesis-only child state supplies no retirement authority.
+
+The candidate streams the union of compiled and every root's retained aliases for each exact
+reviewed native owner, validates descriptor identities, and refuses retained migrations. Every
+alias needs its permanent current receipt on every root, including roots without a history claim
+for that alias. Each supplied proof must match its root's original certified carrier and ordinary
+write inclusion. Source preimages are checked before and after the join, and their original file
+handles and root observations remain borrowed by the non-serializable result. This is scoped
+evidence, with no deletion flag or release verdict. Independent completeness of the reviewed
+source inventory, remaining codec/storage/proof dependencies, and a same-candidate source-removed
+oldest-floor startup rehearsal remain separate requirements. The external child statement verifier
+continues to require its receipt carrier at the registry's exact current cursor.
+
+The ignored Core tests in
+`runtime/retirement/source_candidate/tests/certified/rehearsal` implement one concrete isolated
+rehearsal for the unused account signing-key native owner. The original test keeps the reviewed
+source handles and genuine parent/registered-child retirement joins alive while it stages a
+separate source tree, builds its Core test binary, and invokes the candidate-linked consumer.
+Only the extracted `account_signing_key/execute.rs` is omitted. Exact reviewed edits remove its
+module and dispatch hooks and executable-support advertising; the public reader, instruction and
+stored-value codecs, immutable catalog descriptors, and archived source preimages remain.
+The staging helper rejects stale reviewed hook hashes, links, changed original file identities,
+altered candidate membership and changed bytes. Its explicit native build-input census excludes
+runtime credential material; a missing compiler input must fail the isolated build. The build
+uses `--locked` and an explicitly provisioned fixed target lane. Compiler/toolchain and external
+dependency closure qualification is separate from these source checks.
+
+The consumer restores each original oldest effective floor through `restore_exact_for_floor`,
+even though a newer snapshot is present, and checks every retained suffix height through the
+original certified tip. Both opaque replay owners remain alive while the restored complete-State
+cuts and receipt archives are joined again. Genesis, missing-height and newest-snapshot fallbacks
+are refused. No JSON input or subprocess report grants retirement or release authority. Running
+the original ignored test requires `IROHA_N14_SOURCE_REMOVAL_DIR` (new output outside the checkout)
+and `IROHA_N14_SOURCE_REMOVAL_TARGET_DIR` (the fixed separate build lane); these are test tooling
+inputs, never node protocol settings. Original-descriptor executable launch is mandatory and is
+preflighted before building: the existing native process owner currently refuses this on macOS.
+No pathname fallback is supplied. Compilation and execution of this source-removed rehearsal
+remain pending; this engineering-key component fixture does not establish deployed-network,
+previously used-handler, complete source-closure, or release qualification.
 
 ## Notice policy
 
@@ -971,7 +1116,9 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
   kernel bridge, including the two-root reservation/export/import/acknowledgement protocol;
   narrower authenticated dynamic-call manifests. Registered account/contract obligations now
   execute captured bindings, but replacing root-wide profiles still requires draining them.
-- **Migrations:** storage capabilities and generic carriers.
+- **Migrations:** qualify the implemented sealed one-source/one-successor storage adapter;
+  additional migration shapes and broader instruction storage capabilities remain open. Qualify
+  the dormant generic carrier execution and staging profile before support or activation.
 - **Checkpoints:** qualify original-image replay across pre-acknowledgement crashes, interrupted
   staging and repeated startup, including typed resource retries and pending-spool crash recovery;
   qualify the connected portable export, sparse Kura restore, authenticated DA projections and
@@ -990,10 +1137,18 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
   history meets the new root; deleting the startup re-validation of the signed genesis policy
   then.
 
-Parliament lifecycle parameter updates are validated, but Core still needs the frozen
-governance-clock policy and anonymous-ballot integration owned by
+The dormant anonymous Parliament family now has a distinct original-signed runtime creator:
+Core derives the operator, notice, provenance verdict and proposal time from the admitted action
+and committed policy; retries retain the exact predecessor content. Runtime-only G3 effect
+preparation checks the production certificate and compare-and-set head, and rolls back rejected
+effects before preparing failure. Its receipt is a distinct standalone type: native block outputs
+remain closed, and G3 application refuses as unsupported before effects until a new selected
+immutable result profile can authenticate and commit that receipt. Checked identity/policy
+adapters retain original local refusals. This source candidate still needs the result-profile
+implementation, same-candidate validation and the governance-clock/ballot qualification owned by
 [`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
-Its current block-height/timed-OVN lifecycle is not a substitute for that integration.
+`PARLIAMENT_BALLOT_QUALIFICATION_V1` remains `None`: candidate certificates never enact, other
+proposal effects remain open, and the frozen baseline handlers are unchanged.
 The closure resolver still uses the baseline's ordinary graph allocations; complete funded graph
 custody and trigger-fanout resource qualification remain part of the complete-State work. Component
 tests alone do not qualify live deployment.

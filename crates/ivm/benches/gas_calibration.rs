@@ -8,6 +8,7 @@
 //!
 //! Use output to calibrate a target `ns_per_gas` scalar for your baseline CPU and
 //! to tune `ivm_gas_limit_per_block` for a desired block time (e.g., ~200 ms).
+use ivm_abi::error::VmTrap;
 #[path = "support/gas_policy.rs"]
 mod gas_policy;
 
@@ -142,7 +143,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
         vm.set_host(DefaultHost::new());
         let start_remaining = vm.remaining_gas();
         assert!(
-            matches!(vm.run(), Err(VMError::PointerAbiFault(__actual_error_field)) if __actual_error_field == (PointerAbiFaultV1::InvalidAddress))
+            matches!(vm.run(), Err(VMError::Trap(VmTrap::PointerAbiFault(__actual_error_field))) if __actual_error_field == (PointerAbiFaultV1::InvalidAddress))
         );
         assert_eq!(
             start_remaining - vm.remaining_gas(),

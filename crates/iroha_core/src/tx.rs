@@ -9,6 +9,7 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
+use ivm_abi::error::VmTrap;
 mod authority_admission;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -3415,7 +3416,14 @@ impl StateBlock<'_> {
                     ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
                 })?;
         }
-        if state_transaction.taira_activation_entrypoint.is_none() {
+        let carrier_admitted = external_entrypoint
+            && crate::runtime::generic_carriers::admission::admit(
+                &state_transaction.world,
+                state_transaction.block_height(),
+                signed.instructions(),
+            )
+            .map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))?;
+        if state_transaction.taira_activation_entrypoint.is_none() && !carrier_admitted {
             crate::runtime::envelope::admit_envelopes(
                 state_transaction.world.runtime_selection.get(),
                 state_transaction.block_height(),
@@ -3454,8 +3462,8 @@ impl StateBlock<'_> {
                 .map_err(|reason| {
                     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))
                 })?;
-                let record =
-                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                let (code_hash, code_bytes) =
+                    code::fetch_bound_contract_program(state_transaction, &call.contract_address)
                         .map_err(|error| {
                             error.map_rejection(TransactionRejectionReason::Validation)
                         })?
@@ -3467,13 +3475,13 @@ impl StateBlock<'_> {
                                 ),
                             ))
                         })?;
-                crate::executor::ensure_contract_invocation_code_hash(call, record.code_hash)
+                crate::executor::ensure_contract_invocation_code_hash(call, code_hash)
                     .map_err(TransactionRejectionReason::Validation)?;
                 let contract_address = Some(call.contract_address.clone());
                 Self::validate_ivm(
                     authority.clone(),
                     state_transaction,
-                    &IvmBytecode::from_compiled(record.code_bytes),
+                    &IvmBytecode::from_compiled(code_bytes),
                     None,
                     contract_address,
                     ivm_cache,
@@ -3636,26 +3644,32 @@ impl StateBlock<'_> {
     ) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
+        let profile = if deploy_target.is_some() {
+            crate::smartcontracts::ivm::profile::resolve_artifact(&state_transaction.world, bytes)
+        } else {
+            crate::smartcontracts::ivm::profile::resolve_raw_artifact(
+                &state_transaction.world,
+                bytes,
+            )
+        };
         let summary = ivm_cache
-            .summarize_executable_in_world(&state_transaction.world, bytes)
+            .summarize_executable_for_profile(bytes, profile.id())
             .map_err(|error| {
                 let error = match ExecutionDeferred::try_from_vm_error(error) {
                     Ok(owner) => return ExecutionAttemptError::Deferred(owner),
                     Err(error) => error,
                 };
                 let failure = match error {
-                    ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
-                        "unknown syscall number 0x{number:02x} for abi_version 1"
-                    )),
+                    ivm::VMError::Trap(VmTrap::UnknownSyscall(number)) => {
+                        ValidationFail::NotPermitted(format!(
+                            "unknown syscall number 0x{number:02x} for abi_version 1"
+                        ))
+                    }
                     // The summary was prepared under the profile resolved for these bytes in
                     // this root; that profile's engine owns the projection.
                     error => ValidationFail::IvmAdmission(
                         crate::smartcontracts::ivm::projection::admission_error(
-                            crate::smartcontracts::ivm::profile::resolve_artifact(
-                                &state_transaction.world,
-                                bytes,
-                            )
-                            .engine(),
+                            profile.engine(),
                             error,
                         ),
                     ),
@@ -3826,30 +3840,32 @@ impl StateBlock<'_> {
                 }
             }
         }
-        // Validate every supplied or stored manifest as a complete V1
-        // consensus binding. A present manifest may not omit either hash.
-        let validate_manifest =
-            |manifest: &ContractManifest| -> Result<(), TransactionRejectionReason> {
-                crate::smartcontracts::ivm::validate_manifest_hashes(manifest, code_hash, abi_hash)
-                    .map_err(|error| {
-                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
-                    })
-            };
+        // Every present registration binds the complete artifact and its own ABI.
+        let stored = crate::smartcontracts::code::registered_manifest::RegisteredManifest::get(
+            &state_transaction.world,
+            &artifact_id,
+        );
+        let manifest_error =
+            |error| TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error));
         if is_contract {
             if let Some(manifest) = manifest_metadata.as_ref() {
-                validate_manifest(manifest)?;
+                crate::smartcontracts::ivm::validate_manifest_hashes(manifest, code_hash, abi_hash)
+                    .map_err(manifest_error)?;
             }
-            if let Some(manifest) = state_transaction.world.contract_manifests.get(&artifact_id) {
-                validate_manifest(manifest)?;
+            if let Some(manifest) = stored.as_ref() {
+                crate::smartcontracts::ivm::validate_manifest_hash_fields(
+                    manifest.hashes(),
+                    code_hash,
+                    abi_hash,
+                )
+                .map_err(manifest_error)?;
+            } else if profile.id() == ivm::IvmProfileId::C10_ABI_V1 {
+                return Err(manifest_error(
+                    iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
+                )
+                .into());
             }
-        } else if manifest_metadata.is_some()
-            || state_transaction
-                .world
-                .contract_manifests
-                .get(&artifact_id)
-                .is_some()
-            || deploy_target.is_some()
-        {
+        } else if manifest_metadata.is_some() || stored.is_some() || deploy_target.is_some() {
             return Err(
                 TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                     iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
@@ -4149,7 +4165,8 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
             false
         } else {
             let any = instruction.as_any();
-            any.is::<RegisterSmartContractCode>()
+            (any.is::<RegisterSmartContractCode>()
+                || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                 || any.is::<RegisterSmartContractBytes>()
                 || any.is::<UploadSmartContractCodeChunk>()
                 || any.is::<FinalizeSmartContractCodeUpload>()
@@ -4280,7 +4297,9 @@ fn enforce_manifest_protected_namespaces(
                 } else {
                     let modifies_contract_code = {
                         let any = instruction.as_any();
-                        any.is::<RegisterSmartContractCode>()
+                        (any.is::<RegisterSmartContractCode>()
+                            || any
+                                .is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                             || any.is::<RegisterSmartContractBytes>()
                             || any.is::<UploadSmartContractCodeChunk>()
                             || any.is::<FinalizeSmartContractCodeUpload>()
@@ -4319,7 +4338,7 @@ fn enforce_manifest_protected_namespaces(
                             contract_targets.insert(deactivate.contract_address().clone());
                         } else {
                             let any = instruction.as_any();
-                            if any.is::<RegisterSmartContractCode>()
+                            if (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                 || any.is::<RegisterSmartContractBytes>()
                                 || any.is::<UploadSmartContractCodeChunk>()
                                 || any.is::<FinalizeSmartContractCodeUpload>()
@@ -13109,7 +13128,7 @@ pub mod tests {
             let results = committed.as_ref().output_results().collect::<Vec<_>>();
             assert_eq!(results.len(), 1);
             assert!(
-                matches!(results[0].as_ref(),
+                matches!(results[0].baseline().expect("baseline source-limit fixture").as_ref(),
                     Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
                         if message == crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION
                 ),

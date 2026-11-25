@@ -7,10 +7,15 @@ mod app_api_canonical_auth;
 mod asset;
 #[path = "asset_propagation.rs"]
 mod asset_propagation;
+#[path = "child_runtime_admin.rs"]
+mod child_runtime_admin;
 #[path = "config.rs"]
 mod config;
 #[path = "contracts.rs"]
 mod contracts;
+#[cfg(unix)]
+#[path = "da/admission.rs"]
+mod da_admission;
 #[path = "debug_genesis.rs"]
 mod debug_genesis;
 #[path = "domain_links.rs"]

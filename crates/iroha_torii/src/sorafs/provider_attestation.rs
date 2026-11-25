@@ -100,11 +100,10 @@ pub async fn read_attestation(
                     archive_id: key.archive_id,
                     replication_order: key.replication_order,
                 };
-                // The HTTP join is deadline-bounded, but this physical worker must retain
-                // its query-memory reservation until the native blocking read actually ends.
-                // Cancelling an inner timeout would detach that read from its prepaid owner.
-                let readback = runtime
-                    .block_on(inventory.get(&scope, key))
+                // The physical read retains this worker's query permit, memory and decoder
+                // through both authorization checks, even when the HTTP join times out.
+                let readback = inventory
+                    .get_on_blocking_worker(&runtime, &scope, key)
                     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
                 if Instant::now() >= deadline {
                     return Err(StatusCode::SERVICE_UNAVAILABLE);
@@ -158,14 +157,10 @@ pub async fn read_attestation(
             [(axum::http::header::CACHE_CONTROL, "private, no-store")],
         )
             .into_response(),
-        Ok(Ok(Err(status))) => {
-            (status, "native provider attestation read rejected").into_response()
-        }
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "native provider attestation read unavailable",
-        )
-            .into_response(),
+        // Let the shared typed-error boundary render these statuses in the requested format.
+        // A plain-text body would replace the native refusal with 406 for a Norito client.
+        Ok(Ok(Err(status))) => status.into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 

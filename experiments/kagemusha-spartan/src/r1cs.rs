@@ -107,6 +107,18 @@ pub struct Instance<F> {
     pub io: Vec<F>,
 }
 
+/// What a witness holds in a Hyrax row as its build wrote it
+/// (`UniformCircuit::build_rows`): values to read, nothing at all, or a
+/// padding fixed row's single 1 in column 0. Only a caller proving the
+/// witness exactly as built may tell the prover; the prover then never reads
+/// (nor brings into memory) the zero and padding rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowFill {
+    Values,
+    Zero,
+    Unit,
+}
+
 pub struct Witness<F> {
     /// `rows * cols`, row major, zero tail columns.
     pub w: Vec<F>,
@@ -117,15 +129,161 @@ impl<F: zeroize::Zeroize> zeroize::Zeroize for Witness<F> {
     }
 }
 
+/// A built witness and its public row layout. Dropping it wipes every
+/// written row without materializing the zero and public padding rows.
+pub(crate) struct WrittenWitness<S: zeroize::Zeroize> {
+    witness: Witness<S>,
+    rows: Vec<RowFill>,
+}
+
+impl<S: zeroize::Zeroize> WrittenWitness<S> {
+    pub(crate) fn new(witness: Witness<S>, rows: Vec<RowFill>) -> Self {
+        Self { witness, rows }
+    }
+
+    pub(crate) fn rows(&self) -> &[RowFill] {
+        &self.rows
+    }
+
+    /// Mutable authored values remain under this guard until the proof consumes it.
+    pub(crate) fn parts_mut(&mut self) -> (&mut Witness<S>, &[RowFill]) {
+        (&mut self.witness, &self.rows)
+    }
+
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.witness.w.capacity() * std::mem::size_of::<S>()
+            + self.rows.capacity() * std::mem::size_of::<RowFill>()
+    }
+}
+
+impl<S: zeroize::Zeroize> std::ops::Deref for WrittenWitness<S> {
+    type Target = Witness<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.witness
+    }
+}
+
+impl<S: zeroize::Zeroize> Drop for WrittenWitness<S> {
+    fn drop(&mut self) {
+        let cols = self.witness.w.len() / self.rows.len().max(1);
+        for (row, fill) in self.witness.w.chunks_mut(cols.max(1)).zip(&self.rows) {
+            if *fill == RowFill::Values {
+                row.iter_mut().for_each(zeroize::Zeroize::zeroize);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod written_witness_tests {
+    use super::{RowFill, Witness, WrittenWitness};
+    use std::cell::Cell;
+
+    struct ObserveWipe<'a>(&'a Cell<usize>);
+
+    impl zeroize::Zeroize for ObserveWipe<'_> {
+        fn zeroize(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn releasing_or_unwinding_a_built_witness_wipes_only_written_rows() {
+        for unwind in [false, true] {
+            let cells = [const { Cell::new(0) }; 6];
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _witness = WrittenWitness::new(
+                    Witness {
+                        w: cells.iter().map(ObserveWipe).collect(),
+                    },
+                    vec![RowFill::Values, RowFill::Zero, RowFill::Unit],
+                );
+                if unwind {
+                    panic!("exercise the guard when proving unwinds");
+                }
+            }));
+            assert_eq!(outcome.is_err(), unwind);
+            assert_eq!(cells.map(Cell::into_inner), [1, 1, 0, 0, 0, 0]);
+        }
+    }
+}
+
 /// The relation a proof is about (the toy uniform R1CS, or a sparse circuit).
 /// `z = (w || io)` padded to `2^sz`.
 pub trait Rel<F: Scalar>: Sync {
     fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>);
+    /// The outer rounds are done: what only they read may go.
+    fn outer_done(&mut self) {}
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F>;
+    /// `M(r_x, .)` as the prover holds it: the witness half dense, the public
+    /// half only up to its last nonzero entry.
+    fn m_table_split(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> crate::kern::Split<F> {
+        crate::kern::Split::from_full(self.m_table(shape, ex, ra, rb, rc))
+    }
+    /// [`Rel::m_table_split`] at `ex = eq(r_x, .)`, given `r_x` (a relation
+    /// may never hold the whole equality table).
+    fn m_table_split_at(
+        &self,
+        shape: &Shape,
+        rx: &[F],
+        ra: F,
+        rb: F,
+        rc: F,
+    ) -> crate::kern::Split<F> {
+        let ex = crate::prof::time("i.eq", || crate::grid::eq_table(rx));
+        self.m_table_split(shape, &ex, ra, rb, rc)
+    }
+    /// The first inner round over `M(r_x, .)` and `z`, the relation's last
+    /// use: its values, the challenges `challenge` draws after committing
+    /// them, and M folded by those challenges. By default from the whole
+    /// split table ([`Rel::m_table_split_at`]), the relation dropped first.
+    fn m_first_inner(
+        self: Box<Self>,
+        shape: &Shape,
+        rx: &[F],
+        rabc: [F; 3],
+        basis: &crate::kern::Basis,
+        z: &crate::kern::ZView<'_, '_, F>,
+        challenge: &mut dyn FnMut(&[F]) -> Vec<F>,
+    ) -> crate::kern::FirstInner<F> {
+        let m = crate::prof::time("i.mtable", || {
+            self.m_table_split_at(shape, rx, rabc[0], rabc[1], rabc[2])
+        });
+        drop(self);
+        crate::kern::first_inner_split(basis, m, z, challenge)
+    }
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F);
     /// Nonzero entries of A, B and C (0 when the relation is structured).
     fn nnz(&self) -> [usize; 3] {
         [0; 3]
+    }
+    /// [`Rel::abc`] of `z = (w || io)` as the prover holds it: the witness in
+    /// its rows, the public half its tail (copied whole by default).
+    /// `Az, Bz, Cz` at the rows of `ranges` for the selected matrices,
+    /// written to `out[m]` range after range (each output starts zeroed).
+    /// `false` when the relation cannot, and the prover holds the whole
+    /// tables instead.
+    fn abc_ranges(
+        &self,
+        _shape: &Shape,
+        _z: &crate::kern::ZView<'_, '_, F>,
+        _ranges: &[std::ops::Range<usize>],
+        _mats: [bool; 3],
+        _out: &mut [Vec<F>; 3],
+    ) -> bool {
+        false
+    }
+    fn abc_rows(
+        &self,
+        shape: &Shape,
+        z: &crate::kern::ZView<'_, '_, F>,
+    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        let mut full = crate::kern::zeroed(2 << shape.sw());
+        let half = 1usize << shape.sw();
+        full[..half].copy_from_slice(&z.rows.to_vec());
+        full[half..half + z.tail.len()].copy_from_slice(z.tail);
+        self.abc(shape, &full)
     }
 }
 
@@ -181,6 +339,19 @@ pub trait Circuit<F: Scalar>: Sync {
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
         Vec::new()
     }
+    /// Row `k` of [`Circuit::fixed_values`] (`cols` values), without the rest.
+    fn fixed_row(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let cols = shape.cols();
+        self.fixed_values(shape)[k * cols..(k + 1) * cols].to_vec()
+    }
+    /// The committed public columns of fixed row `k`. A missing suffix
+    /// represents zero scalars. Other circuits retain their full row check.
+    fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let mut row = self.fixed_row(shape, k);
+        assert_eq!(row.len(), shape.cols(), "fixed rows are whole rows");
+        row.truncate(shape.active_cols());
+        row
+    }
     /// The first of the fixed rows, holding one wallet's own constants (its
     /// key's comb tables): committed with blind 0 like the others and left out
     /// of proofs, but their commitments come from the instance (`wallet_io`)
@@ -225,6 +396,47 @@ pub trait Circuit<F: Scalar>: Sync {
     /// one.
     fn binding_r(&self, _w: &[F]) -> Option<[u8; 32]> {
         None
+    }
+    /// The prover's accounted memory (retained and phase peaks) for
+    /// measurement lines; empty when the circuit does not account it.
+    fn memory_note(&self) -> String {
+        String::new()
+    }
+
+    // The prover's witness hooks on its copy-on-write rows. By default each
+    // copies the whole witness and calls the slice hook.
+
+    /// [`Circuit::randomize_masks`] on the prover's rows.
+    fn randomize_masks_rows(&self, w: &mut crate::kern::Rows<'_, F>, rng: &mut SpikeRng) {
+        let mut full = w.to_vec();
+        self.randomize_masks(&mut full, rng);
+        w.write_back(&full);
+    }
+    /// [`Circuit::fill_link`] on the prover's rows.
+    fn fill_link_rows(&self, rho: &[u8; 32], w: &mut crate::kern::Rows<'_, F>) {
+        let mut full = w.to_vec();
+        self.fill_link(rho, &mut full);
+        w.write_back(&full);
+    }
+    /// [`Circuit::instantiate`] filling the prover's rows.
+    fn instantiate_rows<'a>(
+        &'a self,
+        shape: &Shape,
+        ch: &[F],
+        w: &mut crate::kern::Rows<'_, F>,
+    ) -> Box<dyn Rel<F> + 'a> {
+        let mut full = w.to_vec();
+        let rel = self.instantiate(shape, ch, Some(&mut full));
+        w.write_back(&full);
+        rel
+    }
+    /// [`Circuit::late_values`] of the prover's rows.
+    fn late_values_rows(&self, w: &crate::kern::Rows<'_, F>) -> Vec<F> {
+        self.late_values(&w.to_vec())
+    }
+    /// [`Circuit::binding_r`] of the prover's rows.
+    fn binding_r_rows(&self, w: &crate::kern::Rows<'_, F>) -> Option<[u8; 32]> {
+        self.binding_r(&w.to_vec())
     }
 }
 
@@ -282,7 +494,8 @@ pub fn sample<F: Scalar>(shape: &Shape, rng: &mut SpikeRng) -> (Instance<F>, Wit
 /// `z = (w || io)` padded to `2^sz`.
 pub fn z_vector<F: Scalar>(shape: &Shape, inst: &Instance<F>, wit: &Witness<F>) -> Vec<F> {
     let half = 1 << shape.sw();
-    let mut z = vec![F::ZERO; 2 * half];
+    // The public half is zero beyond the io: its pages are never written.
+    let mut z = crate::kern::zeroed(2 * half);
     z[..half].copy_from_slice(&wit.w);
     z[half..half + inst.io.len()].copy_from_slice(&inst.io);
     z

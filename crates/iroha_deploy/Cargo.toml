@@ -20,6 +20,7 @@ workspace = true
 [features]
 # Owning unit-test selectors only; never forwarded to SDK or Core dependencies.
 mutation-testing = []
+test-fixtures = []
 
 [dependencies]
 iroha_allocation = { workspace = true }

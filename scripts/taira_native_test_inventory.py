@@ -69,7 +69,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'governance_locks_dto_keeps_exact_json_layout_and_rejects_duplicate_account_keys',
         'governance_slash_dto_keeps_exact_json_layout_and_rejects_duplicate_account_keys',
     )),
-    ('native KAGEMUSHA wallet State and verifier-pack routing', 'kagemusha_wallet_v1/tests.rs', 'kagemusha_wallet_v1/tests/wsv_tests.rs', 'wsv_tests', 'kagemusha_wallet_v1::tests::wsv_tests', ('registration_requires_dedicated_asset_permission_and_reserve_consent', 'registration_rejects_a_foreign_network_before_creating_reserve_rows', 'registered_reserve_rejects_ordinary_transfer_burn_and_teardown', 'native_rejection_and_missing_source_anchor_cannot_activate', 'real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal', 'committed_reader_requires_an_original_cut_and_finite_limits', 'routing_uses_permanent_scope_and_refuses_missing_wallet_records', 'verifier_pack_routing_requires_the_exact_registered_asset_and_permanent_scope', 'verifier_install_routing_requires_the_registered_authorizing_asset_and_scheme', 'package_quota_charges_exact_native_calls_and_one_operation_at_the_boundary', 'package_quota_refusal_is_atomic_for_sigma_and_lineage_limits_and_overflow', 'lineage_call_quota_refuses_before_native_verifier_or_payout', 'unavailable_production_artifacts_retain_local_deferral_and_no_activation', 'verifier_install_requires_actual_reserve_owner_before_artifact_parsing', 'genuine_verifier_install_is_immutable_exact_retry_and_same_overlay_native_owner', 'verifier_install_rechecks_live_asset_permission_and_registered_scope', 'authorized_install_cannot_turn_missing_originals_into_a_verifier', 'package_quota_refuses_before_native_verifier_and_ledger_activation', 'real_reserve_pays_unload_once_and_online_controls_defer_without_consuming_it', 'real_fee_payout_requires_retained_history_and_never_requires_receive', 'retained_request_normalizes_distinct_payer_completions_without_replacing_signed_terms', 'corrupted_reserve_owner_and_mutated_registration_are_rejected', 'snapshot_requires_exact_reserve_indexes_and_reference_counts', 'private_root_load_rejects_before_debit_or_receipt_creation', 'ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss', 'compact_fee_claim_routes_by_the_validated_send_asset_and_permanent_scope')),
+    ('native KAGEMUSHA wallet State and verifier-pack routing', 'kagemusha_wallet_v1/tests.rs', 'kagemusha_wallet_v1/tests/wsv_tests.rs', 'wsv_tests', 'kagemusha_wallet_v1::tests::wsv_tests', ('registration_requires_dedicated_asset_permission_and_reserve_consent', 'registration_rejects_a_foreign_network_before_creating_reserve_rows', 'registered_reserve_rejects_ordinary_transfer_burn_and_teardown', 'native_rejection_and_missing_source_anchor_cannot_activate', 'real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal', 'committed_reader_requires_an_original_cut_and_finite_limits', 'routing_uses_permanent_scope_and_refuses_missing_wallet_records', 'verifier_pack_routing_requires_the_exact_registered_asset_and_permanent_scope', 'verifier_install_routing_requires_the_registered_authorizing_asset_and_scheme', 'package_quota_charges_exact_native_calls_and_one_operation_at_the_boundary', 'package_quota_refusal_is_atomic_for_sigma_and_lineage_limits_and_overflow', 'lineage_call_quota_refuses_before_native_verifier_or_payout', 'unavailable_production_artifacts_retain_local_deferral_and_no_activation', 'verifier_install_requires_actual_reserve_owner_before_artifact_parsing', 'genuine_verifier_install_is_immutable_exact_retry_and_same_overlay_native_owner', 'verifier_install_rechecks_live_asset_permission_and_registered_scope', 'authorized_install_cannot_turn_missing_originals_into_a_verifier', 'package_quota_refuses_before_native_verifier_and_ledger_activation', 'real_reserve_pays_unload_once_and_online_controls_defer_without_consuming_it', 'real_fee_payout_requires_retained_history_and_never_requires_receive', 'retained_request_normalizes_distinct_payer_completions_without_replacing_signed_terms', 'corrupted_reserve_owner_and_mutated_registration_are_rejected', 'snapshot_requires_exact_reserve_indexes_and_reference_counts', 'private_root_load_rejects_before_debit_or_receipt_creation', 'ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss', 'compact_fee_claim_routes_by_the_validated_send_asset_and_permanent_scope', 'ordinary_unload_still_requires_native_proof_artifacts', 'production_suffix_actions_are_refused_without_wallet_effects_or_proof_work', 'suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve')),
     ('native State preverify backend and key admission', 'state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests', (
         'unsupported_retired_and_claimed_backends_fail_state_admission',
         'stark_fri_profile_labels_require_enveloped_state_preverify_metadata',
@@ -324,7 +324,10 @@ NATIVE_CORE_TEST_OWNERS = (
         'sccp_pairing_payload_refusal_preserves_actual_allocator_cause_without_release',
         'native_initializer_invariant_keeps_original_across_validation_and_producer_recovery',
         'original_evidence_decode_owner_survives_worker_deferral_until_its_last_reader',
-        'anonymous_ballot_adapter_absence_stays_deferred_through_publication',
+        'a_local_ballot_refusal_stays_deferred_through_publication',
+        'runtime_support_codec_refusal_remains_original_publication_deferral',
+        'missing_g3_result_profile_requires_recovery_with_the_original_diagnostic',
+        'g3_codec_and_storage_refusals_keep_their_original_publication_owners',
     )),
     ('native publication refusal identity', 'sumeragi/executor/publication.rs', 'sumeragi/executor/publication/tests.rs', 'tests', 'sumeragi::executor::publication::tests', (
         'state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
@@ -340,6 +343,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'below_quorum_current_frame_cannot_finish_pending_archive_capture',
         'restart_binds_archives_after_replay_and_captures_the_missing_tip_once',
         'binding_refuses_unpublished_execution_and_captures_the_published_tip',
+        'provider_archive_bound_holds_the_commit_until_retention_frees_capacity',
+        'provider_archive_retention_runs_beside_commit_capture_across_many_bounds',
     )),
     ('native original execution and undo', 'state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests', (
         'authenticated_root_scope_requires_native_execution_and_survives_publication',
@@ -421,6 +426,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'funded_prefix_authority_rejects_invalid_frames_exactly_like_the_portable_authority',
         'one_shot_admitted_push_admits_both_slots_before_a_refusal_can_release_itself',
         'one_shot_admitted_push_funds_no_owner_that_could_release_its_own_wait',
+        'a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds',
+        'historical_rereads_keep_their_verified_predecessor_and_reject_a_different_cut',
+        'signer_source_capture_preserves_the_next_readers_decoder_budget',
     )),
     ('native pending original execution', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/pending_execution_tests.rs', 'pending_execution_tests', 'sumeragi::test_chain::tests::pending_execution_tests', (
         'pending_execution_retains_one_source_and_publishes_once',
@@ -429,6 +437,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'discarded_unprepared_execution_leaves_original_state_unchanged',
         'prepared_genesis_derives_then_enforces_both_signed_native_policies',
         'changed_original_genesis_configuration_is_rejected_before_publication',
+        'dropped_durable_execution_recovers_only_from_original_certified_suffix',
     )),
     ('native original publication', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/native_publication_tests.rs', 'native_publication_tests', 'sumeragi::test_chain::tests::native_publication_tests', (
         'original_genesis_and_successor_have_exact_native_execution_authority',
@@ -578,6 +587,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'due_control_build_progresses_under_replenished_drive_and_partial_ingress',
         'execution_certification_survives_parking',
         'certified_execution_flag_reaches_the_application_without_inference',
+        'checkpoint_durability_deferral_keeps_original_execution_and_append',
     )),
     ('native driver kernel', 'sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/kernel.rs', 'kernel', 'sumeragi::driver::tests::kernel', (
         'kernel_refuses_unfunded_waiter_before_constructing_consensus',
@@ -668,6 +678,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'certified_execution_skips_clock_guards',
         'sccp_ct5_completion_resamples_clock_and_retains_original_for_certified_retry',
         'sccp_ct5_prepare_signing_resamples_original_after_valid_and_binds_every_coordinate',
+        'deterministic_time_floor_rejects_before_local_clock_refusal',
     )),
     ('native original first Prepare admission', 'sumeragi/executor.rs', 'sumeragi/executor/prepare_admission_tests.rs', 'prepare_admission_tests', 'sumeragi::executor::prepare_admission_tests', (
         'ct1_native_first_prepare_rechecks_original_clock_after_execution',

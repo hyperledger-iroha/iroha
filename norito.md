@@ -549,6 +549,14 @@ failure. This isolation does not reset enclosing resource counters: nested or
 repeated decodes continue charging the original caller's budget, and a refusal
 retains its original scope identity.
 
+`core::with_decode_depth_scope` lets a schema-directed dynamic container enter
+the same existing nested-value guard as a typed field decoder. It preserves
+the original budget's refusal and restores depth on success or failure; it
+neither resets cumulative counters nor grants schema or allocation authority.
+The new, unselected [generic carrier codec](specs/runtime/generic_carriers_v1.md)
+uses it for its explicitly defined container grammar. No native Norito layout
+changes through this scope helper.
+
 `ArchiveView::decode_exact_with<T, R, F>` keeps `T` as the original wire
 schema and padding owner while permitting a callback to return a different
 result `R`, such as a borrowed payload view with prepaid field allocations.

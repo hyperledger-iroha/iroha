@@ -282,7 +282,7 @@ use tokio::sync::RwLock;
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
-pub(crate) const HEADER_SORA_CONTENT_CID: &str = "sora-content-cid";
+use super::HEADER_SORA_CONTENT_CID;
 const BLINDED_PATH_PLACEHOLDER: &str = "~blinded";
 const HEADER_DAG_SCOPE: &str = "dag-scope";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
@@ -1689,6 +1689,8 @@ impl ByteRange {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/storage/token`.
 pub struct StreamTokenRequestDto {
+    /// Optional canonical paid operation and CAR chunk cursor for authenticated account issuance.
+    pub paid_readback: Option<String>,
     /// Hex-encoded manifest identifier.
     pub manifest_id_hex: String,
     /// Hex-encoded provider identifier (32 bytes).

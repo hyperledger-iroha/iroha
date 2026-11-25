@@ -8793,6 +8793,7 @@ fn decode_world_fields(
     let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
     let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
         take_required(&mut map, "runtime_selection")?;
+    let runtime_child_admin_state = take_required(&mut map, "runtime_child_admin_state")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_protocol_policies: Storage<
@@ -9144,10 +9145,47 @@ fn decode_world_fields(
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
     > = take_required(&mut map, "runtime_game_transfers")?;
+    let c10_contract_manifests: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    > = take_required(&mut map, "c10_contract_manifests")?;
+    let c10_contract_profiles: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    > = take_required(&mut map, "c10_contract_profiles")?;
+    let c10_triggers: Storage<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    > = take_required(&mut map, "c10_triggers")?;
+    let c10_trigger_candidates = rebuild_derived_storage_with_previous(
+        c10_trigger_candidates(&c10_triggers.view(), &triggers.view())?,
+        c10_trigger_candidates(
+            &c10_triggers.block_and_revert(),
+            &triggers.block_and_revert(),
+        )?,
+    );
+    let kagemusha_spartan_programs: Storage<
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    > = take_required(&mut map, "kagemusha_spartan_programs")?;
     let runtime_retirements: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     > = take_required(&mut map, "runtime_retirements")?;
+    let runtime_generic_values = map
+        .remove("runtime_generic_values")
+        .ok_or_else(|| json::Error::missing_field("runtime_generic_values"))?
+        .decode_carrier_store(
+            execution_budget,
+            snapshot_storage::carrier::restore_carriers,
+        )?;
+    let runtime_generic_artifacts = map
+        .remove("runtime_generic_artifacts")
+        .ok_or_else(|| json::Error::missing_field("runtime_generic_artifacts"))?
+        .decode_carrier_store(
+            execution_budget,
+            snapshot_storage::carrier::restore_artifacts,
+        )?;
     let runtime_escrow_captures: Storage<
         iroha_data_model::escrow::EscrowId,
         iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
@@ -9279,7 +9317,14 @@ fn decode_world_fields(
         runtime_deferred_consents,
         runtime_amx_captures,
         runtime_game_transfers,
+        c10_contract_manifests,
+        c10_contract_profiles,
+        c10_triggers,
+        c10_trigger_candidates,
+        kagemusha_spartan_programs,
         runtime_retirements,
+        runtime_generic_values,
+        runtime_generic_artifacts,
         runtime_escrow_captures,
         runtime_migrations,
         runtime_boundaries,
@@ -9331,6 +9376,7 @@ fn decode_world_fields(
         runtime_containments,
         runtime_definitions,
         runtime_selection,
+        runtime_child_admin_state,
         privacy_consensus_policy,
         privacy_protocol_policies,
         kagemusha_wallet_ledger,
@@ -9554,7 +9600,7 @@ fn decode_world_fields(
 
 // Shape checks cover both exact snapshot cuts. Service admission separately binds the
 // selected history owner and the certified root; an included receipt is only data here.
-fn validate_runtime_retirement_shapes(
+fn validate_runtime_manifest_and_retirement_shapes(
     world: &World,
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), StateRestoreError> {
@@ -9576,9 +9622,25 @@ fn validate_runtime_retirement_shapes(
         }
         Ok(())
     }
-    validate(&world.view(), "world.runtime_retirements")?;
+    let current = world.view();
+    validate(&current, "world.runtime_retirements")?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&current).map_err(|error| {
+        json::Error::InvalidField {
+            field: "world.kagemusha_spartan_programs".into(),
+            message: error.to_string(),
+        }
+    })?;
+    crate::smartcontracts::code::registered_manifest::validate_cut(&current, budget)?;
+    drop(current);
     let previous = world.try_block_and_revert(budget)?;
     validate(&previous, "world.runtime_retirements.revert")?;
+    crate::kagemusha_wallet_v1::spartan::validate_snapshot(&previous).map_err(|error| {
+        json::Error::InvalidField {
+            field: "world.kagemusha_spartan_programs.revert".into(),
+            message: error.to_string(),
+        }
+    })?;
+    crate::smartcontracts::code::registered_manifest::validate_cut(&previous, budget)?;
     Ok(())
 }
 
@@ -9652,13 +9714,24 @@ fn validate_runtime_retirement_roots(state: &State) -> Result<(), MergeLedgerCom
 #[path = "runtime_retirement_restore_tests.rs"]
 mod runtime_retirement_restore_tests;
 
+#[path = "child_runtime_snapshot.rs"]
+mod child_runtime_snapshot;
+
+#[path = "generic_carrier_snapshot.rs"]
+mod generic_carrier_snapshot;
+#[path = "runtime_support_restore.rs"]
+mod runtime_support_restore;
+
 fn parse_world(
     execution_budget: &iroha_allocation::AllocationBudget,
     map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
     let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
-    validate_runtime_retirement_shapes(&world, execution_budget)?;
+    child_runtime_snapshot::validate_world(&world, execution_budget)?;
+    generic_carrier_snapshot::validate_world(&world, execution_budget)?;
+    runtime_support_restore::validate(&world.view())?;
+    validate_runtime_manifest_and_retirement_shapes(&world, execution_budget)?;
     crate::runtime::ironwood::admission::world(&mut world).map_err(|error| match error {
         crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
             StateRestoreError::Serialization(json::Error::InvalidField {
@@ -11164,6 +11237,7 @@ fn build_state(
         stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
             stateless_cache_cap,
         )),
+        c10_event_blocks: Default::default(),
         trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
             pipeline_cache_size,
             PreparedContractCache::with_execution_budget(
@@ -11254,6 +11328,7 @@ fn build_state(
         *state.lane_privacy_registry.get_mut() = privacy;
     }
     validate_runtime_retirement_roots(&state)?;
+    child_runtime_snapshot::validate_identity(&state)?;
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
@@ -14520,5 +14595,150 @@ mod privacy_root_refusal_tests {
                 if field == "world.privacy_state")
             );
         }
+    }
+}
+
+/// Verify authoritative identities in one snapshot cut and derive its bounded scan index.
+fn c10_trigger_candidates(
+    rows: &impl mv::storage::StorageReadOnly<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    baseline: &impl crate::smartcontracts::isi::triggers::set::SetReadOnly,
+) -> Result<
+    BTreeMap<iroha_data_model::trigger::TriggerId, iroha_data_model::events::TriggeringEventType>,
+    json::Error,
+> {
+    use crate::smartcontracts::isi::triggers::{
+        data_trigger_scope_authorization_is_well_formed, set::validate_data_trigger_authorities,
+    };
+    use iroha_data_model::ivm_c10::EventFilterBoxC10V1;
+    let invalid = |message: String| json::Error::InvalidField {
+        field: "world.c10_triggers".into(),
+        message,
+    };
+    let mut index = BTreeMap::new();
+    for (id, stored) in rows.iter() {
+        let action = &stored.trigger().action;
+        if id != &stored.trigger().id || baseline.ids().get(id).is_some() {
+            return Err(invalid(
+                "trigger identifier disagrees with its key or is owned by both execution families"
+                    .into(),
+            ));
+        }
+        if matches!(action.filter(), EventFilterBoxC10V1::Data(_))
+            && !data_trigger_scope_authorization_is_well_formed(action.metadata())
+        {
+            return Err(invalid(
+                "persisted C10 data trigger has no canonical scope authorization".into(),
+            ));
+        }
+        if let Some(kind) = stored.trigger().event_scan_kind() {
+            index.insert(id.clone(), kind);
+        }
+    }
+    if !index.is_empty() {
+        let baseline_authorities = baseline.data_triggers().iter().map(|(_, a)| &a.authority);
+        let c10_authorities = rows
+            .iter()
+            .map(|(_, row)| &row.trigger().action)
+            .filter(|action| matches!(action.filter(), EventFilterBoxC10V1::Data(_)))
+            .map(|action| action.authority());
+        validate_data_trigger_authorities(baseline_authorities.chain(c10_authorities))
+            .map_err(invalid)?;
+    }
+    Ok(index)
+}
+
+#[cfg(test)]
+mod c10_trigger_restore_tests {
+    use super::*;
+    use iroha_data_model::{
+        events::{
+            TriggeringEventType, data::prelude::AccountEventFilter,
+            execute_trigger::ExecuteTriggerEventFilter,
+        },
+        isi::{InstructionBox, Log},
+        ivm_c10::{ActionC10V1, EventFilterBoxC10V1, StoredC10TriggerV1, TriggerC10V1},
+        level::Level,
+        trigger::{TriggerId, action::Repeats},
+    };
+
+    fn row(id: &TriggerId, filter: EventFilterBoxC10V1) -> StoredC10TriggerV1 {
+        let action = ActionC10V1::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "fixture".into(),
+            ))],
+            Repeats::Exactly(2),
+            iroha_test_samples::ALICE_ID.clone(),
+            filter,
+        )
+        .unwrap()
+        .with_metadata(
+            crate::smartcontracts::isi::triggers::owned_data_trigger_scope_metadata_for_testing(),
+        );
+        StoredC10TriggerV1::new(TriggerC10V1 {
+            id: id.clone(),
+            action,
+        })
+    }
+
+    #[test]
+    fn c10_scan_index_is_rebuilt_independently_for_current_and_revert_and_refuses_key_substitution()
+    {
+        use mv::storage::StorageReadOnly as _;
+        let world = World::default();
+        let id: TriggerId = "same_trigger".parse().unwrap();
+        let data = row(
+            &id,
+            EventFilterBoxC10V1::Data(
+                AccountEventFilter::new()
+                    .for_account(iroha_test_samples::ALICE_ID.clone())
+                    .into(),
+            ),
+        );
+        let by_call = row(
+            &id,
+            EventFilterBoxC10V1::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().for_trigger(id.clone()),
+            ),
+        );
+        for stored in [data.clone(), by_call] {
+            let mut block = world.block();
+            block.c10_triggers.insert(id.clone(), stored);
+            block.commit();
+        }
+        let current =
+            c10_trigger_candidates(&world.c10_triggers.view(), &world.triggers.view()).unwrap();
+        let previous = c10_trigger_candidates(
+            &world.c10_triggers.block_and_revert(),
+            &world.triggers.block_and_revert(),
+        )
+        .unwrap();
+        let rebuilt = rebuild_derived_storage_with_previous(current, previous);
+        assert!(rebuilt.view().get(&id).is_none());
+        assert_eq!(
+            rebuilt.block_and_revert().get(&id),
+            Some(&TriggeringEventType::Data)
+        );
+        let wrong_id: TriggerId = "other_trigger".parse().unwrap();
+        let mut block = world.block();
+        block.c10_triggers.insert(wrong_id.clone(), data);
+        block.commit();
+        assert!(
+            c10_trigger_candidates(&world.c10_triggers.view(), &world.triggers.view()).is_err()
+        );
+        let mut block = world.block();
+        block.c10_triggers.remove(wrong_id);
+        block.commit();
+        assert!(c10_trigger_candidates(&world.c10_triggers.view(), &world.triggers.view()).is_ok());
+        assert!(
+            c10_trigger_candidates(
+                &world.c10_triggers.block_and_revert(),
+                &world.triggers.block_and_revert()
+            )
+            .is_err()
+        );
     }
 }

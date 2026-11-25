@@ -176,8 +176,8 @@ fn portable_prefix_authenticates_exact_parent_da_bundles_and_refuses_substitutio
         1,
         BlobDigest::new([0x11; 32]),
         manifest,
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x33; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0x33; 32]),
         Some(Hash::prehashed([0x55; 32])),
         RetentionPolicy::default(),
         ticket,
@@ -199,9 +199,10 @@ fn portable_prefix_authenticates_exact_parent_da_bundles_and_refuses_substitutio
         signature: Signature::try_new(key.private_key(), &authorization.signing_digest()).unwrap(),
     });
     let scope = DaPinScopeV1::new(&authorization, ticket, manifest, Some("portable-da".into()));
+    let paired_commitment = commitments.commitments()[0].pin_scope_digest();
     let pins = DaPinIntentBundle::new(vec![DaPinIntent::new(
         authorization,
-        DaPinScopeAuthorizationV1::try_sign(scope, &key).unwrap(),
+        DaPinScopeAuthorizationV1::try_sign(scope, &paired_commitment, &key).unwrap(),
     )]);
     let mut parent = fixture.block_with_submitted_work(fixture.next_header());
     parent.set_da_commitments(Some(commitments.clone()));

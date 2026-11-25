@@ -150,7 +150,7 @@ impl StateTransaction<'_, '_> {
             .verify_issuer_signatures_v1(context, spend.authorization.anchor, &issuer.public_key)
             .map_err(AxtCurrentIssuerErrorV1::Authentication)?;
         let timing = self.nexus().axt;
-        let expiry = ivm::axt::expiry_slot_with_skew(
+        let expiry = ivm_abi::axt::expiry_slot_with_skew(
             spend.authorization.expiry_slot,
             timing.slot_length_ms,
             timing.max_clock_skew_ms,

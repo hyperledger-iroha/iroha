@@ -1,6 +1,7 @@
 //! Executor formatting preserves redaction and ordinary Rust debug layouts.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 #[test]
 fn loaded_executor_debug_redacts_locked_runtime_and_ignores_outer_flags() {
@@ -68,7 +69,7 @@ fn ordinary_executor_debug_keeps_unit_tuple_and_named_field_layouts() {
 
 #[test]
 fn executor_tuple_debug_resets_nested_flags_only_for_alternate_output() {
-    let error = ExecutorMigrationError::Rejected(VMError::InvalidOpcode(17));
+    let error = ExecutorMigrationError::Rejected(VMError::Trap(VmTrap::InvalidOpcode(17)));
     let pretty = "Rejected(\n    InvalidOpcode(\n        17,\n    ),\n)";
     assert_eq!(format!("{error:#?}"), pretty);
     assert_eq!(format!("{error:+#080?}"), pretty);
@@ -77,7 +78,10 @@ fn executor_tuple_debug_resets_nested_flags_only_for_alternate_output() {
     assert_eq!(format!("{error:x?}"), "Rejected(InvalidOpcode(11))");
     assert_eq!(
         format!("{error:*^80.4?}"),
-        format!("Rejected({:*^80.4?})", VMError::InvalidOpcode(17))
+        format!(
+            "Rejected({:*^80.4?})",
+            VMError::Trap(VmTrap::InvalidOpcode(17))
+        )
     );
     assert_eq!(
         format!("{:?}", ExecutorMigrationError::LiveCustody),

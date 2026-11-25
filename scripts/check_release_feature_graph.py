@@ -136,7 +136,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "a10fc4cd5c3063e29d02d57140d1360b5004434ab356cfd70225bc1321d76732"
+    "4a3f9391b642c231f32fc9b06f4cdc316dd78b3e6f50b0b7469786d3f0233f1b"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -1025,19 +1025,41 @@ def _quoted_arg_words(
     return tuple(word for word in match.group(1).split() if word)
 
 
+def _dockerfile_profile_daemons(source: str, path: Path) -> tuple[str, ...]:
+    """Return every daemon a Dockerfile selects from its configuration profile.
+
+    The root Dockerfile builds the daemon its `CONFIG_PROFILE` starts in addition
+    to `BINARIES`, so each literal `profile_daemon=<binary>` assignment ships.
+    """
+
+    daemons = tuple(
+        dict.fromkeys(
+            value.rstrip(";")
+            for value in re.findall(r"\bprofile_daemon=(\S*)", source)
+        )
+    )
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", daemon) for daemon in daemons):
+        raise RuntimeError(f"{path}: profile daemon must be a literal binary name")
+    return daemons
+
+
 def _dockerfile_binary_names(
     source: str, path: Path, catalog: WorkspaceCatalog
 ) -> tuple[str, ...]:
+    profile_daemons = _dockerfile_profile_daemons(source, path)
     declared = _quoted_arg_words(source, "BINARIES", path, required=False)
     if declared:
-        return declared
+        return tuple(dict.fromkeys((*profile_daemons, *declared)))
     if declared == () and "workspace_metadata.docker_bins" in source:
         if not catalog.workspace_docker_bins:
             raise RuntimeError(f"{path}: workspace docker_bins metadata is empty")
-        return catalog.workspace_docker_bins
+        return tuple(dict.fromkeys((*profile_daemons, *catalog.workspace_docker_bins)))
     binaries = tuple(
         dict.fromkeys(
-            re.findall(r"--bin\s+(?:\"|')?([A-Za-z0-9_.-]+)", source)
+            (
+                *profile_daemons,
+                *re.findall(r"--bin\s+(?:\"|')?([A-Za-z0-9_.-]+)", source),
+            )
         )
     )
     if not binaries:
@@ -1167,11 +1189,6 @@ def _validate_dockerfile_output_provenance(source: str, path: Path) -> None:
             "cp",
             "/cargo-target/${cargo_target_profile_dir}/${bin}",
             "/outbin/${bin}",
-        ),
-        (
-            "cp",
-            "/cargo-target/${cargo_target_profile_dir}/kagami",
-            "/outbin/kagami",
         ),
         ("chmod", "755", "/outbin/*"),
     }

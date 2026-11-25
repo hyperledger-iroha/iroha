@@ -82,7 +82,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 45
+    assert len(expected) == len(set(expected)) == 53
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -103,7 +103,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
         + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
         + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
-    assert len(current) == len(set(current)) == 84
+    assert len(current) == len(set(current)) == 100
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -396,6 +396,8 @@ def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
             # The Google first-device sign-up key JNI owner retired at bridge ABI 29.
             "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve",
             "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore",
+            # Superseded by the explicit-layout signed-transaction JSON decoder.
+            "connect_norito_decode_signed_transaction_json",
         },
         "csharp": {
             'connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1',
@@ -406,6 +408,7 @@ def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
             "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
             "connect_norito_kagemusha_device_response_authenticator_v1_verify",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+            "connect_norito_decode_signed_transaction_json",
         },
         "node": {"privateSettlementVerifyAuditorCapsuleResponseV1", "validationFeeHijiriQuoteRequestV1", "validationFeeVerifyHijiriQuoteResponseV1"},
         "python": {"private_settlement_verify_auditor_capsule_response_v1", "validation_fee_hijiri_quote_request_v1", "validation_fee_verify_hijiri_quote_response_v1"},
@@ -865,7 +868,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     for filename, owner, methods, relative in (
         ("KagemushaWalletV1.kt", "KagemushaWalletNativeV1", {"revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "review", "executeReviewed", "discardReview", "snapshot", "suffixUnloadStatus", "suffixUnloadPrepare", "suffixUnloadResume", "executeReviewedSuffixUnload", "suffixUnloadInstruction", "suffixUnloadSignedWire", "suffixUnloadAttemptOutcome", "suffixUnloadIngestFinality"}, "platform_jni/kagemusha_wallet_advance.rs"),
         ("KagemushaWalletInstalledRuntimeV1.kt", "KagemushaWalletInstalledRuntimeNativeV1", {"beginInstallation", "registerInstallation", "closeInstallation", "relocateRegistrationSource"}, "kagemusha_wallet_ffi/installed/jni.rs"),
-        ("KagemushaSpartanWalletV1.kt", "NativeSpartanBridge", {"install", "beginAccount", "authorizeAccount", "prepare", "execute", "output", "verifyPayment", "discard"}, "platform_jni/kagemusha_spartan.rs"),
+        ("KagemushaSpartanWalletV1.kt", "NativeSpartanBridge", {"install", "installBlacklist", "creditStatus", "epoch", "activationSettlement", "unloadSettlement", "issueOpenRequest", "beginAccount", "authorizeAccount", "prepare", "time", "confirm", "execute", "output", "verifyPayment", "discard"}, "platform_jni/kagemusha_spartan.rs"),
         ("KagemushaWalletOutputV1.kt", "KagemushaWalletObservationNativeV1", {"observe"}, "platform_jni/kagemusha_wallet_observation.rs"),
     ):
         consumer = (REPO_ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet" / filename).read_text()
@@ -880,7 +883,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     source = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/kagemusha_wallet_suffix.rs").read_text()
     defined_exports.extend(re.findall(r'pub\s+(?:unsafe\s+)?extern\s+"system"\s+fn\s+(Java_\w+)\s*\(', source))
     expected = MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
-    assert len(expected) == len(set(expected)) == len(declared_exports) == 38
+    assert len(expected) == len(set(expected)) == len(declared_exports) == 46
     assert set(expected) == declared_exports
     assert len(defined_exports) == len(set(defined_exports)) == len(expected)
     assert set(defined_exports) == set(expected)
@@ -1149,6 +1152,14 @@ def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None
         "connect_norito_kagemusha_spartan_begin_account_v1",
         "connect_norito_kagemusha_spartan_authorize_account_v1",
         "connect_norito_kagemusha_spartan_prepare_v1",
+        "connect_norito_kagemusha_spartan_credit_status_v1",
+        "connect_norito_kagemusha_spartan_epoch_v1",
+        "connect_norito_kagemusha_spartan_activation_settlement_v1",
+        "connect_norito_kagemusha_spartan_unload_settlement_v1",
+        "connect_norito_kagemusha_spartan_issue_open_request_v1",
+        "connect_norito_kagemusha_spartan_install_blacklist_v1",
+        "connect_norito_kagemusha_spartan_confirm_v1",
+        "connect_norito_kagemusha_spartan_time_v1",
         "connect_norito_kagemusha_spartan_execute_v1",
         "connect_norito_kagemusha_spartan_output_v1",
         "connect_norito_kagemusha_spartan_verify_payment_v1",

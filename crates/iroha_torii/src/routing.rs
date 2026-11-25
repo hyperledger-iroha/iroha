@@ -231,7 +231,7 @@ use iroha_data_model::{
     smart_contract::manifest,
     transaction::{
         executable::Executable,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+        signed::{SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -10710,6 +10710,51 @@ fn contract_manifest_response_body(
     };
     norito::json::to_json_pretty(&response)
 }
+/// Read the manifest and its captured profile from a single retained C10 registry cut.
+pub(crate) fn handle_get_c10_contract_code(
+    state: &CoreState,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
+) -> Result<Response> {
+    use iroha_data_model::ivm_c10::manifest::{
+        REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1,
+    };
+    let world = state.world_view();
+    let missing = || {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    };
+    let manifest = world
+        .c10_contract_manifests()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let host_profile = *world
+        .c10_contract_profiles()
+        .get(&artifact_id)
+        .ok_or_else(missing)?;
+    let body = norito::json::to_json_pretty(&RegisteredManifestC10V1 {
+        network_id: *state.network_id_ref(),
+        artifact_id,
+        host_profile,
+        manifest: manifest.clone(),
+    })
+    .map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to serialize the registered C10 manifest: {e}"
+        )))
+    })?;
+    let mut response = application_json_response(body);
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(REGISTERED_MANIFEST_MEDIA_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static("Accept"),
+    );
+    Ok(response)
+}
+
 /// Fetch an on-chain contract manifest by its exact dataspace-scoped identity.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -13965,6 +14010,36 @@ fn bound_signed_contract_arguments(
         .transpose()
         .map_err(|error| error.to_string())
 }
+/// Whether a multisig contract-call payload is exactly the empty JSON object.
+fn is_empty_multisig_contract_payload(payload: &IrohaJson) -> bool {
+    payload
+        .try_into_any_norito::<Value>()
+        .is_ok_and(|value| value.as_object().is_some_and(norito::json::Map::is_empty))
+}
+/// Check a multisig contract-call payload against the entrypoint's embedded argument
+/// schema and return the record a direct call with it would carry.
+///
+/// The multisig envelope always carries its payload as the firing event's JSON
+/// object and never a fixed record; the callback encodes the event against the
+/// schema when it fires. A zero-parameter entrypoint takes exactly the empty object,
+/// which its callback receives as the event but does not decode.
+fn multisig_contract_call_argument_record(
+    prepared: &ivm::PreparedContract,
+    entrypoint: &str,
+    payload: &IrohaJson,
+) -> core::result::Result<Option<Vec<u8>>, String> {
+    let embedded_entrypoint = prepared.entrypoint_descriptor(entrypoint).ok_or_else(|| {
+        format!("deployed contract is missing embedded entrypoint `{entrypoint}`")
+    })?;
+    if embedded_entrypoint.argument_schema.is_none() {
+        return if is_empty_multisig_contract_payload(payload) {
+            Ok(None)
+        } else {
+            Err("zero-parameter entrypoint takes the empty object payload".to_owned())
+        };
+    }
+    encode_contract_argument_record(prepared, entrypoint, Some(payload))
+}
 const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
 const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
 const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
@@ -16107,6 +16182,39 @@ fn normalize_contract_payload_after_authorization<E>(
     authorize()?;
     normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
+/// Normalize the payload of a multisig contract-call proposal.
+///
+/// The proposal envelope carries a JSON object as the firing event's arguments. A
+/// parameterized entrypoint takes the object its argument schema describes; a
+/// zero-parameter entrypoint takes exactly the empty object.
+fn normalize_multisig_contract_payload(
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: &IrohaJson,
+) -> Result<IrohaJson> {
+    if descriptor.argument_schema.is_none() {
+        // Keeps the refusal of a parameterized manifest that lacks its schema.
+        normalize_contract_payload(descriptor, None)?;
+        if !is_empty_multisig_contract_payload(payload) {
+            return Err(multisig_selector_conflict_error(
+                "multisig_contract_zero_parameter_payload",
+                "zero-parameter contract entrypoints take the empty object payload",
+            ));
+        }
+        return Ok(IrohaJson::new(norito::json!({})));
+    }
+    normalize_contract_payload(descriptor, Some(payload))?
+        .filter(|value| {
+            value
+                .try_into_any_norito::<Value>()
+                .is_ok_and(|value| value.as_object().is_some())
+        })
+        .ok_or_else(|| {
+            multisig_selector_conflict_error(
+                "multisig_contract_object_payload_required",
+                "contract multisig proposals require an exact object payload",
+            )
+        })
+}
 fn resolve_contract_entrypoint_pc(
     prepared: &ivm::PreparedContract,
     selector: &str,
@@ -17555,7 +17663,7 @@ fn build_multisig_contract_call_instructions(
 multisig_account_id: &iroha_data_model::account::AccountId,
 (contract_address, contract_alias): (&iroha_data_model::smart_contract::ContractAddress, Option<&iroha_data_model::smart_contract::ContractAlias>),
 entrypoint: &str,
-(payload, arguments): (Option<&IrohaJson>, Option<&[u8]>),
+payload: Option<&IrohaJson>,
 manifest: &manifest::ContractManifest,
 code_hash: &Hash,
 attempt_created_at_ms: NonZeroU64,
@@ -17576,15 +17684,14 @@ attempt_created_at_ms: NonZeroU64,
             "contract multisig proposals require an exact object payload",
         )
     })?;
-    let arguments =
-        bound_signed_contract_arguments(arguments.map(<[u8]>::to_vec)).map_err(conversion_error)?;
+    // The callback takes its arguments from the ExecuteTrigger payload when the
+    // approved proposal fires; core refuses a fixed argument record here.
     let call = iroha_data_model::smart_contract::multisig_call::build_multisig_contract_call(
         multisig_account_id,
         contract_address,
         contract_alias,
         entrypoint,
         payload,
-        arguments,
         code_hash,
         attempt_created_at_ms,
     )
@@ -18668,13 +18775,16 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     {
         return None;
     }
-    let expected_arguments = encode_contract_argument_record(
-        &prepared,
-        &contract_entrypoint,
-        Some(&IrohaJson::new(payload.clone())),
-    )
-    .ok()?;
-    if expected_arguments.as_deref() != invocation.arguments.as_ref().map(iroha_data_model::transaction::executable::ContractArgumentRecord::as_bytes) {
+    // Trigger callbacks take their arguments from the firing event, so the envelope
+    // carries no fixed record; its payload must still match the entrypoint's schema.
+    if invocation.arguments.is_some()
+        || multisig_contract_call_argument_record(
+            &prepared,
+            &contract_entrypoint,
+            &IrohaJson::new(payload.clone()),
+        )
+        .is_err()
+    {
         return None;
     }
     Some(ExactMultisigContractCallTarget {
@@ -19437,6 +19547,7 @@ fn query_multisig_proposals(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
+    use ivm_abi::error::{VmDeferral, VmTrap};
     use super::*;
     #[test]
     fn local_contract_authorization_refusal_is_transport_capacity_not_a_completed_denial() {
@@ -19560,12 +19671,12 @@ mod multisig_contract_call_tests {
         let held = pool.try_reserve_bytes(8).unwrap();
         let refusal = pool.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
-        let converted = contract_vm_attempt_error(ivm::VMError::AllocationDeferred(refusal), |_| panic!("local refusal cannot be formatted as a completed VM error"));
+        let converted = contract_vm_attempt_error(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(refusal)), |_| panic!("local refusal cannot be formatted as a completed VM error"));
         let ExecutionAttemptError::<()>::Deferred(owner) = converted else { panic!("original refusal remains local") };
         assert_eq!(owner.allocation_refusal(), Some(&expected));
         drop(held);
         assert_eq!(pool.reserved_bytes(), 0);
-        assert!(matches!(contract_vm_attempt_error(ivm::VMError::PermissionDenied, |error| error), ExecutionAttemptError::Rejected(ivm::VMError::PermissionDenied)));
+        assert!(matches!(contract_vm_attempt_error(ivm::VMError::Trap(VmTrap::PermissionDenied), |error| error), ExecutionAttemptError::Rejected(ivm::VMError::Trap(VmTrap::PermissionDenied))));
     }
 
     #[test]
@@ -19794,7 +19905,7 @@ mod multisig_contract_call_tests {
 &multisig,
 (&contract_address, Some(&contract_alias)),
 "main",
-(Some(&payload), None),
+Some(&payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1).expect("positive fixture attempt"),
@@ -19895,7 +20006,7 @@ NonZeroU64::new(1).expect("positive fixture attempt"),
 &multisig,
 (&contract_address, Some(alias)),
 entrypoint,
-(Some(payload), None),
+Some(payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1).expect("positive fixture attempt"),
@@ -23902,22 +24013,46 @@ seiyaku BytesPayloadNormalizeTest { permission CanEnactGovernance;
         let normalized_payload = normalize_contract_payload(entrypoint, Some(&request_payload))
             .expect("canonical blob payload should validate")
             .expect("validated payload");
-        let arguments = encode_contract_argument_record(
+        encode_contract_argument_record(
             program.prepared_contract(),
             "create",
             Some(&normalized_payload),
         )
-        .expect("argument record");
-        let (_, expected_hash) = build_multisig_contract_call_instructions(
+        .expect("payload matches the parameterized entrypoint schema")
+        .expect("parameterized entrypoint has an argument record");
+        let (expected_instructions, expected_hash) = build_multisig_contract_call_instructions(
 &multisig_account_id,
 (&contract_address, Some(&contract_alias)),
 "create",
-(Some(&normalized_payload), arguments.as_deref()),
+Some(&normalized_payload),
 &manifest,
 &code_hash,
 NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt"),
 )
         .expect("normalized instructions");
+        let Some(iroha_data_model::isi::RegisterBox::Trigger(register)) = expected_instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("the proposal registers the contract callback trigger")
+        };
+        let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+            register.object().action().executable()
+        else {
+            panic!("the callback trigger executes one contract invocation")
+        };
+        assert!(
+            invocation.arguments.is_none(),
+            "core refuses contract trigger callbacks with a fixed argument record"
+        );
+        let execute = expected_instructions[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("the proposal fires the registered trigger");
+        assert_eq!(
+            execute.args, normalized_payload,
+            "the parameterized callback takes its arguments from the firing event"
+        );
         let expected_hash = expected_hash.to_string();
         assert_eq!(
             proposal_id,
@@ -23931,6 +24066,164 @@ NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt"),
         assert_eq!(
             response_payload["instructions_hash"].as_str(),
             Some(expected_hash.as_str())
+        );
+    }
+    routing_test! { async multisig_contract_envelopes_take_arguments_from_the_firing_event
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            signer_two_id,
+            _alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let code = kotodama_lang::compiler::Compiler::new()
+            .compile_source(
+                r"
+seiyaku MultisigEventArguments { permission CanEnactGovernance;
+
+  kotoage fn create(bytes alias_literal) authorize(CanEnactGovernance) {}
+
+  kotoage fn ping() authorize(CanEnactGovernance) {}
+}
+",
+            )
+            .expect("compile event-argument contract");
+        let contract_alias = "review_event_args::universal"
+            .parse::<iroha_data_model::smart_contract::ContractAlias>()
+            .expect("contract alias");
+        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
+        install_contract_instance_with_code(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            &contract_address,
+            code,
+            Some(contract_alias.clone()),
+            std::slice::from_ref(&multisig_account_id),
+        );
+        let attempt = NonZeroU64::new(1_700_000_000_345).expect("frozen proposer attempt");
+        let request = |entrypoint: &str, payload: IrohaJson| MultisigContractCallProposeDto {
+            proposal_nonce: MultisigProposalNonce::new([0x42; 32]).unwrap(),
+            selector: concrete_selector(multisig_account_id.clone()),
+            signer_account_id: signer_two_id.clone(),
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(attempt.get()),
+            contract_alias: contract_alias.clone(),
+            entrypoint: entrypoint.to_owned(),
+            payload,
+            fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
+        };
+        let PreparedContractCall {
+            program,
+            code_hash,
+            manifest,
+            ..
+        } = prepare_contract_call(state.as_ref(), &contract_address, None)
+            .expect("prepared contract call");
+        let envelope = |entrypoint: &str, payload: &IrohaJson| {
+            build_multisig_contract_call_instructions(
+                &multisig_account_id,
+                (&contract_address, Some(&contract_alias)),
+                entrypoint,
+                Some(payload),
+                &manifest,
+                &code_hash,
+                attempt,
+            )
+            .expect("canonical envelope")
+        };
+        // A zero-parameter entrypoint takes exactly the empty object payload.
+        let empty = IrohaJson::new(norito::json!({}));
+        let response = handle_post_contract_call_multisig_propose(
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(request("ping", empty.clone())),
+        )
+        .await
+        .expect("zero-parameter multisig proposal");
+        let response_payload = decode_json_response(response).await;
+        assert_eq!(
+            response_payload["instructions_hash"].as_str(),
+            Some(envelope("ping", &empty).1.to_string().as_str())
+        );
+        let error = handle_post_contract_call_multisig_propose(
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(request("ping", IrohaJson::new(norito::json!({ "probe": true })))),
+        )
+        .await
+        .expect_err("a zero-parameter entrypoint takes no arguments");
+        expect_app_conflict(error, "multisig_contract_zero_parameter_payload");
+        // The approve route admits exactly the canonical event-argument envelopes.
+        let target = |instructions: Vec<dm::InstructionBox>| {
+            exact_multisig_contract_call_target_with_world(
+                &state.world_view(),
+                &multisig_account_id,
+                &occurrence_fixture_value(instructions, 1, 2, BTreeSet::new()),
+            )
+        };
+        let create_payload = IrohaJson::new(norito::json!({
+            "alias_literal": "0x62616e6b696e674063656e7472616c62616e6b"
+        }));
+        for (entrypoint, payload) in [("create", &create_payload), ("ping", &empty)] {
+            let found = target(envelope(entrypoint, payload).0)
+                .expect("canonical event-argument envelope is an exact target");
+            assert_eq!(found.contract_alias, contract_alias);
+            assert_eq!(found.contract_entrypoint, entrypoint);
+            assert_eq!(&found.payload, payload);
+        }
+        assert!(
+            target(envelope("ping", &IrohaJson::new(norito::json!({ "probe": true }))).0)
+                .is_none(),
+            "a zero-parameter envelope with arguments is not an exact target"
+        );
+        assert!(
+            target(envelope("create", &IrohaJson::new(norito::json!({ "wrong": 1 }))).0)
+                .is_none(),
+            "a payload outside the entrypoint schema is not an exact target"
+        );
+        let mut fixed = envelope("create", &create_payload).0;
+        let Some(iroha_data_model::isi::RegisterBox::Trigger(register)) =
+            fixed[0].as_any().downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("the envelope registers the callback trigger")
+        };
+        let trigger = register.object();
+        let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+            trigger.action().executable()
+        else {
+            panic!("the callback trigger executes one contract invocation")
+        };
+        let mut invocation = invocation.clone();
+        invocation.arguments = bound_signed_contract_arguments(
+            encode_contract_argument_record(
+                program.prepared_contract(),
+                "create",
+                Some(&create_payload),
+            )
+            .expect("payload matches the schema"),
+        )
+        .expect("bounded record");
+        assert!(invocation.arguments.is_some());
+        let action = iroha_data_model::trigger::action::Action::new(
+            iroha_data_model::transaction::Executable::ContractCall(invocation),
+            iroha_data_model::trigger::action::Repeats::Exactly(1),
+            multisig_account_id.clone(),
+            trigger.action().filter().clone(),
+        )
+        .expect("fixed-record action fixture")
+        .with_metadata(trigger.action().metadata().clone());
+        fixed[0] = iroha_data_model::isi::Register::trigger(
+            iroha_data_model::trigger::Trigger::new(trigger.id().clone(), action),
+        )
+        .into();
+        assert!(
+            target(fixed).is_none(),
+            "core refuses contract trigger callbacks with a fixed argument record"
         );
     }
     routing_test! { async multisig_generic_propose_binds_assessment_only_in_signed_proposal_marker
@@ -24910,16 +25203,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_callable_contract_entrypoint(&manifest, &entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, Some(&payload))?;
-    if normalized_payload
-        .clone()
-        .and_then(|value| value.try_into_any_norito::<Value>().ok()).is_none_or(|value| value.as_object().is_none())
-    {
-        return Err(multisig_selector_conflict_error(
-            "multisig_contract_object_payload_required",
-            "contract multisig proposals require an exact object payload",
-        ));
-    }
+    let normalized_payload = normalize_multisig_contract_payload(entrypoint_descriptor, &payload)?;
     let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
         "apps_mint_request::cbsi"
             .parse()
@@ -24936,9 +25220,8 @@ pub async fn handle_post_contract_call_multisig_propose(
             ));
         }
         let payload_value = normalized_payload
-            .clone()
-            .and_then(|value| value.try_into_any_norito::<Value>().ok())
-            .ok_or_else(|| {
+            .try_into_any_norito::<Value>()
+            .map_err(|_| {
                 multisig_selector_conflict_error(
                     "mint_request_payload_invalid",
                     "CBSI mint requests require an exact object payload",
@@ -24998,14 +25281,18 @@ pub async fn handle_post_contract_call_multisig_propose(
             }
         }
     }
-    let arguments = encode_contract_argument_record(
+    // The encoded record checks the payload against the pinned schema and shapes the
+    // direct-call routing estimate. The proposal itself carries only the payload:
+    // the trigger callback encodes it from the firing event when the proposal executes.
+    let arguments = multisig_contract_call_argument_record(
         program.prepared_contract(),
         &entrypoint,
-        normalized_payload.as_ref(),
+        &normalized_payload,
     )
     .map_err(conversion_error)?;
-    let signed_arguments =
-        bound_signed_contract_arguments(arguments.clone()).map_err(conversion_error)?;
+    // A zero-parameter call's outer metadata omits the payload, as a direct call's does.
+    let metadata_payload = arguments.is_some().then_some(&normalized_payload);
+    let signed_arguments = bound_signed_contract_arguments(arguments).map_err(conversion_error)?;
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let attempt_created_at_ms = NonZeroU64::new(creation_time_ms).ok_or_else(|| {
         multisig_selector_validation_error("positive Propose creation_time_ms is required")
@@ -25016,7 +25303,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &code_hash,
         contract_alias.as_ref(),
         Some(&entrypoint),
-        normalized_payload.as_ref(),
+        metadata_payload,
     );
     tx_metadata.insert(
         Name::from_str("contract_attempt_created_at_ms").expect("static metadata key"),
@@ -25026,7 +25313,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &multisig_account_id,
         (&contract_address, contract_alias.as_ref()),
         &entrypoint,
-        (normalized_payload.as_ref(), arguments.as_deref()),
+        Some(&normalized_payload),
         &manifest,
         &code_hash,
         attempt_created_at_ms,
@@ -32407,22 +32694,22 @@ struct AccountHistoryTxBase {
 trait HistoryTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint;
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint>;
-    fn result(&self) -> &TransactionResult;
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_>;
 }
 impl HistoryTransaction for iroha_data_model::query::CommittedTransaction {
     fn entrypoint(&self) -> &TransactionEntrypoint { &self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result() }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result() }
 }
 struct BorrowedNetworkTransaction<'a> {
     entrypoint: &'a TransactionEntrypoint,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
-    result: &'a TransactionResult,
+    result: iroha_data_model::block::execution_output::TransactionResultRef<'a>,
 }
 impl HistoryTransaction for BorrowedNetworkTransaction<'_> {
     fn entrypoint(&self) -> &TransactionEntrypoint { self.entrypoint }
     fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
-    fn result(&self) -> &TransactionResult { self.result }
+    fn result(&self) -> iroha_data_model::block::execution_output::TransactionResultRef<'_> { self.result }
 }
 fn history_cache_anchor(height: usize, hash: Option<&str>) -> Result<Option<HashOf<BlockHeader>>> {
     if height == 0 {
@@ -32498,10 +32785,10 @@ fn project_finalized_network_range<T>(
             let entrypoint = block.network_entrypoint_at(index)
                 .ok_or_else(|| conversion_error("validated Network source disappeared".into()))?;
             let index = u32::try_from(index).map_err(|_| history_capacity_error())?;
-            let (_, output) = block.network_output_at(index)
+            let (_, output) = block.network_execution_output_at(index)
                 .ok_or_else(|| conversion_error("validated Network output disappeared".into()))?;
             let transaction = BorrowedNetworkTransaction {
-                entrypoint, entrypoint_hash: entrypoint.hash(), result: &output.result,
+                entrypoint, entrypoint_hash: entrypoint.hash(), result: output.result(),
             };
             let rows = project(height, &transaction);
             let count = projections.len().checked_add(rows.len()).ok_or_else(history_capacity_error)?;
@@ -33796,16 +34083,16 @@ pub(crate) fn output_fee_projection(
     block: &iroha_data_model::block::SignedBlock,
     output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
 ) -> Result<Option<iroha_data_model::transaction::FeePaymentIntent>, Error> {
-    let Some(network) = output.network() else {
+    let Some(input_index) = output.network_index() else {
         return Ok(None);
     };
     let entrypoint = block
-        .network_entrypoint_at(network.input_index as usize)
+        .network_entrypoint_at(input_index as usize)
         .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
     Ok(tx_fee_projection(&BorrowedNetworkTransaction {
         entrypoint,
         entrypoint_hash: entrypoint.hash(),
-        result: &network.result,
+        result: output.result(),
     }))
 }
 
@@ -40018,21 +40305,28 @@ fn native_contract_emission_source_is_visible(
     emission: &iroha_data_model::smart_contract::event::ContractEmissionV1,
 ) -> bool {
     use iroha_data_model::block::execution_output::{
-        ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
-        PipelineExecutionOutputV2,
+        ExecutionOutputV1, ExecutionSourceC10V1, NetworkExecutionOutputV2,
+        PipelineEventPositionV1, PipelineExecutionOutputV2,
     };
-    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) { return false; }
-    match output {
-        ExecutionOutputV1::Network(source)
-        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: source, .. }) => visibility.allows_external_entrypoint(block, source.input_index as usize),
-        ExecutionOutputV1::Pipeline(source)
-        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: source, .. }) => match source.invocation.event {
-            PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
-            PipelineEventPositionV1::BlockApproved => true,
+    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) {
+        return false;
+    }
+    let position = match output {
+        ExecutionOutputV1::Network(row)
+        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => PipelineEventPositionV1::Network(row.input_index),
+        ExecutionOutputV1::Pipeline(row)
+        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => row.invocation.event,
+        ExecutionOutputV1::C10(row) => match &row.source {
+            ExecutionSourceC10V1::Network(index) => PipelineEventPositionV1::Network(*index),
+            ExecutionSourceC10V1::Pipeline { invocation, .. } => invocation.event,
+            ExecutionSourceC10V1::Time { .. } => return true,
         },
-        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
-        // A governance block-start output names no account, input or session.
-        ExecutionOutputV1::GovernanceBlockStart(_) => true,
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+        | ExecutionOutputV1::GovernanceBlockStart(_) => return true,
+    };
+    match position {
+        PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
+        PipelineEventPositionV1::BlockApproved => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -40064,7 +40358,7 @@ mod native_contract_emission_source_visibility_tests {
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
             ExternalExecutionRouteRole, builder::BlockBuilder,
             execution_output::{
-                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                ExecutionOutputV1, ExecutionOutputC10V1, ExecutionSourceC10V1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
                 PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineExecutionOutputV2,
                 PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2,
                 TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
@@ -40072,7 +40366,7 @@ mod native_contract_emission_source_visibility_tests {
         },
         events::time::{TimeEvent, TimeInterval},
         smart_contract::{ContractAddress, entrypoint::*, event::*},
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionResult},
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
@@ -40144,30 +40438,39 @@ mod native_contract_emission_source_visibility_tests {
         }
     }
 
-    fn network_outputs(index: u32) -> [ExecutionOutputV1; 2] {
+    fn c10_output(source: ExecutionSourceC10V1) -> ExecutionOutputV1 {
+        ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source,
+            result: iroha_data_model::ivm_c10::TransactionResultC10V1(Ok(Vec::new()), Vec::new(), None, Default::default()),
+            completions: Vec::new(),
+            trigger_lifecycle: None,
+        })
+    }
+
+    fn network_outputs(index: u32) -> [ExecutionOutputV1; 3] {
         let execution = NetworkExecutionOutputV1 {
             input_index: index, result: TransactionResult::new(Ok(Vec::new())),
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Network(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Network(index)), ExecutionOutputV1::Network(execution.clone()),
          ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 2] {
+    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 3] {
         let execution = PipelineExecutionOutputV1 {
             invocation: PipelineInvocationV1 { event, candidate_index: 0, trigger: trigger() },
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Pipeline(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Pipeline { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Pipeline(execution.clone()),
          ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn time_outputs() -> [ExecutionOutputV1; 2] {
+    fn time_outputs() -> [ExecutionOutputV1; 3] {
         let execution = TimeExecutionOutputV1 {
             invocation: TimeInvocationV1 {
                 schedule_index: 0, trigger: trigger(),
@@ -40176,7 +40479,7 @@ mod native_contract_emission_source_visibility_tests {
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Time(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Time { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Time(execution.clone()),
          ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
@@ -46935,7 +47238,7 @@ mod contract_feed_binding_tests {
     use iroha_data_model::{
         smart_contract::ContractAddress,
         transaction::{
-            FeePaymentIntent, TransactionBuilder,
+            FeePaymentIntent, TransactionBuilder, TransactionResult,
             error::TransactionRejectionReason,
             executable::{ContractArgumentRecord, ContractInvocation},
         },
@@ -47054,7 +47357,7 @@ mod contract_feed_binding_tests {
         BorrowedNetworkTransaction {
             entrypoint,
             entrypoint_hash: entrypoint.hash(),
-            result,
+            result: result.into(),
         }
     }
     routing_test! { sync non_contract_transactions_never_reach_contract_feeds
@@ -55556,7 +55859,7 @@ fn external_signed_transaction_results(
         usize,
         HashOf<TransactionEntrypoint>,
         &SignedTransaction,
-        &TransactionResult,
+        iroha_data_model::block::execution_output::TransactionResultRef<'_>,
     ),
 > + '_ {
     (0..block.network_entrypoint_count()).filter_map(move |index| {
@@ -55570,7 +55873,7 @@ fn external_signed_transaction_result_at(
 ) -> Option<(
     HashOf<TransactionEntrypoint>,
     &SignedTransaction,
-    &TransactionResult,
+    iroha_data_model::block::execution_output::TransactionResultRef<'_>,
 )> {
     // The caller owns a complete carrier validated by the finalized reader.
     // Do not repeat whole-tree validation for every projected row.
@@ -55581,9 +55884,8 @@ fn external_signed_transaction_result_at(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => return None,
     };
     let entrypoint_hash = source.hash();
-    let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
-    let result = &output.result;
-    Some((entrypoint_hash, signed, result))
+    let (_, output) = block.network_execution_output_at(u32::try_from(index).ok()?)?;
+    Some((entrypoint_hash, signed, output.result()))
 }
 fn resolve_explorer_history_entrypoint(
     block: &SignedBlock,
@@ -60456,6 +60758,7 @@ pub mod event {
     //! Events stream handler
     use super::*;
     use crate::{event, stream::WebSocketNorito};
+    include!("routing/c10_event_stream.rs");
     /// Type for any error during events streaming
     #[derive(Debug, thiserror::Error)]
     enum Error {

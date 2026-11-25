@@ -4,7 +4,7 @@
 use crate::secure_file_metadata;
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     da::{ingest::StoredDaReceipt, prelude::*},
@@ -47,7 +47,6 @@ const DA_RECEIPT_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
 /// First-release ceiling covering Ed25519, secp256k1, and ML-DSA-65 receipt signatures.
 const DA_RECEIPT_SIGNATURE_MAX_BYTES_V1: usize = 4 * 1024;
 /// First-release ceiling for one canonical DA manifest spool body.
-const DA_MANIFEST_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// First-release ceiling for one authorised DA pin-intent spool body.
 const DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// First-release ceiling for one unsigned producer pin-scope challenge.
@@ -55,12 +54,13 @@ const DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
 const TICKET_ARTIFACTS_DIR: &str = "artifacts";
 const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
-/// Placeholder signature bytes used before signing DA receipts.
-pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA5; 64];
-const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
 const DA_INGEST_SERVER_ASSIGNMENT_VERSION: u16 = 1;
-const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION: u16 = 1;
+/// Version 2 embeds the receipt that carries `retention_policy`.
+const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION: u16 = 2;
+/// Header owner of the retired version-1 assignment, which embedded the 12-field receipt.
+const RETIRED_DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_V1: &str =
+    "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1";
 const DA_INGEST_SERVER_ASSIGNMENT_DIR: &str = "request-intents-v1";
 const DA_INGEST_SERVER_ASSIGNMENT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1: usize = 128 * 1024;
@@ -111,12 +111,15 @@ pub(super) struct DaIngestServerAssignmentV1 {
 }
 
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1")]
+#[norito_schema(name = "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV2")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
-
-struct DaIngestSignedReceiptAssignmentV1 {
+/// Durable operator-signed receipt for one signed DA ingest request.
+///
+/// Its nominal identity names version 2, so the Norito header declares the layout; the
+/// retired version-1 frame is refused by its exact header owner and never decoded.
+struct DaIngestSignedReceiptAssignmentV2 {
     version: u16,
     request_digest: [u8; 32],
     lane_id: LaneId,
@@ -154,7 +157,7 @@ impl DaIngestServerAssignmentV1 {
             retention_mismatch,
             manifest_bytes,
             operator_public_key: signer.public_key().clone(),
-            assignment_signature: receipt_signature_placeholder(),
+            assignment_signature: DaIngestReceipt::signature_placeholder(),
         };
         let signing_bytes = assignment.signing_bytes()?;
         assignment.assignment_signature = Signature::try_new(signer.private_key(), &signing_bytes)
@@ -164,7 +167,7 @@ impl DaIngestServerAssignmentV1 {
 
     fn signing_bytes(&self) -> std::io::Result<Vec<u8>> {
         let mut unsigned = self.clone();
-        unsigned.assignment_signature = receipt_signature_placeholder();
+        unsigned.assignment_signature = DaIngestReceipt::signature_placeholder();
         to_bytes(&unsigned).map_err(std::io::Error::other)
     }
 }
@@ -224,13 +227,13 @@ fn validate_da_ingest_server_assignment(
             "DA ingest server assignment does not match the signed request identity",
         ));
     }
-    if assignment.manifest_bytes.len() > DA_MANIFEST_ARTIFACT_MAX_BYTES_V1 {
+    if assignment.manifest_bytes.len() > DaManifestV1::MAX_ENCODED_BYTES {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
             format!(
                 "DA ingest server assignment manifest is {} bytes, exceeding the first-release {}-byte limit",
                 assignment.manifest_bytes.len(),
-                DA_MANIFEST_ARTIFACT_MAX_BYTES_V1
+                DaManifestV1::MAX_ENCODED_BYTES
             ),
         ));
     }
@@ -631,8 +634,8 @@ pub(super) fn load_or_create_da_ingest_server_assignment(
 }
 
 fn validate_da_ingest_signed_receipt_assignment(
-    assignment: &DaIngestSignedReceiptAssignmentV1,
-    expected: &DaIngestSignedReceiptAssignmentV1,
+    assignment: &DaIngestSignedReceiptAssignmentV2,
+    expected: &DaIngestSignedReceiptAssignmentV2,
 ) -> std::io::Result<()> {
     if assignment.version != DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION
         || assignment.request_digest != expected.request_digest
@@ -660,9 +663,13 @@ fn validate_da_ingest_signed_receipt_assignment(
             "signed DA receipt assignment lane/epoch does not match its receipt",
         ));
     }
-    let assigned_unsigned = unsigned_receipt_bytes(&assignment.receipt, assignment.sequence)
+    let assigned_unsigned = assignment
+        .receipt
+        .operator_signing_bytes(assignment.sequence)
         .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
-    let expected_unsigned = unsigned_receipt_bytes(&expected.receipt, expected.sequence)
+    let expected_unsigned = expected
+        .receipt
+        .operator_signing_bytes(expected.sequence)
         .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err.to_string()))?;
     if assigned_unsigned != expected_unsigned {
         return Err(std::io::Error::new(
@@ -670,31 +677,43 @@ fn validate_da_ingest_signed_receipt_assignment(
             "signed DA receipt assignment conflicts with the deterministic receipt fields",
         ));
     }
-    verify_receipt_signature(
-        &assignment.receipt,
-        assignment.sequence,
-        &assignment.operator_public_key,
-    )
-    .map_err(|err| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("signed DA receipt assignment has an invalid operator signature: {err}"),
-        )
-    })?;
+    assignment
+        .receipt
+        .verify_operator_signature(assignment.sequence, &assignment.operator_public_key)
+        .map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("signed DA receipt assignment has an invalid operator signature: {err}"),
+            )
+        })?;
     Ok(())
 }
 
 fn decode_da_ingest_signed_receipt_assignment(
     path: &Path,
-    expected: &DaIngestSignedReceiptAssignmentV1,
-) -> std::io::Result<DaIngestSignedReceiptAssignmentV1> {
+    expected: &DaIngestSignedReceiptAssignmentV2,
+) -> std::io::Result<DaIngestSignedReceiptAssignmentV2> {
     let bytes = read_regular_spool_artifact(
         path,
         "signed DA receipt assignment",
         DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1,
     )?;
+    if norito::core::Header::read(bytes.as_slice()).is_ok_and(|header| {
+        header.schema
+            == norito::core::schema_hash_for_name(RETIRED_DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_V1)
+    }) {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "signed DA receipt assignment {} is the retired version-1 frame; this build reads \
+                 only version {DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION}, so drain or archive \
+                 the spool written by the earlier build",
+                path.display()
+            ),
+        ));
+    }
     let assignment =
-        decode_from_bytes::<DaIngestSignedReceiptAssignmentV1>(&bytes).map_err(|err| {
+        decode_from_bytes::<DaIngestSignedReceiptAssignmentV2>(&bytes).map_err(|err| {
             std::io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
@@ -749,6 +768,7 @@ fn validate_signed_receipt_against_server_assignment(
         || receipt.stripe_layout.shards_per_stripe != manifest.shards_per_stripe
         || receipt.stripe_layout.row_parity_stripes != manifest.erasure_profile.row_parity_stripes
         || receipt.queued_at_unix != assignment.queued_at_secs
+        || receipt.retention_policy != manifest.retention_policy
         || receipt.rent_quote != manifest.rent_quote
     {
         return Err(std::io::Error::new(
@@ -792,7 +812,7 @@ pub(super) fn load_or_create_da_ingest_signed_receipt(
             },
         )?;
     validate_signed_receipt_against_server_assignment(request, &server_assignment, candidate)?;
-    let expected = DaIngestSignedReceiptAssignmentV1 {
+    let expected = DaIngestSignedReceiptAssignmentV2 {
         version: DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION,
         request_digest: request.signing_digest(),
         lane_id: request.lane_id,
@@ -876,10 +896,6 @@ pub(super) fn load_or_create_da_ingest_signed_receipt(
         .map(|assignment| assignment.receipt)
 }
 
-pub(crate) fn receipt_signature_placeholder() -> Signature {
-    Signature::try_from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER)
-        .expect("DA receipt placeholder signature is non-empty and nonzero")
-}
 /// Persistent store tracking the highest sequence observed per `(lane, epoch)`.
 pub struct ReplayCursorStore {
     dir: PathBuf,
@@ -1850,19 +1866,6 @@ pub struct DaReceiptLogEntry {
     /// Manifest hash referenced by the receipt.
     pub manifest_hash: BlobDigest,
 }
-#[derive(
-    Clone,
-    Debug,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_torii::da::persistence::DaReceiptSigningPayload")]
-struct DaReceiptSigningPayload {
-    version: u16,
-    sequence: u64,
-    receipt: DaIngestReceipt,
-}
 fn archive_receipts_outside_allow_set(
     dir: &Path,
     retain: &impl Fn(LaneEpoch) -> bool,
@@ -2135,41 +2138,6 @@ fn xor_digest(target: &mut [u8; blake3::OUT_LEN], value: [u8; blake3::OUT_LEN]) 
         *target ^= value;
     }
 }
-pub(super) fn unsigned_receipt_bytes(
-    receipt: &DaIngestReceipt,
-    sequence: u64,
-) -> eyre::Result<Vec<u8>> {
-    let mut unsigned = receipt.clone();
-    unsigned.operator_signature = receipt_signature_placeholder();
-    to_bytes(&DaReceiptSigningPayload {
-        version: RECEIPT_SIGNING_PAYLOAD_VERSION,
-        sequence,
-        receipt: unsigned,
-    })
-    .map_err(|err| eyre!(err))
-}
-fn verify_receipt_signature(
-    receipt: &DaIngestReceipt,
-    sequence: u64,
-    signer_public_key: &PublicKey,
-) -> eyre::Result<()> {
-    let unsigned_bytes = unsigned_receipt_bytes(receipt, sequence)?;
-    match signer_public_key.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(receipt.operator_signature.payload())
-                .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(receipt.operator_signature.payload())
-                .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
-        }
-        _ => {}
-    }
-    receipt
-        .operator_signature
-        .verify(signer_public_key, &unsigned_bytes)
-        .map_err(|err| eyre!(err))
-}
 fn validate_receipt_resource_bounds(receipt: &DaIngestReceipt) -> eyre::Result<()> {
     if receipt
         .pdp_commitment
@@ -2333,7 +2301,8 @@ impl DaReceiptLog {
         }
         validate_receipt_fingerprint(receipt, &fingerprint)?;
         validate_receipt_resource_bounds(receipt)?;
-        verify_receipt_signature(receipt, sequence, &self.signer_public_key)
+        receipt
+            .verify_operator_signature(sequence, &self.signer_public_key)
             .wrap_err("DA receipt signature verification failed")?;
         let encoded = encode_stored_da_receipt(receipt, sequence).map_err(|err| eyre!(err))?;
         let receipt_digest = *blake3::hash(&encoded).as_bytes();
@@ -2421,16 +2390,14 @@ impl DaReceiptLog {
             cursor_advanced: true,
         })
     }
-    /// Return a logged durable receipt for an idempotent ingest retry.
-    ///
-    /// The receipt is reloaded from disk before returning it so duplicate acknowledgements do not
-    /// rely on process-local state.
-    pub(crate) fn receipt_for_duplicate(
+    /// Probe only the key-specific namespace before dispatching duplicate verification. The
+    /// blocking worker authenticates the file and its manifest before any replay adoption.
+    pub(super) fn duplicate_receipt_path(
         &self,
         lane_epoch: LaneEpoch,
         sequence: u64,
         fingerprint: ReplayFingerprint,
-    ) -> eyre::Result<Option<(PathBuf, DaIngestReceipt)>> {
+    ) -> eyre::Result<Option<PathBuf>> {
         if self.dir.as_os_str().is_empty() {
             return Err(eyre!(
                 "DA receipt log is not durable; duplicate receipt cannot be recovered from disk"
@@ -2442,6 +2409,21 @@ impl DaReceiptLog {
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         }
+        Ok(Some(path))
+    }
+
+    /// Read a signed receipt without changing replay cursors. A replay-fenced recheck may
+    /// supply an exact receipt whose manifest and local shards the worker already verified.
+    pub(super) fn inspect_duplicate_receipt(
+        &self,
+        lane_epoch: LaneEpoch,
+        sequence: u64,
+        fingerprint: ReplayFingerprint,
+        verified: Option<&DaIngestReceipt>,
+    ) -> eyre::Result<Option<(PathBuf, DaIngestReceipt)>> {
+        let Some(path) = self.duplicate_receipt_path(lane_epoch, sequence, fingerprint)? else {
+            return Ok(None);
+        };
         let (receipt_key, stored) = Self::decode_receipt_with_key(&path)
             .wrap_err_with(|| format!("failed to reload durable DA receipt {}", path.display()))?;
         if stored.sequence != sequence
@@ -2454,27 +2436,62 @@ impl DaReceiptLog {
                 path.display()
             ));
         }
-        verify_receipt_signature(&stored.receipt, stored.sequence, &self.signer_public_key)
+        stored
+            .receipt
+            .verify_operator_signature(stored.sequence, &self.signer_public_key)
             .wrap_err_with(|| {
                 format!(
                     "failed to verify reloaded durable DA receipt {}",
                     path.display()
                 )
             })?;
-        validate_receipt_manifest_artifact_if_present(&self.dir, &receipt_key, &stored.receipt)
-            .wrap_err_with(|| {
-                format!(
-                    "failed to validate reloaded durable DA receipt {} against manifest spool",
-                    path.display()
-                )
-            })?;
-        let encoded = encode_stored_da_receipt(&stored.receipt, stored.sequence)?;
+        if let Some(verified) = verified {
+            if verified != &stored.receipt {
+                return Err(eyre!("verified DA receipt changed before adoption"));
+            }
+        } else {
+            validate_receipt_manifest_artifact_if_present(&self.dir, &receipt_key, &stored.receipt)
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to validate reloaded durable DA receipt {} against manifest spool",
+                        path.display()
+                    )
+                })?;
+        }
+        Ok(Some((path, stored.receipt)))
+    }
+    /// Return a logged durable receipt for an idempotent ingest retry.
+    ///
+    /// The receipt is reloaded from disk before returning it so duplicate acknowledgements do not
+    /// rely on process-local state.
+    pub(crate) fn receipt_for_duplicate(
+        &self,
+        lane_epoch: LaneEpoch,
+        sequence: u64,
+        fingerprint: ReplayFingerprint,
+    ) -> eyre::Result<Option<(PathBuf, DaIngestReceipt)>> {
+        self.adopt_duplicate_receipt(lane_epoch, sequence, fingerprint, None)
+    }
+
+    pub(super) fn adopt_duplicate_receipt(
+        &self,
+        lane_epoch: LaneEpoch,
+        sequence: u64,
+        fingerprint: ReplayFingerprint,
+        verified: Option<&DaIngestReceipt>,
+    ) -> eyre::Result<Option<(PathBuf, DaIngestReceipt)>> {
+        let Some((path, receipt)) =
+            self.inspect_duplicate_receipt(lane_epoch, sequence, fingerprint, verified)?
+        else {
+            return Ok(None);
+        };
+        let encoded = encode_stored_da_receipt(&receipt, sequence)?;
         let receipt_digest = *blake3::hash(&encoded).as_bytes();
-        let manifest_hash = stored.receipt.manifest_hash;
+        let manifest_hash = receipt.manifest_hash;
         let mut guard = self.lock_index();
         if let Some(existing) = guard.get(&lane_epoch) {
             if existing.sequence > sequence {
-                return Ok(Some((path, stored.receipt)));
+                return Ok(Some((path, receipt)));
             }
             if existing.sequence == sequence {
                 if existing.receipt_digest != receipt_digest
@@ -2490,7 +2507,7 @@ impl DaReceiptLog {
                 self.cursor_store
                     .record(lane_epoch, sequence)
                     .wrap_err("failed to reconcile duplicate DA receipt cursor")?;
-                return Ok(Some((path, stored.receipt)));
+                return Ok(Some((path, receipt)));
             }
             let expected_next = existing.sequence.checked_add(1).ok_or_else(|| {
                 eyre!("durable DA receipt head sequence cannot advance beyond u64::MAX")
@@ -2543,7 +2560,7 @@ impl DaReceiptLog {
                 receipt_digest,
             },
         );
-        Ok(Some((path, stored.receipt)))
+        Ok(Some((path, receipt)))
     }
     /// Inspect the recovered in-memory head without reading or adopting durable receipts.
     #[cfg(test)]
@@ -2611,9 +2628,11 @@ impl DaReceiptLog {
                 let StoredDaReceipt {
                     sequence, receipt, ..
                 } = stored;
-                verify_receipt_signature(&receipt, sequence, signer_public_key).wrap_err_with(
-                    || format!("failed to verify durable DA receipt {}", path.display()),
-                )?;
+                receipt
+                    .verify_operator_signature(sequence, signer_public_key)
+                    .wrap_err_with(|| {
+                        format!("failed to verify durable DA receipt {}", path.display())
+                    })?;
                 validate_receipt_manifest_artifact_if_present(dir, &receipt_key, &receipt)
                     .wrap_err_with(|| {
                         format!(
@@ -2691,14 +2710,10 @@ impl DaReceiptLog {
             "durable DA receipt",
             DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
         )?;
-        let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
-        if stored.version != StoredDaReceipt::VERSION {
-            return Err(eyre!(
-                "unsupported DA receipt version {} (expected {})",
-                stored.version,
-                StoredDaReceipt::VERSION
-            ));
-        }
+        // A retired version-1 frame is refused by its exact header owner with a typed error;
+        // it is never decoded under the version-2 layout.
+        let stored = StoredDaReceipt::decode_frame(&data)
+            .map_err(|err| eyre!("durable DA receipt {} is refused: {err}", path.display()))?;
         validate_receipt_resource_bounds(&stored.receipt).wrap_err_with(|| {
             format!(
                 "durable DA receipt {} exceeds resource bounds",
@@ -3287,27 +3302,31 @@ mod temp_artifact_tests {
             manifest_hash: BlobDigest::new([seed.wrapping_add(3); 32]),
             storage_ticket: StorageTicketId::new([seed; 32]),
             pdp_commitment: Some(vec![seed]),
+            retention_policy: Default::default(),
             stripe_layout: DaStripeLayout::default(),
             queued_at_unix: 1234,
             rent_quote: DaRentQuote::default(),
-            operator_signature: receipt_signature_placeholder(),
+            operator_signature: DaIngestReceipt::signature_placeholder(),
         };
-        let unsigned = unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
+        let unsigned = receipt
+            .operator_signing_bytes(sequence)
+            .expect("test receipt encodes");
         receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
         receipt
     }
     #[test]
-    fn unsigned_receipt_bytes_use_checked_nonzero_placeholder_signature() {
+    fn signed_receipt_assignment_verifies_the_exact_sequence_and_declared_frame() {
         let signer = checked_random_keypair("receipt placeholder");
         let receipt = test_receipt(&signer, LaneId::new(7), 3, 11, 0x42);
-        let unsigned = unsigned_receipt_bytes(&receipt, 11).expect("unsigned receipt encodes");
-        let payload: DaReceiptSigningPayload =
-            decode_from_bytes(&unsigned).expect("unsigned receipt payload decodes");
-        crate::frame_test_support::assert_current_frame(
-            &payload,
-            "iroha_torii::da::persistence::DaReceiptSigningPayload",
+        receipt
+            .verify_operator_signature(11, signer.public_key())
+            .unwrap();
+        assert!(
+            receipt
+                .verify_operator_signature(12, signer.public_key())
+                .is_err()
         );
-        let assignment = DaIngestSignedReceiptAssignmentV1 {
+        let assignment = DaIngestSignedReceiptAssignmentV2 {
             version: DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION,
             request_digest: [0x43; 32],
             lane_id: receipt.lane_id,
@@ -3318,12 +3337,24 @@ mod temp_artifact_tests {
         };
         crate::frame_test_support::assert_current_frame(
             &assignment,
-            "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1",
+            "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV2",
         );
-        let placeholder = payload.receipt.operator_signature.payload();
-        assert_eq!(placeholder, RECEIPT_SIGNATURE_PLACEHOLDER);
-        assert!(!placeholder.iter().all(|byte| *byte == 0));
-        assert_eq!(placeholder, receipt_signature_placeholder().payload());
+        assert_eq!(DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION, 2);
+        // A frame whose header names the retired version-1 owner is refused before decoding.
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("retired.receipt.norito");
+        let mut bytes = to_bytes(&assignment).expect("encode assignment");
+        bytes[6..22].copy_from_slice(&norito::core::schema_hash_for_name(
+            RETIRED_DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_V1,
+        ));
+        std::fs::write(&path, &bytes).expect("write retired assignment");
+        let error = decode_da_ingest_signed_receipt_assignment(&path, &assignment)
+            .expect_err("retired version-1 assignment frame");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("retired version-1 frame"),
+            "{error}"
+        );
     }
     #[test]
     fn da_receipt_log_rejects_malformed_ed25519_signature_r() {
@@ -4181,6 +4212,7 @@ pub(super) fn load_manifest_from_spool(
 }
 pub(super) struct LoadedManifestArtifact {
     pub(super) bytes: Vec<u8>,
+    pub(super) manifest: DaManifestV1,
     lane_id: LaneId,
     epoch: u64,
     storage_ticket: StorageTicketId,
@@ -4199,7 +4231,7 @@ pub(super) fn load_manifest_artifact_from_spool(
     let bytes = read_regular_spool_artifact(
         &path,
         "DA manifest artifact",
-        DA_MANIFEST_ARTIFACT_MAX_BYTES_V1,
+        DaManifestV1::MAX_ENCODED_BYTES,
     )?;
     let (manifest, _) = decode_manifest_spool_body(&bytes)?;
     if manifest.storage_ticket != *ticket {
@@ -4213,6 +4245,7 @@ pub(super) fn load_manifest_artifact_from_spool(
         lane_id: manifest.lane_id,
         epoch: manifest.epoch,
         storage_ticket: manifest.storage_ticket,
+        manifest,
     })
 }
 #[cfg(test)]
@@ -4255,6 +4288,12 @@ pub(super) fn load_pdp_commitment_for_manifest_artifact(
     validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
+/// Load the durable pin intent of one replay slot.
+///
+/// `commitment_digest` is the paired record's
+/// [`DaCommitmentRecord::pin_scope_digest`], derived by the caller from the slot's durable
+/// receipt; the producer's stored pin-scope witnesses are verified against it.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn load_da_pin_intent(
     spool_dir: &Path,
     lane_id: LaneId,
@@ -4262,6 +4301,7 @@ pub(super) fn load_da_pin_intent(
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: &ReplayFingerprint,
+    commitment_digest: &BlobDigest,
 ) -> std::io::Result<DaPinIntent> {
     if spool_dir.as_os_str().is_empty() {
         return Err(std::io::Error::new(
@@ -4303,16 +4343,23 @@ pub(super) fn load_da_pin_intent(
             ),
         )
     })?;
-    validate_pin_intent_artifact_inputs(&intent, lane_id, epoch, sequence, storage_ticket)
-        .map_err(|err| {
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "DA pin-intent artifact {} does not match its filename: {err}",
-                    path.display()
-                ),
-            )
-        })?;
+    validate_pin_intent_artifact_inputs(
+        &intent,
+        commitment_digest,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+    )
+    .map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "DA pin-intent artifact {} does not match its filename: {err}",
+                path.display()
+            ),
+        )
+    })?;
     Ok(intent)
 }
 pub(super) fn load_da_pin_scope(
@@ -4460,7 +4507,7 @@ mod tests {
     }
 }
 fn decode_manifest_spool_body(bytes: &[u8]) -> std::io::Result<(DaManifestV1, ReplayFingerprint)> {
-    let manifest = decode_from_bytes::<DaManifestV1>(bytes).map_err(|err| {
+    let manifest = DaManifestV1::decode_canonical(bytes).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
             format!("manifest spool body is not a DA manifest: {err}"),
@@ -4612,6 +4659,7 @@ fn validate_da_schedule_artifact_inputs(
 }
 fn validate_pin_intent_artifact_inputs(
     intent: &DaPinIntent,
+    commitment_digest: &BlobDigest,
     lane_id: LaneId,
     epoch: u64,
     sequence: u64,
@@ -4648,7 +4696,7 @@ fn validate_pin_intent_artifact_inputs(
         || intent.pin_scope_authorization.scope.alias != intent.alias
         || !intent
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(commitment_digest)
     {
         return Err(invalid_artifact_input(
             "DA pin-intent scope authorization does not match intent body",
@@ -4660,6 +4708,7 @@ fn validate_pin_intent_artifact_inputs(
 fn da_pin_intents_have_same_signed_identity(
     existing: &DaPinIntent,
     candidate: &DaPinIntent,
+    commitment_digest: &BlobDigest,
 ) -> bool {
     let authorization_signers_match = existing
         .authorization
@@ -4695,10 +4744,10 @@ fn da_pin_intents_have_same_signed_identity(
         && pin_scope_signers_match
         && existing
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(commitment_digest)
         && candidate
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(commitment_digest)
 }
 
 fn da_pin_intent_has_same_request_authorization(
@@ -4734,16 +4783,27 @@ pub(super) fn validate_da_pin_intent_retry_authorization(
 }
 
 /// Select the first durable semantic pin intent while tolerating randomized signature bytes.
+///
+/// `commitment_digest` is the digest of the paired commitment record the producer signed.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select_da_pin_intent_for_persistence(
     spool_dir: &Path,
     candidate: &DaPinIntent,
+    commitment_digest: &BlobDigest,
     lane_id: LaneId,
     epoch: u64,
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: &ReplayFingerprint,
 ) -> std::io::Result<DaPinIntent> {
-    validate_pin_intent_artifact_inputs(candidate, lane_id, epoch, sequence, storage_ticket)?;
+    validate_pin_intent_artifact_inputs(
+        candidate,
+        commitment_digest,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+    )?;
     validate_ticket_fingerprint(storage_ticket, fingerprint)?;
     if spool_dir.as_os_str().is_empty() {
         return Ok(candidate.clone());
@@ -4755,8 +4815,15 @@ pub(super) fn select_da_pin_intent_for_persistence(
         sequence,
         storage_ticket,
         fingerprint,
+        commitment_digest,
     ) {
-        Ok(existing) if da_pin_intents_have_same_signed_identity(&existing, candidate) => {
+        Ok(existing)
+            if da_pin_intents_have_same_signed_identity(
+                &existing,
+                candidate,
+                commitment_digest,
+            ) =>
+        {
             Ok(existing)
         }
         Ok(_) => Err(std::io::Error::new(
@@ -4816,13 +4883,13 @@ pub(super) fn persist_manifest_for_sorafs(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
-    if manifest_bytes.len() > DA_MANIFEST_ARTIFACT_MAX_BYTES_V1 {
+    if manifest_bytes.len() > DaManifestV1::MAX_ENCODED_BYTES {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
             format!(
                 "DA manifest is {} bytes, exceeding the first-release {}-byte limit",
                 manifest_bytes.len(),
-                DA_MANIFEST_ARTIFACT_MAX_BYTES_V1
+                DaManifestV1::MAX_ENCODED_BYTES
             ),
         ));
     }
@@ -5049,9 +5116,11 @@ pub(super) fn persist_da_commitment_schedule_entry(
     );
     Ok(Some(target_path))
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn persist_da_pin_intent(
     spool_dir: &Path,
     intent: &DaPinIntent,
+    commitment_digest: &BlobDigest,
     lane_id: LaneId,
     epoch: u64,
     sequence: u64,
@@ -5064,6 +5133,7 @@ pub(super) fn persist_da_pin_intent(
     let selected_intent = select_da_pin_intent_for_persistence(
         spool_dir,
         intent,
+        commitment_digest,
         lane_id,
         epoch,
         sequence,
@@ -5116,8 +5186,15 @@ pub(super) fn persist_da_pin_intent(
             sequence,
             storage_ticket,
             fingerprint,
+            commitment_digest,
         ) {
-            Ok(existing) if da_pin_intents_have_same_signed_identity(&existing, intent) => {
+            Ok(existing)
+                if da_pin_intents_have_same_signed_identity(
+                    &existing,
+                    intent,
+                    commitment_digest,
+                ) =>
+            {
                 return Ok(Some(target_path));
             }
             Ok(_) => {

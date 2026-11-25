@@ -230,8 +230,10 @@ impl RequestV1 {
     }
 }
 
-/// Full issuer result bound, independent of the 10,034-byte Payment envelope limit.
-pub const RESULT_MAX_BYTES: usize = 262_144;
+/// Full issuer result bound, independent of the 10,034-byte Payment envelope limit. It is the
+/// provider's bound for the durable E6 winner, so a delivery and its retained copy agree.
+pub const RESULT_MAX_BYTES: usize =
+    crate::kagemusha_wallet_advance_v1::KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1;
 
 /// Exact originals retained by the issuer before it signs the initial credential.
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -297,6 +299,50 @@ impl IssuerEvidenceV1 {
     }
 }
 
+/// Enrollment, signer and wallet-identity bindings of already authenticated initial
+/// credential fields, shared by every credential profile and by the retained-marker check.
+/// The fields must name the installed scheme and provider contract, the exact selected
+/// Enrollment certificate, the E1 `challenge` and the `payment_key` generated for it. This
+/// authenticates no credential signature: the caller's profile does that first.
+/// # Errors
+/// Rejects invalid fields, challenge, key or selected signer, a renewal credential, and any
+/// scheme, provider contract, signer, asset, account, app policy, payment key, enrollment
+/// identity or wallet identity other than the selected one.
+pub fn verify_initial_credential_fields_v1(
+    fields: &KagemushaWalletCredentialBodyV1,
+    scheme: &KagemushaWalletSchemeV1,
+    selected_issuer: &KagemushaWalletSignerCertificateV1,
+    challenge: &KagemushaWalletEnrollmentChallengeV1,
+    payment_key: &KagemushaDevicePublicKeyV1,
+) -> Result<(), &'static str> {
+    selected_issuer
+        .verify_role(scheme, KagemushaWalletSignerRoleV1::Enrollment)
+        .map_err(|_| "selected enrollment issuer")?;
+    fields.validate().map_err(|_| "initial credential fields")?;
+    challenge
+        .validate()
+        .map_err(|_| "initial credential challenge")?;
+    payment_key
+        .validate()
+        .map_err(|_| "initial credential payment key")?;
+    if fields.scheme_id != scheme.scheme_id()
+        || fields.scheme_id != challenge.scheme_id
+        || fields.provider_contract != scheme.provider_contract
+        || fields.issuer_certificate != selected_issuer.certificate_digest()
+        || fields.renewal_sequence != 0
+        || fields.fresh_evidence != fields.enrollment_evidence
+        || fields.asset_digest != challenge.asset_digest
+        || fields.account_digest != challenge.account_digest
+        || fields.app_policy != challenge.app_policy
+        || fields.payment_key != *payment_key
+        || fields.enrollment_id != challenge.enrollment_id(payment_key)
+        || fields.wallet_id != challenge.wallet_id(payment_key)
+    {
+        return Err("initial credential enrollment binding");
+    }
+    Ok(())
+}
+
 /// Exact E6 delivery; authorization comes from the original scheme-rooted credential signature.
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_enrollment_v1::ResultV1")]
@@ -330,20 +376,8 @@ impl ResultV1 {
         let credential_value =
             KagemushaWalletCredentialV1::decode_canonical(&self.credential, &scheme.scheme_id())
                 .map_err(|_| "issuer credential")?;
-        let set: KagemushaWalletCertificateSetV1 = norito::decode_canonical_with_limits(
-            &self.certificates,
-            norito::canonical_decode_limits(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1),
-        )
-        .map_err(|_| "issuer certificate set")?;
-        let issuer = set
-            .certificate(
-                &credential_value.body.issuer_certificate,
-                KagemushaWalletSignerRoleV1::Enrollment,
-            )
-            .map_err(|_| "issuer certificate")?;
-        if issuer != selected_issuer {
-            return Err("issuer differs from selected pre-key permit");
-        }
+        // Model frame authentication: the rooted Enrollment signature over the Model body
+        // message. Every binding of the authenticated fields is the shared verifier's.
         credential_value
             .verify_enrollment(
                 scheme,
@@ -352,10 +386,56 @@ impl ResultV1 {
                 &request.body.marker.payment_key,
             )
             .map_err(|_| "issuer enrollment credential")?;
-        let c = &credential_value.body;
+        self.verify_initial_fields(scheme, selected_issuer, request, &credential_value.body)?;
+        Ok(credential_value)
+    }
+
+    /// The one verifier of E6 bindings, shared by every credential profile. `fields` are the
+    /// enrollment fields of a credential the caller already authenticated under its own
+    /// profile (the Model frame signature, or the Spartan original under the installed
+    /// parameters); this method authenticates no credential signature itself. It binds those
+    /// fields to the exact account-authorized E5, the E1 challenge and generated payment key,
+    /// the independently selected Enrollment signer and the complete delivered certificate
+    /// set, the policy's regulatory terms and lease, and the issuer-retained evidence.
+    /// # Errors
+    /// Rejects an altered request, a certificate set that is not canonical or does not hold
+    /// exactly the selected issuer under the credential's issuer digest, a renewal, and any
+    /// scheme, asset, account, app-policy, key, enrollment or wallet identity, evidence kind,
+    /// regulatory policy, lease or evidence digest that differs from the selected originals.
+    pub fn verify_initial_fields(
+        &self,
+        scheme: &KagemushaWalletSchemeV1,
+        selected_issuer: &KagemushaWalletSignerCertificateV1,
+        request: &RequestV1,
+        fields: &KagemushaWalletCredentialBodyV1,
+    ) -> Result<(), &'static str> {
+        self.shape()?;
+        request.validate()?;
+        let set: KagemushaWalletCertificateSetV1 = norito::decode_canonical_with_limits(
+            &self.certificates,
+            norito::canonical_decode_limits(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1),
+        )
+        .map_err(|_| "issuer certificate set")?;
+        set.validate().map_err(|_| "issuer certificate set")?;
+        let issuer = set
+            .certificate(
+                &fields.issuer_certificate,
+                KagemushaWalletSignerRoleV1::Enrollment,
+            )
+            .map_err(|_| "issuer certificate")?;
+        if issuer != selected_issuer {
+            return Err("issuer differs from selected pre-key permit");
+        }
+        verify_initial_credential_fields_v1(
+            fields,
+            scheme,
+            selected_issuer,
+            &request.body.challenge,
+            &request.body.marker.payment_key,
+        )?;
         // The attested security level, never a policy selector, chooses the Android kind.
         let kind_matches = matches!(
-            (&request.body.policy.platform, c.evidence_kind),
+            (&request.body.policy.platform, fields.evidence_kind),
             (
                 KagemushaWalletEnrollmentPlatformV1::Apple { .. },
                 KagemushaWalletEvidenceKindV1::AppleAppAttest
@@ -366,19 +446,19 @@ impl ResultV1 {
             )
         );
         if !kind_matches
-            || c.regulatory_policy != request.body.policy.regulatory_policy
-            || c.lease_expires_at_ms
+            || fields.regulatory_policy != request.body.policy.regulatory_policy
+            || fields.lease_expires_at_ms
                 != request
                     .body
                     .policy
-                    .lease_expires_at(c.issued_at_ms)
+                    .lease_expires_at(fields.issued_at_ms)
                     .map_err(|_| "issuer lease")?
-            || c.enrollment_evidence.digest
-                != self.evidence.digest(&request.body, c.evidence_kind)?
+            || fields.enrollment_evidence.digest
+                != self.evidence.digest(&request.body, fields.evidence_kind)?
         {
             return Err("issuer enrollment policy/evidence");
         }
-        Ok(credential_value)
+        Ok(())
     }
 
     fn shape(&self) -> Result<(), &'static str> {

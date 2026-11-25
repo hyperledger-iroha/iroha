@@ -10,6 +10,9 @@ use crate::managed::native_operation::test_support::{
     UnavailablePeers,
     native_fixture::{NativeFixture, NativeReadHttp, balance, policy, quote_instructions},
 };
+use crate::managed::native_operation::test_support::{
+    request_only_expiry_ms, wait_for_original_expiry,
+};
 use iroha_core::{
     execution_attempt::ExecutionAttemptError, smartcontracts::ValidSingularQuery, state::State,
 };
@@ -25,12 +28,8 @@ use iroha_data_model::{
         asset::FindAssetById,
         error::{FindError, QueryExecutionFail},
     },
-    sorafs::{
-        pin_registry::StorageClass,
-        reserve::{
-            ReserveDuration, ReserveLifecycleStage, ReserveProviderTermsV1, ReserveTier,
-            account_proof::ReserveAccountProofExpectedV1,
-        },
+    sorafs::reserve::{
+        ReserveLifecycleStage, ReserveProviderTermsV1, account_proof::ReserveAccountProofExpectedV1,
     },
     transaction::{FeePaymentIntent, error::TransactionRejectionReason},
 };
@@ -118,14 +117,17 @@ pub(in crate::managed) fn registered_native(
     );
     assert_eq!(native.chain.commit(vec![set.clone()]), vec![true]);
     assert_only_original(&native.observe(&coordinator.authority), &set, 3);
-    let terms = ReserveProviderTermsV1 {
-        provider_id: coordinator.authority.provider_id().unwrap(),
-        provider_account: operator.account.clone(),
-        tier: ReserveTier::TierA,
-        storage_class: StorageClass::Hot,
-        duration: ReserveDuration::Monthly,
-        capacity_gib: 1,
-    };
+    let provider = coordinator.authority.provider_id().unwrap();
+    let terms = prepared
+        .provider_service_plans()
+        .unwrap()
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.provider_id() == provider)
+        .unwrap()
+        .reserve_terms()
+        .clone();
+    assert_eq!(terms.provider_account, operator.account);
     let register = quote_instructions(
         &native,
         &coordinator.authority.reserve_operations_config().unwrap(),
@@ -922,7 +924,7 @@ fn genuinely_expired_unprepared_top_up_recovers_without_http_or_new_authorizatio
         &coordinator,
         &directory,
         &retained,
-        now_ms().unwrap() + 500,
+        request_only_expiry_ms(),
         &options,
     );
     let original_bytes = directory
@@ -944,14 +946,7 @@ fn genuinely_expired_unprepared_top_up_recovers_without_http_or_new_authorizatio
         }
     };
     let request_only_bytes = retained_names.map(&retained_bytes);
-    let wait_until = Instant::now() + Duration::from_secs(2);
-    while now_ms().unwrap() < retained.terms.signing_deadline_unix_ms {
-        assert!(
-            Instant::now() < wait_until,
-            "finite real UTC expiry did not arrive"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_original_expiry(retained.terms.signing_deadline_unix_ms);
     drop(ports);
     let mut unavailable = UnavailablePeers::start(&prepared);
     for submit in [false, true] {

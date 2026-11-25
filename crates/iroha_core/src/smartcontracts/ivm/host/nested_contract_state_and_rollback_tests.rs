@@ -332,7 +332,10 @@ seiyaku Callback {{ permission AssetOps;
         );
         let error = outcome.expect_err("active addresses cannot be entered again");
         assert!(
-            matches!(error.as_unmetered(), ivm::VMError::ReentrantCall),
+            matches!(
+                error.as_unmetered(),
+                VmErrorRef::Trap(VmTrap::ReentrantCall)
+            ),
             "{error:?}"
         );
         assert!(
@@ -528,7 +531,7 @@ seiyaku FaultChild {
     );
     let error = outcome.expect_err("division by zero must trap after the staged write");
     assert!(
-        matches!((&(error.as_unmetered()), &(ivm::VMError::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero))), (ivm::VMError::NumericFault(__actual_0), ivm::VMError::NumericFault(__expected_0)) if __actual_0 == __expected_0)
+        matches!((&(error.as_unmetered()), &(ivm::VMError::Trap(VmTrap::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero)))), (VmErrorRef::Trap(VmTrap::NumericFault(__actual_0)), ivm::VMError::Trap(VmTrap::NumericFault(__expected_0))) if __actual_0 == __expected_0)
     );
     let ValidationFail::IvmFault(fault) = crate::execution_attempt::expect_completed_rejection(
         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error),

@@ -9,10 +9,10 @@ using Hyperledger.Iroha.Transactions;
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
-/// Typed transaction builds in an explicit Norito layout. Building admits account identities, so
-/// these tests need the ABI-33 native bridge like every other builder test; the decode and vector
-/// suites (<see cref="NoritoDenseTransactionFixtureTests"/>,
-/// <see cref="NoritoDenseLayoutVectorTests"/>) do not.
+/// Typed transaction builds in an explicit Norito layout. Building admits account identities and
+/// the dense layout transcodes instructions without a managed dense encoder, so these tests need
+/// the ABI-33 native bridge like every other builder test; only the vector suite
+/// (<see cref="NoritoDenseLayoutVectorTests"/>) does not.
 /// </summary>
 public sealed class TransactionBuilderDenseLayoutTests
 {
@@ -202,6 +202,15 @@ public sealed class TransactionBuilderDenseLayoutTests
             Assert.True(bare.AsSpan().IndexOf("NRT0"u8) < 0);
             Assert.True(bare.Length <= framed.Length - NoritoHeader.EncodedLength);
             Assert.Throws<InvalidOperationException>(() => instruction.EncodeFramedPayload(denseContext));
+            // The managed dense encoder writes exactly what the data model writes for the frame.
+            Assert.Equal(
+                bare,
+                NoritoInstructionLayoutNative.Transcode(
+                    instruction.WireId, framed, NoritoWireLayout.Compact, NoritoWireLayout.Dense, "framed"));
+            Assert.Equal(
+                framed,
+                NoritoInstructionLayoutNative.Transcode(
+                    instruction.WireId, bare, NoritoWireLayout.Dense, NoritoWireLayout.Compact, "bare"));
 
             var envelope = denseContext.ToWireInstruction(instruction);
             Assert.Equal(instruction.WireId, envelope.WireId);
@@ -235,7 +244,7 @@ public sealed class TransactionBuilderDenseLayoutTests
     }
 
     [Fact]
-    public void InstructionsWithoutADenseEncoderAreRefusedInTheDenseLayoutOnly()
+    public void InstructionsWithoutAManagedDenseEncoderAreTranscodedByTheNativeBridge()
     {
         var fixture = NoritoDenseTransactionFixtureTests.LoadFixtures()[0];
         var seed = Convert.FromHexString(FixtureSeedHex);
@@ -246,11 +255,35 @@ public sealed class TransactionBuilderDenseLayoutTests
         var compact = builder.BuildSignedBare(seed, NoritoWireLayout.Compact);
         Assert.Equal(builder.BuildSigned(seed).SignedTransactionBytes, compact.SignedTransactionBytes);
 
-        var error = Assert.Throws<NotSupportedException>(() => builder.BuildSignedBare(seed, NoritoWireLayout.Dense));
-        Assert.Contains(instruction.WireId, error.Message, StringComparison.Ordinal);
-        Assert.Throws<NotSupportedException>(
-            () => instruction.EncodeEnvelopePayload(
-                new TransactionEncodingContext(fixture.Authority, NoritoWireLayout.Dense)));
+        // The dense envelope is the bridge's transcoding of the compact frame, and back.
+        var compactContext = new TransactionEncodingContext(fixture.Authority);
+        var denseContext = new TransactionEncodingContext(fixture.Authority, NoritoWireLayout.Dense);
+        var framed = instruction.EncodeEnvelopePayload(compactContext);
+        var bare = instruction.EncodeEnvelopePayload(denseContext);
+        Assert.True(bare.AsSpan().IndexOf("NRT0"u8) < 0);
+        Assert.True(bare.Length <= framed.Length - NoritoHeader.EncodedLength);
+        Assert.Equal(
+            framed,
+            NoritoInstructionLayoutNative.Transcode(
+                instruction.WireId, bare, NoritoWireLayout.Dense, NoritoWireLayout.Compact, "bare"));
+
+        var dense = builder.BuildSignedBare(seed, NoritoWireLayout.Dense);
+        var decoded = Assert.IsType<WireInstructionsExecutable>(dense.Wire.Payload.Executable);
+        var envelope = Assert.Single(decoded.Instructions);
+        Assert.Equal(instruction.WireId, envelope.WireId);
+        Assert.Equal(bare, envelope.Payload);
+        Assert.Equal(dense.SignedTransactionBytes, BareSignedTransaction.Decode(dense.SignedTransactionBytes, NoritoWireLayout.Dense).SignedTransactionBytes);
+        Assert.True(Ed25519Signer.Verify(dense.SigningHash, dense.Signature, Ed25519Signer.GetPublicKey(seed)));
+        Assert.NotEqual(compact.SigningHash, dense.SigningHash);
+
+        // A body that is not the instruction's canonical dense payload is refused on decode.
+        var extended = dense.Wire.Payload with
+        {
+            Executable = new WireInstructionsExecutable([new WireInstruction(instruction.WireId, [.. bare, 0])]),
+        };
+        Assert.Throws<ArgumentException>(
+            () => TransactionWireCodec.DecodePayload(
+                TransactionWireCodec.EncodePayload(extended), NoritoWireLayout.Dense, "payload"));
 
         // The typed codecs do not speak fixed-width lengths.
         Assert.Throws<ArgumentOutOfRangeException>(() => builder.BuildSignedBare(seed, NoritoWireLayout.Fixed));

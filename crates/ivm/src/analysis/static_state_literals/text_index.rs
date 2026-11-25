@@ -1,6 +1,7 @@
 //! Original-budget borrowed text index and separately admitted NFC scratch.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     error::ExecutionDeferral,
@@ -68,14 +69,15 @@ impl<'a> TextIndex<'a> {
             .map(Text::scratch_bytes)
             .max()
             .unwrap_or(0);
-        let mut plan =
-            ExecutionMemoryPlan::array::<Text<'a>>(count).map_err(VMError::AllocationDeferred)?;
+        let mut plan = ExecutionMemoryPlan::array::<Text<'a>>(count)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(
-            ExecutionMemoryPlan::array::<u8>(scratch_bytes).map_err(VMError::AllocationDeferred)?,
+            ExecutionMemoryPlan::array::<u8>(scratch_bytes)
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut entries = ExecutionBuffer::new(count, &mut lease).map_err(buffer_error)?;
         // The unpartitioned lease covers the audited cumulative ICU/sort
         // layouts, not another physical byte buffer. Sequential validations
@@ -135,12 +137,12 @@ fn candidate<'a>(contract: &'a PreparedContract, literal: &DecodedLiteral) -> Te
 fn buffer_error(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(error)) => {
-            VMError::AllocationDeferred(error)
+            VMError::Deferred(VmDeferral::AllocationDeferred(error))
         }
         PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
-        | PrepaidBufferError::Reservation(_) => {
-            VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
-        }
+        | PrepaidBufferError::Reservation(_) => VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable,
+        )),
     }
 }
 

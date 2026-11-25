@@ -2581,3 +2581,22 @@ fn lifecycle_missing_inline_binding_never_streams_the_executable_as_a_fallback()
         assert!(tx.lifecycle_allows_apply());
     }
 }
+
+#[test]
+fn registration_height_requires_canonical_unsigned_decimal() {
+    for (text, expected) in [("0", 0), ("10", 10), ("18446744073709551615", u64::MAX)] {
+        assert_eq!(super::parse_registration_height(text), Some(expected));
+    }
+    for text in [
+        "",
+        "00",
+        "01",
+        "-1",
+        "+1",
+        " 1",
+        "18446744073709551616",
+        "100000000000000000000",
+    ] {
+        assert_eq!(super::parse_registration_height(text), None);
+    }
+}

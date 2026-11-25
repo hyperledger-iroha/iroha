@@ -12,9 +12,10 @@
 
 use ff::Field;
 use iroha_pasta::PastaCurve;
-use iroha_pasta::fold::fold_generators_vartime;
-use iroha_pasta::msm::{BudgetExceeded, FixedBaseTable, MemoryBudget, msm_public, msm_secret};
+use iroha_pasta::fold::{fold_generators_vartime, folded_generators_vartime};
+use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_secret_cancellable};
 use rayon::prelude::*;
+use zeroize::Zeroizing;
 
 use crate::fs::{SpikeRng, Transcript};
 
@@ -25,21 +26,14 @@ pub type Aff<C> = <C as PastaCurve>::AffineExt;
 /// every commitment and the relation; it is not a production parameter ID.
 pub const GENERATOR_DOMAIN: &str = "kagemusha-zks-spike/gens";
 
+/// The public commitment bases. Private commitments sum them through the
+/// secret Pippenger MSM ([`secret_msm`], `spartan::column_sums`), which keeps
+/// no per-shape table, so a generator set holds the bases alone.
 pub struct Gens<C: PastaCurve> {
     pub g: Vec<Aff<C>>,
     pub h: Aff<C>,
     pub u: Aff<C>,
-    /// Fixed-base tables of `g[..active]` by (active, window), built on first
-    /// use (iroha_pasta `FixedBaseTable`, 2b50a7f647).
-    pub tables: std::sync::Mutex<Vec<(usize, usize, std::sync::Arc<FixedBaseTable<C>>)>>,
-    /// Fixed-base tables of the round slots by (offset, grid size): the
-    /// slot's grid generators, then `h` (review lane ebb983).
-    pub round_tables: std::sync::Mutex<Vec<(usize, usize, std::sync::Arc<FixedBaseTable<C>>)>>,
 }
-
-/// Window of the round-slot tables: 28 bases, fastest at 9 on the Mac
-/// (`ZKS_KBENCH=roundcommit`: 0.19 ms against 0.51 ms for the generic MSM).
-const ROUND_WINDOW: usize = 9;
 
 /// The backend has one pinned prover implementation. Benchmark environment
 /// variables cannot change a native wallet's cryptographic execution path.
@@ -47,149 +41,71 @@ pub fn old_kernels() -> bool {
     false
 }
 
+/// `sum_i scalars[i] * bases[i]` for private scalars over public bases,
+/// through iroha_pasta's secret Pippenger kernel (`msm_secret_cancellable`).
+///
+/// The kernel is variable time in the scalars: buckets are chosen by digit
+/// and zero digits are skipped, so timing and memory accesses follow the
+/// private values. The owner accepted that exposure for witness rows, round
+/// values, the opening's L/R vectors and the generator-claim folds (TODO.md
+/// G8, 2026-11-24). Its plan assumes full-width scalars, its bucket inversion
+/// is constant time and its digit and bucket scratch is wiped. Scratch stays
+/// within the default per-kernel budget and the process MSM ceiling. The group
+/// element is the one every other MSM gives, so proofs are unchanged.
+///
+/// # Panics
+/// Only on a caller error the kernel reports instead of a sum: unequal
+/// lengths, more than `u32::MAX` bases, or one base exceeding the 256 MiB
+/// default budget. No identity or partial sum is ever substituted.
+pub(crate) fn secret_msm<C: PastaCurve>(scalars: &[F<C>], bases: &[Aff<C>]) -> C {
+    msm_secret_cancellable::<C>(
+        scalars,
+        bases,
+        MemoryBudget::DEFAULT,
+        &SharedMemoryBudget::process_default(),
+        None,
+    )
+    .expect("secret MSM")
+}
+
 impl<C: PastaCurve> Gens<C> {
     /// Derive `g[i] = H_curve(GENERATOR_DOMAIN, LE64(i))`, with `h` at `n`
     /// and `u` at `n + 1`. The full capacity therefore identifies the
     /// blinding bases, even when only a prefix of `g` is used.
     pub fn new(n: usize) -> Self {
-        let points: Vec<C> = (0..n + 2)
-            .into_par_iter()
-            .map(|i| {
-                C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
-                    .expect("hash to curve")
-            })
-            .collect();
-        let affine = iroha_pasta::curve::batch_normalize(&points);
-        Self {
-            g: affine[..n].to_vec(),
-            h: affine[n],
-            u: affine[n + 1],
-            tables: Default::default(),
-            round_tables: Default::default(),
-        }
+        // Normalize each public hash-to-curve batch directly into its final slots.
+        const MAX_BATCH: usize = 2048;
+        let mut affine = vec![C::AffineExt::default(); n + 2];
+        let batch_size = affine
+            .len()
+            .div_ceil(rayon::current_num_threads())
+            .min(MAX_BATCH);
+        affine
+            .par_chunks_mut(batch_size)
+            .enumerate()
+            .for_each(|(batch, out)| {
+                let first = batch * batch_size;
+                let points: Vec<C> = (first..first + out.len())
+                    .map(|i| {
+                        C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
+                            .expect("hash to curve")
+                    })
+                    .collect();
+                C::batch_normalize(&points, out);
+            });
+        let u = affine.pop().expect("U generator");
+        let h = affine.pop().expect("H generator");
+        Self { g: affine, h, u }
     }
 
-    /// The same generators without built tables. Preserve the parent set's
-    /// `h` and `u`: `Gens::new(n)` would select different blinding bases.
+    /// The first `n` generators. Preserve the parent set's `h` and `u`:
+    /// `Gens::new(n)` would select different blinding bases.
     pub fn prefix(&self, n: usize) -> Self {
         Self {
             g: self.g[..n].to_vec(),
             h: self.h,
             u: self.u,
-            tables: Default::default(),
-            round_tables: Default::default(),
         }
-    }
-
-    /// The fixed-base table of the round slot at `offset` holding `len` grid
-    /// values: bases `g[offset + position]` in grid order, then `h` for the
-    /// blind. Built once per generator set.
-    pub fn round_table(&self, offset: usize, len: usize) -> std::sync::Arc<FixedBaseTable<C>> {
-        let mut tables = self.round_tables.lock().unwrap();
-        if let Some((_, _, t)) = tables.iter().find(|(o, l, _)| *o == offset && *l == len) {
-            return t.clone();
-        }
-        let mut bases: Vec<Aff<C>> = crate::grid::slot_positions(crate::grid::grid_vars(len))
-            .iter()
-            .map(|p| self.g[offset + p])
-            .collect();
-        bases.push(self.h);
-        let table = std::sync::Arc::new(
-            FixedBaseTable::<C>::with_window(&bases, ROUND_WINDOW, MemoryBudget::DEFAULT)
-                .expect("table within budget"),
-        );
-        tables.push((offset, len, table.clone()));
-        table
-    }
-
-    /// The fixed-base table of `g[..active]` with window `window`, when its
-    /// construction fits the fixed budget. The second value is build time.
-    pub fn table(
-        &self,
-        active: usize,
-        window: usize,
-    ) -> Result<(std::sync::Arc<FixedBaseTable<C>>, f64), BudgetExceeded> {
-        self.table_with_budget(active, window, MemoryBudget::DEFAULT)
-    }
-
-    pub(crate) fn table_with_budget(
-        &self,
-        active: usize,
-        window: usize,
-        budget: MemoryBudget,
-    ) -> Result<(std::sync::Arc<FixedBaseTable<C>>, f64), BudgetExceeded> {
-        let mut tables = self.tables.lock().unwrap();
-        if let Some((_, _, t)) = tables.iter().find(|(a, w, _)| *a == active && *w == window) {
-            // A cache hit needs no construction scratch, but its retained
-            // points and skip flags still belong to this call's budget.
-            budget.check(t.table_bytes().saturating_add(active))?;
-            return Ok((t.clone(), 0.0));
-        }
-        let clock = std::time::Instant::now();
-        let table = std::sync::Arc::new(FixedBaseTable::<C>::with_window(
-            &self.g[..active],
-            window,
-            budget,
-        )?);
-        let build = clock.elapsed().as_secs_f64();
-        tables.push((active, window, table.clone()));
-        Ok((table, build))
-    }
-
-    /// Retained points and skip flags of commitment tables this stage will
-    /// build. Existing caches are already charged by OS available memory.
-    /// Construction scratch belongs to the process MSM reservation separately.
-    /// `complete` adds round-slot tables; a phase-one preview needs only rows.
-    pub fn commitment_cache_bytes(&self, shape: &crate::r1cs::Shape, complete: bool) -> u64 {
-        let estimate = |n: usize, window: usize| -> u128 {
-            if n == 0 {
-                return 0;
-            }
-            // Query the canonical builder's public budget refusal before it
-            // allocates. Admission therefore follows its exact construction
-            // requirements, including chunk scratch and index limits.
-            let required = match FixedBaseTable::<C>::with_window(
-                &self.g[..n],
-                window,
-                MemoryBudget::new(0),
-            ) {
-                Err(error) => error.required,
-                Ok(_) => return 0,
-            };
-            if required > MemoryBudget::DEFAULT.bytes() {
-                return 0;
-            }
-            // fixed_base.rs retains n * num_windows(255, c) affine points
-            // and n skip flags. Signed windows include the final carry.
-            let window = window.clamp(2, 15);
-            n as u128 * ((255 / window + 1) * core::mem::size_of::<Aff<C>>() + 1) as u128
-        };
-        let active = shape.active_cols();
-        let window = crate::spartan::table_window::<C>();
-        let mut bytes = if self
-            .tables
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(a, w, _)| *a == active && *w == window)
-        {
-            0
-        } else {
-            estimate(active, window)
-        };
-        if complete {
-            let cached = self.round_tables.lock().unwrap();
-            for slot in crate::spartan::slots(shape) {
-                let len = crate::grid::pow3(slot.k);
-                if !cached
-                    .iter()
-                    .any(|(offset, count, _)| *offset == slot.offset && *count == len)
-                {
-                    bytes += estimate(len + 1, ROUND_WINDOW);
-                }
-            }
-        }
-        bytes.min(u64::MAX as u128) as u64
     }
 }
 
@@ -291,13 +207,15 @@ pub fn prove<C: PastaCurve>(
     gens: &Gens<C>,
     t: &mut Transcript<C>,
     p: &C,
-    mut x: Vec<F<C>>,
+    x: Vec<F<C>>,
     mut b: Vec<F<C>>,
     kappa: F<C>,
     mut blind: F<C>,
     rng: &mut SpikeRng,
     claims: &[Claim<C>],
 ) -> IpaProof<C> {
+    // The opening vector is private: wiped on every exit, also when unwinding.
+    let mut x = Zeroizing::new(x);
     let n = x.len();
     assert!(n.is_power_of_two() && b.len() == n && gens.g.len() == n);
     let (p, kappa, svecs) = fold_claims(t, p, &b, kappa, claims);
@@ -306,46 +224,30 @@ pub fn prove<C: PastaCurve>(
     }
     let u_point = begin(gens, t, &p, &kappa);
     let h = C::from(gens.h);
-    let old = old_kernels();
-    // U as a base of the L/R sums (the new kernels fold the value and blind
-    // terms into each sum instead of four separate scalar multiplications).
+    // U as a base of the L/R sums: the value and blind terms are folded into
+    // each sum instead of separate scalar multiplications.
     let u_affine = group::Curve::to_affine(&u_point);
-    let mut g = gens.g.clone();
+    // The first round reads the installed generators. Its fold allocates
+    // only the reduced vector, which later rounds update in place.
+    let mut g = std::borrow::Cow::Borrowed(gens.g.as_slice());
     let mut lr = Vec::with_capacity(n.trailing_zeros() as usize);
     let mut len = n;
     while len > 1 {
         let half = len / 2;
         let (lam, mu): (F<C>, F<C>) = (rng.scalar(), rng.scalar());
         let lr_clock = std::time::Instant::now();
-        let (l, r) = if old {
-            let (x_lo, x_hi) = x.split_at(half);
-            let (b_lo, b_hi) = b.split_at(half);
-            let (g_lo, g_hi) = g[..len].split_at(half);
-            let l = msm_secret::<C>(x_lo, g_hi, MemoryBudget::DEFAULT).expect("msm")
-                + u_point * inner(x_lo, b_hi)
-                + h * lam;
-            let r = msm_secret::<C>(x_hi, g_lo, MemoryBudget::DEFAULT).expect("msm")
-                + u_point * inner(x_hi, b_lo)
-                + h * mu;
-            (l.to_affine(), r.to_affine())
-        } else {
-            // L and R at the same time, each one sum over its generators, U
-            // and H: the same group elements as above.
+        let (l, r) = {
+            // Each side adds the same two private terms to its vector
+            // commitment. The secret kernel accepts both slices directly, so
+            // neither secret scalars nor bases are copied.
             let (x_lo, x_hi) = x.split_at(half);
             let (b_lo, b_hi) = b.split_at(half);
             let (g_lo, g_hi) = g[..len].split_at(half);
             let side = |xs: &[F<C>], bs: &[F<C>], gs: &[Aff<C>], blind: F<C>| -> Aff<C> {
-                let mut scalars = Vec::with_capacity(half + 2);
-                scalars.extend_from_slice(xs);
-                scalars.push(inner(xs, bs));
-                scalars.push(blind);
-                let mut bases = Vec::with_capacity(half + 2);
-                bases.extend_from_slice(gs);
-                bases.push(u_affine);
-                bases.push(gens.h);
-                group::Curve::to_affine(
-                    &msm_secret::<C>(&scalars, &bases, MemoryBudget::DEFAULT).expect("msm"),
-                )
+                let tail = Zeroizing::new([inner(xs, bs), blind]);
+                let vector = secret_msm::<C>(xs, gs);
+                let masks = secret_msm::<C>(&tail[..], &[u_affine, gens.h]);
+                group::Curve::to_affine(&(vector + masks))
             };
             rayon::join(
                 || side(x_lo, b_hi, g_hi, lam),
@@ -385,7 +287,14 @@ pub fn prove<C: PastaCurve>(
         }
         crate::prof::add("ipa.xb", xb_clock.elapsed().as_secs_f64());
         let fold_clock = std::time::Instant::now();
-        fold_generators_vartime::<C>(&mut g[..len], &u);
+        match &mut g {
+            std::borrow::Cow::Borrowed(initial) => {
+                g = std::borrow::Cow::Owned(folded_generators_vartime::<C>(initial, &u));
+            }
+            std::borrow::Cow::Owned(folded) => {
+                fold_generators_vartime::<C>(&mut folded[..len], &u);
+            }
+        }
         crate::prof::add(
             if len == n {
                 "ipa.fold1"
@@ -422,16 +331,22 @@ pub fn prove<C: PastaCurve>(
 
 /// `s_i = prod_j u_j^{bit_j(i)}`, round 1 the most significant bit.
 pub fn s_vector<S: Field>(us: &[S]) -> Vec<S> {
-    let mut s = vec![S::ONE];
-    for u in us {
-        let mut next = Vec::with_capacity(s.len() * 2);
-        for value in &s {
-            next.push(*value);
-            next.push(*value * u);
-        }
-        s = next;
-    }
+    let mut s = Vec::new();
+    fill_s_vector(&mut s, us);
     s
+}
+
+fn fill_s_vector<S: Field>(s: &mut Vec<S>, us: &[S]) {
+    s.clear();
+    s.reserve_exact(1 << us.len());
+    s.push(S::ONE);
+    // Add one more significant index bit at a time. The old prefix is the
+    // low half and remains in place; only the new high half is written.
+    for &u in us.iter().rev() {
+        for i in 0..s.len() {
+            s.push(s[i] * u);
+        }
+    }
 }
 
 pub fn verify<C: PastaCurve>(
@@ -444,7 +359,7 @@ pub fn verify<C: PastaCurve>(
     claims: &[Claim<C>],
 ) -> Result<(Vec<F<C>>, F<C>), String> {
     let n = b.len();
-    if proof.lr.len() != n.trailing_zeros() as usize || gens.g.len() != n {
+    if !n.is_power_of_two() || proof.lr.len() != n.trailing_zeros() as usize || gens.g.len() != n {
         return Err("ipa: round count".into());
     }
     let (p, kappa, _) = fold_claims(t, p, &b, kappa, claims);
@@ -466,8 +381,11 @@ pub fn verify<C: PastaCurve>(
         us.push(u);
         len = half;
     }
-    // Own generator claim, decided natively here (accumulated in recursion).
-    let g_final = msm_public::<C>(&s_vector(&us), &gens.g, MemoryBudget::DEFAULT)
+    // Only the final folded scalar survives. Reuse its full-length backing
+    // allocation for the public coefficients of the generator decision.
+    let b_final = b[0];
+    fill_s_vector(&mut b, &us);
+    let g_final = msm_public::<C>(&b, &gens.g, MemoryBudget::DEFAULT)
         .map_err(|e| format!("ipa: msm {e:?}"))?;
     if g_final.to_affine() != proof.g_final {
         return Err("ipa: folded generator".into());
@@ -475,7 +393,7 @@ pub fn verify<C: PastaCurve>(
     t.point(b"ipa/G", &proof.g_final);
     t.point(b"ipa/A", &proof.a);
     let c: F<C> = t.endo_challenge(b"ipa/c");
-    let lhs = (C::from(proof.g_final) + u_point * b[0]) * proof.z1 + C::from(gens.h) * proof.z2;
+    let lhs = (C::from(proof.g_final) + u_point * b_final) * proof.z1 + C::from(gens.h) * proof.z2;
     let rhs = C::from(proof.a) + folded * c;
     if lhs != rhs {
         return Err("ipa: final opening".into());
@@ -483,7 +401,7 @@ pub fn verify<C: PastaCurve>(
     if bool::from(C::from(proof.a).is_identity()) {
         return Err("ipa: identity commitment".into());
     }
-    Ok((us, b[0]))
+    Ok((us, b_final))
 }
 
 #[cfg(test)]
@@ -491,6 +409,28 @@ mod generator_tests {
     use super::*;
     use group::{Curve, GroupEncoding};
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    #[test]
+    fn generator_weights_reuse_the_folded_buffer() {
+        fn check<S: Field>(two: S) {
+            let mut buffer = vec![S::ZERO; 8];
+            let allocation = buffer.as_ptr();
+            buffer.truncate(1);
+            for u in [&[two, S::ZERO, two][..], &[]] {
+                fill_s_vector(&mut buffer, u);
+                assert_eq!(buffer.as_ptr(), allocation);
+                for (index, &value) in buffer.iter().enumerate() {
+                    let expected = u.iter().rev().enumerate().fold(S::ONE, |v, (bit, x)| {
+                        if index & (1 << bit) == 0 { v } else { v * x }
+                    });
+                    assert_eq!(value, expected);
+                }
+                assert_eq!(buffer.len(), 1 << u.len());
+            }
+        }
+        check(iroha_pasta::Fp::from(2));
+        check(iroha_pasta::Fq::from(2));
+    }
 
     #[test]
     fn round_profile_labels_cover_every_pointer_width() {
@@ -548,6 +488,23 @@ mod generator_tests {
                 "Pallas {index}"
             );
             assert_eq!(encoded::<Vesta>(v.to_affine()), expected_v, "Vesta {index}");
+        }
+    }
+
+    #[test]
+    fn batches_keep_the_public_indices_and_both_final_bases() {
+        fn check<C: PastaCurve>(n: usize) {
+            let gens = Gens::<C>::new(n);
+            assert_eq!(gens.g.len(), n);
+            for (i, point) in gens.g.iter().chain([&gens.h, &gens.u]).enumerate() {
+                let expected =
+                    C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes()).unwrap();
+                assert_eq!(*point, expected.to_affine());
+            }
+        }
+        for n in [0, 2051] {
+            check::<Pallas>(n);
+            check::<Vesta>(n);
         }
     }
 

@@ -76,15 +76,33 @@ struct RuntimeSelection {
 }
 impl RuntimeSelection {
     fn read(authority: &ServiceAuthority) -> Result<Self> {
+        Self::read_provider_intervals(authority, false)
+    }
+
+    fn read_provider_intervals(authority: &ServiceAuthority, parallel: bool) -> Result<Self> {
+        Self::read_intervals(authority, parallel, None)
+    }
+
+    fn read_intervals(
+        authority: &ServiceAuthority,
+        parallel: bool,
+        catalog_imports: Option<&CheckpointImportScope>,
+    ) -> Result<Self> {
         let intent = authority.original_intent()?;
-        // This read owns one bounded immutable import workspace for its three fresh children.
-        // It carries no source, wallet, current-state or authority verdict beyond this call.
-        let imports = CheckpointImportScope::for_original(authority);
+        // Each selection always opens three fresh children. A catalog check may borrow its
+        // renderer's bounded workspace for pure imports from the complete original bytes.
+        let read = intent.runtime_read();
+        let imports = if parallel && read.is_some() {
+            catalog_imports
+                .cloned()
+                .or_else(|| CheckpointImportScope::for_provider_intervals(authority, true))
+        } else {
+            CheckpointImportScope::for_provider_intervals(authority, false)
+        };
         #[cfg(test)]
         let imports = tests::import_scope_tests::select_scope(imports);
         // Only immutable projections share this view. Every mutable child read below retains
         // its ordinary native admission, and no projection escapes the full-image exit check.
-        let read = intent.runtime_read();
         let result = (|| {
             // RuntimeSelection owns its original projection; copy only at that ownership boundary.
             let plans = intent.provider_plans()?.clone();
@@ -114,16 +132,15 @@ impl RuntimeSelection {
                 None => parent.selected_policies()?,
             };
             drop(parent);
-            let mut initial = Vec::with_capacity(3);
-            let mut compliance = Vec::with_capacity(3);
-            for (index, plan) in plans.iter().enumerate() {
+            let select = |index: usize| {
+                let plan = &plans[index];
                 if plan.peer_index() != index
                     || usize::from(plan.slot()) != index
                     || plan.network_id() != authority.config.network_id
                 {
                     return Err(invalid("original generated provider slot differs"));
                 }
-                policies.provider(plan.provider_id())?;
+                let policy = policies.provider(plan.provider_id())?;
                 let custody = match read.as_ref() {
                     Some(read) => ManagedStreamTokenCustody::open_existing_in_runtime(
                         authority,
@@ -138,27 +155,31 @@ impl RuntimeSelection {
                     )?,
                 };
                 let selected = match custody {
-                    Some(custody) => custody.inspect_local_initial_interval_if_present(
-                        &policies.provider(plan.provider_id())?.custody,
-                    )?,
+                    Some(custody) => {
+                        custody.inspect_local_initial_interval_if_present(&policy.custody)?
+                    }
                     None => None,
                 };
                 #[cfg(test)]
                 tests::import_scope_tests::after_child(index, imports.as_ref());
-                initial.push(selected);
-                compliance.push(intent.gateway_compliance_plan(plan.provider_id())?);
-            }
+                Ok((
+                    selected,
+                    intent.gateway_compliance_plan(plan.provider_id())?,
+                ))
+            };
+            // Each slot opens its own custody purpose. The joined round keeps the original
+            // image and import scope alive until all three readers release their native locks.
+            let [a, b, c] =
+                super::provider_round::run([0, 1, 2], parallel && read.is_some(), select, || {
+                    invalid("generated runtime custody reader failed")
+                })?;
             intent.validate_policies(&policies)?;
             Ok(Self {
                 policies,
                 plans,
                 publication,
-                compliance: compliance
-                    .try_into()
-                    .map_err(|_| invalid("original compliance count differs"))?,
-                initial: initial
-                    .try_into()
-                    .map_err(|_| invalid("original enrollment count differs"))?,
+                compliance: [a.1, b.1, c.1],
+                initial: [a.0, b.0, c.0],
             })
         })();
         // Every temporary child is already closed. End pure reuse before closing the original
@@ -302,10 +323,37 @@ impl GeneratedServiceRuntimeRevision {
     }
 }
 
+/// One renderer may share immutable checkpoint imports during one catalog observation or peer start.
+pub(super) struct CatalogLaunchReads<'a> {
+    owner: &'a GeneratedServiceRuntime,
+    imports: Option<CheckpointImportScope>,
+}
+
+impl CatalogLaunchReads<'_> {
+    fn imports_for(&mut self, owner: &GeneratedServiceRuntime) -> Option<&CheckpointImportScope> {
+        if !std::ptr::eq(self.owner, owner) || !owner.shares_original_for_read() {
+            self.imports = None;
+        }
+        self.imports.as_ref()
+    }
+}
+
 pub(super) struct GeneratedServiceRuntime {
     authority: ServiceAuthority,
 }
 impl GeneratedServiceRuntime {
+    pub(super) fn catalog_launch_reads(&self) -> CatalogLaunchReads<'_> {
+        CatalogLaunchReads {
+            owner: self,
+            imports: CheckpointImportScope::for_provider_intervals(&self.authority, true),
+        }
+    }
+
+    /// A read-only projection shares a renderer only outside a caller's physical admission.
+    pub(super) fn shares_original_for_read(&self) -> bool {
+        self.authority.shares_original_for_read()
+    }
+
     #[cfg(test)]
     pub(super) fn open(prepared: &PreparedLocalnet) -> Result<Self> {
         Ok(Self {
@@ -360,7 +408,7 @@ impl GeneratedServiceRuntime {
             .require_complete("renewal requires all original parent execution")?;
         let original_carriers = history.ordered_carriers()?;
         drop(parent);
-        let mut custody = ManagedStreamTokenCustody::open(&self.authority.prepared, provider)?;
+        let mut custody = ManagedStreamTokenCustody::open_from_original(&self.authority, provider)?;
         let policy = &selection.policies.provider(provider)?.custody;
         let enrollment = custody.retained_renewed_enrollment(sequence, policy, deadline)?;
         let prepared = ProviderComponent::prepare(
@@ -404,12 +452,23 @@ impl GeneratedServiceRuntime {
         prepared: &PreparedLocalnet,
         revision: &GeneratedServiceRuntimeRevision,
     ) -> Result<()> {
+        self.validate_catalog_launch(prepared, revision, None)
+    }
+
+    pub(super) fn validate_catalog_launch(
+        &self,
+        prepared: &PreparedLocalnet,
+        revision: &GeneratedServiceRuntimeRevision,
+        reads: Option<&mut CatalogLaunchReads<'_>>,
+    ) -> Result<()> {
         if prepared != &self.authority.prepared {
             return Err(invalid(
                 "runtime revision belongs to another prepared generation",
             ));
         }
-        self.validate(revision)
+        let imports = reads.and_then(|reads| reads.imports_for(self));
+        self.validate_material_with(revision, imports)?
+            .validate_interval(revision.components.as_ref())
     }
     pub(super) fn validate(&self, revision: &GeneratedServiceRuntimeRevision) -> Result<()> {
         self.validate_material(revision)?
@@ -419,7 +478,17 @@ impl GeneratedServiceRuntime {
         &self,
         revision: &GeneratedServiceRuntimeRevision,
     ) -> Result<RuntimeSelection> {
-        let selection = RuntimeSelection::read(&self.authority)?;
+        self.validate_material_with(revision, None)
+    }
+
+    fn validate_material_with(
+        &self,
+        revision: &GeneratedServiceRuntimeRevision,
+        imports: Option<&CheckpointImportScope>,
+    ) -> Result<RuntimeSelection> {
+        // Each child reads its own custody interval. The selection owner keeps an active
+        // decoder or an owned original on the caller's serial path.
+        let selection = RuntimeSelection::read_intervals(&self.authority, true, imports)?;
         let root = PrivateDirectory::open_exact(generation_path(&self.authority.prepared)?)?;
         let expected = encode(&revision.manifest, MAX_MANIFEST_BYTES)?;
         let required_identities: &[RequiredTransaction] = revision
@@ -519,8 +588,8 @@ impl GeneratedServiceRuntime {
             parallel,
             |index| {
                 require_deadline(deadline)?;
-                let mut custody = ManagedStreamTokenCustody::open(
-                    &self.authority.prepared,
+                let mut custody = ManagedStreamTokenCustody::open_from_original(
+                    &self.authority,
                     selection.plans[index].provider_id(),
                 )?;
                 read(index, &mut custody)

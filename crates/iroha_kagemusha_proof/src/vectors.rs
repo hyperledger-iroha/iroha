@@ -416,12 +416,12 @@ pub fn sample_witness<F: PoseidonField>(
             successor_consumed_credit: rng.next_field(),
         })),
     };
-    StepWitness {
-        relation_id: SAMPLE_RELATION_ID,
-        predecessor: StateV1 { core, rest },
-        successor_nonce: rng.next_field(),
+    StepWitness::new(
+        SAMPLE_RELATION_ID,
+        StateV1 { core, rest },
+        rng.next_field(),
         inputs,
-    }
+    )
 }
 
 #[cfg(test)]

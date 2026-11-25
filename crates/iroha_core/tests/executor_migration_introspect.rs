@@ -14,14 +14,23 @@ use iroha_data_model::{
 use iroha_model_base::chain::ChainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
+use ivm_abi::error::VmTrap;
 struct LoggingHost;
 impl IVMHost for LoggingHost {
-    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        _number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        _vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         println!("syscall {number:#x}");
-        Err(VMError::UnknownSyscall(number))
+        Err(VMError::Trap(VmTrap::UnknownSyscall(number)))
     }
     fn as_any(&mut self) -> &mut dyn core::any::Any {
         self
@@ -89,7 +98,9 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
         assert!(
             matches!(
                 error,
-                iroha_core::executor::ExecutorMigrationError::Rejected(VMError::DecodeError)
+                iroha_core::executor::ExecutorMigrationError::Rejected(VMError::Trap(
+                    VmTrap::DecodeError
+                ))
             ),
             "header metadata must not select host fixture behavior"
         );

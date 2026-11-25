@@ -213,12 +213,14 @@ fn map_overlay_error(
                 ),
             ))
         }
-        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::AmxBudgetExceeded {
-            dataspace,
-            stage,
-            elapsed_ms,
-            budget_ms,
-        }) => TransactionRejectionReason::Validation(
+        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::Trap(
+            ivm_abi::error::VmTrap::AmxBudgetExceeded {
+                dataspace,
+                stage,
+                elapsed_ms,
+                budget_ms,
+            },
+        )) => TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::NotPermitted(format!(
                 "{} code={}",
                 crate::pipeline::overlay::amx_timeout_message(
@@ -2259,6 +2261,7 @@ pub fn check_genesis_block(
     authenticate_genesis_block_intents(block, genesis_account)?;
     check_genesis_execution_results(block)
 }
+pub(crate) mod genesis_child_runtime;
 pub(crate) mod genesis_crypto_policy;
 pub(crate) mod genesis_policies;
 pub(crate) mod genesis_staking_policy;
@@ -3466,7 +3469,7 @@ pub(crate) mod valid {
             struct VerifiedProof<'block> {
                 proof: &'block ProofBlob,
                 dsid: DataSpaceId,
-                facts: ivm::axt::AxtProofUseFacts,
+                facts: ivm_abi::axt::AxtProofUseFacts,
             }
             type VerifiedProofBuckets = BTreeMap<(Option<u64>, Hash), Vec<usize>>;
 
@@ -3500,7 +3503,7 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    let expiry_deadline = ivm::axt::expiry_slot_with_skew(
+                    let expiry_deadline = ivm_abi::axt::expiry_slot_with_skew(
                         expiry_slot,
                         axt_timing.slot_length_ms,
                         axt_timing.max_clock_skew_ms,
@@ -3661,7 +3664,7 @@ pub(crate) mod valid {
                 verified_proofs.push(VerifiedProof {
                     proof,
                     dsid,
-                    facts: ivm::axt::AxtProofUseFacts::from_verified_envelope(envelope),
+                    facts: ivm_abi::axt::AxtProofUseFacts::from_verified_envelope(envelope),
                 });
                 verified_proof_buckets
                     .entry(cache_key)
@@ -3755,7 +3758,7 @@ pub(crate) mod valid {
                 }
                 let mut touch_dsids: BTreeSet<DataSpaceId> = BTreeSet::new();
                 for touch in &envelope.touches {
-                    if ivm::axt::validate_model_touch_manifest(&touch.manifest).is_err() {
+                    if ivm_abi::axt::validate_model_touch_manifest(&touch.manifest).is_err() {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Descriptor,
@@ -5184,6 +5187,12 @@ pub(crate) mod valid {
                 drop(state_block);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Some(initial) = state_block.genesis_child_runtime.as_ref()
+                && let Err(error) = initial.require_unchanged(&state_block)
+            {
+                drop(state_block);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             let axt_start = Instant::now();
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 drop(state_block);
@@ -5424,6 +5433,18 @@ pub(crate) mod valid {
             Self::validate_sumeragi_consensus_effects(block)?;
             Self::validate_da_sidecar_hashes(block)?;
             Self::validate_da_pin_intent_bundle(block, state, soft_fork)?;
+            if let Some(records) = block.da_commitments() {
+                crate::da::validate_commitment_bundle_against_nexus_at_height(
+                    records,
+                    state.nexus(),
+                    block.header().height().get(),
+                )
+                .map_err(BlockValidationError::DaCommitmentBundle)?;
+            }
+            crate::da::proposal_queue::validate_pairs(
+                block.da_commitments(),
+                block.da_pin_intents(),
+            )?;
             Self::validate_execution_context_with_state(
                 block,
                 topology,
@@ -5571,15 +5592,37 @@ pub(crate) mod valid {
             let Some(bundle) = block.da_pin_intents() else {
                 return Ok(());
             };
+            Self::validate_da_proposal_pins(
+                bundle,
+                block.da_commitments(),
+                block.header().height().get(),
+                state,
+                &state.nexus_quotas_for_validation(replacement),
+            )
+        }
+
+        /// Check the pin section against the parent, including producer authority and quota.
+        ///
+        /// `commitments` is the same proposal's commitment section: every pin-scope witness
+        /// signs its paired record's digest.
+        #[expect(clippy::result_large_err, reason = "preserve typed validation errors")]
+        pub(crate) fn validate_da_proposal_pins(
+            bundle: &DaPinIntentBundle,
+            commitments: Option<&iroha_data_model::da::commitment::DaCommitmentBundle>,
+            height: u64,
+            state: &impl StateReadOnly,
+            quotas: &iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1,
+        ) -> Result<(), BlockValidationError> {
             let world = state.world();
             crate::da::validate_pin_intent_bundle_against_nexus_at_height(
                 bundle,
                 state.nexus(),
-                block.header().height().get(),
+                height,
                 |account| world.accounts().get(account).is_some(),
             )?;
             crate::da::validate_pin_intent_authorizations(
                 bundle,
+                commitments,
                 *state.network_id(),
                 |account| {
                     world
@@ -5615,16 +5658,16 @@ pub(crate) mod valid {
             crate::da::validate_pin_intent_admission_policy(
                 bundle,
                 admission_policy.as_ref(),
-                |lane_id| state.lane_incarnation_at_height(lane_id, block.header().height().get()),
+                |lane_id| state.lane_incarnation_at_height(lane_id, height),
             )?;
             // The committed quotas of the State this block builds on, as its construction
             // freezes them; the window length is the signed Nexus DA setting.
             crate::da::quota::prepare_ingest_quota_writes(
                 world.smart_contract_state(),
                 bundle,
-                block.header().height().get(),
+                height,
                 state.nexus().da.ingest_quota_window_blocks,
-                &state.nexus_quotas_for_validation(replacement),
+                quotas,
             )?;
             for intent in &bundle.intents {
                 if world
@@ -8978,11 +9021,14 @@ pub(crate) mod valid {
                 map_block_err_to_reason(&BlockValidationError::InvalidGenesis(
                     InvalidGenesisError::RejectedOutput(GenesisOutputRejection {
                         output_index: 0,
-                        reason: Box::new(TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "rejected genesis mapping fixture".into()
-                            ),
-                        )),
+                        reason: Box::new(
+                            TransactionRejectionReason::Validation(
+                                iroha_data_model::ValidationFail::NotPermitted(
+                                    "rejected genesis mapping fixture".into()
+                                ),
+                            )
+                            .into()
+                        ),
                     })
                 )),
                 Some(Reason::InvalidGenesis)

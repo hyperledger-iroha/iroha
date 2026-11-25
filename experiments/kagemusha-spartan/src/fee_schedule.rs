@@ -1,9 +1,13 @@
 //! Send's exact held FeeSchedule and integer fee arithmetic.
 //!
 //! The predecessor state must be authenticated and the Request must be joined
-//! to the operation. This component opens the already-held schedule by digest;
-//! its issuer signature was checked when installed. It verifies no receiver or
-//! issuer signature and is not a complete Send relation.
+//! to the operation. This component opens the already-held schedule by digest.
+//! A schedule is held only after native installation passes `authenticate`
+//! (its RegulatoryPolicy-role signer, scheme, asset, terms and signature).
+//! No transition of this experiment installs one yet: RefreshPolicy is not
+//! built and Bootstrap fixes the held digest to zero, so every proven state
+//! holds none. In-circuit, this component verifies no receiver or issuer
+//! signature and is not a complete Send relation.
 
 use ff::{Field, PrimeField};
 use iroha_pasta::{Fp, poseidon};
@@ -51,8 +55,8 @@ fn dummy() -> SignedFeeSchedule {
     }
 }
 
-/// Exact native object digest, including every original signature byte.
-pub fn digest(input: &SignedFeeSchedule) -> Fp {
+/// The schedule's signing message `m = P_bytes(kgwfsch1, body)`.
+pub fn message(input: &SignedFeeSchedule) -> Fp {
     let mut items = vec![Fp::from(BODY_BYTES as u64)];
     items.extend(
         input
@@ -60,7 +64,61 @@ pub fn digest(input: &SignedFeeSchedule) -> Fp {
             .chunks(31)
             .map(|b| fp(&BigUint::from_bytes_le(b))),
     );
-    let message = poseidon::hash_with_domain(SIGNING_DOMAIN, &items);
+    poseidon::hash_with_domain(SIGNING_DOMAIN, &items)
+}
+
+/// Native authentication of a fee schedule original and its signer, which
+/// policy installation must pass before the schedule's digest may be held:
+/// the exact signer certificate the body names (`signer_certificate`), issued
+/// by the installed scheme root for this scheme with the RegulatoryPolicy role
+/// (proposal §2.3, wire §3.3); version 1, this scheme and the wallet's asset;
+/// a nonzero beneficiary; terms (basis points at most 10,000, maximum at least
+/// minimum, rounding Down 1 or Up 2); and a canonical low-S signature over
+/// `message` by the certified key. Returns the schedule's object digest.
+pub fn authenticate(
+    input: &SignedFeeSchedule,
+    signer: &certificate::Certificate,
+    scheme: &[u8; 32],
+    asset: &[u8; 32],
+    root: &crate::p256::Point,
+) -> Result<Fp, &'static str> {
+    let b = &input.body;
+    let u128_at = |at: usize| u128::from_le_bytes(b[at..at + 16].try_into().unwrap());
+    if b[..2] != 1u16.to_le_bytes() {
+        return Err("fee schedule version");
+    }
+    if b[2..34] != scheme[..] {
+        return Err("fee schedule scheme");
+    }
+    if *asset == [0; 32] || b[34..66] != asset[..] {
+        return Err("fee schedule asset");
+    }
+    if b[74..106].iter().all(|x| *x == 0) {
+        return Err("fee schedule beneficiary");
+    }
+    if u32::from_le_bytes(b[106..110].try_into().unwrap()) > 10_000
+        || u128_at(142) < u128_at(126)
+        || !matches!(b[158], 1 | 2)
+    {
+        return Err("fee schedule terms");
+    }
+    if b[159..191] != certificate::certificate_digest(signer).to_repr()[..] {
+        return Err("fee schedule signer certificate");
+    }
+    let key = certificate::authenticate_signer(
+        signer,
+        scheme,
+        root,
+        certificate::Role::RegulatoryPolicy,
+    )?;
+    certificate::verify_native(&key, message(input), &input.signature)
+        .map_err(|_| "fee schedule signature")?;
+    Ok(digest(input))
+}
+
+/// Exact native object digest, including every original signature byte.
+pub fn digest(input: &SignedFeeSchedule) -> Fp {
+    let message = message(input);
     let s = &input.signature;
     poseidon::hash_with_domain(
         OBJECT_DOMAIN,

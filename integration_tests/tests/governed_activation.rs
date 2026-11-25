@@ -12,18 +12,22 @@
 //! because Parliament cannot enact a runtime change set on this release (the harness's
 //! `ParliamentApprovalUnavailable`).
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha_data_model::governance::types::{
     GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentBody,
 };
+use iroha_data_model::ivm_c10::{RegisterSmartContractCodeC10V1, RegisterTriggerC10V1};
 use iroha_test_network::NetworkBuilder;
 use iroha_torii_shared::parliament_api::ParliamentDecisionModeProjectionV1;
 
 #[path = "support/governed_activation.rs"]
 pub(crate) mod harness;
+
+#[path = "support/anonymous_ballot_corridor.rs"]
+mod anonymous_ballot;
 
 /// Blocks between the tip at drafting and the effective height: room for the proposal and the
 /// attempt, which each take one carrier block.
@@ -93,7 +97,12 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         );
     }
 
-    // Game partitions alone are refused; their capture service is what a root can draft.
+    // Game partitions alone are refused: they extend the endorsed-proposal addition, which the
+    // founded selection has not activated, so their successor names an unpublished definition.
+    // Once that addition is active the drafter refuses them for the missing captured-transfer
+    // service instead (unit test
+    // `unfinished_game_export_is_not_drafted_or_signed_without_rewriting_frozen_consensus`).
+    // Their capture service is what a root can draft.
     let effective_height = harness::tip(&client)? + LEAD_BLOCKS;
     let refusal = harness::draft_refusal(
         &network.peers()[0],
@@ -101,7 +110,10 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         effective_height,
     )?;
     ensure!(
-        refusal.contains("captured-transfer service"),
+        refusal.contains(&format!(
+            "addition {}: successor selection",
+            harness::GAME_PARTITIONS
+        )) && refusal.contains("is not published"),
         "game partitions were refused for another reason: {refusal}"
     );
     harness::draft_on_every_validator(
@@ -110,6 +122,50 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         effective_height,
         [0x51; 32],
     )?;
+
+    // Compare the actual draft from all validators with the interfaces of the founded selection.
+    let c10 = harness::draft_on_every_validator(
+        &network,
+        "iroha.runtime.ivm_c10.v1",
+        effective_height,
+        [0xc1; 32],
+    )?;
+    let catalog = iroha_core::runtime::release_catalog()?;
+    let published = catalog
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, catalog.definitions[id].clone()))
+        .collect::<BTreeMap<_, _>>();
+    let successor = c10
+        .change_set
+        .apply(&catalog.baseline, &published)?
+        .selection;
+    ensure!(
+        c10.change_set.successor != c10.change_set.predecessor,
+        "C10 draft must produce a distinct successor"
+    );
+    let mut interfaces: BTreeMap<_, _> = successor
+        .bindings
+        .iter()
+        .map(|binding| (binding.wire_id.as_str(), binding.interface))
+        .collect();
+    for original in &catalog.baseline.bindings {
+        ensure!(
+            interfaces.remove(original.wire_id.as_str()) == Some(original.interface),
+            "C10 draft must preserve the interface for {}",
+            original.wire_id
+        );
+    }
+    ensure!(
+        interfaces.len() == 2
+            && [
+                RegisterSmartContractCodeC10V1::WIRE_ID,
+                RegisterTriggerC10V1::WIRE_ID
+            ]
+            .into_iter()
+            .all(|wire| interfaces.contains_key(wire)),
+        "C10 draft must add exactly its two registration interfaces"
+    );
 
     // The anonymous ballot family: drafted identically, proposed, and given its attempt.
     let drafted = harness::draft_on_every_validator(
@@ -148,18 +204,20 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
 
     // Without Parliament nothing schedules: every node refuses to attest, and the chain passes
     // the effective height with the founded selection.
-    let id_hex = hex::encode(attempt.proposed.drafted.id.0);
-    for peer in network.validators() {
-        let refusal = peer
-            .client()
-            .client()
-            .post_runtime_attest_upgrade_json(&id_hex)
-            .err()
-            .ok_or_else(|| eyre!("a node attested an unscheduled change set"))?;
-        ensure!(
-            format!("{refusal:?}").contains("is not recorded"),
-            "a node refused to attest for another reason: {refusal:?}"
-        );
+    for id in [attempt.proposed.drafted.id, c10.id] {
+        let id_hex = hex::encode(id.0);
+        for peer in network.validators() {
+            let refusal = peer
+                .client()
+                .client()
+                .post_runtime_attest_upgrade_json(&id_hex)
+                .err()
+                .ok_or_else(|| eyre!("a node attested unscheduled change set {id_hex}"))?;
+            ensure!(
+                format!("{refusal:?}").contains("is not recorded"),
+                "a node refused to attest {id_hex} for another reason: {refusal:?}"
+            );
+        }
     }
     harness::carry_to_height(
         &network,
@@ -175,10 +233,11 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
         );
     }
     eprintln!(
-        "GOVERNED_ACTIVATION_PREFIX validators=4 drafted={} attempt={} scheduled=false selection={}",
+        "GOVERNED_ACTIVATION_PREFIX validators=4 drafted={} attempt={} scheduled=false selection={} c10_draft={}",
         harness::PARLIAMENT_ANONYMOUS,
         hex::encode(attempt.attempt_id.as_bytes()),
         founded.selection_id_hex,
+        c10.id,
     );
     Ok(())
 }
@@ -187,9 +246,11 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
 #[ignore = "Parliament cannot enact a runtime change set on this release: the baseline Policy Jury ballot is the retired timed-OVN ballot and the anonymous ballot family enacts nothing (support/governed_activation.rs, ParliamentApprovalUnavailable)"]
 fn four_validators_activate_the_anonymous_ballot_family_through_parliament() -> Result<()> {
     let context = "governed_activation_anonymous_family";
-    let (network, runtime) =
-        sandbox::start_network_blocking_or_skip(builder(context)?, context)?
-            .ok_or_else(|| eyre!("governed activation requires real localhost sockets"))?;
+    let (network, runtime) = sandbox::start_network_blocking_or_skip(
+        anonymous_ballot::genesis(builder(context)?)?,
+        context,
+    )?
+    .ok_or_else(|| eyre!("governed activation requires real localhost sockets"))?;
     runtime.block_on(network.ensure_blocks(1))?;
     let activated = harness::activate_addition(
         &network,
@@ -197,6 +258,7 @@ fn four_validators_activate_the_anonymous_ballot_family_through_parliament() -> 
         LEAD_BLOCKS,
         [0x53; 32],
     )?;
+    anonymous_ballot::exercise(&network, &runtime)?;
     eprintln!(
         "GOVERNED_ACTIVATION_COMPLETE validators=4 addition={} change_set={} height={}",
         harness::PARLIAMENT_ANONYMOUS,

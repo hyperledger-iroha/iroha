@@ -3,6 +3,73 @@
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 
+/// Torii returned its explicit 503 for a provider discovery proof at the requested height.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("current certified provider discovery is unavailable")]
+pub struct ProviderDiscoveryUnavailable;
+
+fn current_proof_unavailable(response: &Response<Vec<u8>>, code: &str) -> Option<crate::ApiError> {
+    if response.status() != StatusCode::SERVICE_UNAVAILABLE
+        || !response.headers().contains_key(http::header::CONTENT_TYPE)
+    {
+        return None;
+    }
+    crate::ApiError::from_response(response).filter(|error| error.code() == code)
+}
+
+impl ProviderDiscoveryUnavailable {
+    fn matches(response: &Response<Vec<u8>>) -> bool {
+        current_proof_unavailable(response, "provider_discovery_unavailable").is_some()
+    }
+}
+
+fn unavailable_custody_response(response: &Response<Vec<u8>>) -> Option<crate::Error> {
+    current_proof_unavailable(response, "stream_token_custody_unavailable").map(|error| {
+        crate::Error::Api {
+            operation: "sorafs.stream_token_custody.read",
+            error: Box::new(error),
+        }
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn provider_discovery_unavailability_requires_the_exact_http_status_and_error_envelope() {
+    let unavailable = ErrorEnvelope::new("provider_discovery_unavailable", "unavailable");
+    let other = ErrorEnvelope::new("stream_token_custody_unavailable", "unavailable");
+    for (media, body) in [
+        (APPLICATION_NORITO, norito::to_bytes(&unavailable).unwrap()),
+        (
+            APPLICATION_JSON,
+            norito::json::to_vec(&unavailable).unwrap(),
+        ),
+    ] {
+        let mut response = Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header(http::header::CONTENT_TYPE, media)
+            .body(body)
+            .unwrap();
+        assert!(ProviderDiscoveryUnavailable::matches(&response));
+        assert!(!unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        *response.body_mut() = if media == APPLICATION_JSON {
+            norito::json::to_vec(&other).unwrap()
+        } else {
+            norito::to_bytes(&other).unwrap()
+        };
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+        assert!(unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        assert!(!unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        *response.body_mut() = b"provider_discovery_unavailable".to_vec();
+        assert!(!unavailable_custody_response(&response).is_some());
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+    }
+}
+
 /// One bounded finality response retaining its exact requested height, scope and deadline.
 ///
 /// This is untrusted transport ownership, not authenticated finality. It has no public
@@ -199,6 +266,34 @@ impl Client {
     ) -> Result<
         iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
     > {
+        self.get_stream_token_custody_state_with_proof(
+            provider,
+            expected_owner,
+            expected_binding,
+            native_schema,
+            block,
+        )
+        .map(|(current, _)| current)
+    }
+
+    /// Read and verify current custody, returning the exact canonical response frame as well.
+    /// A consumer retaining an original execution cut can reverify this frame against its
+    /// independently authenticated checkpoint after the network advances.
+    ///
+    /// # Errors
+    /// Returns the same scope, deadline, response and proof errors as
+    /// [`Self::get_stream_token_custody_state`].
+    pub fn get_stream_token_custody_state_with_proof(
+        &self,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        expected_owner: &iroha_data_model::account::AccountId,
+        expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<(
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
+        Vec<u8>,
+    )> {
         use iroha_data_model::sorafs::stream_token_custody::proof::{
             MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1, StreamTokenCustodyProofV1,
         };
@@ -236,18 +331,28 @@ impl Client {
             StatusCode::OK,
             MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
             "Failed to get native custody state",
-        )?;
+        )
+        .map_err(|error| {
+            if !norito::core::decode_limits_active()
+                && response.body().len() <= MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1
+                && let Some(unavailable) = unavailable_custody_response(&response)
+            {
+                error.wrap_err(unavailable)
+            } else {
+                error
+            }
+        })?;
         let proof = StreamTokenCustodyProofV1::decode_frame(body)?;
         let verified = proof.verify(
             self.network_id,
             provider,
             expected_owner,
             expected_binding,
-            native_schema.select_schema(proof.world.schema_hash)?,
+            native_schema,
             block,
         )?;
         self.ensure_activation_evidence_deadline()?;
-        Ok(verified)
+        Ok((verified, response.into_body()))
     }
 
     fn read_provider_discovery_frame(
@@ -283,7 +388,17 @@ impl Client {
             StatusCode::OK,
             MAX_PROVIDER_DISCOVERY_BYTES_V1,
             "Failed to get provider discovery",
-        )?;
+        )
+        .map_err(|error| {
+            if !norito::core::decode_limits_active()
+                && response.body().len() <= MAX_PROVIDER_DISCOVERY_BYTES_V1
+                && ProviderDiscoveryUnavailable::matches(&response)
+            {
+                error.wrap_err(ProviderDiscoveryUnavailable)
+            } else {
+                error
+            }
+        })?;
         ProviderDiscoveryProofV1::decode_frame(body).map_err(Into::into)
     }
 
@@ -373,13 +488,48 @@ impl Client {
         expected_node: &iroha_model_base::peer::PeerId,
         expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     ) -> Result<AuthenticatedFinalityAttestation> {
+        self.read_sumeragi_finality_attestation(
+            Some(height),
+            challenge,
+            expected_node,
+            expected_scope,
+        )
+    }
+
+    /// Authenticate the selected validator's signed durable tip at capture time.
+    /// The caller independently verifies its chain and quorum against its original genesis.
+    ///
+    /// # Errors
+    /// Rejects transport, deadlines, malformed proofs and incorrect scope, peer, network or challenge.
+    pub fn get_latest_sumeragi_finality_attestation(
+        &self,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+        expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    ) -> Result<AuthenticatedFinalityAttestation> {
+        self.read_sumeragi_finality_attestation(None, challenge, expected_node, expected_scope)
+    }
+
+    fn read_sumeragi_finality_attestation(
+        &self,
+        height: Option<NonZeroU64>,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+        expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    ) -> Result<AuthenticatedFinalityAttestation> {
         if challenge == [0; 32] {
             return Err(eyre!("finality challenge must be nonzero"));
         }
         self.ensure_data_model_compatibility()?;
-        let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
-            .path()
-            .replace("{height}", &height.get().to_string());
+        use iroha_torii_shared::route_catalog::sumeragi;
+        let path = match height {
+            Some(height) => sumeragi::BRIDGE_FINALITY_ATTESTATION
+                .path()
+                .replace("{height}", &height.to_string()),
+            None => sumeragi::BRIDGE_FINALITY_ATTESTATION_LATEST
+                .path()
+                .to_owned(),
+        };
         let response = self.send_activation_evidence_read(
             &path,
             SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
@@ -387,6 +537,13 @@ impl Client {
             ActivationEvidenceReadAuth::Public,
         )?;
         if response.status() != StatusCode::OK {
+            let Some(height) = height else {
+                return Err(eyre!(
+                    "durable-tip attestation unavailable (HTTP {})",
+                    response.status()
+                ));
+            };
+
             let failure = Self::decode_finality_attestation_failure(
                 &response,
                 height.get(),
@@ -419,7 +576,7 @@ impl Client {
         if attestation.body.challenge != challenge
             || attestation.body.node_id != *expected_node
             || attestation.body.network_id != self.network_id
-            || attestation.body.status.committed_height != height.get()
+            || height.is_some_and(|height| attestation.body.status.committed_height != height.get())
         {
             return Err(eyre!(
                 "current finality attestation differs from exact request bindings"

@@ -59,6 +59,14 @@ wallet_symbols=(
   connect_norito_kagemusha_spartan_begin_account_v1
   connect_norito_kagemusha_spartan_authorize_account_v1
   connect_norito_kagemusha_spartan_prepare_v1
+  connect_norito_kagemusha_spartan_credit_status_v1
+  connect_norito_kagemusha_spartan_epoch_v1
+  connect_norito_kagemusha_spartan_activation_settlement_v1
+  connect_norito_kagemusha_spartan_unload_settlement_v1
+  connect_norito_kagemusha_spartan_issue_open_request_v1
+  connect_norito_kagemusha_spartan_install_blacklist_v1
+  connect_norito_kagemusha_spartan_confirm_v1
+  connect_norito_kagemusha_spartan_time_v1
   connect_norito_kagemusha_spartan_execute_v1
   connect_norito_kagemusha_spartan_output_v1
   connect_norito_kagemusha_spartan_verify_payment_v1
@@ -96,7 +104,14 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_registration_source_relocate_v1
 )
 wallet_jni_symbols=()
-for method in revision openBegin openFinish openCancel close activity call setup enrollment enrollmentRefusal execute snapshot review executeReviewed discardReview suffixUnloadStatus suffixUnloadPrepare suffixUnloadResume executeReviewedSuffixUnload suffixUnloadInstruction suffixUnloadAttemptOutcome suffixUnloadIngestFinality suffixUnloadSignedWire; do
+for method in install installBlacklist creditStatus epoch activationSettlement unloadSettlement issueOpenRequest beginAccount authorizeAccount prepare time confirm execute output verifyPayment discard; do
+  wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_${method}")
+done
+layout_jni_symbols=(
+  Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_tx_norito_NativeInstructionLayoutBridge_nativeTranscodeInstruction
+)
+for method in revision openBegin openFinish openCancel close beginExchange endExchange activity call setup enrollment enrollmentRefusal execute snapshot review executeReviewed discardReview suffixUnloadStatus suffixUnloadPrepare suffixUnloadResume executeReviewedSuffixUnload suffixUnloadInstruction suffixUnloadAttemptOutcome suffixUnloadIngestFinality suffixUnloadSignedWire; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
 done
 for method in beginInstallation registerInstallation closeInstallation relocateRegistrationSource; do
@@ -111,6 +126,9 @@ retired_auth_jni_symbols=(
   Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore
 )
 required_protocol_symbols=(
+  connect_norito_decode_signed_transaction_json_v1
+  connect_norito_sign_transaction_payload_v1
+  connect_norito_transcode_instruction_v1
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
   "${wallet_symbols[@]}"
 )
@@ -161,7 +179,7 @@ while IFS= read -r symbol; do
   required_fixture_symbols+=("$symbol")
 done < <(bash -c 'source "$1"; printf "%s\n" "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"' gate "$symbol_gate_dir/gate.sh")
 [[ "${#required_fixture_symbols[@]}" -gt 0 ]] || fail "required protocol symbols could not be read"
-required_jni_fixture_symbols=("${wallet_jni_symbols[@]}" "${load_original_jni_symbols[@]}")
+required_jni_fixture_symbols=("${layout_jni_symbols[@]}" "${wallet_jni_symbols[@]}" "${load_original_jni_symbols[@]}")
 while IFS= read -r symbol; do
   required_jni_fixture_symbols+=("$symbol")
 done < <(bash -c 'source "$1"; printf "%s\n" "${REQUIRED_PRIVACY_JNI_SYMBOLS[@]}"' gate "$symbol_gate_dir/gate.sh")
@@ -193,8 +211,9 @@ run_symbol_gate() {
 }
 
 for mode in elf apple; do
-  run_symbol_gate "$mode" >/dev/null \
-    || fail "binary-symbol gate rejected the exact $mode protocol inventory"
+  if ! output="$(run_symbol_gate "$mode")"; then
+    fail "binary-symbol gate rejected the exact $mode protocol inventory: $output"
+  fi
 done
 for retired in \
   "elf connect_norito_kagemusha_wallet_install_runtime_v1" \
@@ -220,6 +239,15 @@ for retired in \
   fi
   grep -Eq 'retired KAGEMUSHA (C|JNI) namespace' <<<"$output" \
     || fail "binary-symbol gate rejected $retired without naming the retired namespace"
+done
+for mode in elf apple; do
+  prefix=""
+  [[ "$mode" == "apple" ]] && prefix="_"
+  retired=connect_norito_decode_signed_transaction_json
+  if output="$(run_symbol_gate "$mode" "${prefix}${retired}")"; then
+    fail "binary-symbol gate accepted retired export: $retired"
+  fi
+  grep -Fq "retired protocol symbol $retired" <<<"$output" || fail "missing retired decoder diagnostic"
 done
 for retired in "${retired_auth_jni_symbols[@]}"; do
   if output="$(run_symbol_gate elf "$retired")"; then

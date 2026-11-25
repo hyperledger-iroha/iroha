@@ -1219,6 +1219,22 @@ impl ProviderAdvertCache {
         self.record_by_provider(provider_id)
     }
 
+    /// Read signed candidate bytes for Torii's current-height native discovery proof.
+    /// The handler must bind these bytes to its authenticated admission and finish the
+    /// exact certified State snapshot. A separately configured registry keeps its own check.
+    pub(crate) fn signed_candidate_for_discovery_snapshot(
+        &self,
+        state: &Arc<iroha_core::state::State>,
+        provider_id: &[u8; 32],
+        now: u64,
+    ) -> Option<&AdvertRecord> {
+        if !self.admission.uses_state(state) || norito::core::decode_limits_active() {
+            return self.admitted_record_by_provider(provider_id, now);
+        }
+        let record = self.unverified_record_for_native_proof(provider_id)?;
+        valid_signed_advert(record.advert(), now).then_some(record)
+    }
+
     /// Return an advert only while its retained council admission and signed payload are valid.
     ///
     /// A cache hit alone is insufficient after expiry or an admission-record replacement. The
@@ -1238,9 +1254,7 @@ impl ProviderAdvertCache {
         let admission = self.admission.entry(provider_id)?;
         // The registry selects current native authority, including signed-genesis
         // admissions. Council signature presence is not a substitute for that source.
-        (advert.signature_strict
-            && advert.validate_with_body(now_unix_seconds).is_ok()
-            && verify_signature(advert).is_ok()
+        (valid_signed_advert(advert, now_unix_seconds)
             && verify_advert_against_envelope(advert, &admission).is_ok())
         .then_some(record)
     }
@@ -1286,6 +1300,12 @@ fn fingerprint(advert: &ProviderAdvertV1) -> Result<[u8; FINGERPRINT_LEN], Adver
     let digest = blake3_hash(&bytes);
     Ok(digest.into())
 }
+fn valid_signed_advert(advert: &ProviderAdvertV1, now: u64) -> bool {
+    advert.signature_strict
+        && advert.validate_with_body(now).is_ok()
+        && verify_signature(advert).is_ok()
+}
+
 fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), AdvertError> {
     advert.verify_signature().map_err(|err| match err {
         AdvertSignatureError::UnsupportedAlgorithm(other) => {

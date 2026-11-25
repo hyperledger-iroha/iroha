@@ -639,6 +639,55 @@ def test_image_rejects_invalid_epoch(tmp_path: Path, epoch: str) -> None:
     assert not _outputs(tmp_path / "out")["archive"].exists()
 
 
+def _dockerfile_build_inventory(config_profile: str, binaries: str) -> subprocess.CompletedProcess[str]:
+    source = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    start = source.index('case "${CONFIG_PROFILE}" in')
+    end = source.index("done;", start) + len("done;")
+    selection = source[start:end].replace("\\\n", "\n")
+    return subprocess.run(
+        ["/bin/sh", "-euc", f'{selection}\nprintf "%s" "$build_bins"'],
+        env={"PATH": "/usr/bin:/bin", "CONFIG_PROFILE": config_profile, "BINARIES": binaries},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("config_profile", "binaries", "expected"),
+    (
+        ("single", "iroha kagami", "iroha3d iroha kagami"),
+        ("nexus", "iroha", "iroha3d iroha"),
+        ("taira", "iroha kagami", "iroha3d_taira iroha kagami"),
+        ("single", "iroha3d_taira iroha iroha", "iroha3d iroha3d_taira iroha"),
+        ("taira", "iroha3d iroha3d_taira", "iroha3d_taira iroha3d"),
+        ("single", "", "iroha3d"),
+    ),
+)
+def test_dockerfile_builds_the_profile_daemon_plus_requested_binaries(
+    config_profile: str, binaries: str, expected: str
+) -> None:
+    result = _dockerfile_build_inventory(config_profile, binaries)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+def test_dockerfile_default_inventory_links_one_daemon() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    default = dockerfile.split('ARG BINARIES="', 1)[1].split('"', 1)[0]
+    assert "iroha3d" not in default.split()
+    assert "iroha3d_taira" not in default.split()
+    assert _dockerfile_build_inventory("single", default).stdout.split()[0] == "iroha3d"
+    assert "iroha3d_taira" not in _dockerfile_build_inventory("single", default).stdout.split()
+    assert "iroha3d" not in _dockerfile_build_inventory("taira", default).stdout.split()
+
+
+def test_dockerfile_rejects_unknown_config_profile_before_building() -> None:
+    result = _dockerfile_build_inventory("staging", "iroha")
+    assert result.returncode != 0
+    assert "Unsupported CONFIG_PROFILE staging" in result.stderr
+
+
 def test_image_source_has_no_nondeterministic_docker_archive_path() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -661,7 +710,7 @@ def test_image_source_has_no_nondeterministic_docker_archive_path() -> None:
     assert "configs/sorafs/external_software_signer" in source
     assert "configs/sorafs/runtime_provider_broker" in source
     assert "sorafs_external_software_signer" in dockerfile
-    assert 'ARG BINARIES="iroha3d iroha3d_taira ' in dockerfile
+    assert 'ARG BINARIES="sorafs_governance_dag ' in dockerfile
     assert 'test -x "${BIN_PATH}/iroha3d_taira"' in dockerfile
     assert "/usr/local/libexec/iroha-runtime-provider-broker-v1" in dockerfile
     assert "ARG IROHA_RUST_BUILDER_IMAGE\n" in dockerfile

@@ -1,14 +1,13 @@
 //! Generic data-availability CLI helpers (DA-8 roadmap workstream).
 use super::{
     da_common::{
-        DaManifestFetcher, DaPublisher, DaPublisherReceipt, load_metadata_from_path,
-        parse_blob_class, parse_fec_scheme, parse_storage_class,
+        DaManifestFetcher, DaPublisher, load_metadata_from_path, parse_blob_class,
+        parse_fec_scheme, parse_storage_class, read_da_input,
     },
     sorafs::FetchArgs,
 };
 use crate::cli_output::print_with_optional_text;
 use crate::{CliOutputFormat, Run, RunContext};
-use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::da::{
@@ -20,7 +19,7 @@ use iroha::data_model::{
     asset::AssetDefinitionId,
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
-        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1},
         manifest::DaManifestV1,
         pin_intent::DaPinIntentProof,
         types::{
@@ -55,6 +54,8 @@ use std::{
 pub enum Command {
     /// Submit a raw blob to `/v1/da/ingest` and capture the signed receipt.
     Submit(SubmitArgs),
+    /// Verify a prepared DA response offline and sign its exact pin scope with the configured key.
+    AuthorizePin(AuthorizePinArgs),
     /// Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`).
     Get(FetchArgs),
     /// Download manifest + chunk plan artifacts for an existing DA storage ticket.
@@ -86,6 +87,7 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Submit(args) => args.run(context),
+            Command::AuthorizePin(args) => args.run(context),
             Command::Get(args) => args.run(context),
             Command::GetBlob(args) => args.run(context),
             Command::Prove(args) => args.run(context),
@@ -102,6 +104,31 @@ impl Run for Command {
         }
     }
 }
+#[derive(Args, Debug)]
+pub struct AuthorizePinArgs {
+    /// Original producer-signed JSON request, including its transmitted payload.
+    #[arg(long, value_name = "FILE")]
+    pub request: PathBuf,
+    /// Complete prepared JSON response containing the signed receipt and proposed pin scope.
+    #[arg(long, value_name = "FILE")]
+    pub response: PathBuf,
+    /// Independently trusted Torii receipt-signing public key.
+    #[arg(long, value_name = "KEY")]
+    pub operator_public_key: iroha_crypto::PublicKey,
+}
+
+impl AuthorizePinArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let witness = super::da_common::authorize_pin_artifacts(
+            context.config(),
+            &self.request,
+            &self.response,
+            &self.operator_public_key,
+        )?;
+        context.print_data(&witness)
+    }
+}
+
 #[derive(clap::Args, Debug)]
 pub struct SubmitArgs {
     /// Path to the blob payload (CAR, manifest bundle, governance file, etc.).
@@ -170,9 +197,9 @@ pub struct SubmitArgs {
     /// Skip HTTP submission and only emit the signed request artefacts.
     #[arg(long = "no-submit")]
     pub no_submit: bool,
-    /// Fixture file providing a mocked DA receipt (test-only helper; bypasses HTTP submit).
-    #[arg(long = "receipt-fixture", value_name = "PATH", hide = true)]
-    pub receipt_fixture: Option<PathBuf>,
+    /// Trusted receipt public key for the selected Torii endpoint.
+    #[arg(long, value_name = "PUBLIC_KEY", required_unless_present = "no_submit")]
+    pub operator_public_key: Option<iroha_crypto::PublicKey>,
 }
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct SubmitRequestOutput {
@@ -186,7 +213,7 @@ struct SubmitReceiptOutput {
     status: String,
     duplicate: bool,
     receipt: DaIngestReceipt,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
     receipt_path: String,
     receipt_json_path: String,
     pdp_commitment_header: Option<String>,
@@ -456,15 +483,18 @@ impl PinIntentVerifyArgs {
 }
 impl SubmitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let payload_bytes = fs::read(&self.payload)
-            .wrap_err_with(|| format!("failed to read payload `{}`", self.payload.display()))?;
+        let payload_bytes = read_da_input(
+            &self.payload,
+            iroha_torii_shared::da::upload::DA_UPLOAD_MAX_BYTES,
+        )
+        .wrap_err_with(|| format!("failed to read payload `{}`", self.payload.display()))?;
         let metadata = match &self.metadata_json {
             Some(path) => load_metadata_from_path(path)?,
             None => ExtraMetadata { items: Vec::new() },
         };
         let manifest_bytes = match &self.manifest_path {
             Some(path) => Some(
-                fs::read(path)
+                read_da_input(path, DaManifestV1::MAX_ENCODED_BYTES)
                     .wrap_err_with(|| format!("failed to read manifest `{}`", path.display()))?,
             ),
             None => None,
@@ -490,11 +520,6 @@ impl SubmitArgs {
         // submission still leaves a complete, replayable artifact.
         let mut request_output = persist_submit_request(&artifact_root, &request)?;
         if self.no_submit {
-            if self.receipt_fixture.is_some() {
-                return Err(eyre!(
-                    "--receipt-fixture cannot be combined with --no-submit (fixture already skips HTTP)"
-                ));
-            }
             let output = SubmitOutput {
                 submitted: false,
                 request: request_output,
@@ -503,14 +528,14 @@ impl SubmitArgs {
             let text = render_submit_text(&output);
             return print_with_optional_text(context, Some(text), &output);
         }
-        let receipt = if let Some(path) = &self.receipt_fixture {
-            load_da_receipt_fixture(path, &request)?
-        } else {
-            let publisher = DaPublisher::new(context.config(), self.endpoint.as_deref())?;
-            let request_bytes = to_bytes(&request)
-                .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
-            publisher.publish(&request_bytes)?
-        };
+        let operator = self
+            .operator_public_key
+            .as_ref()
+            .ok_or_else(|| eyre!("DA submission requires --operator-public-key"))?;
+        let publisher = DaPublisher::new(context.config(), self.endpoint.as_deref(), operator)?;
+        let request_bytes = to_bytes(&request)
+            .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
+        let receipt = publisher.publish(&request_bytes)?;
         // A pending prepare response causes the publisher to add the exact pin-scope
         // witness and retry once. Replace the prepare artifact with the exact request
         // that was submitted last so operators can inspect or gather more witnesses.
@@ -823,7 +848,8 @@ pub struct ProveAvailabilityArgs {
     /// Storage ticket issued by Torii (hex string).
     #[arg(long = "storage-ticket", value_name = "HEX")]
     pub storage_ticket: String,
-    /// Gateway provider descriptor reused by `sorafs fetch` (name=... , provider-id=... , base-url=... , stream-token=...).
+    /// Gateway provider descriptor `name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64`.
+    /// The gateway key is its 32-byte public key encoded in hex.
     #[arg(long = "gateway-provider", value_name = "SPEC", required = true)]
     pub gateway_provider: Vec<String>,
     /// Optional Torii base URL for manifest reads (must end with `/`).
@@ -1254,64 +1280,6 @@ fn persist_submit_request(root: &Path, request: &DaIngestRequest) -> Result<Subm
         request_path: request_path.display().to_string(),
         request_json_path: request_json_path.display().to_string(),
         request_bytes: request_bytes.len(),
-    })
-}
-fn load_da_receipt_fixture(
-    path: &Path,
-    submitted_request: &DaIngestRequest,
-) -> Result<DaPublisherReceipt> {
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read DA receipt fixture `{}`", path.display()))?;
-    let value: Value = norito::json::from_slice(&bytes).map_err(|err| {
-        eyre!(
-            "failed to parse DA receipt fixture `{}` as JSON: {err}",
-            path.display()
-        )
-    })?;
-    let receipt_b64 = value
-        .get("receipt_base64")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "receipt fixture `{}` is missing `receipt_base64` field",
-                path.display()
-            )
-        })?;
-    let receipt_bytes = Base64Standard
-        .decode(receipt_b64.as_bytes())
-        .map_err(|err| {
-            eyre!(
-                "receipt fixture `{}` contains invalid base64 payload: {err}",
-                path.display()
-            )
-        })?;
-    let receipt: DaIngestReceipt = decode_from_bytes(&receipt_bytes).map_err(|err| {
-        eyre!(
-            "failed to decode DA receipt from fixture `{}`: {err}",
-            path.display()
-        )
-    })?;
-    let json = norito::json::to_json_pretty(&receipt).map_err(|err| {
-        eyre!(
-            "failed to render DA receipt JSON from fixture `{}`: {err}",
-            path.display()
-        )
-    })?;
-    let header_value = value
-        .get("headers")
-        .and_then(Value::as_object)
-        .and_then(|headers| headers.get("sora-pdp-commitment"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    Ok(DaPublisherReceipt {
-        status: "accepted".to_owned(),
-        duplicate: false,
-        bytes: receipt_bytes,
-        json,
-        receipt,
-        pin_scope: None,
-        submitted_request: submitted_request.clone(),
-        pdp_commitment_header: header_value,
     })
 }
 fn parse_fixed_hex(label: &str, field: &str) -> Result<[u8; 32]> {
@@ -2096,6 +2064,202 @@ mod tests {
     }
 
     #[test]
+    fn authorize_pin_offline_emits_one_verified_witness_and_rejects_substitutions() {
+        use iroha_data_model::da::{
+            commitment::DaProofScheme,
+            ingest::{DaPinScopeSignatureV1, DaStripeLayout},
+        };
+        use sorafs_manifest::{
+            ChunkingProfileV1,
+            pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
+        };
+
+        let mut context = TestContext::new(CliOutputFormat::Json);
+        let operator = fixture_key_pair(0x61);
+        let request = da::build_da_request(
+            context.cfg.network_id,
+            context.cfg.account.clone(),
+            vec![0x57; 4096],
+            &DaIngestParams::default(),
+            ExtraMetadata {
+                items: vec![MetadataEntry::new(
+                    "da.registry.alias",
+                    b" public/blob ".to_vec(),
+                    MetadataVisibility::Public,
+                )],
+            },
+            &context.cfg.key_pair,
+            None,
+        )
+        .expect("signed producer artifact");
+        let manifest_digest = [0x52; 32];
+        let profile = sorafs_car::da_payload::chunk_profile_for_request(request.chunk_size);
+        let mut chunks = ChunkStore::with_profile(profile);
+        chunks.ingest_bytes(&request.payload).unwrap();
+        let pdp = PdpCommitmentV1::from_tree(
+            &PdpMerkleTreeV1::from_bytes(&request.payload).unwrap(),
+            manifest_digest,
+            ChunkingProfileV1::from_profile(profile, sorafs_manifest::BLAKE3_256_MULTIHASH_CODE),
+            iroha_torii_shared::da::sampling::compute_sample_window(request.total_size),
+            1234,
+        )
+        .unwrap();
+        let mut receipt = DaIngestReceipt {
+            client_blob_id: request.client_blob_id,
+            lane_id: request.lane_id,
+            epoch: request.epoch,
+            blob_hash: request.payload_hash,
+            chunk_root: BlobDigest::new(*chunks.por_tree().root()),
+            manifest_hash: BlobDigest::new(manifest_digest),
+            storage_ticket: StorageTicketId::new([0x54; 32]),
+            pdp_commitment: Some(norito::encode_canonical(&pdp).unwrap()),
+            stripe_layout: DaStripeLayout::default(),
+            queued_at_unix: pdp.sealed_at,
+            retention_policy: request.retention_policy.clone(),
+            rent_quote: DaRentQuote::default(),
+            operator_signature: DaIngestReceipt::signature_placeholder(),
+        };
+        let sign_receipt = |receipt: &mut DaIngestReceipt| {
+            receipt.operator_signature = iroha_crypto::Signature::try_new(
+                operator.private_key(),
+                &receipt.operator_signing_bytes(request.sequence).unwrap(),
+            )
+            .unwrap();
+        };
+        sign_receipt(&mut receipt);
+        let scope_for = |receipt: &DaIngestReceipt| {
+            DaPinScopeProposalV1::new(
+                DaPinScopeV1::new(
+                    &request.authorization(),
+                    receipt.storage_ticket,
+                    ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+                    Some("public/blob".into()),
+                ),
+                receipt
+                    .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+                    .pin_scope_digest(),
+            )
+        };
+        let scope = scope_for(&receipt);
+        let dir = tempdir().unwrap();
+        let request_path = dir.path().join("da_request.json");
+        let response_path = dir.path().join("da_response.json");
+        fs::write(&request_path, json::to_vec(&request).unwrap()).unwrap();
+        let write_response = |receipt: &DaIngestReceipt, scope: &DaPinScopeProposalV1| {
+            let response = norito::json!({ "status": "pending_pin_authorization", "duplicate": false,
+                "receipt": receipt, "pin_scope": scope });
+            fs::write(&response_path, json::to_vec(&response).unwrap()).unwrap();
+        };
+        let args = |key: &iroha_crypto::PublicKey| AuthorizePinArgs {
+            request: request_path.clone(),
+            response: response_path.clone(),
+            operator_public_key: key.clone(),
+        };
+        write_response(&receipt, &scope);
+        args(operator.public_key()).run(&mut context).unwrap();
+        let witness: DaPinScopeSignatureV1 =
+            json::from_str(context.printed.last().unwrap()).unwrap();
+        assert_eq!(witness.signer, *context.cfg.key_pair.public_key());
+        witness
+            .signature
+            .verify(&witness.signer, &scope.signing_digest())
+            .unwrap();
+
+        assert!(
+            args(fixture_key_pair(0x62).public_key())
+                .run(&mut context)
+                .is_err()
+        );
+        let mut changed = receipt.clone();
+        changed.retention_policy.required_replicas += 1;
+        write_response(&changed, &scope_for(&changed));
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("pinned operator")
+        );
+        let mut changed_scope = scope.clone();
+        changed_scope.alias = Some("different/blob".into());
+        write_response(&receipt, &changed_scope);
+        assert!(args(operator.public_key()).run(&mut context).is_err());
+        let mut changed_pdp = pdp.clone();
+        changed_pdp.commitment_root_segment[0] ^= 1;
+        changed.pdp_commitment = Some(norito::encode_canonical(&changed_pdp).unwrap());
+        sign_receipt(&mut changed);
+        write_response(&changed, &scope_for(&changed));
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("original payload")
+        );
+        let mut changed_pdp = pdp;
+        changed_pdp.manifest_digest = [0x59; 32];
+        changed.pdp_commitment = Some(norito::encode_canonical(&changed_pdp).unwrap());
+        sign_receipt(&mut changed);
+        write_response(&changed, &scope_for(&changed));
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("PDP commitment")
+        );
+        write_response(&receipt, &scope);
+        let mut changed_request = request.clone();
+        changed_request.payload[0] ^= 1;
+        fs::write(&request_path, json::to_vec(&changed_request).unwrap()).unwrap();
+        assert!(args(operator.public_key()).run(&mut context).is_err());
+        let mut changed_request = request.clone();
+        changed_request.network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::prehashed([0x73; 32])
+            ));
+        changed_request.signatures.clear();
+        changed_request
+            .try_add_signature(&context.cfg.key_pair)
+            .unwrap();
+        fs::write(&request_path, json::to_vec(&changed_request).unwrap()).unwrap();
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("selected configuration")
+        );
+        let mut changed_request = request.clone();
+        changed_request.owner = AccountId::new(fixture_key_pair(0x74).public_key().clone());
+        changed_request.signatures.clear();
+        changed_request
+            .try_add_signature(&context.cfg.key_pair)
+            .unwrap();
+        fs::write(&request_path, json::to_vec(&changed_request).unwrap()).unwrap();
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("selected configuration")
+        );
+        let mut changed_request = request;
+        changed_request.signatures[0].signature = witness.signature;
+        fs::write(&request_path, json::to_vec(&changed_request).unwrap()).unwrap();
+        assert!(
+            args(operator.public_key())
+                .run(&mut context)
+                .unwrap_err()
+                .to_string()
+                .contains("original DA request witnesses")
+        );
+        assert_eq!(context.printed.len(), 1);
+    }
+
+    #[test]
     fn persist_submit_request_replaces_prepare_with_pin_scope_witness() {
         let context = TestContext::new(CliOutputFormat::Json);
         let request = da::build_da_request(
@@ -2108,11 +2272,14 @@ mod tests {
             None,
         )
         .expect("build DA submit persistence fixture");
-        let scope = DaPinScopeV1::new(
-            &request.authorization(),
-            StorageTicketId::new([0x54; 32]),
-            ManifestDigest::new([0x55; 32]),
-            None,
+        let scope = DaPinScopeProposalV1::new(
+            DaPinScopeV1::new(
+                &request.authorization(),
+                StorageTicketId::new([0x54; 32]),
+                ManifestDigest::new([0x55; 32]),
+                None,
+            ),
+            BlobDigest::default(),
         );
         let mut authorized = request.clone();
         authorized
@@ -2221,7 +2388,7 @@ mod tests {
             sequence: 3,
             payload_hash: BlobDigest::new([0xEB; 32]),
             payload_bytes: 1,
-            request_content_hash: Hash::prehashed([0xEC; 32]),
+            request_content_hash: iroha_crypto::Hash::prehashed([0xEC; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -2238,8 +2405,9 @@ mod tests {
             ManifestDigest::new([0x55; 32]),
             None,
         );
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-            .expect("sign deterministic CLI DA pin scope");
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+                .expect("sign deterministic CLI DA pin scope");
         let intent = DaPinIntent::new(authorization, scope_authorization);
         let proof = DaPinIntentProof {
             intent,

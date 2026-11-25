@@ -1,5 +1,6 @@
 //! Driverless policy boundaries and canonical Merkle fallback regressions.
 
+use crate::error::VmTrap;
 use std::cell::Cell;
 
 use super::{DEFAULT_GPU_MIN_LEAVES, ResolvedMerklePolicy, cpu_preference};
@@ -205,11 +206,11 @@ fn refused_acceleration_keeps_retained_tree_and_canonical_fallback() {
     for chunk in [0, 33] {
         assert!(matches!(
             ByteMerkleTree::from_bytes_accel(&bytes, chunk),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             ByteMerkleTree::root_from_bytes_accel(&bytes, chunk),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
 }

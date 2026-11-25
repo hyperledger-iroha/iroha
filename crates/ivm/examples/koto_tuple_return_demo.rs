@@ -1,7 +1,7 @@
 //! Kotodama tuple-return demo: compile a function returning pointer-backed integers.
 use iroha_primitives::numeric_abi::IntValueV1;
-use ivm::{IVM, PointerType, ProgramMetadata};
-use kotodama_lang::compiler::Compiler as KotodamaCompiler;
+use ivm::{IVM, PointerType};
+use kotodama_lang::compiler::{Compiler, CompilerOptions};
 fn returned_int(vm: &IVM, word_index: usize) -> i64 {
     let pointer = vm
         .public_call_result_word(word_index)
@@ -31,24 +31,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     "#;
     // 2) Compile to IVM bytecode
-    let compiler = KotodamaCompiler::new();
+    let options = CompilerOptions::default();
+    let profile = options.target_profile()?;
+    let compiler = Compiler::new_with_options(options);
     let code = compiler.compile_source(src).expect("compile tuple return");
-    // 3) Select the public entrypoint and run.
+    let contract = ivm::prepare_contract_for_profile(code.into(), profile)?;
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&code).expect("load program");
-    let metadata = ProgramMetadata::parse(&code).expect("parse contract metadata");
-    let entrypoint = metadata
-        .contract_interface
-        .as_ref()
-        .expect("contract interface")
-        .entrypoints
-        .iter()
-        .find(|entrypoint| entrypoint.name == "main")
-        .expect("main entrypoint");
-    vm.set_program_counter(
-        u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc,
-    )
-    .expect("select main entrypoint");
+    vm.load_prepared(&contract)?;
+    vm.select_entrypoint("main")?;
     vm.run().expect("run");
     // 4) Read canonical `IntValueV1` values from the completed result table.
     assert_eq!(vm.call_result_word_count()?, 2);

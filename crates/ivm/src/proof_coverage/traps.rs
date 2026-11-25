@@ -15,6 +15,7 @@
 //! the file's construction sites.
 
 use super::Obligation;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError, VmTrapKind,
     numeric::{NumericFaultV1, PointerAbiFaultV1},
@@ -233,6 +234,13 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/pipeline/overlay.rs",
         PrepareRejection: [MaxCyclesWithoutZk],
     ),
+    // The carrier return-register contract is checked only after the VM has
+    // completed successfully. Its rejection is an enclosing instruction verdict,
+    // never an interpreter or syscall terminal trap.
+    producer!(
+        "crates/iroha_core/src/runtime/generic_carriers/execution.rs",
+        OutsideInvocation: [PermissionDenied],
+    ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/cache.rs",
         PrepareRejection: [ArtifactAbiHashMismatch, GenericSyscallNotAllowed, InvalidMetadata],
@@ -292,6 +300,17 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/smartcontracts/ivm/host/fi_link_revision.rs",
         SyscallTrap: [DecodeError, GasCostOverflow, NotImplemented, PermissionDenied],
     ),
+    // One selected carrier capability is captured before execution, used by
+    // storage syscalls, then revalidated by the original artifact owner after
+    // execution. Shared codec/capability failures retain all three origins;
+    // physical pool and allocator refusals remain local at every boundary.
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs",
+        PrepareRejection: [NoritoInvalid, PermissionDenied],
+        SyscallTrap: [NoritoInvalid, PermissionDenied],
+        LocalDeferral: [AllocationDeferred, AllocatorDeferred],
+        OutsideInvocation: [NoritoInvalid, PermissionDenied],
+    ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host/linked_fi.rs",
         SyscallTrap: [PermissionDenied],
@@ -320,6 +339,13 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/iroha_core/src/smartcontracts/ivm/host/x509_attachment.rs",
         SyscallTrap: [NoritoInvalid, PermissionDenied],
         LocalDeferral: [AllocationDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
+    ),
+    // Retained carrier payloads are admitted while applying successful artifacts
+    // or staging a native code instruction, outside any running VM. Conversion
+    // delegates actual local refusals to their original execution-error owner.
+    producer!(
+        "crates/iroha_core/src/state/generic_carrier_storage.rs",
+        OutsideInvocation: [PermissionDenied],
     ),
     // Core encodes a fee-conversion state value with the VM codec outside any run.
     producer!(
@@ -486,10 +512,29 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         SyscallTrap: [NoritoInvalid],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
+    // Shared ALLOC/INPUT kernels retain native guest-pointer failures. Calling
+    // their carrier-only entry points with another profile violates host setup;
+    // original-pool and physical allocator refusals are never proof outcomes.
+    producer!(
+        "crates/ivm/src/host/stateless_memory.rs",
+        SyscallTrap: [NoritoInvalid],
+        HostInvariant: [PermissionDenied],
+        LocalDeferral: [AllocationDeferred, AllocatorDeferred],
+    ),
+    producer!(
+        "crates/ivm/src/host/syscall_context.rs",
+        SyscallTrap: [MemoryOutOfBounds, NoritoInvalid, PermissionDenied, RegisterOutOfBounds],
+    ),
+    producer!(
+        "crates/ivm/src/host/syscall_quote.rs",
+        SyscallTrap: [NoritoInvalid, RegisterOutOfBounds],
+    ),
     // The interpreter, program loading, syscall dispatch and the gas, heap and TLV helpers
     // they share. `debit_gas` and the heap preflight serve argument prepayment before the
     // run, root-call initialization and the opcodes or syscalls that call them. A non-ZK
     // run entered with private state is a violated host lifecycle contract.
+    // Likewise, a carrier TLV copy without an original VM allocation pool
+    // violates the explicit host construction contract.
     producer!(
         "crates/ivm/src/ivm.rs",
         PrepareRejection: [
@@ -509,7 +554,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             UnknownSyscall,
         ],
         HostInvariant: [
-            HostUnavailable, SyscallGasQuoteExceeded,
+            HostUnavailable, PermissionDenied, SyscallGasQuoteExceeded,
             SyscallMeteringModeMismatch,
         ],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
@@ -531,7 +576,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/ivm/program_load.rs",
-        PrepareRejection: [InvalidMetadata],
+        PrepareRejection: [InvalidMetadata, UnknownSyscall],
     ),
     // Stale or detached register-logger custody is a violated host lifecycle contract.
     producer!(
@@ -557,6 +602,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/ivm/trace_logging/change_counts.rs",
+        InterpreterTrap: [InvalidOpcode],
+    ),
+    producer!(
+        "crates/ivm/src/ivm/trace_logging/change_counts/baseline.rs",
         InterpreterTrap: [InvalidOpcode],
     ),
     producer!(
@@ -832,7 +881,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         InitializationTrap: [NoritoInvalid],
         InterpreterTrap: [NoritoInvalid],
         SyscallTrap: [NoritoInvalid],
-        LocalDeferral: [ExecutionDeferred],
+        LocalDeferral: [AllocatorDeferred, ExecutionDeferred],
     ),
     producer!(
         "crates/ivm_abi/src/state_cursor.rs",
@@ -853,8 +902,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm_artifact_admission/src/error.rs",
-        PrepareRejection: [ArtifactAbiHashMismatch, InvalidMetadata],
-        LocalDeferral: [AllocationDeferred, AllocatorDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
+        PrepareRejection: [ArtifactAbiHashMismatch, InvalidMetadata, MaxCyclesWithoutZk, MissingMaxCycles, UnsupportedProgramAbiVersion, UnsupportedProgramFeatureBits, UnsupportedProgramVersion],
     ),
     producer!(
         "crates/ivm_artifact_admission/src/literal.rs",
@@ -863,10 +911,31 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
 ];
 
-/// One [`VMError`] variant with its trap kind.
+/// Node-local Rust family that owns an inventoried error payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VmErrorFamily {
+    /// Deterministic execution or admission failure.
+    Trap,
+    /// Original reason the node could not complete the attempt.
+    Deferred,
+}
+impl VmErrorFamily {
+    /// Rust enum that declares this family's payload variants.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Trap => "VmTrap",
+            Self::Deferred => "VmDeferral",
+        }
+    }
+}
+
+/// One payload variant with its owning Rust family and diagnostic category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VmErrorEntry {
-    /// Variant identifier in `ivm_abi::error::VMError`.
+    /// Enum that declares this payload.
+    pub family: VmErrorFamily,
+    /// Variant identifier in the owning enum.
     pub variant: &'static str,
     /// Trap kind `classify_trap` assigns; `None` for the `Metered` wrapper,
     /// which is classified by the error it carries.
@@ -903,101 +972,268 @@ impl VmErrorEntry {
     }
 }
 
-const fn error(variant: &'static str, trap_kind: Option<VmTrapKind>) -> VmErrorEntry {
-    VmErrorEntry { variant, trap_kind }
+const fn error(
+    family: VmErrorFamily,
+    variant: &'static str,
+    trap_kind: Option<VmTrapKind>,
+) -> VmErrorEntry {
+    VmErrorEntry {
+        family,
+        variant,
+        trap_kind,
+    }
 }
 
-/// Number of [`VMError`] variants.
+/// Number of distinct error payload variants.
 pub const VM_ERROR_COUNT: usize = 50;
 
-/// Every [`VMError`] variant in declaration order.
+/// Every error payload, preserving the declaration order within each family.
 pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
-    error("ExecutionDeferred", Some(VmTrapKind::Other)),
-    error("AllocationDeferred", Some(VmTrapKind::Other)),
-    error("DecodeDeferred", Some(VmTrapKind::Other)),
-    error("AllocatorDeferred", Some(VmTrapKind::Other)),
-    error("VerificationDeferred", Some(VmTrapKind::Other)),
-    // The wrapper is classified by the error it carries.
-    error("Metered", None),
-    error("OutOfGas", Some(VmTrapKind::OutOfGas)),
-    error("OutOfMemory", Some(VmTrapKind::OutOfMemory)),
-    error("MemoryAccessViolation", Some(VmTrapKind::MemoryFault)),
-    error("MisalignedAccess", Some(VmTrapKind::MemoryFault)),
-    error("MemoryOutOfBounds", Some(VmTrapKind::MemoryFault)),
-    error("DecodeError", Some(VmTrapKind::DecodeError)),
-    error("InvalidOpcode", Some(VmTrapKind::InvalidOpcode)),
-    error("UnknownSyscall", Some(VmTrapKind::UnknownSyscall)),
-    error("HostUnavailable", Some(VmTrapKind::NotImplemented)),
-    error("NotImplemented", Some(VmTrapKind::NotImplemented)),
     error(
+        VmErrorFamily::Deferred,
+        "ExecutionDeferred",
+        Some(VmTrapKind::Other),
+    ),
+    error(
+        VmErrorFamily::Deferred,
+        "AllocationDeferred",
+        Some(VmTrapKind::Other),
+    ),
+    error(
+        VmErrorFamily::Deferred,
+        "DecodeDeferred",
+        Some(VmTrapKind::Other),
+    ),
+    error(
+        VmErrorFamily::Deferred,
+        "AllocatorDeferred",
+        Some(VmTrapKind::Other),
+    ),
+    error(
+        VmErrorFamily::Deferred,
+        "VerificationDeferred",
+        Some(VmTrapKind::Other),
+    ),
+    // The wrapper is classified by the error it carries.
+    error(VmErrorFamily::Trap, "Metered", None),
+    error(VmErrorFamily::Trap, "OutOfGas", Some(VmTrapKind::OutOfGas)),
+    error(
+        VmErrorFamily::Trap,
+        "OutOfMemory",
+        Some(VmTrapKind::OutOfMemory),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "MemoryAccessViolation",
+        Some(VmTrapKind::MemoryFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "MisalignedAccess",
+        Some(VmTrapKind::MemoryFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "MemoryOutOfBounds",
+        Some(VmTrapKind::MemoryFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "DecodeError",
+        Some(VmTrapKind::DecodeError),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "InvalidOpcode",
+        Some(VmTrapKind::InvalidOpcode),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "UnknownSyscall",
+        Some(VmTrapKind::UnknownSyscall),
+    ),
+    error(
+        VmErrorFamily::Deferred,
+        "HostUnavailable",
+        Some(VmTrapKind::NotImplemented),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "NotImplemented",
+        Some(VmTrapKind::NotImplemented),
+    ),
+    error(
+        VmErrorFamily::Deferred,
         "SyscallGasQuoteExceeded",
         Some(VmTrapKind::SyscallGasQuoteExceeded),
     ),
     error(
+        VmErrorFamily::Deferred,
         "SyscallMeteringModeMismatch",
         Some(VmTrapKind::SyscallMeteringModeMismatch),
     ),
-    error("GasCostOverflow", Some(VmTrapKind::GasCostOverflow)),
-    error("SyscallOutOfGas", Some(VmTrapKind::OutOfGas)),
-    error("NumericFault", Some(VmTrapKind::NumericFault)),
-    error("RegisterIntegerOverflow", Some(VmTrapKind::NumericFault)),
-    error("PointerAbiFault", Some(VmTrapKind::PointerAbiFault)),
-    error("AssertionFailed", Some(VmTrapKind::AssertionFailed)),
-    error("ContractAbort", Some(VmTrapKind::ContractAbort)),
-    error("ExceededMaxCycles", Some(VmTrapKind::ExceededMaxCycles)),
-    error("InvalidMetadata", Some(VmTrapKind::InvalidMetadata)),
     error(
+        VmErrorFamily::Trap,
+        "GasCostOverflow",
+        Some(VmTrapKind::GasCostOverflow),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "SyscallOutOfGas",
+        Some(VmTrapKind::OutOfGas),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "NumericFault",
+        Some(VmTrapKind::NumericFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "RegisterIntegerOverflow",
+        Some(VmTrapKind::NumericFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "PointerAbiFault",
+        Some(VmTrapKind::PointerAbiFault),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "AssertionFailed",
+        Some(VmTrapKind::AssertionFailed),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "ContractAbort",
+        Some(VmTrapKind::ContractAbort),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "ExceededMaxCycles",
+        Some(VmTrapKind::ExceededMaxCycles),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "InvalidMetadata",
+        Some(VmTrapKind::InvalidMetadata),
+    ),
+    error(
+        VmErrorFamily::Trap,
         "UnsupportedProgramVersion",
         Some(VmTrapKind::UnsupportedProgramVersion),
     ),
     error(
+        VmErrorFamily::Trap,
         "UnsupportedProgramFeatureBits",
         Some(VmTrapKind::UnsupportedProgramFeatureBits),
     ),
     error(
+        VmErrorFamily::Trap,
         "UnsupportedProgramAbiVersion",
         Some(VmTrapKind::UnsupportedProgramAbiVersion),
     ),
-    error("MissingMaxCycles", Some(VmTrapKind::MissingMaxCycles)),
-    error("MaxCyclesWithoutZk", Some(VmTrapKind::MaxCyclesWithoutZk)),
     error(
+        VmErrorFamily::Trap,
+        "MissingMaxCycles",
+        Some(VmTrapKind::MissingMaxCycles),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "MaxCyclesWithoutZk",
+        Some(VmTrapKind::MaxCyclesWithoutZk),
+    ),
+    error(
+        VmErrorFamily::Trap,
         "ProgramVectorLengthTooLarge",
         Some(VmTrapKind::ProgramVectorLengthTooLarge),
     ),
     error(
+        VmErrorFamily::Trap,
         "ArtifactAbiHashMismatch",
         Some(VmTrapKind::ArtifactAbiHashMismatch),
     ),
     error(
+        VmErrorFamily::Trap,
         "GenericSyscallNotAllowed",
         Some(VmTrapKind::GenericSyscallNotAllowed),
     ),
-    error("InvalidVectorLength", Some(VmTrapKind::InvalidVectorLength)),
-    error("MissingHalt", Some(VmTrapKind::MissingHalt)),
     error(
+        VmErrorFamily::Trap,
+        "InvalidVectorLength",
+        Some(VmTrapKind::InvalidVectorLength),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "MissingHalt",
+        Some(VmTrapKind::MissingHalt),
+    ),
+    error(
+        VmErrorFamily::Trap,
         "VectorExtensionDisabled",
         Some(VmTrapKind::PermissionDenied),
     ),
-    error("ZkExtensionDisabled", Some(VmTrapKind::PermissionDenied)),
+    error(
+        VmErrorFamily::Trap,
+        "ZkExtensionDisabled",
+        Some(VmTrapKind::PermissionDenied),
+    ),
     // No file in the producer scope constructs this variant; the
     // `vm_error_without_producer` open semantic tracks it.
-    error("NullifierAlreadyUsed", Some(VmTrapKind::PermissionDenied)),
-    error("PermissionDenied", Some(VmTrapKind::PermissionDenied)),
-    error("ReentrantCall", Some(VmTrapKind::ReentrantCall)),
-    error("CallDepthExceeded", Some(VmTrapKind::CallDepthExceeded)),
     error(
+        VmErrorFamily::Trap,
+        "NullifierAlreadyUsed",
+        Some(VmTrapKind::PermissionDenied),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "PermissionDenied",
+        Some(VmTrapKind::PermissionDenied),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "ReentrantCall",
+        Some(VmTrapKind::ReentrantCall),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "CallDepthExceeded",
+        Some(VmTrapKind::CallDepthExceeded),
+    ),
+    error(
+        VmErrorFamily::Trap,
         "ControlFlowViolation",
         Some(VmTrapKind::ControlFlowViolation),
     ),
-    error("PrivacyViolation", Some(VmTrapKind::PrivacyViolation)),
-    error("RegisterOutOfBounds", Some(VmTrapKind::RegisterOutOfBounds)),
-    error("NoritoInvalid", Some(VmTrapKind::NoritoInvalid)),
-    error("AbiTypeNotAllowed", Some(VmTrapKind::AbiTypeNotAllowed)),
     error(
+        VmErrorFamily::Trap,
+        "PrivacyViolation",
+        Some(VmTrapKind::PrivacyViolation),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "RegisterOutOfBounds",
+        Some(VmTrapKind::RegisterOutOfBounds),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "NoritoInvalid",
+        Some(VmTrapKind::NoritoInvalid),
+    ),
+    error(
+        VmErrorFamily::Trap,
+        "AbiTypeNotAllowed",
+        Some(VmTrapKind::AbiTypeNotAllowed),
+    ),
+    error(
+        VmErrorFamily::Trap,
         "HostOutputBudgetExceeded",
         Some(VmTrapKind::HostOutputBudgetExceeded),
     ),
-    error("AmxBudgetExceeded", Some(VmTrapKind::AmxBudgetExceeded)),
+    error(
+        VmErrorFamily::Trap,
+        "AmxBudgetExceeded",
+        Some(VmTrapKind::AmxBudgetExceeded),
+    ),
 ];
 
 /// Return the declaration identifier of a [`VMError`] variant.
@@ -1007,56 +1243,62 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
 #[must_use]
 pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
     match error {
-        VMError::ExecutionDeferred(_) => "ExecutionDeferred",
-        VMError::AllocationDeferred(_) => "AllocationDeferred",
-        VMError::DecodeDeferred(_) => "DecodeDeferred",
-        VMError::AllocatorDeferred(_) => "AllocatorDeferred",
-        VMError::VerificationDeferred(_) => "VerificationDeferred",
-        VMError::Metered { .. } => "Metered",
-        VMError::OutOfGas => "OutOfGas",
-        VMError::OutOfMemory => "OutOfMemory",
-        VMError::MemoryAccessViolation { .. } => "MemoryAccessViolation",
-        VMError::MisalignedAccess { .. } => "MisalignedAccess",
-        VMError::MemoryOutOfBounds => "MemoryOutOfBounds",
-        VMError::DecodeError => "DecodeError",
-        VMError::InvalidOpcode(_) => "InvalidOpcode",
-        VMError::UnknownSyscall(_) => "UnknownSyscall",
-        VMError::HostUnavailable => "HostUnavailable",
-        VMError::NotImplemented { .. } => "NotImplemented",
-        VMError::SyscallGasQuoteExceeded { .. } => "SyscallGasQuoteExceeded",
-        VMError::SyscallMeteringModeMismatch { .. } => "SyscallMeteringModeMismatch",
-        VMError::GasCostOverflow => "GasCostOverflow",
-        VMError::SyscallOutOfGas { .. } => "SyscallOutOfGas",
-        VMError::NumericFault(_) => "NumericFault",
-        VMError::RegisterIntegerOverflow => "RegisterIntegerOverflow",
-        VMError::PointerAbiFault(_) => "PointerAbiFault",
-        VMError::AssertionFailed => "AssertionFailed",
-        VMError::ContractAbort { .. } => "ContractAbort",
-        VMError::ExceededMaxCycles => "ExceededMaxCycles",
-        VMError::InvalidMetadata => "InvalidMetadata",
-        VMError::UnsupportedProgramVersion { .. } => "UnsupportedProgramVersion",
-        VMError::UnsupportedProgramFeatureBits { .. } => "UnsupportedProgramFeatureBits",
-        VMError::UnsupportedProgramAbiVersion { .. } => "UnsupportedProgramAbiVersion",
-        VMError::MissingMaxCycles => "MissingMaxCycles",
-        VMError::MaxCyclesWithoutZk { .. } => "MaxCyclesWithoutZk",
-        VMError::ProgramVectorLengthTooLarge { .. } => "ProgramVectorLengthTooLarge",
-        VMError::ArtifactAbiHashMismatch { .. } => "ArtifactAbiHashMismatch",
-        VMError::GenericSyscallNotAllowed { .. } => "GenericSyscallNotAllowed",
-        VMError::InvalidVectorLength { .. } => "InvalidVectorLength",
-        VMError::MissingHalt => "MissingHalt",
-        VMError::VectorExtensionDisabled => "VectorExtensionDisabled",
-        VMError::ZkExtensionDisabled => "ZkExtensionDisabled",
-        VMError::NullifierAlreadyUsed => "NullifierAlreadyUsed",
-        VMError::PermissionDenied => "PermissionDenied",
-        VMError::ReentrantCall => "ReentrantCall",
-        VMError::CallDepthExceeded => "CallDepthExceeded",
-        VMError::ControlFlowViolation => "ControlFlowViolation",
-        VMError::PrivacyViolation => "PrivacyViolation",
-        VMError::RegisterOutOfBounds => "RegisterOutOfBounds",
-        VMError::NoritoInvalid => "NoritoInvalid",
-        VMError::AbiTypeNotAllowed { .. } => "AbiTypeNotAllowed",
-        VMError::HostOutputBudgetExceeded { .. } => "HostOutputBudgetExceeded",
-        VMError::AmxBudgetExceeded { .. } => "AmxBudgetExceeded",
+        VMError::Deferred(VmDeferral::ExecutionDeferred(_)) => "ExecutionDeferred",
+        VMError::Deferred(VmDeferral::AllocationDeferred(_)) => "AllocationDeferred",
+        VMError::Deferred(VmDeferral::DecodeDeferred(_)) => "DecodeDeferred",
+        VMError::Deferred(VmDeferral::AllocatorDeferred(_)) => "AllocatorDeferred",
+        VMError::Deferred(VmDeferral::VerificationDeferred(_)) => "VerificationDeferred",
+        VMError::Trap(VmTrap::Metered { .. }) => "Metered",
+        VMError::Trap(VmTrap::OutOfGas) => "OutOfGas",
+        VMError::Trap(VmTrap::OutOfMemory) => "OutOfMemory",
+        VMError::Trap(VmTrap::MemoryAccessViolation { .. }) => "MemoryAccessViolation",
+        VMError::Trap(VmTrap::MisalignedAccess { .. }) => "MisalignedAccess",
+        VMError::Trap(VmTrap::MemoryOutOfBounds) => "MemoryOutOfBounds",
+        VMError::Trap(VmTrap::DecodeError) => "DecodeError",
+        VMError::Trap(VmTrap::InvalidOpcode(_)) => "InvalidOpcode",
+        VMError::Trap(VmTrap::UnknownSyscall(_)) => "UnknownSyscall",
+        VMError::Deferred(VmDeferral::HostUnavailable) => "HostUnavailable",
+        VMError::Trap(VmTrap::NotImplemented { .. }) => "NotImplemented",
+        VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. }) => "SyscallGasQuoteExceeded",
+        VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => {
+            "SyscallMeteringModeMismatch"
+        }
+        VMError::Trap(VmTrap::GasCostOverflow) => "GasCostOverflow",
+        VMError::Trap(VmTrap::SyscallOutOfGas { .. }) => "SyscallOutOfGas",
+        VMError::Trap(VmTrap::NumericFault(_)) => "NumericFault",
+        VMError::Trap(VmTrap::RegisterIntegerOverflow) => "RegisterIntegerOverflow",
+        VMError::Trap(VmTrap::PointerAbiFault(_)) => "PointerAbiFault",
+        VMError::Trap(VmTrap::AssertionFailed) => "AssertionFailed",
+        VMError::Trap(VmTrap::ContractAbort { .. }) => "ContractAbort",
+        VMError::Trap(VmTrap::ExceededMaxCycles) => "ExceededMaxCycles",
+        VMError::Trap(VmTrap::InvalidMetadata) => "InvalidMetadata",
+        VMError::Trap(VmTrap::UnsupportedProgramVersion { .. }) => "UnsupportedProgramVersion",
+        VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { .. }) => {
+            "UnsupportedProgramFeatureBits"
+        }
+        VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { .. }) => {
+            "UnsupportedProgramAbiVersion"
+        }
+        VMError::Trap(VmTrap::MissingMaxCycles) => "MissingMaxCycles",
+        VMError::Trap(VmTrap::MaxCyclesWithoutZk { .. }) => "MaxCyclesWithoutZk",
+        VMError::Trap(VmTrap::ProgramVectorLengthTooLarge { .. }) => "ProgramVectorLengthTooLarge",
+        VMError::Trap(VmTrap::ArtifactAbiHashMismatch { .. }) => "ArtifactAbiHashMismatch",
+        VMError::Trap(VmTrap::GenericSyscallNotAllowed { .. }) => "GenericSyscallNotAllowed",
+        VMError::Trap(VmTrap::InvalidVectorLength { .. }) => "InvalidVectorLength",
+        VMError::Trap(VmTrap::MissingHalt) => "MissingHalt",
+        VMError::Trap(VmTrap::VectorExtensionDisabled) => "VectorExtensionDisabled",
+        VMError::Trap(VmTrap::ZkExtensionDisabled) => "ZkExtensionDisabled",
+        VMError::Trap(VmTrap::NullifierAlreadyUsed) => "NullifierAlreadyUsed",
+        VMError::Trap(VmTrap::PermissionDenied) => "PermissionDenied",
+        VMError::Trap(VmTrap::ReentrantCall) => "ReentrantCall",
+        VMError::Trap(VmTrap::CallDepthExceeded) => "CallDepthExceeded",
+        VMError::Trap(VmTrap::ControlFlowViolation) => "ControlFlowViolation",
+        VMError::Trap(VmTrap::PrivacyViolation) => "PrivacyViolation",
+        VMError::Trap(VmTrap::RegisterOutOfBounds) => "RegisterOutOfBounds",
+        VMError::Trap(VmTrap::NoritoInvalid) => "NoritoInvalid",
+        VMError::Trap(VmTrap::AbiTypeNotAllowed { .. }) => "AbiTypeNotAllowed",
+        VMError::Trap(VmTrap::HostOutputBudgetExceeded { .. }) => "HostOutputBudgetExceeded",
+        VMError::Trap(VmTrap::AmxBudgetExceeded { .. }) => "AmxBudgetExceeded",
     }
 }
 
@@ -1206,9 +1448,9 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
 /// checked register instructions.
 ///
 /// In status mode a numeric syscall returns the tag in `r11` and execution
-/// continues; in trap mode it raises `VMError::NumericFault`. Checked register
-/// division by zero always raises `VMError::NumericFault(DivisionByZero)`; the C10 signed
-/// register overflow raises the internal `VMError::RegisterIntegerOverflow`, which is not a
+/// continues; in trap mode it raises `VmTrap::NumericFault`. Checked register
+/// division by zero always raises `VmTrap::NumericFault(DivisionByZero)`; the C10 signed
+/// register overflow raises the internal `VmTrap::RegisterIntegerOverflow`, which is not a
 /// numeric fault code. The relation must
 /// bind the selected mode, the exact tag and the gas of every completed stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1260,7 +1502,7 @@ pub const NUMERIC_FAULTS: &[NumericFaultEntry; NUMERIC_FAULT_COUNT] = &[
 
 /// One stable pointer or envelope validation fault code.
 ///
-/// Numeric pointer validation raises `VMError::PointerAbiFault` with the tag;
+/// Numeric pointer validation raises `VmTrap::PointerAbiFault` with the tag;
 /// the relation must bind the exact tag and the gas of every completed stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PointerAbiFaultEntry {

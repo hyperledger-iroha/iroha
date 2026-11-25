@@ -369,6 +369,36 @@ pub struct ExtraMetadata {
     pub items: Vec<MetadataEntry>,
 }
 impl ExtraMetadata {
+    /// Normalized public registry alias embedded in an ingest request's signed metadata.
+    ///
+    /// # Errors
+    /// Returns an error for ambiguous, encrypted, private, empty, or non-UTF-8 alias metadata.
+    pub fn registry_alias(&self) -> Result<Option<&str>, &'static str> {
+        let mut entries = self
+            .items
+            .iter()
+            .filter(|entry| entry.key == "da.registry.alias");
+        let Some(entry) = entries.next() else {
+            return Ok(None);
+        };
+        if entries.next().is_some() {
+            return Err("alias must occur only once");
+        }
+        if entry.visibility != MetadataVisibility::Public {
+            return Err("must use public visibility");
+        }
+        if !matches!(entry.encryption, MetadataEncryption::None) {
+            return Err("must not be encrypted");
+        }
+        let alias = std::str::from_utf8(&entry.value)
+            .map_err(|_| "value must be valid UTF-8")?
+            .trim();
+        if alias.is_empty() {
+            return Err("alias must not be empty");
+        }
+        Ok(Some(alias))
+    }
+
     /// Returns `true` when no metadata entries are present.
     #[must_use]
     pub fn is_empty(&self) -> bool {

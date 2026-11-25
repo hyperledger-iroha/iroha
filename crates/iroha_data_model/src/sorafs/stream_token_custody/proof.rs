@@ -372,11 +372,12 @@ impl StreamTokenCustodyProofV1 {
         expected_provider: ProviderId,
         expected_owner: &AccountId,
         expected_binding: &SignerCustodyBindingV1,
-        expected_schema: Hash,
+        expected_schema: impl crate::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &VerifiedSumeragiBlock,
     ) -> Result<VerifiedStreamTokenCustodyStateV1, FinalityError> {
         expected_binding.validate().map_err(map_invalid)?;
         block.verify_global_scope(expected_network, &expected_binding.chain_id)?;
+        let expected_schema = expected_schema.select_schema(self.world.schema_hash)?;
         if expected_provider.as_bytes() == &[0; 32]
             || block.commitment().schedule.current.network_id != expected_network
             || self.world.schema_hash != expected_schema

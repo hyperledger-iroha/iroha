@@ -1,5 +1,6 @@
 //! Bounded durable state storage for development and test hosts.
 use crate::VMError;
+use crate::error::VmTrap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
 use iroha_model_base::state_path::StatePath;
 use norito::json;
@@ -103,7 +104,7 @@ impl DurableStateOverlay {
             || path_bytes > STATE_OVERLAY_MAX_PATH_BYTES_V1
             || value_bytes > STATE_OVERLAY_MAX_VALUE_BYTES_V1
         {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         Ok(())
     }
@@ -117,11 +118,11 @@ impl DurableStateOverlay {
             usage.path_bytes = usage
                 .path_bytes
                 .checked_add(path.as_ref().len())
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             usage.value_bytes = usage
                 .value_bytes
                 .checked_add(value.len())
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             Self::ensure_resource_limits(data.len(), usage.path_bytes, usage.value_bytes)?;
         }
         Ok(usage)
@@ -138,8 +139,8 @@ impl DurableStateOverlay {
     }
     /// Create an overlay that persists to the given path.
     pub fn with_persist_path(path: PathBuf) -> Result<Self, VMError> {
-        let persist_target =
-            RetainedOverlayTarget::from_path(&path).map_err(|_| VMError::NoritoInvalid)?;
+        let persist_target = RetainedOverlayTarget::from_path(&path)
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         let mut overlay = Self {
             persist_target: Some(persist_target),
             data: BTreeMap::new(),
@@ -178,7 +179,7 @@ impl DurableStateOverlay {
         let next_path_bytes = if is_new {
             self.path_bytes
                 .checked_add(path.as_ref().len())
-                .ok_or(VMError::NoritoInvalid)?
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?
         } else {
             self.path_bytes
         };
@@ -186,7 +187,7 @@ impl DurableStateOverlay {
             .value_bytes
             .checked_sub(previous_value_len)
             .and_then(|bytes| bytes.checked_add(value.len()))
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         Self::ensure_resource_limits(next_entry_count, next_path_bytes, next_value_bytes)?;
         let key = path.clone();
         let prev = self.data.insert(key.clone(), value);
@@ -257,11 +258,11 @@ impl DurableStateOverlay {
                 path_bytes: self
                     .path_bytes
                     .checked_sub(path.as_ref().len())
-                    .ok_or(VMError::NoritoInvalid)?,
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?,
                 value_bytes: self
                     .value_bytes
                     .checked_sub(value.len())
-                    .ok_or(VMError::NoritoInvalid)?,
+                    .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?,
             }
         } else {
             previous_usage
@@ -323,11 +324,13 @@ impl DurableStateOverlay {
             return Ok(());
         };
         if target.is_poisoned() {
-            return Err(OverlayFlushError::Poisoned(VMError::NoritoInvalid));
+            return Err(OverlayFlushError::Poisoned(VMError::Trap(
+                VmTrap::NoritoInvalid,
+            )));
         }
         let usage = Self::validate_collection(&self.data)?;
         if usage.path_bytes != self.path_bytes || usage.value_bytes != self.value_bytes {
-            return Err(VMError::NoritoInvalid.into());
+            return Err(VMError::Trap(VmTrap::NoritoInvalid).into());
         }
         let encoded_len = persisted_json_encoded_len(&self.data)?;
         let mut serialized = String::with_capacity(encoded_len);
@@ -344,19 +347,19 @@ impl DurableStateOverlay {
         }
         serialized.push('}');
         if serialized.len() != encoded_len || serialized.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
-            return Err(VMError::NoritoInvalid.into());
+            return Err(VMError::Trap(VmTrap::NoritoInvalid).into());
         }
         match state_overlay_fs::atomic_write(target, serialized.as_bytes()) {
             Ok(()) => Ok(()),
-            Err(state_overlay_fs::AtomicWriteError::BeforePublication(_error)) => {
-                Err(OverlayFlushError::BeforePublication(VMError::NoritoInvalid))
-            }
-            Err(state_overlay_fs::AtomicWriteError::AfterPublication(_error)) => {
-                Err(OverlayFlushError::AfterPublication(VMError::NoritoInvalid))
-            }
-            Err(state_overlay_fs::AtomicWriteError::Poisoned(_error)) => {
-                Err(OverlayFlushError::Poisoned(VMError::NoritoInvalid))
-            }
+            Err(state_overlay_fs::AtomicWriteError::BeforePublication(_error)) => Err(
+                OverlayFlushError::BeforePublication(VMError::Trap(VmTrap::NoritoInvalid)),
+            ),
+            Err(state_overlay_fs::AtomicWriteError::AfterPublication(_error)) => Err(
+                OverlayFlushError::AfterPublication(VMError::Trap(VmTrap::NoritoInvalid)),
+            ),
+            Err(state_overlay_fs::AtomicWriteError::Poisoned(_error)) => Err(
+                OverlayFlushError::Poisoned(VMError::Trap(VmTrap::NoritoInvalid)),
+            ),
         }
     }
 
@@ -366,7 +369,7 @@ impl DurableStateOverlay {
             .as_ref()
             .is_some_and(RetainedOverlayTarget::is_poisoned)
         {
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         } else {
             Ok(())
         }
@@ -376,7 +379,7 @@ impl DurableStateOverlay {
             return Ok(());
         };
         let Some(bytes) = state_overlay_fs::read_bounded(target, STATE_OVERLAY_MAX_FILE_BYTES_V1)
-            .map_err(|_| VMError::NoritoInvalid)?
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         else {
             return Ok(());
         };
@@ -391,38 +394,40 @@ impl DurableStateOverlay {
     ) -> Result<(BTreeMap<StatePath, Vec<u8>>, OverlayResourceUsage), VMError> {
         preflight_persisted_json(&bytes)?;
         let persisted: BTreeMap<String, String> =
-            json::from_slice(&bytes).map_err(|_| VMError::NoritoInvalid)?;
+            json::from_slice(&bytes).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
         drop(bytes);
         let mut map = BTreeMap::new();
         let mut usage = OverlayResourceUsage::default();
         for (k, v) in persisted {
             if k.len() > crate::syscalls::STATE_MAX_PATH_BYTES {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
-            let path: StatePath = k.parse().map_err(|_| VMError::NoritoInvalid)?;
+            let path: StatePath = k
+                .parse()
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
             let encoded = v.trim();
             if encoded.len() > STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             let decoded = B64_STANDARD
                 .decode(encoded.as_bytes())
-                .map_err(|_| VMError::NoritoInvalid)?;
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
             Self::validate_entry(&path, &decoded)?;
             usage.path_bytes = usage
                 .path_bytes
                 .checked_add(path.as_ref().len())
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             usage.value_bytes = usage
                 .value_bytes
                 .checked_add(decoded.len())
-                .ok_or(VMError::NoritoInvalid)?;
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
             Self::ensure_resource_limits(
                 map.len().saturating_add(1),
                 usage.path_bytes,
                 usage.value_bytes,
             )?;
             if map.insert(path, decoded).is_some() {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
         }
         Ok((map, usage))
@@ -432,19 +437,22 @@ fn persisted_json_encoded_len(data: &BTreeMap<StatePath, Vec<u8>>) -> Result<usi
     let mut bytes = 2usize;
     for (index, (path, value)) in data.iter().enumerate() {
         if index != 0 {
-            bytes = bytes.checked_add(1).ok_or(VMError::NoritoInvalid)?;
+            bytes = bytes
+                .checked_add(1)
+                .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         }
         bytes = bytes
             .checked_add(json_string_encoded_len(path.as_ref())?)
             .and_then(|total| total.checked_add(1))
             .and_then(|total| total.checked_add(2))
-            .ok_or(VMError::NoritoInvalid)?;
-        let encoded_value = base64::encoded_len(value.len(), true).ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
+        let encoded_value =
+            base64::encoded_len(value.len(), true).ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         bytes = bytes
             .checked_add(encoded_value)
-            .ok_or(VMError::NoritoInvalid)?;
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
         if bytes > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
     }
     Ok(bytes)
@@ -456,14 +464,16 @@ fn json_string_encoded_len(value: &str) -> Result<usize, VMError> {
             character if (character as u32) < 0x20 => 6,
             character => character.len_utf8(),
         };
-        bytes.checked_add(added).ok_or(VMError::NoritoInvalid)
+        bytes
+            .checked_add(added)
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))
     })
 }
 fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
     if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| VMError::NoritoInvalid)?;
+    let text = std::str::from_utf8(bytes).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut cursor = FlatOverlayJsonCursor::new(text.as_bytes());
     cursor.skip_whitespace();
     cursor.expect(b'{')?;
@@ -475,7 +485,7 @@ fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
     let mut entries = 0usize;
     loop {
         if entries == STATE_OVERLAY_MAX_ENTRIES_V1 {
-            return Err(VMError::NoritoInvalid);
+            return Err(VMError::Trap(VmTrap::NoritoInvalid));
         }
         cursor.scan_string(STATE_OVERLAY_MAX_RAW_JSON_PATH_BYTES_V1)?;
         cursor.skip_whitespace();
@@ -520,7 +530,7 @@ impl<'a> FlatOverlayJsonCursor<'a> {
         if self.consume(expected) {
             Ok(())
         } else {
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         }
     }
     fn scan_string(&mut self, maximum_raw_bytes: usize) -> Result<(), VMError> {
@@ -529,7 +539,7 @@ impl<'a> FlatOverlayJsonCursor<'a> {
         let mut escaped = false;
         while let Some(&byte) = self.bytes.get(self.offset) {
             if self.offset.saturating_sub(start) > maximum_raw_bytes {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             self.offset = self.offset.saturating_add(1);
             if escaped {
@@ -540,13 +550,13 @@ impl<'a> FlatOverlayJsonCursor<'a> {
                 return Ok(());
             }
         }
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     }
     fn finish(&self) -> Result<(), VMError> {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         }
     }
 }
@@ -559,6 +569,7 @@ impl DurableStateSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     use std::{fs, io};
     fn path(value: &str) -> StatePath {
         value.parse().expect("canonical state path")
@@ -593,7 +604,7 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("second"), b"two".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(fs::read(&victim_path).unwrap(), b"do not replace");
         assert!(overlay.get_ref(&path("second")).is_none());
@@ -662,7 +673,7 @@ mod tests {
 
         assert!(matches!(
             DurableStateOverlay::with_persist_path(alias.join("nested/state.json")),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(!external.join("nested").exists());
         fs::remove_dir_all(root).expect("remove temporary directory");
@@ -684,11 +695,11 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("seed"), b"one".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             clone.set(&path("seed"), b"one".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(!external.join("nested").exists());
         fs::remove_dir_all(root).expect("remove temporary directory");
@@ -704,7 +715,7 @@ mod tests {
 
         assert!(matches!(
             DurableStateOverlay::with_persist_path(root.join("state.json")),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
             .expect("restore private permissions for cleanup");
@@ -725,7 +736,7 @@ mod tests {
 
         assert!(matches!(
             DurableStateOverlay::with_persist_path(overlay_path),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         fs::set_permissions(root.join("state.json"), fs::Permissions::from_mode(0o600))
             .expect("restore private leaf permissions for cleanup");
@@ -748,7 +759,7 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("seed"), b"one".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(!pending.join("nested").exists());
         fs::set_permissions(&pending, fs::Permissions::from_mode(0o700))
@@ -775,7 +786,7 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("seed"), b"one".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(
             fs::read(pending.join("state.json")).unwrap(),
@@ -862,22 +873,25 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("second"), b"two".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(overlay.get_ref(&path("second")), Some(b"two".as_slice()));
-        assert!(matches!(overlay.flush(), Err(VMError::NoritoInvalid)));
+        assert!(matches!(
+            overlay.flush(),
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
+        ));
         assert!(matches!(
             poisoned_clone.flush(),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(matches!(
             overlay.set(&path("third"), b"three".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(overlay.get_ref(&path("third")).is_none());
         assert!(matches!(
             overlay.restore(&seed_snapshot),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(overlay.get_ref(&path("second")), Some(b"two".as_slice()));
 
@@ -905,7 +919,7 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("second"), b"two".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(fs::read(&victim_path).unwrap(), b"do not replace");
         assert!(overlay.get_ref(&path("second")).is_none());
@@ -926,7 +940,7 @@ mod tests {
 
         assert!(matches!(
             overlay.set(&path("second"), b"two".to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(overlay_path.is_dir());
         assert!(overlay.get_ref(&path("second")).is_none());
@@ -951,7 +965,7 @@ mod tests {
         let oversized_path = path("oversized");
         assert!(matches!(
             overlay.set(&oversized_path, oversized),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(overlay.get_ref(&oversized_path).is_none());
     }
@@ -971,7 +985,7 @@ mod tests {
         ]));
         assert!(matches!(
             overlay.restore(&snapshot),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert_eq!(overlay.get_ref(&existing), Some(b"kept".as_slice()));
         assert!(overlay.get_ref(&path("valid")).is_none());
@@ -997,7 +1011,7 @@ mod tests {
         let duplicate = r#"{"root/e\u0301":"AQ==","root/é":"Ag=="}"#;
         assert!(matches!(
             DurableStateOverlay::decode_persisted(duplicate.as_bytes().to_vec()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]
@@ -1029,7 +1043,7 @@ mod tests {
         ] {
             assert!(matches!(
                 DurableStateOverlay::ensure_resource_limits(overflow.0, overflow.1, overflow.2),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ));
         }
     }
@@ -1052,7 +1066,7 @@ mod tests {
         let overflow = path("bounded/overflow");
         assert!(matches!(
             overlay.set(&overflow, vec![0x5a]),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         assert!(overlay.get_ref(&overflow).is_none());
         assert_eq!(overlay.value_bytes, STATE_OVERLAY_MAX_VALUE_BYTES_V1);
@@ -1069,7 +1083,7 @@ mod tests {
         encoded.push('}');
         assert!(matches!(
             DurableStateOverlay::decode_persisted(encoded.into_bytes()),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]

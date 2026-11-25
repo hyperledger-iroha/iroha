@@ -306,12 +306,17 @@ fn accepted_invalid_proof_and_invalid_request_signature_share_full_receive_matri
             &mut SpikeRng::new(b"complete Receive actual proof"),
             &candidate.0,
         );
+        let proof_bytes = proof.to_bytes();
+        eprintln!(
+            "full Receive case {i} unlinked proof bytes {}",
+            proof_bytes.len()
+        );
         assert!(
             spartan::verify_circuit(
                 &candidate.0.shape,
                 &gens,
                 &candidate.1,
-                &proof.to_bytes(),
+                &proof_bytes,
                 &candidate.0
             )
             .is_ok()
@@ -326,7 +331,7 @@ fn accepted_invalid_proof_and_invalid_request_signature_share_full_receive_matri
                     &candidate.0.shape,
                     &gens,
                     &forged,
-                    &proof.to_bytes(),
+                    &proof_bytes,
                     &candidate.0
                 )
                 .is_err(),

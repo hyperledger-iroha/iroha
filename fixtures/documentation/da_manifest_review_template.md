@@ -9,19 +9,21 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 ## Manifest Metadata
 - Manifest name / version: <string>
 - Blob class & governance tag: <taikai_segment · da.taikai.live>
-- BLAKE3 digest (hex): `<digest>`
-- Norito payload hash (optional): `<digest>`
-- Source envelope / URL: <https://.../manifest_signatures.json>
+- DA manifest digest (BLAKE3 of canonical Norito bytes): `<manifest_hash>`
+- Original payload digest (BLAKE3): `<blob_hash>`
+- Signed DA receipt and source location: <artefact reference>
 - Torii policy snapshot ID: `<unix timestamp or git sha>`
 
-## Signature Verification
-- Manifest fetch source / storage ticket: `<hex>`
-- Verification command/output: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (log excerpt attached?)
-- `manifest_blake3` reported by tool: `<digest>`
-- `chunk_digest_sha3_256` reported by tool: `<digest>`
-- Council signer multihashes:
-  - `<did:...>` / `<ed25519 multihash>`
-- Verification timestamp (UTC): `<2026-02-20T11:04:33Z>`
+## Commitment and Receipt Verification
+- Torii storage ticket from the operator-signed receipt: `<ticket>`
+- Trusted receipt-signing public key used by the producer at submission: `<operator_key>`
+- Fetch the canonical manifest: `iroha app da get-blob --storage-ticket "$ticket" --output-dir "$evidence_dir"`
+- Obtain the commitment for the receipt's manifest digest: `iroha --output-format json app da commitments-prove --manifest-hash "$manifest_hash" > "$evidence_dir/commitment.json"`
+- Extract the membership proof: `jq -e '.proof' "$evidence_dir/commitment.json" > "$evidence_dir/proof.json"`
+- Verify against a trusted node on the selected network: `iroha --config "$verifier_config" --output-format json app da commitments-verify --proof-json "$evidence_dir/proof.json" | jq -e '.valid == true'`
+- Compare the canonical manifest file's BLAKE3 digest and ticket with the verified commitment. Record the certified block height and independent checkpoint reference: `<height, checkpoint>`
+- Panel signatures or vote evidence, when required: <governance record>
+- Verification timestamp (UTC): `<timestamp>`
 
 ## Retention Verification
 | Field | Expected (policy) | Observed (manifest) | Evidence |
@@ -56,7 +58,7 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 - Notes for Parliament minutes: <summary of deadlines / obligations>
 
 ## Attachments
-- [ ] Signed Norito manifest (`.to`)
+- [ ] Canonical DA manifest (`.norito`), operator-signed receipt and verified commitment proof
 - [ ] JSON summary / CI artefact proving retention values
 - [ ] Proof token or compliance packet (for takedowns)
 - [ ] Buffer telemetry snapshot (`iroha_settlement_buffer_xor`)

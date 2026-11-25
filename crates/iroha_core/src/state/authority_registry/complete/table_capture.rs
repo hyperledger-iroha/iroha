@@ -287,9 +287,39 @@ capture_world_table_once!(
     "world.runtime_game_transfers"
 );
 capture_world_table_once!(
+    capture_c10_contract_manifests_once,
+    c10_contract_manifests,
+    "world.c10_contract_manifests"
+);
+capture_world_table_once!(
+    capture_c10_contract_profiles_once,
+    c10_contract_profiles,
+    "world.c10_contract_profiles"
+);
+capture_world_table_once!(
+    capture_c10_triggers_once,
+    c10_triggers,
+    "world.c10_triggers"
+);
+capture_world_table_once!(
+    capture_kagemusha_spartan_programs_once,
+    kagemusha_spartan_programs,
+    "world.kagemusha_spartan_programs"
+);
+capture_world_table_once!(
     capture_runtime_retirements_once,
     runtime_retirements,
     "world.runtime_retirements"
+);
+capture_world_table_once!(
+    capture_runtime_generic_artifacts_once,
+    runtime_generic_artifacts,
+    "world.runtime_generic_artifacts"
+);
+capture_world_table_once!(
+    capture_runtime_generic_values_once,
+    runtime_generic_values,
+    "world.runtime_generic_values"
 );
 capture_world_table_once!(
     capture_runtime_escrow_captures_once,
@@ -960,7 +990,13 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_runtime_deferred_consents_once::MATERIALIZER,
     capture_runtime_amx_captures_once::MATERIALIZER,
     capture_runtime_game_transfers_once::MATERIALIZER,
+    capture_c10_contract_manifests_once::MATERIALIZER,
+    capture_c10_contract_profiles_once::MATERIALIZER,
+    capture_c10_triggers_once::MATERIALIZER,
+    capture_kagemusha_spartan_programs_once::MATERIALIZER,
     capture_runtime_retirements_once::MATERIALIZER,
+    capture_runtime_generic_values_once::MATERIALIZER,
+    capture_runtime_generic_artifacts_once::MATERIALIZER,
     capture_runtime_escrow_captures_once::MATERIALIZER,
     capture_runtime_migrations_once::MATERIALIZER,
     capture_runtime_boundaries_once::MATERIALIZER,
@@ -1431,7 +1467,13 @@ mod tests {
             "world.runtime_deferred_consents",
             "world.runtime_amx_captures",
             "world.runtime_game_transfers",
+            "world.c10_contract_manifests",
+            "world.c10_contract_profiles",
+            "world.c10_triggers",
+            "world.kagemusha_spartan_programs",
             "world.runtime_retirements",
+            "world.runtime_generic_values",
+            "world.runtime_generic_artifacts",
             "world.runtime_escrow_captures",
             "world.runtime_migrations",
             "world.runtime_boundaries",

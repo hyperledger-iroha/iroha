@@ -384,6 +384,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [
     ".",
     "./address",
+    "./anonymous-ballot",
     "./atomic-private-settlement",
     "./blake2b",
     "./bootle-lantern-issuance",
@@ -551,6 +552,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/noritoValueCodecs.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
+      "dist/offchainSigning.js",
       "dist/privacyExact12Network.js",
       "dist/privacyX509Wire.js",
       "dist/proofAttachment.js",

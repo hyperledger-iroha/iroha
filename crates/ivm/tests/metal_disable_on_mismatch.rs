@@ -1,10 +1,4 @@
-//! Acceptance: disable Metal backend on golden-vector mismatch
-//!
-//! This test forces the Metal self-test to fail via an env var and verifies that:
-//! - The backend is disabled (reported via `metal_available()` / `metal_disabled()`), and
-//! - Execution falls back to the scalar path and still matches known vectors
-//!
-//! Skips on non-macOS or when the `metal` feature is not enabled.
+//! Metal self-test quarantine, release environment policy, and scalar fallback parity.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn isolated(name: &str) -> bool {
     const CHILD: &str = "IVM_METAL_POLICY_CONTROL";
@@ -35,7 +29,33 @@ fn isolated(name: &str) -> bool {
     );
     true
 }
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal", not(debug_assertions)))]
+#[test]
+fn metal_release_ignores_the_forced_selftest_failure() {
+    if isolated("metal_release_ignores_the_forced_selftest_failure") {
+        return;
+    }
+    const FLAG: &str = "IVM_FORCE_METAL_SELFTEST_FAIL";
+    // A fresh process owns discovery and its sticky quarantine diagnostics.
+    unsafe { std::env::set_var(FLAG, "1") };
+    assert!(!ivm_abi::dev_env::dev_env_flag(FLAG));
+    for _ in 0..ivm::acceleration_config().resource_limits.devices {
+        ivm::release_metal_state();
+        let available = ivm::metal_available();
+        let reason = ivm::acceleration_runtime_errors().metal;
+        assert!(
+            reason
+                .as_deref()
+                .is_none_or(|message| !message.contains(FLAG)),
+            "release honored the debug self-test override: {reason:?}"
+        );
+        if available {
+            break;
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", debug_assertions))]
 #[test]
 fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     #[cfg(feature = "metal")]

@@ -238,8 +238,13 @@ fn absorb<'w, F: PoseidonField>(words: &[&'w Word<F>]) -> Vec<AbsorbInput<'w, F>
 fn commitment<'w, F: PoseidonField>(
     core: &[&'w Word<F>; CORE_FIELDS],
     rest_digest: &'w Word<F>,
+    #[cfg(test)] prior_credential_root: Option<&'w Word<F>>,
 ) -> Vec<AbsorbInput<'w, F>> {
     let mut words = core.to_vec();
+    #[cfg(test)]
+    if let Some(root) = prior_credential_root {
+        words.insert(core_index::CREDENTIAL + 1, root);
+    }
     words.push(rest_digest);
     absorb(&words)
 }
@@ -616,8 +621,22 @@ fn relate<F: PoseidonField>(
         certificates: term(&mut batch, |terms| &terms.certificates),
         nonce: batch.pair(value(terms, |terms| digest_fields::<F>(&terms.nonce))),
     };
+    #[cfg(test)]
+    let prior_credential_root = if shape.core30_candidate {
+        // Both head commitments copy this same private cell. Key generation
+        // leaves it unknown. A witnessed candidate must supply its opening.
+        let root = match witness {
+            None => Value::unknown(),
+            Some(step) => Value::known(step.core30_prior_root.ok_or(Error::Synthesis)?),
+        };
+        Some(batch.push(root))
+    } else {
+        None
+    };
     let words = uint.glue().witnesses(region, &batch.values)?;
     let word = |index: usize| at(&words, index);
+    #[cfg(test)]
+    let prior_credential_root = prior_credential_root.map(word).transpose()?;
 
     // Lifecycle Active or Retiring (carried unchanged), a nonzero amount, a
     // sequence that does not overflow.
@@ -953,7 +972,12 @@ fn relate<F: PoseidonField>(
         region,
         shape,
         HashSite::Predecessor,
-        &commitment(&predecessor_core, rest_digest),
+        &commitment(
+            &predecessor_core,
+            rest_digest,
+            #[cfg(test)]
+            prior_credential_root,
+        ),
     )?;
     check_digest(&predecessor, digests.map(|digests| digests.predecessor))?;
     let successor = hash_site(
@@ -961,7 +985,12 @@ fn relate<F: PoseidonField>(
         region,
         shape,
         HashSite::Successor,
-        &commitment(&successor_core, rest_digest),
+        &commitment(
+            &successor_core,
+            rest_digest,
+            #[cfg(test)]
+            prior_credential_root,
+        ),
     )?;
     check_digest(&successor, digests.map(|digests| digests.successor))?;
 

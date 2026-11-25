@@ -301,6 +301,19 @@ impl<'a, V: CellValue, A, I, C: Send + Sync + 'static> DetachedPublicationSlot<'
         }
     }
     /// Move the same fully prepared pair into its terminal publisher.
+    /// Internal exact-owner transfer for a distinct execution-suspension capability.
+    /// The caller retains this emptied slot and all original cleanup beside resumed writers.
+    pub(super) fn take_prepared(&mut self) -> PreparedPublication<'a, V, A, I, C> {
+        assert!(
+            self.complete && !self.released,
+            "complete original pair required"
+        );
+        self.released = true;
+        let Phase::Prepared(prepared) = std::mem::replace(&mut self.phase, Phase::Empty) else {
+            unreachable!()
+        };
+        prepared
+    }
     pub fn into_prepared(mut self) -> PreparedPublication<'a, V, A, I, C> {
         assert!(
             self.complete && !self.released,

@@ -191,7 +191,6 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.committed_by_ticket.get(ticket)
     }
-    #[cfg(test)]
     /// Return whether a record collides with any committed commitment identity.
     #[must_use]
     pub fn contains_record_identity(&self, record: &DaCommitmentRecord) -> bool {
@@ -273,7 +272,7 @@ impl DaCommitmentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::da::{
         commitment::{DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, RetentionClass},
         types::{BlobDigest, StorageTicketId},
@@ -297,8 +296,8 @@ mod tests {
             seq,
             BlobDigest::new([id_u8; 32]),
             ManifestDigest::new(manifest_hash),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([seq_u8; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([seq_u8; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),

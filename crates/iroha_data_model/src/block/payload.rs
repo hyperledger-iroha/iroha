@@ -1,7 +1,9 @@
 use super::{
     SignedBlock,
     execution_context::BlockExecutionContextBundle,
-    execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+    execution_output::{
+        ExecutionOutputV1, NetworkExecutionOutputV1, TransactionRejectionRef, TransactionResultRef,
+    },
     header::BlockHeader,
 };
 use crate::{
@@ -12,10 +14,7 @@ use crate::{
     },
     events::data::prelude::AssetBatchTransferOutcome,
     fastpq::TransferTranscript,
-    transaction::{
-        error::TransactionRejectionReason,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
-    },
+    transaction::signed::{SignedTransaction, TransactionEntrypoint},
     trigger::DataTriggerSequence,
 };
 use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
@@ -236,7 +235,7 @@ impl SignedBlock {
         self.payload.external_entrypoints.get(index)
     }
     /// Return error for an OUTPUT index.
-    pub fn output_error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
+    pub fn output_error(&self, tx: usize) -> Option<TransactionRejectionRef<'_>> {
         self.result
             .as_ref()
             .and_then(|result| result.outputs.get(tx))
@@ -523,6 +522,18 @@ impl SignedBlock {
         let row = outputs.get(output_index)?.network()?;
         (row.input_index == input_index).then_some((u32::try_from(output_index).ok()?, row))
     }
+    /// Borrow the complete output for a canonical network input, retaining its result family.
+    pub fn network_execution_output_at(
+        &self,
+        input_index: u32,
+    ) -> Option<(u32, &ExecutionOutputV1)> {
+        let outputs = self.execution_outputs();
+        let output_index = super::execution_output::governance_start_row_count_v1(outputs)
+            .checked_add(usize::try_from(input_index).ok()?)?;
+        let row = outputs.get(output_index)?;
+        (row.network_index() == Some(input_index))
+            .then_some((u32::try_from(output_index).ok()?, row))
+    }
     /// Canonical full typed-output hashes, independently of the network-input tree.
     pub fn output_hashes(
         &self,
@@ -532,7 +543,7 @@ impl SignedBlock {
     /// Full transaction results projected from the one output owner. Indices are OUTPUT indices.
     pub fn output_results(
         &self,
-    ) -> impl ExactSizeIterator<Item = &TransactionResult> + DoubleEndedIterator {
+    ) -> impl ExactSizeIterator<Item = TransactionResultRef<'_>> + DoubleEndedIterator {
         self.execution_outputs()
             .iter()
             .map(ExecutionOutputV1::result)
@@ -557,8 +568,8 @@ impl SignedBlock {
         self.network_input_hashes()
             .position(|hash| hash == *entrypoint_hash)
             .and_then(|index| u32::try_from(index).ok())
-            .and_then(|index| self.network_output_at(index))
-            .map_or(&[], |(_, output)| output.result.batch_transfer_outcomes())
+            .and_then(|index| self.network_execution_output_at(index))
+            .map_or(&[], |(_, output)| output.result().batch_transfer_outcomes())
     }
     /// AXT policy snapshot captured during execution, when results are present.
     #[inline]
@@ -583,7 +594,7 @@ impl SignedBlock {
             .filter_map(|(i, result)| result.as_ref().ok().map(|ok| (i as u64, ok)))
     }
     /// Failed OUTPUT indices and rejection reasons.
-    pub fn failed_outputs(&self) -> impl Iterator<Item = (u64, &TransactionRejectionReason)> {
+    pub fn failed_outputs(&self) -> impl Iterator<Item = (u64, TransactionRejectionRef<'_>)> {
         self.output_results()
             .enumerate()
             .filter_map(|(i, result)| result.as_ref().err().map(|err| (i as u64, err)))

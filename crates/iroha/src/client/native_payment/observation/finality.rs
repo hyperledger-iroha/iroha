@@ -101,13 +101,22 @@ fn carrier(
             None,
         ))
     } else {
-        let replay = match &evidence.result().0 {
-            Err(TransactionRejectionReason::Validation(ValidationFail::SettlementReplay(
-                replay,
-            ))) if replay.settlement_id == request.intent.settlement_id => Some(BusinessLocator {
-                height: replay.committed_block_height,
-                block_hash: *Hash::from(replay.committed_block_hash).as_ref(),
-            }),
+        use iroha_data_model::{
+            block::execution_output::TransactionRejectionRef as R,
+            ivm_c10::{TransactionRejectionReasonC10V1 as C, ValidationFailC10V1 as V},
+        };
+        let replay = match evidence.result().as_ref() {
+            Err(R::Baseline(TransactionRejectionReason::Validation(
+                ValidationFail::SettlementReplay(replay),
+            )))
+            | Err(R::C10(C::Validation(V::SettlementReplay(replay))))
+                if replay.settlement_id == request.intent.settlement_id =>
+            {
+                Some(BusinessLocator {
+                    height: replay.committed_block_height,
+                    block_hash: *Hash::from(replay.committed_block_hash).as_ref(),
+                })
+            }
             _ => None,
         };
         Ok((
@@ -152,8 +161,8 @@ fn business(
             (intent.settlement_id == request.intent.settlement_id
                 && block
                     .block()
-                    .network_output_at(index)
-                    .is_some_and(|(_, output)| output.result.is_ok()))
+                    .network_execution_output_at(index)
+                    .is_some_and(|(_, output)| output.result().is_ok()))
             .then_some(index)
         })
         .ok_or(Error::CandidateMismatch)?;

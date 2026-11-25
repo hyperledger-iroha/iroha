@@ -28,6 +28,7 @@ enum EffectState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RootKind {
     Instructions,
+    Carrier,
     Replay,
     Vm,
     Batch,
@@ -186,7 +187,19 @@ impl StateTransaction<'_, '_> {
             ));
         }
         let kind = match signed.instructions() {
-            Executable::Instructions(_) => RootKind::Instructions,
+            Executable::Instructions(_) => {
+                if crate::runtime::generic_carriers::admission::original_candidate(
+                    self.world.runtime_selection.get(),
+                    signed.instructions(),
+                )
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                .is_some()
+                {
+                    RootKind::Carrier
+                } else {
+                    RootKind::Instructions
+                }
+            }
             Executable::IvmProved(_) => RootKind::Replay,
             Executable::Ivm(_) | Executable::ContractCall(_) => RootKind::Vm,
             Executable::Batch(_) => RootKind::Batch,
@@ -248,6 +261,56 @@ impl StateTransaction<'_, '_> {
         self.admit_execution_effect_group(instructions, false, true)
     }
 
+    /// Consume the private carrier host's already validated typed group exactly once.
+    /// Ordinary instruction roots and ordinary host artifact groups cannot use this path.
+    pub(crate) fn admit_carrier_execution_effects(
+        &mut self,
+        group: crate::smartcontracts::ivm::host::generic_carrier::Admission,
+    ) -> Result<(), ValidationFail> {
+        let valid = matches!(&self.execution_effects.state, EffectState::Root(root)
+            if root.matches(self) && root.kind == RootKind::Carrier && root.authored
+                && root.artifact_groups == 0 && !root.closed)
+            && !self.execution_callback_active();
+        if !valid {
+            return Err(self
+                .break_execution_effect_owner("carrier effects lost their original signed root"));
+        }
+        let EffectState::Root(root) = &mut self.execution_effects.state else {
+            unreachable!()
+        };
+        if let Some(fault) = &root.fault {
+            return Err(fault.validation());
+        }
+        let count = root.instructions.checked_add(group.items());
+        let bytes = root.bytes.checked_add(group.bytes());
+        let fault = match (count, bytes) {
+            (None, _) | (_, None) => {
+                Some(EffectFault::Owner("carrier effect count overflows".into()))
+            }
+            (Some(count), _) if root.max_instructions != 0 && count > root.max_instructions => {
+                Some(EffectFault::Instructions {
+                    attempted: count,
+                    maximum: root.max_instructions,
+                })
+            }
+            (_, Some(bytes)) if root.max_bytes != 0 && bytes > root.max_bytes => {
+                Some(EffectFault::Bytes {
+                    maximum: root.max_bytes,
+                })
+            }
+            _ => None,
+        };
+        if let Some(fault) = fault {
+            let error = fault.validation();
+            root.fault = Some(fault);
+            return Err(error);
+        }
+        root.instructions = count.expect("checked carrier count");
+        root.bytes = bytes.expect("checked carrier bytes");
+        root.artifact_groups = 1;
+        Ok(())
+    }
+
     fn admit_execution_effect_group<'a>(
         &mut self,
         instructions: impl ExactSizeIterator<Item = &'a InstructionBox> + 'a,
@@ -288,7 +351,10 @@ impl StateTransaction<'_, '_> {
         } else if replay {
             root.kind == RootKind::Replay && !root.authored
         } else {
-            matches!(root.kind, RootKind::Instructions | RootKind::Batch) && !root.authored
+            matches!(
+                root.kind,
+                RootKind::Instructions | RootKind::Carrier | RootKind::Batch
+            ) && !root.authored
         };
         let next_artifact_groups = root.artifact_groups.checked_add(usize::from(host));
         let result = if next_artifact_groups.is_none() {

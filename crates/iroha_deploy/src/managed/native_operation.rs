@@ -3,7 +3,9 @@
 
 use super::{Error, Result, service_authority::ServiceAuthority};
 use crate::verify::{
-    finality::{AttestationQuorum, FinalityError, FinalitySource, FinalityVerifier},
+    finality::{
+        AttestationQuorum, FinalityError, FinalitySource, FinalityVerifier, ObservationStart,
+    },
     http::HttpFinalitySource,
 };
 use iroha::client::Client;
@@ -231,8 +233,9 @@ impl ServiceAuthority {
         } else {
             None
         };
+        let mut start = ObservationStart::default();
         let mut verifier = if let Some(bytes) = retained {
-            self.decode_checkpoint(&bytes)?
+            self.decode_observation_checkpoint(&bytes, &mut start)?
         } else if let Some(seed) = &seed {
             seed.verifier()
         } else {
@@ -244,7 +247,7 @@ impl ServiceAuthority {
                 .map_err(|_| invalid("original genesis finality differs"))?
         };
         let result = source(verifier.checkpoint().height(), deadline).and_then(|source| {
-            let observation = verifier.observe(&source, &rand::random());
+            let observation = verifier.observe_imported(&source, &rand::random(), start);
             let attested_height = observation.as_ref().map_or(0, AttestationQuorum::verified);
             if let Some(seed) = &seed {
                 self.validate_profile()?;
@@ -557,8 +560,8 @@ pub(super) fn optional_current<T>(
 
 // Every candidate is checked by the supplied SDK operation against the same independently
 // authenticated block. This helper owns only bounded endpoint iteration, never proof authority.
-pub(super) fn read_selected_peers<T>(
-    peers: &[(PeerId, Client)],
+pub(super) fn read_selected_peers<'a, T>(
+    peers: impl IntoIterator<Item = &'a (PeerId, Client)>,
     deadline: Instant,
     mut read: impl FnMut(&Client, Instant) -> Result<T>,
 ) -> Result<T> {
@@ -582,7 +585,7 @@ pub fn decode_checkpoint(
     network: iroha_data_model::NetworkId,
     chain: &str,
 ) -> Result<FinalityVerifier> {
-    decode_checkpoint_with_validation(bytes, network, chain, None)
+    decode_checkpoint_with_validation(bytes, network, chain, None, None)
 }
 
 pub(super) fn decode_checkpoint_with_validation(
@@ -590,6 +593,7 @@ pub(super) fn decode_checkpoint_with_validation(
     network: iroha_data_model::NetworkId,
     chain: &str,
     mut validation: Option<&mut EpochValidationScope>,
+    start: Option<&mut ObservationStart>,
 ) -> Result<FinalityVerifier> {
     // The current outer owner wins even if this operation warmed before it was entered.
     if norito::core::decode_limits_active() {
@@ -603,7 +607,7 @@ pub(super) fn decode_checkpoint_with_validation(
         validation.as_deref_mut(),
     )
     .map_err(|_| invalid("invalid retained native operation checkpoint"))?;
-    FinalityVerifier::from_checkpoint_with_validation(checkpoint, network, chain, validation)
+    FinalityVerifier::from_checkpoint_with_validation(checkpoint, network, chain, validation, start)
         .map_err(|_| invalid("retained native operation checkpoint changed network or chain"))
 }
 
@@ -743,11 +747,11 @@ fn verify_carrier_execution(
         }
         let output = certified_tip
             .block()
-            .network_output_at(input_index)
+            .network_execution_output_at(input_index)
             .ok_or_else(|| {
                 invalid("native operation carrier lacks exact successful original execution")
             })?;
-        let applied = output.1.result.as_ref().is_ok();
+        let applied = output.1.result().as_ref().is_ok();
         if require_success && !applied {
             return Err(invalid(
                 "native operation carrier lacks exact successful original execution",

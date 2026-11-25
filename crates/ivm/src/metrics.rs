@@ -18,6 +18,7 @@ use prometheus::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MerkleRootBackend {
     /// Metal or CUDA computed the root.
+    #[cfg(any(test, target_os = "macos", feature = "cuda"))]
     Gpu,
     /// The canonical CPU tree computed the root.
     Cpu,
@@ -110,6 +111,7 @@ static METRICS: LazyLock<IvmMetrics> = LazyLock::new(IvmMetrics::new);
 /// Count one standalone Merkle root computed by `backend`.
 pub(crate) fn record_merkle_root(backend: MerkleRootBackend) {
     match backend {
+        #[cfg(any(test, target_os = "macos", feature = "cuda"))]
         MerkleRootBackend::Gpu => METRICS.merkle_root_gpu_total.inc(),
         MerkleRootBackend::Cpu => METRICS.merkle_root_cpu_total.inc(),
     }

@@ -57,6 +57,7 @@ mod zk_hydration_route_tests {
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
+    use ivm_abi::error::VmTrap;
 
     #[inline(never)]
     fn route_state() -> Box<State> {
@@ -270,7 +271,10 @@ mod zk_hydration_route_tests {
             };
             assert_eq!(
                 message,
-                format!("invalid ZK snapshot state: {}", ivm::VMError::NoritoInvalid)
+                format!(
+                    "invalid ZK snapshot state: {}",
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                )
             );
             route_allocation_limit = usize::try_from(budget.consumed_allocated_bytes()).unwrap();
             assert!(!warm.is_execution_deferred());
@@ -402,7 +406,12 @@ mod zk_hydration_route_tests {
 
     #[test]
     fn trigger_route_preserves_cold_registry_owner_and_fresh_state_retry() {
-        let state = route_state();
+        assert_trigger_route_after_genesis(&route_state());
+    }
+
+    // Keep the trigger transaction frames out of the signed genesis validation stack.
+    #[inline(never)]
+    fn assert_trigger_route_after_genesis(state: &State) {
         let trigger_id: TriggerId = "hydration_registry_callback".parse().unwrap();
         let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
             max_cycles: 1_000,
@@ -433,7 +442,7 @@ mod zk_hydration_route_tests {
             .unwrap(),
         );
         {
-            let mut setup = state.block(next_header(&state));
+            let mut setup = state.block(next_header(state));
             let mut transaction = setup.transaction_for_callback_testing();
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut transaction)
@@ -452,7 +461,7 @@ mod zk_hydration_route_tests {
         let mut route_allocation_limit = 0;
         for _ in 0..2 {
             let budget = route_decode_budget(usize::MAX);
-            let mut warm_block = state.block(next_header(&state));
+            let mut warm_block = state.block(next_header(state));
             let mut warm = warm_block.transaction_for_callback_testing();
             warm.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             warm.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -465,8 +474,8 @@ mod zk_hydration_route_tests {
             route_allocation_limit > 0,
             "real route preparation decodes before hydration"
         );
-        let (id, key_bytes, circuit_bytes) = install_cold_key(&state, "trigger");
-        let baseline = crate::snapshot::canonical_state_snapshot_bytes(&state);
+        let (id, key_bytes, circuit_bytes) = install_cold_key(state, "trigger");
+        let baseline = crate::snapshot::canonical_state_snapshot_bytes(state);
         let key_pointer = state
             .view()
             .world()
@@ -478,7 +487,7 @@ mod zk_hydration_route_tests {
             .unwrap()
             .bytes
             .as_ptr();
-        let mut block = state.block(next_header(&state));
+        let mut block = state.block(next_header(state));
         let mut transaction = block.transaction_for_callback_testing();
         transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -519,7 +528,7 @@ mod zk_hydration_route_tests {
         assert_eq!(block.gas_used_in_block, 0);
         drop(block);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes(&state),
+            crate::snapshot::canonical_state_snapshot_bytes(state),
             baseline
         );
         assert_eq!(
@@ -536,7 +545,7 @@ mod zk_hydration_route_tests {
                 .as_ptr(),
             key_pointer
         );
-        let mut fresh_block = state.block(next_header(&state));
+        let mut fresh_block = state.block(next_header(state));
         let mut fresh = fresh_block.transaction_for_callback_testing();
         fresh.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         fresh.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -570,7 +579,7 @@ mod zk_hydration_route_tests {
         assert_eq!(fresh_block.committed_fragment_count(), 0);
         drop(fresh_block);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes(&state),
+            crate::snapshot::canonical_state_snapshot_bytes(state),
             baseline
         );
     }
@@ -3705,7 +3714,10 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
         .enumerate()
     {
         assert_eq!(
-            committed.block().output_error(index),
+            committed
+                .block()
+                .output_error(index)
+                .map(|reason| reason.baseline().expect("baseline execution")),
             Some(&crate::tx::TransactionRejectionReason::Validation(
                 ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
                     refusal.into()
@@ -6709,15 +6721,15 @@ fn proved_empty_overlay_accounts_verified_replay_gas() {
     let state = State::new_for_testing(World::default(), kura, query_handle);
     let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
     let replay_gas = 40_000;
-    let (axt_descriptor, axt_binding) = ivm::axt::AxtDescriptor::builder()
+    let (axt_descriptor, axt_binding) = ivm_abi::axt::AxtDescriptor::builder()
         .dataspace(DataSpaceId::UNIVERSAL)
         .build_with_binding()
         .expect("AXT descriptor");
-    let mut completed_axt = ivm::axt::HostAxtState::new(axt_descriptor, axt_binding);
+    let mut completed_axt = ivm_abi::axt::HostAxtState::new(axt_descriptor, axt_binding);
     completed_axt
         .record_proof(
             DataSpaceId::UNIVERSAL,
-            Some(ivm::axt::ProofBlob {
+            Some(ivm_abi::axt::ProofBlob {
                 payload: vec![1],
                 expiry_slot: None,
             }),

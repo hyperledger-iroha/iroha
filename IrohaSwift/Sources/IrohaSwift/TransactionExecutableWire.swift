@@ -1,29 +1,69 @@
 import Foundation
 
-/// One `InstructionBox` pair exactly as a transaction payload carries it.
+/// How the native bridge frames one signed-transaction archive
+/// (`connect_norito_decode_signed_transaction_json_v1`).
+enum NativeTransactionArchive: UInt8, Sendable {
+    /// The governed version-1 submission wire; current layout only.
+    case versioned = 0
+    /// A headerless archive whose owner names its layout.
+    case bare = 1
+    /// A Norito frame whose header declares the selected layout.
+    case framed = 2
+}
+
+/// A refusal of the native instruction layout transcoder.
+enum NativeInstructionLayoutError: Error, Equatable, CustomStringConvertible {
+    /// `CONNECT_NORITO_ERR_INSTRUCTION_UNREGISTERED`.
+    static let unregisteredStatus: Int32 = -516
+    /// `CONNECT_NORITO_ERR_INSTRUCTION_PAYLOAD`.
+    static let payloadStatus: Int32 = -517
+
+    /// The ABI-33 bridge or its transcoder export is not loaded.
+    case bridgeUnavailable
+    /// The fixed layout frames no instruction envelope.
+    case invalidLayout
+    /// The payload is not the registered instruction's canonical payload in `layout`.
+    case noncanonicalPayload(wireName: String, layout: NoritoWireLayout)
+    /// Any other native status.
+    case bridgeStatus(Int32)
+
+    var description: String {
+        switch self {
+        case .bridgeUnavailable:
+            return "dense instruction envelopes need the ABI-33 native instruction transcoder"
+        case .invalidLayout:
+            return "instruction envelopes are framed in the compact or dense layout"
+        case let .noncanonicalPayload(wireName, layout):
+            return "instruction \(wireName) payload is not its canonical \(layout) payload"
+        case let .bridgeStatus(status):
+            return "native instruction transcoder failed with status \(status)"
+        }
+    }
+}
+
+/// One `InstructionBox` pair as a transaction payload carries it.
 ///
-/// The pair is the instruction's registry wire ID and its payload bytes. This
-/// codec never interprets the payload:
-/// - in the current layouts it is one nested Norito frame (header and payload);
+/// The pair is the instruction's registry wire ID and its payload:
+/// - in the current layouts the payload is one nested Norito frame (header and
+///   payload);
 /// - in the dense layout it is the instruction's bare dense payload, because a
 ///   frame embedded in a dense payload carries no nested header (`norito.md`,
 ///   "Dense layout", rule 6).
 ///
-/// An uninterpreted payload cannot be transcoded: a pair built or decoded for
-/// the current layouts never encodes as dense, and a dense pair never encodes
-/// as a current layout.
-///
-/// TODO(dense-activation): typed instruction payloads come from the native
-/// bridge, which emits current-layout frames only. Until the bridge encodes and
-/// decodes bare dense instruction payloads, a dense pair can be decoded, compared
-/// and re-encoded here but not built from typed instruction inputs.
+/// A registered instruction keeps one typed form, its Norito frame, in every
+/// layout: the native bridge (`connect_norito_transcode_instruction_v1`)
+/// decodes a dense payload into the frame of exactly the instruction its wire
+/// ID registers and transcodes the frame back when a dense payload is written.
+/// Only a wire ID the bridge does not register stays an uninterpreted dense
+/// payload, which encodes only in the dense layout it was decoded from.
 struct TransactionInstructionWire: Equatable, Sendable {
     /// Longest wire ID an interface definition can declare.
     static let maximumWireNameBytes = 192
 
     let wireName: String
+    /// The nested frame, or the bare dense payload of an unregistered wire ID.
     let payload: Data
-    /// Whether `payload` is a bare dense payload rather than a nested frame.
+    /// Whether `payload` is an opaque bare dense payload rather than a frame.
     let isDense: Bool
 
     /// - Parameters:
@@ -36,17 +76,26 @@ struct TransactionInstructionWire: Equatable, Sendable {
             throw ExecutableBatchInputError.invalidInstructionWireName
         }
         if layout == .dense {
-            guard !payload.isEmpty else {
-                throw ExecutableBatchInputError.invalidInstructionFrame
+            if let frame = try NoritoNativeBridge.shared.transcodeInstruction(
+                wireName: wireName,
+                payload: payload,
+                from: .dense,
+                to: .compact
+            ) {
+                self.payload = frame
+                isDense = false
+            } else {
+                self.payload = Data(payload)
+                isDense = true
             }
         } else {
             guard noritoDecodeFrame(payload) != nil else {
                 throw ExecutableBatchInputError.invalidInstructionFrame
             }
+            self.payload = Data(payload)
+            isDense = false
         }
         self.wireName = wireName
-        self.payload = Data(payload)
-        isDense = layout == .dense
     }
 
     static func isWellFormedWireName(_ wireName: String) -> Bool {
@@ -61,16 +110,37 @@ struct TransactionInstructionWire: Equatable, Sendable {
             }
     }
 
-    /// `[field: wire ID][field: Vec<u8> payload]` in `layout`.
-    func encode(layout: NoritoWireLayout) throws -> Data {
-        guard isDense == (layout == .dense) else {
+    /// The payload this pair carries in `layout`: the frame in the current
+    /// layouts, the bare dense payload in the dense layout.
+    func envelopePayload(layout: NoritoWireLayout) throws -> Data {
+        if isDense {
+            guard layout == .dense else {
+                throw ToriiClientError.invalidPayload(
+                    "an opaque dense instruction payload cannot be written in another Norito layout."
+                )
+            }
+            return payload
+        }
+        guard layout == .dense else { return payload }
+        guard let dense = try NoritoNativeBridge.shared.transcodeInstruction(
+            wireName: wireName,
+            payload: payload,
+            from: .compact,
+            to: .dense
+        ) else {
             throw ToriiClientError.invalidPayload(
-                "instruction payload cannot be written in another Norito layout."
+                "instruction \(wireName) has no registered dense encoding."
             )
         }
+        return dense
+    }
+
+    /// `[field: wire ID][field: Vec<u8> payload]` in `layout`.
+    func encode(layout: NoritoWireLayout) throws -> Data {
+        let envelope = try envelopePayload(layout: layout)
         var instruction = NoritoLayoutWriter(layout: layout)
         instruction.writeField(NoritoLayoutCodec.encodeString(wireName, layout: layout))
-        instruction.writeField(NoritoLayoutCodec.encodeBytesVec(payload, layout: layout))
+        instruction.writeField(NoritoLayoutCodec.encodeBytesVec(envelope, layout: layout))
         return instruction.data
     }
 
@@ -103,6 +173,8 @@ struct TransactionInstructionWire: Equatable, Sendable {
                 payload: payload,
                 layout: layout
             )
+        } catch NativeInstructionLayoutError.bridgeUnavailable {
+            throw NativeInstructionLayoutError.bridgeUnavailable
         } catch {
             throw ToriiClientError.invalidPayload(
                 "\(context) is not one well-formed instruction pair."

@@ -48,17 +48,15 @@ func requireDaPinIntentAlias(_ value: String, field: String) throws -> String {
     return value
 }
 
-private func requireCanonicalDaOwner(_ value: String?, field: String) throws -> String? {
-    guard let value else {
-        return nil
+/// Exact operator or controller signature bytes, including ML-DSA-65.
+func requireCanonicalDaSignature(_ signature: String, field: String) throws -> String {
+    let hex = signature.utf8
+    guard (2...8192).contains(hex.count), hex.count.isMultiple(of: 2),
+          hex.contains(where: { $0 != 0x30 }),
+          hex.allSatisfy({ (0x30...0x39).contains($0) || (0x41...0x46).contains($0) }) else {
+        throw ToriiClientError.invalidPayload("\(field) requires nonzero uppercase signature bytes within 4096 bytes")
     }
-    let exact = try requireExactDaText(value, field: field)
-    let prefix = try AccountAddress.inspectI105NetworkPrefix(exact).chainDiscriminant
-    let address = try AccountAddress.fromI105(exact, expectedPrefix: prefix)
-    guard try address.toI105(networkPrefix: prefix) == exact else {
-        throw ToriiClientError.invalidPayload("\(field) must be a canonical I105 AccountId")
-    }
-    return exact
+    return signature
 }
 
 /// Canonical Norito JSON wrapper for a fixed 32-byte DA digest.
@@ -306,7 +304,7 @@ public struct ToriiDaPinIntentListCursor: Codable, Sendable, Equatable, Hashable
 }
 
 public enum ToriiDaProofScheme: String, Sendable, Equatable, Hashable {
-    case merkleSha256 = "MerkleSha256"
+    case sorafsPorBlake3 = "SorafsPorBlake3"
 }
 
 extension ToriiDaProofScheme: Codable {
@@ -482,8 +480,8 @@ public struct ToriiDaProofPolicyBundle: Codable, Sendable, Equatable {
     }
 }
 
-extension ToriiDaRetentionPolicy: Codable {
-    private enum CodingKeys: String, CodingKey {
+extension ToriiDaRetentionPolicy: Encodable {
+    private enum EncodingKeys: String, CodingKey {
         case hotRetentionSecs = "hot_retention_secs"
         case coldRetentionSecs = "cold_retention_secs"
         case requiredReplicas = "required_replicas"
@@ -491,38 +489,8 @@ extension ToriiDaRetentionPolicy: Codable {
         case governanceTag = "governance_tag"
     }
 
-    public init(from decoder: Decoder) throws {
-        try rejectUnknownDaFields(
-            from: decoder,
-            allowed: [
-                "hot_retention_secs",
-                "cold_retention_secs",
-                "required_replicas",
-                "storage_class",
-                "governance_tag",
-            ],
-            type: "DA retention policy"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let wrapper = try container.decode([String].self, forKey: .governanceTag)
-        guard wrapper.count == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .governanceTag,
-                in: container,
-                debugDescription: "DA governance tag must use a one-element wrapper"
-            )
-        }
-        self.init(
-            hotRetentionSecs: try container.decode(UInt64.self, forKey: .hotRetentionSecs),
-            coldRetentionSecs: try container.decode(UInt64.self, forKey: .coldRetentionSecs),
-            requiredReplicas: try container.decode(UInt16.self, forKey: .requiredReplicas),
-            storageClass: try container.decode(ToriiDaStorageClass.self, forKey: .storageClass),
-            governanceTag: wrapper[0]
-        )
-    }
-
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
+        var container = encoder.container(keyedBy: EncodingKeys.self)
         try container.encode(hotRetentionSecs, forKey: .hotRetentionSecs)
         try container.encode(coldRetentionSecs, forKey: .coldRetentionSecs)
         try container.encode(requiredReplicas, forKey: .requiredReplicas)
@@ -538,7 +506,7 @@ public struct ToriiDaCommitmentRecord: Codable, Sendable, Equatable {
     public let clientBlobId: ToriiDaDigest32
     public let manifestHash: ToriiDaDigest32
     public let proofScheme: ToriiDaProofScheme
-    public let chunkRoot: ToriiDaHash
+    public let chunkRoot: ToriiDaDigest32
     public let proofDigest: ToriiDaHash?
     public let retentionClass: ToriiDaRetentionPolicy
     public let storageTicket: ToriiDaDigest32
@@ -565,20 +533,12 @@ public struct ToriiDaCommitmentRecord: Codable, Sendable, Equatable {
         clientBlobId: ToriiDaDigest32,
         manifestHash: ToriiDaDigest32,
         proofScheme: ToriiDaProofScheme,
-        chunkRoot: ToriiDaHash,
+        chunkRoot: ToriiDaDigest32,
         proofDigest: ToriiDaHash?,
         retentionClass: ToriiDaRetentionPolicy,
         storageTicket: ToriiDaDigest32,
         acknowledgementSignature: String
     ) throws {
-        guard acknowledgementSignature.utf8.count == 128,
-              acknowledgementSignature.utf8.allSatisfy({
-                  (0x30...0x39).contains($0) || (0x41...0x46).contains($0)
-              }) else {
-            throw ToriiClientError.invalidPayload(
-                "DA acknowledgement signature must contain 64 canonical uppercase bytes"
-            )
-        }
         self.laneId = laneId
         self.epoch = epoch
         self.sequence = sequence
@@ -589,7 +549,7 @@ public struct ToriiDaCommitmentRecord: Codable, Sendable, Equatable {
         self.proofDigest = proofDigest
         self.retentionClass = retentionClass
         self.storageTicket = storageTicket
-        self.acknowledgementSignature = acknowledgementSignature
+        self.acknowledgementSignature = try requireCanonicalDaSignature(acknowledgementSignature, field: "DA acknowledgement")
     }
 
     public init(from decoder: Decoder) throws {
@@ -626,7 +586,7 @@ public struct ToriiDaCommitmentRecord: Codable, Sendable, Equatable {
             clientBlobId: container.decode(ToriiDaDigest32.self, forKey: .clientBlobId),
             manifestHash: container.decode(ToriiDaDigest32.self, forKey: .manifestHash),
             proofScheme: container.decode(ToriiDaProofScheme.self, forKey: .proofScheme),
-            chunkRoot: container.decode(ToriiDaHash.self, forKey: .chunkRoot),
+            chunkRoot: container.decode(ToriiDaDigest32.self, forKey: .chunkRoot),
             proofDigest: container.decodeIfPresent(ToriiDaHash.self, forKey: .proofDigest),
             retentionClass: container.decode(
                 ToriiDaRetentionPolicy.self,
@@ -870,6 +830,138 @@ public struct ToriiDaCommitmentProof: Codable, Sendable, Equatable {
     }
 }
 
+/// An account-controller witness over an ingest authorization or its exact pin scope.
+public struct ToriiDaProducerSignature: Codable, Sendable, Equatable {
+    public let signer: String
+    public let signature: String
+    fileprivate let keyOrder: GovernancePublicKeyOrderV1
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case signer, signature }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA producer witness")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        signer = try fields.decode(String.self, forKey: .signer)
+        keyOrder = try governancePublicKeyOrderV1(signer, codingPath: decoder.codingPath + [CodingKeys.signer])
+        signature = try requireCanonicalDaSignature(fields.decode(String.self, forKey: .signature), field: "DA producer")
+    }
+}
+
+private func decodeDaProducerSignatures<Key: CodingKey>(
+    from fields: KeyedDecodingContainer<Key>, key: Key
+) throws -> [ToriiDaProducerSignature] {
+    let witnesses = try fields.decode([ToriiDaProducerSignature].self, forKey: key)
+    guard !witnesses.isEmpty,
+          zip(witnesses, witnesses.dropFirst()).allSatisfy({ $0.0.keyOrder < $0.1.keyOrder }) else {
+        throw DecodingError.dataCorruptedError(forKey: key, in: fields,
+            debugDescription: "DA producer signatures must be nonempty and strictly ordered by signer")
+    }
+    return witnesses
+}
+
+/// Producer-signed quota and replay identity, with the content commitment of the original request.
+public struct ToriiDaIngestAuthorization: Codable, Sendable, Equatable {
+    public let networkId: NetworkId
+    public let owner: String
+    public let laneId: UInt32
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let payloadHash: ToriiDaDigest32
+    public let payloadBytes: UInt64
+    /// BLAKE3 content commitment as an Iroha hash literal (its final bit is set).
+    public let requestContentHash: ToriiDaHash
+    public let signatures: [ToriiDaProducerSignature]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case networkId = "network_id", owner, laneId = "lane_id", epoch, sequence
+        case payloadHash = "payload_hash", payloadBytes = "payload_bytes", requestContentHash = "request_content_hash"
+        case signatures
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA ingest authorization")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        networkId = try fields.decode(NetworkId.self, forKey: .networkId)
+        owner = try fields.decode(String.self, forKey: .owner)
+        _ = try exactCanonicalToriiAccountAddress(owner)
+        laneId = try fields.decode(UInt32.self, forKey: .laneId)
+        epoch = try fields.decode(UInt64.self, forKey: .epoch)
+        sequence = try fields.decode(UInt64.self, forKey: .sequence)
+        payloadHash = try fields.decode(ToriiDaDigest32.self, forKey: .payloadHash)
+        payloadBytes = try fields.decode(UInt64.self, forKey: .payloadBytes)
+        requestContentHash = try fields.decode(ToriiDaHash.self, forKey: .requestContentHash)
+        signatures = try decodeDaProducerSignatures(from: fields, key: .signatures)
+    }
+}
+
+/// Exact ticket, manifest and alias stored in a pin intent.
+///
+/// The producer's witnesses also sign the digest of the paired commitment record, which the
+/// stored scope does not carry; Torii offers it to producers in ``ToriiDaPinScope``.
+public struct ToriiDaStoredPinScope: Codable, Equatable, Sendable {
+    public let networkId: NetworkId
+    public let owner: String
+    public let requestAuthorizationDigest: Data
+    public let laneId: UInt32
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let storageTicket: Data
+    public let manifestHash: Data
+    public let alias: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case networkId = "network_id", owner, laneId = "lane_id", epoch, sequence, alias
+        case requestAuthorizationDigest = "request_authorization_digest", storageTicket = "storage_ticket"
+        case manifestHash = "manifest_hash"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA stored pin scope")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        networkId = try fields.decode(NetworkId.self, forKey: .networkId)
+        owner = try fields.decode(String.self, forKey: .owner)
+        _ = try exactCanonicalToriiAccountAddress(owner)
+        requestAuthorizationDigest = Data(try fields.decode(ToriiDaDigest32.self, forKey: .requestAuthorizationDigest).bytes)
+        laneId = try fields.decode(UInt32.self, forKey: .laneId)
+        epoch = try fields.decode(UInt64.self, forKey: .epoch)
+        sequence = try fields.decode(UInt64.self, forKey: .sequence)
+        storageTicket = Data(try fields.decode(ToriiDaDigest32.self, forKey: .storageTicket).bytes)
+        manifestHash = Data(try fields.decode(ToriiDaDigest32.self, forKey: .manifestHash).bytes)
+        alias = try fields.decodeIfPresent(String.self, forKey: .alias).map {
+            try requireDaPinIntentAlias($0, field: "DA pin alias")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(networkId, forKey: .networkId)
+        try fields.encode(owner, forKey: .owner)
+        try fields.encode([Array(requestAuthorizationDigest)], forKey: .requestAuthorizationDigest)
+        try fields.encode(laneId, forKey: .laneId)
+        try fields.encode(epoch, forKey: .epoch)
+        try fields.encode(sequence, forKey: .sequence)
+        try fields.encode([Array(storageTicket)], forKey: .storageTicket)
+        try fields.encode([Array(manifestHash)], forKey: .manifestHash)
+        try fields.encode(alias, forKey: .alias)
+    }
+}
+
+/// Producer witnesses binding the stored scope, and the digest of its paired commitment, to the requested alias.
+public struct ToriiDaPinScopeAuthorization: Codable, Sendable, Equatable {
+    public let scope: ToriiDaStoredPinScope
+    public let signatures: [ToriiDaProducerSignature]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case scope, signatures }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA pin scope authorization")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        scope = try fields.decode(ToriiDaStoredPinScope.self, forKey: .scope)
+        signatures = try decodeDaProducerSignatures(from: fields, key: .signatures)
+    }
+}
+
+/// A pin intent carrying both the signed ingest request and the signed post-ingest scope.
 public struct ToriiDaPinIntent: Codable, Sendable, Equatable {
     public let laneId: UInt32
     public let epoch: UInt64
@@ -877,96 +969,57 @@ public struct ToriiDaPinIntent: Codable, Sendable, Equatable {
     public let storageTicket: ToriiDaDigest32
     public let manifestHash: ToriiDaDigest32
     public let alias: String?
-    public let owner: String?
+    public let authorization: ToriiDaIngestAuthorization
+    public let pinScopeAuthorization: ToriiDaPinScopeAuthorization
 
-    private enum CodingKeys: String, CodingKey {
-        case laneId = "lane_id"
-        case epoch
-        case sequence
-        case storageTicket = "storage_ticket"
-        case manifestHash = "manifest_hash"
-        case alias
-        case owner
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case laneId = "lane_id", epoch, sequence, storageTicket = "storage_ticket", manifestHash = "manifest_hash"
+        case alias, authorization, pinScopeAuthorization = "pin_scope_authorization"
     }
 
-    public init(
-        laneId: UInt32,
-        epoch: UInt64,
-        sequence: UInt64,
-        storageTicket: ToriiDaDigest32,
-        manifestHash: ToriiDaDigest32,
-        alias: String?,
-        owner: String?
-    ) throws {
-        self.laneId = laneId
-        self.epoch = epoch
-        self.sequence = sequence
-        self.storageTicket = storageTicket
-        self.manifestHash = manifestHash
-        self.alias = try alias.map {
-            try requireDaPinIntentAlias($0, field: "DA pin alias")
+    public init(authorization: ToriiDaIngestAuthorization, pinScopeAuthorization: ToriiDaPinScopeAuthorization) throws {
+        let scope = pinScopeAuthorization.scope
+        guard authorization.networkId == scope.networkId, authorization.owner.utf8.elementsEqual(scope.owner.utf8),
+              authorization.laneId == scope.laneId, authorization.epoch == scope.epoch,
+              authorization.sequence == scope.sequence else {
+            throw ToriiClientError.invalidPayload("DA pin scope differs from its ingest authorization")
         }
-        self.owner = try requireCanonicalDaOwner(owner, field: "DA pin owner")
+        self.authorization = authorization
+        self.pinScopeAuthorization = pinScopeAuthorization
+        laneId = scope.laneId
+        epoch = scope.epoch
+        sequence = scope.sequence
+        storageTicket = try ToriiDaDigest32(bytes: Array(scope.storageTicket))
+        manifestHash = try ToriiDaDigest32(bytes: Array(scope.manifestHash))
+        alias = scope.alias
     }
 
     public init(from decoder: Decoder) throws {
-        try rejectUnknownDaFields(
-            from: decoder,
-            allowed: [
-                "lane_id",
-                "epoch",
-                "sequence",
-                "storage_ticket",
-                "manifest_hash",
-                "alias",
-                "owner",
-            ],
-            type: "DA pin intent"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.contains(.alias),
-              container.contains(.owner) else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "DA pin-intent optional fields must be explicit on the wire"
-                )
-            )
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA pin intent")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(authorization: fields.decode(ToriiDaIngestAuthorization.self, forKey: .authorization),
+                      pinScopeAuthorization: fields.decode(ToriiDaPinScopeAuthorization.self, forKey: .pinScopeAuthorization))
+        let outerAlias = try fields.decodeIfPresent(String.self, forKey: .alias)
+        guard try fields.decode(UInt32.self, forKey: .laneId) == laneId,
+              try fields.decode(UInt64.self, forKey: .epoch) == epoch,
+              try fields.decode(UInt64.self, forKey: .sequence) == sequence,
+              try fields.decode(ToriiDaDigest32.self, forKey: .storageTicket) == storageTicket,
+              try fields.decode(ToriiDaDigest32.self, forKey: .manifestHash) == manifestHash,
+              outerAlias.map({ Data($0.utf8) }) == alias.map({ Data($0.utf8) }) else {
+            throw ToriiClientError.invalidPayload("DA pin intent differs from its producer-signed scope")
         }
-        try self.init(
-            laneId: container.decode(UInt32.self, forKey: .laneId),
-            epoch: container.decode(UInt64.self, forKey: .epoch),
-            sequence: container.decode(UInt64.self, forKey: .sequence),
-            storageTicket: container.decode(ToriiDaDigest32.self, forKey: .storageTicket),
-            manifestHash: container.decode(ToriiDaDigest32.self, forKey: .manifestHash),
-            alias: container.decodeIfPresent(String.self, forKey: .alias),
-            owner: container.decodeIfPresent(String.self, forKey: .owner)
-        )
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(laneId, forKey: .laneId)
-        try container.encode(epoch, forKey: .epoch)
-        try container.encode(sequence, forKey: .sequence)
-        try container.encode(storageTicket, forKey: .storageTicket)
-        try container.encode(manifestHash, forKey: .manifestHash)
-        if let alias {
-            try container.encode(
-                requireDaPinIntentAlias(alias, field: "DA pin alias"),
-                forKey: .alias
-            )
-        } else {
-            try container.encodeNil(forKey: .alias)
-        }
-        if let owner {
-            try container.encode(
-                requireCanonicalDaOwner(owner, field: "DA pin owner"),
-                forKey: .owner
-            )
-        } else {
-            try container.encodeNil(forKey: .owner)
-        }
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(laneId, forKey: .laneId)
+        try fields.encode(epoch, forKey: .epoch)
+        try fields.encode(sequence, forKey: .sequence)
+        try fields.encode(storageTicket, forKey: .storageTicket)
+        try fields.encode(manifestHash, forKey: .manifestHash)
+        try fields.encode(alias, forKey: .alias)
+        try fields.encode(authorization, forKey: .authorization)
+        try fields.encode(pinScopeAuthorization, forKey: .pinScopeAuthorization)
     }
 }
 

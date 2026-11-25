@@ -57,6 +57,16 @@ This crate hosts cross-component tests for Iroha.
   result and persisted state on all four peers, then repeats both reads through
   a cold-restarted validator.
   The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
+- The child runtime administrator gate is
+  `IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api child_runtime_admin::four_validators_authorize_support_activate_and_restart_child_runtime -- --exact --nocapture --test-threads=1`.
+  It starts four validators from signed child-foundation genesis, rejects a foreign
+  root and consumed nonce, schedules and cancels through threshold certificates,
+  proves that three validator support signatures lapse, and activates with all four.
+  It verifies the certified child history on every peer before and after restart,
+  then exercises the persisted rotated administrator threshold. The test requires
+  actual sockets and same-candidate daemon/client artifacts. Qualification requires
+  `IROHA_TEST_REQUIRE_NETWORK=1`; the shared harness's ordinary developer sandbox
+  skip supplies no qualification evidence. Parent registration and anchoring remain separate gates.
 - Generic ZK record/event scenarios use genuine canonical full-unshield keys and
   native wallet proofs over synthetic local trees. Generic proof verification does
   not authorize ledger execution or value movement.
@@ -428,22 +438,20 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   controls through a fixed-height challenge, rejects conflicting evidence,
   resolves a withheld reveal with three validators online, and requires the
   restarted fourth validator to recover identical session bytes and dispute
-  commitments. It then proves the actual V2 technical-win transcript with the native
+  commitments. It then proves the actual RaceV1 technical-win transcript with the native
   prover, rejects altered proof bytes, submits the complete proof inside a typed
   `SettleGameSessionV1`, checks the exact proof receipt and settlement height on
   all four peers, and rejects duplicate settlement. The compiled profile stays
-  unqualified; the test only widens its TxGossip topic to the bounded execution
-  transport budget and leaves default transaction and DA limits intact.
-  Every convergence check also queries the same finalized height
-  from each peer and verifies the BLS CommitQC for the witnessed execution post-state
-  root against the locally generated signed genesis committee. This authenticates
-  the committed witnessed writes. A test-only native Kura helper then reads each
-  peer's complete local WSV checkpoint and commit manifest, validates their exact
-  height/block/artifact binding and publication digest, and requires identical
-  full WSV hashes. This is local full-world convergence evidence; the QC does not
-  sign that complete WSV hash, and the public route is not a full-WSV verifier.
+  unqualified; the test sets an explicit 8-MiB TxGossip frame budget and leaves
+  default transaction and DA limits intact.
+  Every convergence check also queries the same finalized height from each peer
+  and authenticates the complete canonical block prefix from the locally generated
+  signed genesis, including exact three-vote CommitQCs and application attestations.
+  Each public ledger-state carrier must match that authenticated block and its
+  witnessed execution post-state root. Complete game records are compared separately
+  across every live peer; the witnessed root commits to the execution's changed rows.
   It uses zero stakes and never bypasses native proof admission.
-  The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB Nexus storage budget per validator for the finite local workload.
+  The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB SORA Nexus storage budget per validator for the finite local workload.
   Finalized ledger-state observations are retained under each peer's
   `game-finality-evidence/`.
   Run with `IROHA_TEST_REQUIRE_NETWORK=1 cargo iroha-fast -- test -p integration_tests --test core_api native_game_sessions::generic_game_pending_inputs_forfeit_and_restart_four_validators -- --exact --ignored --nocapture`.
@@ -551,13 +559,101 @@ It then executes the actual same-source `sorafs_cli deploy` with an independentl
 verified saved checkpoint, requires its complete success receipt and asset
 readback, and independently challenges the resulting native completion again.
 Set `TEST_NETWORK_BIN_SORAFS_CLI` to the absolute prebuilt `sorafs_cli` artifact
-built with `cli-orchestrator`; missing CLI artifacts fail before network startup.
+built with its default `cli-orchestrator` and `moderation-grpc` features. Missing CLI artifacts fail before network startup.
 The publication qualification test fails if the four-validator network cannot
 start; an unavailable sandbox cannot produce a passing skip.
 Each provider explicitly declares and bounds two GiB for these two small pins;
 the test does not preallocate that disk space.
 The gateway uses a genuinely signed and acknowledged empty compliance catalog;
 its configured optional HTTPS feed is not fetched by this scenario.
+
+The `core_api` target also contains
+`sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery`.
+Its signed multipart upload is included with paid ordinary work. The test
+independently verifies finality and calls native `deploy --da-source`. It rechecks
+the receipt's retained signed assignment and completion assertions and their
+compact proofs against the inclusion checkpoint, including the canonical
+replication order and all three provider IDs. After restarting two providers
+and stopping ingress, it checks each survivor's CID lookup against the published
+SoraFS manifest and recovers the original bytes using native `da-recover`. A second execution of the native CLI uses a bounded loopback
+gateway that withholds one data shard and serves each remaining request from a
+cold provider. This run requires an observed parity read and exact output bytes.
+
+For consensus payloads, the Unix `sumeragi` target's
+`rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality`
+stops one voter before paid work, checks the surviving signers and each process's
+signed row custody, then verifies fresh row acquisition after the voter restarts.
+Run `rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality`
+with `--ignored --exact --test-threads=1` and set
+`IROHA_RS16_QUALIFICATION_COMMITTEE` to one of 7, 10, 13, 16, 19, 22, 25, 28,
+or 31 on a host provisioned for that many daemons. Each size stops all
+`f = (n - 1) / 3` voters before submission. The separate
+`observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality`
+test holds the observer's encrypted inbound link during paid consensus work.
+Per-row withholding and measured whole-daemon resource limits remain open
+qualification cases in `specs/sumeragi_goals.md`.
+
+For qualifying runs, point `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_BIN_IROHA`
+and `TEST_NETWORK_BIN_SORAFS_CLI` at the absolute prebuilt candidate executables.
+Set `IROHA_TEST_REQUIRE_NETWORK=1` and `IROHA_TEST_SKIP_BUILD=1`. Run each
+required selection with an anchored filter and an empty-selection failure.
+For example:
+
+```sh
+cargo nextest run --locked -p integration_tests --test core_api --no-tests=fail --test-threads=1 \
+  -E 'test(/^sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery$/)'
+cargo nextest run --locked -p integration_tests --test sumeragi --no-tests=fail --test-threads=1 \
+  -E 'test(/^observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality$/)'
+cargo nextest run --locked -p integration_tests --test sumeragi --no-tests=fail --test-threads=1 \
+  -E 'test(/^rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality$/)'
+IROHA_RS16_QUALIFICATION_COMMITTEE=7 cargo nextest run --locked -p integration_tests \
+  --test sumeragi --run-ignored only --no-tests=fail --test-threads=1 \
+  -E 'test(/^rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality$/)'
+```
+
+Repeat the last command independently for each larger committee.
+
+The standard Cargo harness is also supported. Its exact filter can succeed with
+zero matches. The following shell function checks discovery, the child exit and
+the exact one-test terminal and summary. It keeps Cargo diagnostics on stderr
+and prints the test transcript, including on failure.
+
+```sh
+da_test() (
+  set -eu
+  target=$1
+  name=$2
+  shift 2
+  output=$(mktemp -d)
+  trap 'rm -rf "$output"' EXIT
+  cargo test --locked -p integration_tests --test "$target" "$name" -- \
+    --exact --list --format terse "$@" > "$output/list"
+  if ! awk -v name="$name" '/: test$/ { count++; if ($0 != name ": test") bad=1 }
+       END { exit !(count == 1 && !bad) }' "$output/list"; then
+    cat "$output/list" >&2
+    exit 1
+  fi
+  if ! cargo test --locked -p integration_tests --test "$target" "$name" -- \
+    --exact --format pretty --color never --test-threads=1 "$@" > "$output/run"; then
+    cat "$output/run" >&2
+    exit 1
+  fi
+  cat "$output/run"
+  awk -v name="$name" 'NF {
+      n++
+      if (n == 1 && $0 != "running 1 test") bad=1
+      if (n == 2 && $0 != "test " name " ... ok") bad=1
+      if (n == 3 && $0 !~ /^test result: ok[.] 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s$/) bad=1
+    } END { exit !(n == 3 && !bad) }' "$output/run"
+)
+
+set -e
+da_test core_api sorafs_publication::da_lifecycle::four_peer_multipart_da_publication_and_cold_parity_recovery
+da_test sumeragi observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality
+da_test sumeragi rs16_validator_loss::four_voters_recover_signed_rows_after_exact_quorum_finality
+IROHA_RS16_QUALIFICATION_COMMITTEE=7 da_test sumeragi rs16_validator_loss::production_committee_recovers_signed_rows_after_exact_quorum_finality --ignored
+```
+
 
 The Taira-only repair is specified in `specs/sorafs/taira_repair_v1.md`.
 Its deployment identity deliberately refuses a freshly generated test network.

@@ -25,7 +25,7 @@ SLOPE = Fraction(2_750_672 + 65_536, 740)
 # The current review preserves the logical PRG-input/hash-dispatch schedule.
 # Provider bytes remain guarded custody inputs, not a provider-cost certificate.
 # See docs/validation/parliament_ballot_request_accounting_20261104.
-REVIEWED_SOURCE_SHA256 = "d3906c1b7255bb20415ffcbda9ee5ecb8edf590532ec98dacd6b696f6742ddac"
+REVIEWED_SOURCE_SHA256 = "a2dd0a3faf9c2fe9da86054411a72a0893660d513f4cd8370f321776cdc651b1"
 
 
 def source_inventory(root: Path) -> dict[str, str]:

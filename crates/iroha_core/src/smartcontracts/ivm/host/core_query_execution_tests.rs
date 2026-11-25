@@ -90,8 +90,11 @@ fn execute_query_rejects_oversized_singular_response_before_output_allocation() 
         .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
         .expect_err("oversized singular query must exhaust its byte budget");
     assert!(matches!(
-        (&(error), &(ivm::VMError::OutOfGas)),
-        (ivm::VMError::OutOfGas, ivm::VMError::OutOfGas)
+        (&(error), &(ivm::VMError::Trap(VmTrap::OutOfGas))),
+        (
+            ivm::VMError::Trap(VmTrap::OutOfGas),
+            ivm::VMError::Trap(VmTrap::OutOfGas)
+        )
     ));
     assert_eq!(
         vm.register(10),
@@ -352,13 +355,19 @@ fn get_account_balance_syscall_does_not_hide_unknown_identity_or_scope() {
     ] {
         let error =
             read_account_balance_syscall(&state, &reader, account, definition, 10_000).unwrap_err();
-        assert!(matches!(error.as_unmetered(), ivm::VMError::DecodeError));
+        assert!(matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::DecodeError)
+        ));
     }
     let (state, holder, reader, definition) =
         account_balance_syscall_fixture(None, AssetBalancePolicy::DataspaceRestricted);
     let error =
         read_account_balance_syscall(&state, &reader, &holder, &definition, 10_000).unwrap_err();
-    assert!(matches!(error.as_unmetered(), ivm::VMError::DecodeError));
+    assert!(matches!(
+        error.as_unmetered(),
+        VmErrorRef::Trap(VmTrap::DecodeError)
+    ));
 }
 
 #[test]
@@ -369,7 +378,7 @@ fn get_account_balance_syscall_preserves_absent_holding_permission_refusal() {
         read_account_balance_syscall(&state, &holder, &reader, &definition, 10_000).unwrap_err();
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     let world = World::with([], [build_fixture_account(&holder, &holder)], []);
     {
@@ -386,7 +395,7 @@ fn get_account_balance_syscall_preserves_absent_holding_permission_refusal() {
         read_account_balance_syscall(&state, &holder, &holder, &definition, 10_000).unwrap_err();
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
 }
 
@@ -406,7 +415,10 @@ fn get_account_balance_syscall_absent_holding_obeys_item_and_byte_budget() {
     ] {
         let error = execute_account_balance_query_on_state(&view, &holder, request(), Some(budget))
             .expect_err("zero balance must fit its query budget");
-        assert!(matches!(error.as_unmetered(), ivm::VMError::OutOfGas));
+        assert!(matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::OutOfGas)
+        ));
     }
     let error = read_account_balance_syscall(
         &state,
@@ -416,14 +428,17 @@ fn get_account_balance_syscall_absent_holding_obeys_item_and_byte_budget() {
         CoreHost::QUERY_GAS_BASE_SINGULAR + CoreHost::QUERY_GAS_PER_ITEM + 1,
     )
     .unwrap_err();
-    assert!(matches!(error.as_unmetered(), ivm::VMError::OutOfGas));
+    assert!(matches!(
+        error.as_unmetered(),
+        VmErrorRef::Trap(VmTrap::OutOfGas)
+    ));
     assert!(
         matches!(
             execute_query_on_state_with_budget(&view, &holder, request(), None)
                 .err()
                 .unwrap()
                 .as_unmetered(),
-            ivm::VMError::DecodeError
+            VmErrorRef::Trap(VmTrap::DecodeError)
         ),
         "ordinary FindAssetById still reports absence"
     );
@@ -634,13 +649,13 @@ seiyaku DedicatedQueryContract {
     vm.set_register(11, domain_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     vm.set_register(10, 0);
     vm.set_register(11, account_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm),
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     ));
     let parameter_name: Name = "block.max_transactions".parse().expect("parameter name");
     let parameter_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&parameter_name));
@@ -679,7 +694,7 @@ seiyaku DedicatedQueryContract {
     vm.set_register(10, retired_untyped_parameter_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_QUERY_GET_PARAMETER, &mut vm),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.register(10), retired_untyped_parameter_ptr);
     let contract_ptr = store_tlv(
@@ -733,7 +748,7 @@ seiyaku DedicatedQueryContract {
     vm.set_register(10, retired_untyped_alias_ptr);
     assert!(matches!(
         host.syscall(ivm_sys::SYSCALL_QUERY_GET_CONTRACT_INSTANCE, &mut vm),
-        Err(ivm::VMError::NoritoInvalid)
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.register(10), retired_untyped_alias_ptr);
 }
@@ -822,10 +837,10 @@ fn core_query_get_respects_user_executor_denial_for_every_entity() {
                 .expect_err("deny-all executor must reject typed entity reads");
             assert!(
                 matches!(
-                    (&(error), &(ivm::VMError::PermissionDenied)),
+                    (&(error), &(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                     (
-                        ivm::VMError::PermissionDenied,
-                        ivm::VMError::PermissionDenied
+                        ivm::VMError::Trap(VmTrap::PermissionDenied),
+                        ivm::VMError::Trap(VmTrap::PermissionDenied)
                     )
                 ),
                 "{presence} entity {tag:?}"
@@ -905,10 +920,10 @@ fn core_query_page_respects_user_executor_denial_for_every_entity() {
             .expect_err("deny-all executor must reject typed page reads");
         assert!(
             matches!(
-                (&(error), &(ivm::VMError::PermissionDenied)),
+                (&(error), &(ivm::VMError::Trap(VmTrap::PermissionDenied))),
                 (
-                    ivm::VMError::PermissionDenied,
-                    ivm::VMError::PermissionDenied
+                    ivm::VMError::Trap(VmTrap::PermissionDenied),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ),
             "entity {tag:?}"
@@ -1048,7 +1063,7 @@ fn core_query_page_is_bounded_ordered_and_validates_arguments() {
         vm.set_register(12, limit);
         assert!(matches!(
             host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ));
     }
 }
@@ -1203,11 +1218,11 @@ fn account_asset_pages_filter_before_pagination_and_enforce_account_access() {
         assert!(matches!(
             (
                 &(host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)),
-                &(ivm::VMError::PermissionDenied)
+                &(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ),
             (
-                Err(ivm::VMError::PermissionDenied),
-                ivm::VMError::PermissionDenied
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                ivm::VMError::Trap(VmTrap::PermissionDenied)
             )
         ));
         assert_eq!(vm.register(10), CoreQueryEntityTagV1::Asset.as_u64());
@@ -1217,9 +1232,12 @@ fn account_asset_pages_filter_before_pagination_and_enforce_account_access() {
     assert!(matches!(
         (
             &(host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)),
-            &(ivm::VMError::DecodeError)
+            &(ivm::VMError::Trap(VmTrap::DecodeError))
         ),
-        (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
+        (
+            Err(ivm::VMError::Trap(VmTrap::DecodeError)),
+            ivm::VMError::Trap(VmTrap::DecodeError)
+        )
     ));
 }
 
@@ -1247,7 +1265,7 @@ fn account_asset_page_request_uses_native_scoped_query_and_rejects_other_entitie
     ] {
         assert!(matches!(
             CoreHost::core_query_page_request(tag, 0, 1, Some(account.clone())),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ));
     }
 }

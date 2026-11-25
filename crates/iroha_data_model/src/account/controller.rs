@@ -250,48 +250,20 @@ impl MultisigPolicy {
         threshold: u16,
         members: impl ExactSizeIterator<Item = (&'a PublicKey, u16)>,
     ) -> Result<(), MultisigPolicyError> {
-        if version != Self::CURRENT_VERSION {
-            return Err(MultisigPolicyError::UnsupportedVersion(version));
-        }
-        if members.len() == 0 {
-            return Err(MultisigPolicyError::EmptyMembers);
-        }
-        if members.len() > usize::from(u16::MAX) {
-            return Err(MultisigPolicyError::TooManyMembers(members.len()));
-        }
-        if threshold == 0 {
-            return Err(MultisigPolicyError::ZeroThreshold);
-        }
-        let mut total_weight = 0u32;
+        let mut validation = CanonicalPolicyValidation::new(version, threshold, members.len())?;
         let mut previous: Option<(&'static str, &'a [u8])> = None;
         for (key, weight) in members {
-            if weight == 0 {
-                return Err(MultisigPolicyError::MemberWeightZero);
-            }
-            let (algorithm, payload) = key
-                .try_to_bytes()
-                .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
-            let current = (algorithm.as_static_str(), payload);
-            if let Some(previous) = previous {
-                match previous.cmp(&current) {
-                    core::cmp::Ordering::Equal => return Err(MultisigPolicyError::DuplicateMember),
-                    core::cmp::Ordering::Greater => {
-                        return Err(MultisigPolicyError::NonCanonicalMemberOrder);
-                    }
-                    core::cmp::Ordering::Less => {}
-                }
-            }
-            previous = Some(current);
-            // At most u16::MAX members each contribute at most u16::MAX.
-            total_weight += u32::from(weight);
+            validation.member(weight, || {
+                let (algorithm, payload) = key
+                    .try_to_bytes()
+                    .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
+                let current = (algorithm.as_static_str(), payload);
+                let order = previous.map(|previous| previous.cmp(&current));
+                previous = Some(current);
+                Ok(order)
+            })?;
         }
-        if u32::from(threshold) > total_weight {
-            return Err(MultisigPolicyError::ThresholdExceedsTotal {
-                threshold,
-                total_weight,
-            });
-        }
-        Ok(())
+        validation.finish()
     }
     /// Policy version.
     #[must_use]
@@ -630,6 +602,65 @@ fn cbor_write_len(buffer: &mut Vec<u8>, major: u8, len: usize) {
         }
     }
 }
+/// Shared serialized-policy relation, independent of member storage ownership.
+/// The key callback preserves weight-before-key validation in the ordinary constructor.
+pub(crate) struct CanonicalPolicyValidation {
+    threshold: u16,
+    total_weight: u32,
+}
+impl CanonicalPolicyValidation {
+    pub(crate) fn new(
+        version: u8,
+        threshold: u16,
+        count: usize,
+    ) -> Result<Self, MultisigPolicyError> {
+        if version != MultisigPolicy::CURRENT_VERSION {
+            return Err(MultisigPolicyError::UnsupportedVersion(version));
+        }
+        if count == 0 {
+            return Err(MultisigPolicyError::EmptyMembers);
+        }
+        if count > usize::from(u16::MAX) {
+            return Err(MultisigPolicyError::TooManyMembers(count));
+        }
+        if threshold == 0 {
+            return Err(MultisigPolicyError::ZeroThreshold);
+        }
+        Ok(Self {
+            threshold,
+            total_weight: 0,
+        })
+    }
+    pub(crate) fn member(
+        &mut self,
+        weight: u16,
+        compare_key: impl FnOnce() -> Result<Option<core::cmp::Ordering>, MultisigPolicyError>,
+    ) -> Result<(), MultisigPolicyError> {
+        if weight == 0 {
+            return Err(MultisigPolicyError::MemberWeightZero);
+        }
+        match compare_key()? {
+            Some(core::cmp::Ordering::Equal) => return Err(MultisigPolicyError::DuplicateMember),
+            Some(core::cmp::Ordering::Greater) => {
+                return Err(MultisigPolicyError::NonCanonicalMemberOrder);
+            }
+            _ => {}
+        }
+        // The caller's exact sequence count was admitted by `new`; each member is u16.
+        self.total_weight += u32::from(weight);
+        Ok(())
+    }
+    pub(crate) fn finish(self) -> Result<(), MultisigPolicyError> {
+        if u32::from(self.threshold) > self.total_weight {
+            return Err(MultisigPolicyError::ThresholdExceedsTotal {
+                threshold: self.threshold,
+                total_weight: self.total_weight,
+            });
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

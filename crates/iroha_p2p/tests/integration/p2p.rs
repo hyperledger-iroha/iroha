@@ -798,6 +798,14 @@ async fn low_topics_do_not_starve_each_other() {
         Ok(ok) => ok,
         Err(e) => panic!("Failed low_topics_do_not_starve_each_other (sender): {e:?}"),
     };
+    // The subscriber drains after posting the burst. Give every best-effort
+    // delivery a slot so subscriber overflow cannot hide transport fairness.
+    let flood_count = 500_u32;
+    let (tx, mut rx) = mpsc::channel(usize::try_from(flood_count).unwrap() + 1);
+    if let Err(sender) = net_b.subscribe_to_peers_messages(tx) {
+        drop(sender);
+        panic!("failed to subscribe net_b");
+    }
     // Allow B to accept inbound connections from A
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     net_b.update_topology(UpdateTopology([peer_a.id().clone()].into_iter().collect()));
@@ -820,14 +828,8 @@ async fn low_topics_do_not_starve_each_other() {
     })
     .await
     .expect("sender failed to connect to receiver");
-    // Subscribe on receiver
-    let (tx, mut rx) = mpsc::channel(4);
-    if let Err(sender) = net_b.subscribe_to_peers_messages(tx) {
-        drop(sender);
-        panic!("failed to subscribe net_b");
-    }
     // Flood topic 0 (TxGossip) and inject a single message on topic 1 (PeerGossip)
-    for i in 0..500u32 {
+    for i in 0..flood_count {
         net_a.post(Post {
             data: MultiTopic {
                 chan: 0,

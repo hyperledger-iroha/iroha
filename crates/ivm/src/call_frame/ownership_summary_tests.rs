@@ -4,6 +4,7 @@
 //! constrained frame initialization, call entry, return, permissions or privacy.
 
 use super::*;
+use crate::error::VmTrap;
 
 const TOP: u64 = Memory::STACK_START + 4096;
 const ARG: u64 = Memory::HEAP_START;
@@ -59,10 +60,10 @@ fn summarized_access(
     if permitted {
         Ok(())
     } else {
-        Err(VMError::MemoryAccessViolation {
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation {
             addr: address as u32,
             perm: permission,
-        })
+        }))
     }
 }
 
@@ -112,10 +113,13 @@ fn assert_equivalent(frames: &CallFrameMemory) {
                 let expected = summarized_access(frames, address, bytes, permission);
                 let equivalent = match (&actual, &expected) {
                     (Ok(()), Ok(()))
-                    | (Err(VMError::MemoryOutOfBounds), Err(VMError::MemoryOutOfBounds)) => true,
+                    | (
+                        Err(VMError::Trap(VmTrap::MemoryOutOfBounds)),
+                        Err(VMError::Trap(VmTrap::MemoryOutOfBounds)),
+                    ) => true,
                     (
-                        Err(VMError::MemoryAccessViolation { addr: a, perm: p }),
-                        Err(VMError::MemoryAccessViolation { addr: b, perm: q }),
+                        Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: a, perm: p })),
+                        Err(VMError::Trap(VmTrap::MemoryAccessViolation { addr: b, perm: q })),
                     ) => a == b && p == q,
                     _ => false,
                 };
@@ -150,7 +154,7 @@ fn exact_owner_summary_matches_all_ancestors_across_nested_calls_and_returns() {
                 tables(argument, result, 1),
                 TOP
             ),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         frames.record_write(argument + 7, 1);
         frames
@@ -184,7 +188,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
     assert!(!rejected.validate());
     assert!(matches!(
         frames.enter_root(TOP, &rejected, tables(0, 0, 0), TOP),
-        Err(VMError::ControlFlowViolation)
+        Err(VMError::Trap(VmTrap::ControlFlowViolation))
     ));
     assert!(frames.is_empty());
     assert_equivalent(&frames);
@@ -215,7 +219,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
         assert_eq!(frames.frames.len(), depth + 1);
         assert!(matches!(
             frames.prepare_child(stack.start, &rejected, tables(0, 0, 0), top),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         assert_eq!(frames.frames.len(), depth + 1);
         frames
@@ -226,7 +230,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
         // Empty stack ownership cannot host another callable's result slot.
         assert!(matches!(
             frames.prepare_child(stack.start, &leaf, result_table(stack.start), top),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         assert_eq!(frames.frames.len(), depth + 2);
         assert!(frames.finish(stack.start, stack.start, 1).is_err());
@@ -271,7 +275,7 @@ fn exact_owner_summary_preserves_straddling_root_tables_and_range_overflow() {
     assert_equivalent(&frames);
     assert!(matches!(
         frames.check_access(u64::MAX, 8, Perm::READ),
-        Err(VMError::MemoryOutOfBounds)
+        Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
     ));
     assert!(frames.check_access(argument - 1, 2, Perm::READ).is_err());
     assert!(
@@ -296,7 +300,7 @@ fn owner_summary_requires_authenticated_child_lifecycle_not_supplied_descriptors
             tables(foreign_argument, foreign_result, 1),
             TOP
         ),
-        Err(VMError::ControlFlowViolation)
+        Err(VMError::Trap(VmTrap::ControlFlowViolation))
     ));
     // Deliberately bypass the native constructor to model an unbound witness.
     // A valid root descriptor in a foreign machine is not child authority here.

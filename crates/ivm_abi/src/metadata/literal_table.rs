@@ -1,6 +1,7 @@
 //! Borrowed, completely validated literal directories without temporary storage.
 
 use super::{LiteralKindV1, ParsedLiteralSection, decode_literal_descriptor};
+use crate::error::VmTrap;
 use crate::{
     SyscallPolicy, VMError,
     pointer_abi::{PointerType, is_type_allowed_for_policy, validate_tlv_bytes},
@@ -56,7 +57,7 @@ impl<'a> LiteralDirectory<'a> {
             return Ok(directory);
         };
         if section.count > usize::from(u16::MAX) + 1 {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::Trap(VmTrap::InvalidMetadata));
         }
         let mut previous = None;
         for index in 0..section.count {
@@ -65,34 +66,37 @@ impl<'a> LiteralDirectory<'a> {
                 || target >= section.data_end
                 || previous.is_some_and(|previous| target <= previous)
             {
-                return Err(VMError::InvalidMetadata);
+                return Err(VMError::Trap(VmTrap::InvalidMetadata));
             }
             if index == 0 && target != section.data_start {
-                return Err(VMError::InvalidMetadata);
+                return Err(VMError::Trap(VmTrap::InvalidMetadata));
             }
             previous = Some(target);
         }
         if section.count == 0 && section.data_start != section.data_end {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::Trap(VmTrap::InvalidMetadata));
         }
         for index in 0..section.count {
             let (kind, target, bytes) = directory.raw_entry(index)?;
             match kind {
                 LiteralKindV1::PointerTlv => {
-                    let tlv = validate_tlv_bytes(bytes).map_err(|_| VMError::InvalidMetadata)?;
+                    let tlv = validate_tlv_bytes(bytes)
+                        .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?;
                     if !is_type_allowed_for_policy(policy, tlv.type_id) {
-                        return Err(VMError::AbiTypeNotAllowed {
+                        return Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
                             abi: 1,
                             type_id: tlv.type_id as u16,
-                        });
+                        }));
                     }
                     target
                         .checked_sub(header_len)
                         .and_then(|address| u64::try_from(address).ok())
-                        .ok_or(VMError::InvalidMetadata)?;
+                        .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
                     directory.pointer_count += 1;
                 }
-                LiteralKindV1::I64 if bytes.len() != 8 => return Err(VMError::InvalidMetadata),
+                LiteralKindV1::I64 if bytes.len() != 8 => {
+                    return Err(VMError::Trap(VmTrap::InvalidMetadata));
+                }
                 LiteralKindV1::I64 => {}
             }
         }
@@ -100,33 +104,41 @@ impl<'a> LiteralDirectory<'a> {
     }
 
     fn descriptor(&self, index: usize) -> Result<(LiteralKindV1, usize), VMError> {
-        let section = self.section.ok_or(VMError::InvalidMetadata)?;
+        let section = self.section.ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         if index >= section.count {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::Trap(VmTrap::InvalidMetadata));
         }
         let start = section
             .entries_start
-            .checked_add(index.checked_mul(8).ok_or(VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
-        let end = start.checked_add(8).ok_or(VMError::InvalidMetadata)?;
+            .checked_add(
+                index
+                    .checked_mul(8)
+                    .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?,
+            )
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
+        let end = start
+            .checked_add(8)
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         let raw = u64::from_le_bytes(
             self.program
                 .get(start..end)
-                .ok_or(VMError::InvalidMetadata)?
+                .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?
                 .try_into()
-                .map_err(|_| VMError::InvalidMetadata)?,
+                .map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?,
         );
         let (kind, relative) = decode_literal_descriptor(raw)?;
         let target = section
             .start
-            .checked_add(usize::try_from(relative).map_err(|_| VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
+            .checked_add(
+                usize::try_from(relative).map_err(|_| VMError::Trap(VmTrap::InvalidMetadata))?,
+            )
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         Ok((kind, target))
     }
 
     fn raw_entry(&self, index: usize) -> Result<(LiteralKindV1, usize, &'a [u8]), VMError> {
         let (kind, target) = self.descriptor(index)?;
-        let section = self.section.ok_or(VMError::InvalidMetadata)?;
+        let section = self.section.ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         let end = if index + 1 < section.count {
             self.descriptor(index + 1)?.1
         } else {
@@ -137,7 +149,7 @@ impl<'a> LiteralDirectory<'a> {
             target,
             self.program
                 .get(target..end)
-                .ok_or(VMError::InvalidMetadata)?,
+                .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?,
         ))
     }
 

@@ -8,6 +8,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -167,5 +168,5 @@ fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     let err = vm.run().expect_err("bare asset names should be rejected");
-    assert!(matches!(err, ivm::VMError::DecodeError));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::DecodeError)));
 }

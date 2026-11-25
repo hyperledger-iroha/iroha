@@ -6,6 +6,7 @@ use ivm::{
     host::{DefaultHost, IVMHost},
     instruction,
 };
+use ivm_abi::error::VmTrap;
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
@@ -175,7 +176,7 @@ fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
     let vm = IVM::new(10_000);
     assert_eq!(
         DefaultHost::new()
-            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, &vm)
+            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, vm.syscall_quote())
             .expect("prepare quantity addition"),
         0,
         "numeric calls debit each bounded phase immediately and never reserve/refund a quote",
@@ -305,7 +306,10 @@ fn alignment_error_gas_charged_then_error() {
     // r2 base aligned; add 1 offset makes misalignment
     vm.registers.set(2, ivm::Memory::HEAP_START);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
     assert_eq!(start - vm.gas_remaining, cost_of(ld));
 }
 #[test]
@@ -323,7 +327,10 @@ fn alignment_error_misaligned_offsets() {
         vm.registers.set(2, ivm::Memory::HEAP_START);
         vm.registers.set(3, 0xABCD_EF01_2345_6789);
         let res = vm.run();
-        assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+        assert!(matches!(
+            res,
+            Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+        ));
         assert_eq!(start - vm.gas_remaining, cost_of(store));
     }
     // LOAD64 with offset 2 should misalign and charge cost
@@ -338,7 +345,10 @@ fn alignment_error_misaligned_offsets() {
         vm.load_program(&program).unwrap();
         vm.registers.set(2, ivm::Memory::HEAP_START);
         let res = vm.run();
-        assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+        assert!(matches!(
+            res,
+            Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+        ));
         assert_eq!(start - vm.gas_remaining, cost_of(load));
     }
 }
@@ -355,7 +365,10 @@ fn alignment_error_store_doubleword() {
     vm.registers.set(2, ivm::Memory::HEAP_START);
     vm.registers.set(3, 0xDEAD_BEEF_F00D_BAAFu64);
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
     let store = wide_store(wide::memory::STORE64, 2, 3, 4);
     assert_eq!(start - vm.gas_remaining, cost_of(store));
 }
@@ -445,12 +458,15 @@ fn mixed_16_32_sequence_cumulative_gas() {
     let program = common::assemble(&code);
     let load_res = vm.load_program(&program);
     match load_res {
-        Err(VMError::MemoryAccessViolation { .. }) => {}
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. })) => {}
         Err(other) => panic!("expected loader to reject mixed-width stream, got {other:?}"),
         Ok(()) => {
             let res = vm.run();
             assert!(
-                matches!(res, Err(VMError::MemoryAccessViolation { .. })),
+                matches!(
+                    res,
+                    Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
+                ),
                 "expected mixed stream to be rejected at execution, got {res:?}"
             );
         }

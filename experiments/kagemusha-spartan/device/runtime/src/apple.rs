@@ -23,7 +23,7 @@ impl Confirmation for Callbacks {
         if result == 0 {
             Ok(())
         } else {
-            Err(format!("hardware Send confirmation refused: {result}"))
+            Err(format!("Send review presentation refused: {result}"))
         }
     }
 }

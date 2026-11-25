@@ -1,47 +1,11 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.nio.charset.StandardCharsets
-import java.util.Optional
-import org.hyperledger.iroha.sdk.norito.NoritoAdapters
-import org.hyperledger.iroha.sdk.norito.NoritoCodec
-import org.hyperledger.iroha.sdk.norito.NoritoDecoder
-import org.hyperledger.iroha.sdk.norito.NoritoEncoder
-import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Helpers for extracting stable HTTP error details from Torii responses. */
 internal object HttpErrorMessageExtractor {
 
     private const val MAX_MESSAGE_LENGTH = 512
-    private val STRING_ADAPTER = NoritoAdapters.stringAdapter()
-    private val DETAILS_ADAPTER = object : TypeAdapter<ErrorDetailsSummary> {
-        override fun encode(encoder: NoritoEncoder, value: ErrorDetailsSummary) {
-            NoritoAdapters.option(STRING_ADAPTER).encode(
-                encoder,
-                Optional.ofNullable(value.rejectCode),
-            )
-        }
-
-        override fun decode(decoder: NoritoDecoder): ErrorDetailsSummary {
-            val rejectCode = decodeRejectCodeField(decoder)
-            if (decoder.remaining() > 0) decoder.readBytes(decoder.remaining())
-            return ErrorDetailsSummary(rejectCode)
-        }
-    }
-    private val ERROR_ENVELOPE_ADAPTER = NoritoAdapters.struct(
-        listOf(
-            NoritoAdapters.field("code", STRING_ADAPTER),
-            NoritoAdapters.field("message", STRING_ADAPTER),
-            NoritoAdapters.field("details", NoritoAdapters.option(DETAILS_ADAPTER)),
-        )
-    ) { fields ->
-        val details = fields["details"] as Optional<*>
-        val summary = details.orElse(null) as? ErrorDetailsSummary
-        ErrorEnvelopeSummary(
-            fields["code"] as String,
-            fields["message"] as String,
-            summary?.rejectCode,
-        )
-    }
 
     @JvmStatic
     fun extractRejectCode(headers: Map<String, List<String>>?, headerName: String?): String? {
@@ -96,10 +60,10 @@ internal object HttpErrorMessageExtractor {
     fun decodeNoritoEnvelope(body: ByteArray): Triple<String, String, String?>? =
         decodeNoritoErrorEnvelope(body)?.let { Triple(it.code, it.message, it.rejectCode) }
 
-    private fun decodeNoritoErrorEnvelope(body: ByteArray): ErrorEnvelopeSummary? {
+    private fun decodeNoritoErrorEnvelope(body: ByteArray): NoritoErrorEnvelope? {
         if (!hasNoritoMagic(body)) return null
         return try {
-            NoritoCodec.decode(body, ERROR_ENVELOPE_ADAPTER, null) as ErrorEnvelopeSummary
+            NoritoErrorEnvelope.decode(body)
         } catch (_: RuntimeException) {
             null
         }
@@ -111,9 +75,6 @@ internal object HttpErrorMessageExtractor {
             body[1] == 'R'.code.toByte() &&
             body[2] == 'T'.code.toByte() &&
             body[3] == '0'.code.toByte()
-
-    private fun decodeRejectCodeField(decoder: NoritoDecoder): String? =
-        NoritoAdapters.option(STRING_ADAPTER).decode(decoder).orElse(null)
 
     private fun extractStructuredMessage(value: Any?): String? {
         if (value is String) {
@@ -171,14 +132,6 @@ internal object HttpErrorMessageExtractor {
         val text = value?.toString()?.trim() ?: return null
         return if (text.isEmpty()) null else text
     }
-
-    private data class ErrorEnvelopeSummary(
-        val code: String,
-        val message: String,
-        val rejectCode: String?,
-    )
-
-    private data class ErrorDetailsSummary(val rejectCode: String?)
 
     private fun getCaseInsensitiveValue(map: Map<*, *>, candidateKey: String): Any? {
         if (map.containsKey(candidateKey)) return map[candidateKey]

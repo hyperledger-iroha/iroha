@@ -1,6 +1,7 @@
 //! Combined admission, fixed-point parity, bounded queuing and borrowed roots.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationRefusal;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -16,14 +17,14 @@ fn combined_original_pool_admission_precedes_both_backings_and_retries() {
     let demand = bytes(3);
     let budget = AllocationBudget::new(0);
     assert!(matches!(Workspace::new(3, &budget),
-        Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes, limit_bytes: 0,
-        })) if requested_bytes == demand));
+        }))) if requested_bytes == demand));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(demand - 1);
     assert!(matches!(
         Workspace::new(3, &budget),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(
         budget.peak_reserved_bytes(),
@@ -33,7 +34,7 @@ fn combined_original_pool_admission_precedes_both_backings_and_retries() {
     budget.set_limit_bytes(demand);
     let occupied = budget.try_reserve_bytes(1).unwrap();
     assert!(matches!(Workspace::new(3, &budget),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == demand));
     assert_eq!(budget.reserved_bytes(), 1);
     drop(occupied);
@@ -96,7 +97,7 @@ fn queued_changes_merge_once_and_back_edges_requeue_after_pop_without_growth() {
     assert_eq!(budget.peak_reserved_bytes(), charged);
     assert!(matches!(
         workspace.merge(3, &one),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(
         workspace.pop().is_none(),
@@ -191,7 +192,10 @@ fn scratch_is_funded_with_zero_retention_and_reclaimed_on_error_or_unwind() {
         if unwind {
             assert!(result.is_err());
         } else {
-            assert!(matches!(result, Ok(Err(VMError::DecodeError))));
+            assert!(matches!(
+                result,
+                Ok(Err(VMError::Trap(VmTrap::DecodeError)))
+            ));
         }
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -199,10 +203,10 @@ fn scratch_is_funded_with_zero_retention_and_reclaimed_on_error_or_unwind() {
     let original = empty_budget.try_reserve_bytes(1).unwrap_err();
     assert!(matches!(buffer_error(PrepaidBufferError::Allocation(
             ChargedBufferError::Admission(original.clone())
-        )), VMError::AllocationDeferred(__actual_error_field) if __actual_error_field == (original)));
+        )), VMError::Deferred(VmDeferral::AllocationDeferred(__actual_error_field)) if __actual_error_field == (original)));
     assert!(matches!(buffer_error(PrepaidBufferError::Allocation(
             ChargedBufferError::Allocator { requested_bytes: 7 }
-        )), VMError::ExecutionDeferred(__actual_error_field) if __actual_error_field == (ExecutionDeferral::AllocationUnavailable)));
+        )), VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (ExecutionDeferral::AllocationUnavailable)));
 }
 
 #[test]

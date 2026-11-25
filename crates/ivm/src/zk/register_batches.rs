@@ -12,6 +12,7 @@
 
 use super::{RegEvent, SharedRegLog};
 use crate::VMError;
+use crate::error::VmDeferral;
 use std::{
     cell::RefCell,
     marker::PhantomData,
@@ -279,16 +280,16 @@ impl RegEventBatch {
                 return Ok(None);
             };
             match state.quota {
-                Quota::Preparing(_) => return Err(VMError::HostUnavailable),
+                Quota::Preparing(_) => return Err(VMError::Deferred(VmDeferral::HostUnavailable)),
                 Quota::Ready { remaining, .. } if rows > remaining => {
-                    return Err(VMError::HostUnavailable);
+                    return Err(VMError::Deferred(VmDeferral::HostUnavailable));
                 }
                 _ => {}
             }
             let id = local
                 .next_batch
                 .checked_add(1)
-                .ok_or(VMError::HostUnavailable)?;
+                .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
             local.next_batch = id;
             let state = local.state.as_mut().expect("original enabled scope");
             let parent = match std::mem::take(&mut state.quota) {

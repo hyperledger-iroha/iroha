@@ -171,13 +171,13 @@ object SignedTransactionEncoder {
 
     private class MultisigSignatureNoritoAdapter : TypeAdapter<MultisigSignature> {
         override fun encode(encoder: NoritoEncoder, value: MultisigSignature) {
-            BYTE_VECTOR_ADAPTER.encode(encoder, value.publicKeyNoritoPayload())
-            BYTE_VECTOR_ADAPTER.encode(encoder, value.signature())
+            encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value.publicKeyNoritoPayload())
+            encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value.signature())
         }
 
         override fun decode(decoder: NoritoDecoder): MultisigSignature {
-            val publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder)
-            val signature = BYTE_VECTOR_ADAPTER.decode(decoder)
+            val publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER, "multisig.signer")
+            val signature = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER, "multisig.signature")
             val publicKey = decodeCompactPublicKeyPayload(publicKeyPayload)
                 ?: throw IllegalArgumentException("Invalid multisig public key payload")
             return MultisigSignature.fromCurveId(publicKey.curveId, publicKey.keyBytes, signature)
@@ -186,11 +186,11 @@ object SignedTransactionEncoder {
 
     private class MultisigSignaturesNoritoAdapter : TypeAdapter<MultisigSignatures> {
         override fun encode(encoder: NoritoEncoder, value: MultisigSignatures) {
-            MULTISIG_SIGNATURE_LIST_ADAPTER.encode(encoder, value.signatures)
+            encodeSizedField(encoder, MULTISIG_SIGNATURE_LIST_ADAPTER, value.signatures)
         }
 
         override fun decode(decoder: NoritoDecoder): MultisigSignatures {
-            return MultisigSignatures.of(MULTISIG_SIGNATURE_LIST_ADAPTER.decode(decoder))
+            return MultisigSignatures.of(decodeSizedField(decoder, MULTISIG_SIGNATURE_LIST_ADAPTER, "multisig.signatures"))
         }
     }
 

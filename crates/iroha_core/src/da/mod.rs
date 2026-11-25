@@ -11,6 +11,7 @@ pub mod confidential_store;
 pub mod pin_intents;
 pub mod pin_store;
 pub mod proofs;
+pub(crate) mod proposal_queue;
 pub(crate) mod quota;
 pub mod receipts;
 pub mod replay_cache;
@@ -209,6 +210,9 @@ pub enum DaCommitmentValidationError {
 /// Errors returned when a DA pin intent violates invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DaPinIntentValidationError {
+    /// The DA commitments and producer-authorized pin scopes do not form exact pairs.
+    #[error("DA commitment records do not match the producer-authorized pin scopes")]
+    CommitmentScopeMismatch,
     /// Pin intent bundle version is unsupported.
     #[error("unsupported DA pin-intent bundle version {version}")]
     UnsupportedVersion {
@@ -522,10 +526,7 @@ fn enforce_record_proof_scheme(
             observed: record.proof_scheme,
         });
     }
-    let chunk_root = record.chunk_root.as_ref();
-    let chunk_root_zero_like = chunk_root[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
-        && chunk_root[Hash::LENGTH - 1] <= 1;
-    if chunk_root_zero_like {
+    if record.chunk_root.is_zero() {
         return Err(DaProofPolicyError::ZeroChunkRoot {
             lane: record.lane_id,
         });
@@ -972,17 +973,9 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-        if !intent
-            .pin_scope_authorization
-            .has_valid_canonical_signatures()
-        {
-            rejected.push(DaPinIntentValidationError::InvalidPinScopeSignatures {
-                lane: intent.lane_id,
-                epoch: intent.epoch,
-                sequence: intent.sequence,
-            });
-            continue;
-        }
+        // Pin-scope witnesses also sign the paired commitment's digest, which this
+        // pin-only filter cannot reach. `validate_pin_intent_authorizations` verifies them
+        // against the paired record; this filter makes no pin-scope signature claim.
         if !account_exists(&authorization.owner) {
             rejected.push(DaPinIntentValidationError::UnknownOwner {
                 lane: intent.lane_id,
@@ -1069,9 +1062,10 @@ fn authorization_satisfies_controller(
 }
 fn pin_scope_authorization_satisfies_controller(
     authorization: &iroha_data_model::da::ingest::DaPinScopeAuthorizationV1,
+    commitment_digest: &iroha_data_model::da::types::BlobDigest,
     controller: &AccountController,
 ) -> bool {
-    if !authorization.has_valid_canonical_signatures() {
+    if !authorization.has_valid_canonical_signatures(commitment_digest) {
         return false;
     }
     witnesses_satisfy_controller(
@@ -1080,19 +1074,36 @@ fn pin_scope_authorization_satisfies_controller(
         controller,
     )
 }
-/// Verify every pin-intent authorization against the exact network and committed account state.
+/// Verify every pin-intent authorization against the exact network, committed account state
+/// and the paired commitment records of the same block.
+///
+/// Every pin-scope witness signs the paired record's
+/// [`DaCommitmentRecord::pin_scope_digest`], so pin-scope witnesses and their controller are
+/// checked against the record of the same lane, epoch and sequence in `commitments`. An intent
+/// without such a record makes no pin-scope claim here: every block validation also runs
+/// `proposal_queue::validate_pairs`, which refuses unpaired sections with
+/// [`DaPinIntentValidationError::CommitmentScopeMismatch`].
 ///
 /// # Errors
 ///
-/// Returns the first missing, cross-network, cryptographically invalid, or
+/// Returns the first missing, cross-network, cryptographically invalid or
 /// controller-insufficient authorization. Call this before quota preparation.
 pub fn validate_pin_intent_authorizations(
     bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    commitments: Option<&DaCommitmentBundle>,
     expected_network_id: NetworkId,
     account_controller: impl Fn(&AccountId) -> Option<AccountController>,
 ) -> Result<(), DaPinIntentValidationError> {
+    let records = commitments.map_or(&[][..], DaCommitmentBundle::commitments);
     for intent in &bundle.intents {
         let authorization = &intent.authorization;
+        let commitment_digest = records
+            .iter()
+            .find(|record| {
+                (record.lane_id, record.epoch, record.sequence)
+                    == (intent.lane_id, intent.epoch, intent.sequence)
+            })
+            .map(DaCommitmentRecord::pin_scope_digest);
         if authorization.lane_id != intent.lane_id
             || authorization.epoch != intent.epoch
             || authorization.sequence != intent.sequence
@@ -1146,9 +1157,13 @@ pub fn validate_pin_intent_authorizations(
                 owner: authorization.owner.clone(),
             });
         }
+        let Some(commitment_digest) = commitment_digest else {
+            // Unpaired: `proposal_queue::validate_pairs` refuses the section.
+            continue;
+        };
         if !intent
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(&commitment_digest)
         {
             return Err(DaPinIntentValidationError::InvalidPinScopeSignatures {
                 lane: intent.lane_id,
@@ -1158,6 +1173,7 @@ pub fn validate_pin_intent_authorizations(
         }
         if !pin_scope_authorization_satisfies_controller(
             &intent.pin_scope_authorization,
+            &commitment_digest,
             &controller,
         ) {
             return Err(DaPinIntentValidationError::UnauthorizedPinScopeOwner {
@@ -1251,6 +1267,28 @@ pub(crate) fn signed_test_ingest_authorization(
     authorization
 }
 #[cfg(test)]
+/// Matching commitment used by pin-scope fixtures that exercise the first-release wire.
+pub(crate) fn test_pin_commitment(
+    authorization: &iroha_data_model::da::ingest::DaIngestAuthorizationV1,
+    storage_ticket: iroha_data_model::da::types::StorageTicketId,
+    manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest,
+) -> DaCommitmentRecord {
+    DaCommitmentRecord::new(
+        authorization.lane_id,
+        authorization.epoch,
+        authorization.sequence,
+        authorization.payload_hash,
+        manifest_hash,
+        DaProofScheme::SorafsPorBlake3,
+        iroha_data_model::da::types::BlobDigest::new([0x6c; 32]),
+        None,
+        Default::default(),
+        storage_ticket,
+        iroha_crypto::Signature::try_from_bytes(&[0x66; 64])
+            .expect("test DA acknowledgement encoding"),
+    )
+}
+#[cfg(test)]
 /// Build a canonically signed exact pin-scope authorization for unit-test pin intents.
 pub(crate) fn signed_test_pin_scope_authorization(
     authorization: &iroha_data_model::da::ingest::DaIngestAuthorizationV1,
@@ -1265,8 +1303,12 @@ pub(crate) fn signed_test_pin_scope_authorization(
         manifest_hash,
         alias,
     );
-    iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(scope, key_pair)
-        .expect("test DA pin-scope authorization must sign")
+    iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(
+        scope,
+        &test_pin_commitment(authorization, storage_ticket, manifest_hash).pin_scope_digest(),
+        key_pair,
+    )
+    .expect("test DA pin-scope authorization must sign")
 }
 #[cfg(test)]
 /// Build a fully signed DA pin intent for unit tests.
@@ -1892,7 +1934,9 @@ mod proof_policy_tests {
         signers: &[&iroha_crypto::KeyPair],
     ) -> DaPinScopeAuthorizationV1 {
         let scope = DaPinScopeV1::new(authorization, storage_ticket, manifest_hash, alias);
-        let digest = scope.signing_digest();
+        let digest = scope.signing_digest(
+            &test_pin_commitment(authorization, storage_ticket, manifest_hash).pin_scope_digest(),
+        );
         let mut signatures = signers
             .iter()
             .map(|key_pair| DaPinScopeSignatureV1 {
@@ -1903,6 +1947,22 @@ mod proof_policy_tests {
             .collect::<Vec<_>>();
         signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
         DaPinScopeAuthorizationV1 { scope, signatures }
+    }
+    /// The block commitments paired with test intents, as their producers signed them.
+    fn paired_test_commitments(bundle: &DaPinIntentBundle) -> DaCommitmentBundle {
+        DaCommitmentBundle::new(
+            bundle
+                .intents
+                .iter()
+                .map(|intent| {
+                    test_pin_commitment(
+                        &intent.authorization,
+                        intent.storage_ticket,
+                        intent.manifest_hash,
+                    )
+                })
+                .collect(),
+        )
     }
     fn admission_policy(
         lane_id: LaneId,
@@ -2049,9 +2109,13 @@ mod proof_policy_tests {
         );
         let bundle =
             DaPinIntentBundle::new(vec![DaPinIntent::new(authorization, scope_authorization)]);
-        let error = validate_pin_intent_authorizations(&bundle, expected, |candidate| {
-            (candidate == &owner).then(|| owner.controller().clone())
-        })
+        let commitments = paired_test_commitments(&bundle);
+        let error = validate_pin_intent_authorizations(
+            &bundle,
+            Some(&commitments),
+            expected,
+            |candidate| (candidate == &owner).then(|| owner.controller().clone()),
+        )
         .expect_err("the same display label cannot bridge distinct genesis lineages");
         assert!(matches!(
             error,
@@ -2064,14 +2128,50 @@ mod proof_policy_tests {
         let network_id = original.authorization.network_id;
         let owner = original.authorization.owner.clone();
         let controller = owner.controller().clone();
+        // The block's paired record is fixed; only the pin section is mutated.
+        let commitments = paired_test_commitments(&DaPinIntentBundle::new(vec![original.clone()]));
         let validate = |candidate: DaPinIntent| {
             validate_pin_intent_authorizations(
                 &DaPinIntentBundle::new(vec![candidate]),
+                Some(&commitments),
                 network_id,
                 |candidate_owner| (candidate_owner == &owner).then(|| controller.clone()),
             )
         };
         validate(original.clone()).expect("the exact producer-approved scope must validate");
+        // An unpaired intent makes no pin-scope claim here; the block's pairing check refuses it.
+        validate_pin_intent_authorizations(
+            &DaPinIntentBundle::new(vec![original.clone()]),
+            None,
+            network_id,
+            |candidate_owner| (candidate_owner == &owner).then(|| controller.clone()),
+        )
+        .expect("pairing is owned by proposal_queue::validate_pairs");
+        assert!(matches!(
+            proposal_queue::validate_pairs(
+                None,
+                Some(&DaPinIntentBundle::new(vec![original.clone()]))
+            ),
+            Err(DaPinIntentValidationError::CommitmentScopeMismatch)
+        ));
+        assert!(
+            proposal_queue::validate_pairs(
+                Some(&commitments),
+                Some(&DaPinIntentBundle::new(vec![original.clone()]))
+            )
+            .is_ok()
+        );
+        let mut other_record = commitments.commitments()[0].clone();
+        other_record.retention_class.hot_retention_secs += 1;
+        assert!(matches!(
+            validate_pin_intent_authorizations(
+                &DaPinIntentBundle::new(vec![original.clone()]),
+                Some(&DaCommitmentBundle::new(vec![other_record])),
+                network_id,
+                |candidate_owner| (candidate_owner == &owner).then(|| controller.clone()),
+            ),
+            Err(DaPinIntentValidationError::InvalidPinScopeSignatures { .. })
+        ));
 
         let mut mutated_ticket = original.clone();
         mutated_ticket.storage_ticket = StorageTicketId::new([0xD3; 32]);
@@ -2135,28 +2235,29 @@ mod proof_policy_tests {
             );
             DaPinIntentBundle::new(vec![DaPinIntent::new(authorization, scope_authorization)])
         };
-        validate_pin_intent_authorizations(
-            &make_bundle(&[&member_a, &member_b], &[&member_a, &member_b]),
-            network_id,
-            |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
-        )
+        let validate = |bundle: DaPinIntentBundle| {
+            validate_pin_intent_authorizations(
+                &bundle,
+                Some(&paired_test_commitments(&bundle)),
+                network_id,
+                |candidate| {
+                    (candidate == &owner).then(|| AccountController::Multisig(policy.clone()))
+                },
+            )
+        };
+        validate(make_bundle(
+            &[&member_a, &member_b],
+            &[&member_a, &member_b],
+        ))
         .expect("canonical two-of-two witnesses satisfy committed state");
-        let error = validate_pin_intent_authorizations(
-            &make_bundle(&[&member_a], &[&member_a, &member_b]),
-            network_id,
-            |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
-        )
-        .expect_err("one witness cannot satisfy a two-of-two account");
+        let error = validate(make_bundle(&[&member_a], &[&member_a, &member_b]))
+            .expect_err("one witness cannot satisfy a two-of-two account");
         assert!(matches!(
             error,
             DaPinIntentValidationError::UnauthorizedOwner { owner: rejected } if rejected == owner
         ));
-        let error = validate_pin_intent_authorizations(
-            &make_bundle(&[&member_a, &member_b], &[&member_a]),
-            network_id,
-            |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
-        )
-        .expect_err("one pin-scope witness cannot satisfy a two-of-two account");
+        let error = validate(make_bundle(&[&member_a, &member_b], &[&member_a]))
+            .expect_err("one pin-scope witness cannot satisfy a two-of-two account");
         assert!(matches!(
             error,
             DaPinIntentValidationError::UnauthorizedPinScopeOwner { owner: rejected }
@@ -2259,7 +2360,6 @@ mod tests {
     };
 
     use iroha_model_base::topology::DataSpaceId;
-    use norito::to_bytes;
     use std::{collections::BTreeMap, num::NonZeroU32};
     fn test_pin_authorization(
         lane: LaneId,
@@ -2339,8 +2439,8 @@ mod tests {
             1,
             BlobDigest::new([0x11; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x22; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0x33; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([0x33; 32]),
             Some(Hash::prehashed([0x44; 32])),
             RetentionClass::default(),
             StorageTicketId::new([0x55; 32]),
@@ -2354,14 +2454,14 @@ mod tests {
             id: LaneId::new(1),
             alias: "merkle-lane".to_string(),
             dataspace_id: DataSpaceId::new(7),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         };
         let lane_b = ModelLaneConfig {
             id: LaneId::new(2),
             alias: "second-merkle-lane".to_string(),
             dataspace_id: DataSpaceId::new(9),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         };
         let lane_config = lane_config_with(vec![lane_a.clone(), lane_b.clone()]);
@@ -2470,7 +2570,7 @@ mod tests {
                 id: inactive_lane,
                 dataspace_id: DataSpaceId::new(7),
                 alias: "missing-dataspace-da".to_owned(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2556,7 +2656,7 @@ mod tests {
                 id: drifted_lane,
                 alias: "catalog-da".to_owned(),
                 dataspace_id: DataSpaceId::new(7),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2566,7 +2666,7 @@ mod tests {
                 id: drifted_lane,
                 alias: "drifted-da".to_owned(),
                 dataspace_id: DataSpaceId::new(9),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2615,7 +2715,8 @@ mod tests {
         let expected_hash = HashOf::new(&bundle);
         assert_eq!(hash, expected_hash);
         assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
-        let encoded = to_bytes(&bundle.policies().to_vec()).expect("encode policies");
+        let encoded =
+            norito::encode_canonical(&bundle.policies().to_vec()).expect("encode policies");
         assert_eq!(bundle.policy_hash(), Hash::new(encoded));
     }
     #[test]
@@ -2635,11 +2736,14 @@ mod tests {
     fn rejects_zero_chunk_root() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = DaCommitmentRecord {
-            chunk_root: Hash::prehashed([0u8; 32]),
+            chunk_root: BlobDigest::new([0u8; 32]),
             ..merkle_record(0)
         };
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::ZeroChunkRoot { .. }));
+        let mut adjacent = record;
+        adjacent.chunk_root.0[31] = 1;
+        assert!(enforce_lane_proof_policy(&adjacent, &lane_config).is_ok());
     }
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_key() {
@@ -2865,7 +2969,7 @@ mod tests {
             ModelLaneConfig {
                 id: LaneId::new(2),
                 alias: "lane-b".to_string(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ];
@@ -2881,7 +2985,7 @@ mod tests {
             lane_id: LaneId::new(7),
             dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             alias: "lane-seven".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy.clone(), policy]);
         assert_eq!(

@@ -5,6 +5,7 @@
 //! backing before a guest store can mutate memory. The bounded linear update
 //! work remains a performance qualification item for fragmented workloads.
 
+use crate::error::VmDeferral;
 use std::ops::Range;
 
 use iroha_allocation::AllocationBudget;
@@ -56,7 +57,7 @@ impl PrivateMemoryRanges {
 
     pub(super) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
         ExecutionMemoryPlan::array::<(u64, u64)>(self.ranges.len())
-            .map_err(VMError::AllocationDeferred)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
 
     /// Copy a test snapshot with an independent reservation in the original pool.
@@ -67,7 +68,7 @@ impl PrivateMemoryRanges {
             .as_ref()
             .map(|budget| {
                 ExecutionMemoryLease::reserve(budget, self.runtime_template_memory_plan()?)
-                    .map_err(VMError::AllocationDeferred)
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
             })
             .transpose()?;
         self.try_clone_for_runtime_template(lease.as_mut())
@@ -123,18 +124,19 @@ impl PrivateMemoryRanges {
             .ranges
             .capacity()
             .checked_mul(2)
-            .ok_or(VMError::AllocationDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::DemandOverflow,
-            ))?
+            )))?
             .max(4)
             .max(required);
         let plan = ExecutionMemoryPlan::array::<(u64, u64)>(capacity)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut lease = self
             .active_budget
             .as_ref()
             .map(|budget| {
-                ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)
+                ExecutionMemoryLease::reserve(budget, plan)
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
             })
             .transpose()?;
         let replacement = self.ranges.try_copy(capacity, lease.as_mut())?;
@@ -179,13 +181,9 @@ impl PrivateMemoryRanges {
             {
                 return Err(storage::unavailable());
             }
-            let required = self
-                .ranges
-                .len()
-                .checked_add(1)
-                .ok_or(VMError::AllocationDeferred(
-                    iroha_allocation::AllocationRefusal::DemandOverflow,
-                ))?;
+            let required = self.ranges.len().checked_add(1).ok_or(VMError::Deferred(
+                VmDeferral::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow),
+            ))?;
             self.try_reserve_capacity(required)?;
         }
         Ok(())

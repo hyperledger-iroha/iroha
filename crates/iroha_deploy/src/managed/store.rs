@@ -229,6 +229,31 @@ impl ManagedStore {
         Ok(self.networks.open_child(name)?)
     }
 
+    /// Prepare a fresh, stopped global generation for a test without launching or selecting it.
+    ///
+    /// # Errors
+    /// Returns an error for an existing generation, invalid custody or failed preparation.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn prepare_stopped_fixture(&self, request: &LocalnetRequest) -> Result<PreparedLocalnet> {
+        validate_name(&request.name)?;
+        let directory = self.networks.ensure_child(&request.name)?;
+        let _operation = acquire(&directory, "operation.lock", &request.name)?;
+        if generation::read_optional(&directory)?.is_some() {
+            return Err(Error::Invalid("fixture generation already exists".into()));
+        }
+        let ports = LocalnetPorts::reserve()?;
+        let (launcher, daemon) = request.admit_programs()?.pins()?;
+        Ok(generation::prepare(
+            &directory,
+            request,
+            RootKind::Global,
+            launcher,
+            daemon,
+            &ports,
+        )?
+        .prepared)
+    }
+
     /// Start or reconnect to a named network, preparing its generation only once.
     ///
     /// Canonical generation runs only for a new context, with private fixed-path seed custody
@@ -1147,6 +1172,18 @@ pub(super) fn adopt_rebuilt_programs(
 /// Remove one stopped generation. The caller holds both ownership locks.
 fn discard_generation(directory: &PrivateDirectory) -> Result<()> {
     directory.revalidate()?;
+    // The stopped State backend hard-links immutable shards between retained heights.
+    // Check every alias within its own peer store before removing generation metadata.
+    for index in 0..crate::localnet::MANAGED_PEERS {
+        let peer = format!("peer{index}");
+        directory.clear_snapshot_subtree(&[
+            generation::DIRECTORY,
+            "nodes",
+            &peer,
+            "state",
+            "tiered_state",
+        ])?;
+    }
     transport::clear_stopped_endpoint(directory)?;
     directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
     Ok(())
@@ -1521,10 +1558,27 @@ fn exchange_optional(
         Err(transport::RequestFailure::Refused(error)) => Err(error.into()),
         Err(transport::RequestFailure::Unavailable(error)) => {
             let error = Error::from(error);
-            let _runtime = match acquire(directory, "runtime.lock", &context.name) {
-                Ok(runtime) => runtime,
-                Err(Error::Busy(_)) => return Err(error),
-                Err(refusal) => return Err(refusal),
+            // A closing supervisor can drop the authenticated stream just before its
+            // runtime gate. Observe that gate without resending Down or extending its deadline.
+            let stream_eof =
+                matches!(&error, Error::Io(io) if io.kind() == std::io::ErrorKind::UnexpectedEof);
+            let release_by = deadline.min(Instant::now() + STOP_REPLY_ALLOWANCE);
+            let _runtime = loop {
+                match acquire(directory, "runtime.lock", &context.name) {
+                    Ok(runtime) => break runtime,
+                    Err(Error::Busy(_)) if stream_eof && Instant::now() < release_by => {
+                        #[cfg(test)]
+                        pre_session_tests::before_wait();
+                        thread::sleep(
+                            POLL.min(release_by.saturating_duration_since(Instant::now())),
+                        );
+                        if Instant::now() >= release_by {
+                            return Err(error);
+                        }
+                    }
+                    Err(Error::Busy(_)) => return Err(error),
+                    Err(refusal) => return Err(refusal),
+                }
             };
             // Only a closed original owner may reconcile an unavailable peer. The admitted
             // session's native object, exact metadata and bytes must remain unchanged.

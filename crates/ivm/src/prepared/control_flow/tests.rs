@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::encoding::wide as enc;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationRefusal;
 
 fn decoded(words: &[u32]) -> Vec<DecodedOp> {
@@ -124,18 +125,18 @@ fn original_pool_refuses_before_construction_and_retries_exact_arrays() {
     let budget = AllocationBudget::new(0);
     assert!(matches!(
         PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(boundaries + nodes);
     let occupied = budget.try_reserve_bytes(boundaries + nodes).unwrap();
     assert!(matches!(
         PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), boundaries + nodes);
     drop(occupied);
@@ -157,7 +158,7 @@ fn second_array_refusal_and_invalid_edges_refund_every_unpublished_owner() {
     let budget = AllocationBudget::new(boundaries + nodes - 1);
     assert!(matches!(
         PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
             if requested_bytes == nodes
     ));
     assert_eq!(budget.peak_reserved_bytes(), boundaries);
@@ -174,11 +175,11 @@ fn second_array_refusal_and_invalid_edges_refund_every_unpublished_owner() {
         let decoded = [DecodedOp { pc: 0, inst: word }];
         assert!(matches!(
             PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(matches!(
             PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
     }

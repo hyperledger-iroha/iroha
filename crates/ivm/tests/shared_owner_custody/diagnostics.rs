@@ -7,6 +7,7 @@ use ivm::{
     encoding::wide::{encode_halt, encode_scall},
     host::IVMHost,
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 use std::any::Any;
 
 struct ExhaustAtTrap {
@@ -14,10 +15,10 @@ struct ExhaustAtTrap {
     error: Option<VMError>,
 }
 impl IVMHost for ExhaustAtTrap {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
-    fn syscall(&mut self, _: u32, _: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(&mut self, _: u32, _: &mut dyn ivm::host::SyscallContext) -> Result<u64, VMError> {
         self.original.set_limit_bytes(0);
         // The real interpreter has completed its public instruction admission.
         // Observe the trap unwinding and capture, not unrelated VM construction.
@@ -46,9 +47,9 @@ fn actual_trap_and_local_refusal_capture_make_no_heap_request_at_exhausted_origi
         let refusal = original.try_reserve_bytes(1).unwrap_err();
         original.set_limit_bytes(128 * 1024 * 1024);
         let expected = if local {
-            VMError::AllocationDeferred(refusal.clone())
+            VMError::Deferred(VmDeferral::AllocationDeferred(refusal.clone()))
         } else {
-            VMError::UnknownSyscall(0x7fff)
+            VMError::Trap(VmTrap::UnknownSyscall(0x7fff))
         };
         let mut host = ExhaustAtTrap {
             original: original.clone(),
@@ -58,8 +59,10 @@ fn actual_trap_and_local_refusal_capture_make_no_heap_request_at_exhausted_origi
         let result = vm.run_with_host(&mut host);
         let requests = stop_log_requests();
         match result {
-            Err(VMError::AllocationDeferred(actual)) if local => assert_eq!(actual, refusal),
-            Err(VMError::UnknownSyscall(0x7fff)) if !local => {}
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(actual))) if local => {
+                assert_eq!(actual, refusal)
+            }
+            Err(VMError::Trap(VmTrap::UnknownSyscall(0x7fff))) if !local => {}
             other => panic!("actual trap changed: {other:?}"),
         }
         assert_eq!(requests, 0, "trap capture and local unwind cannot allocate");
@@ -75,7 +78,10 @@ fn actual_trap_and_local_refusal_capture_make_no_heap_request_at_exhausted_origi
         observe_log_requests();
         let refusal = vm.run_with_host(&mut host);
         let requests = stop_log_requests();
-        assert!(matches!(refusal, Err(VMError::AllocationDeferred(_))));
+        assert!(matches!(
+            refusal,
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+        ));
         assert_eq!(
             requests, 0,
             "local preflight refusal cannot allocate a diagnostic"

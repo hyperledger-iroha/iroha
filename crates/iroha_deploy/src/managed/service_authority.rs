@@ -301,13 +301,7 @@ impl OriginalServiceIntent<'_> {
     // Exact lock/scope observations from validate_profile, without another image traversal.
     // This private projection is enclosed by the original intent's full entry and finish.
     pub(super) fn validate_policy_custody(&self) -> Result<()> {
-        self.authority.validate_operation_custody()?;
-        if let Scope::Provider { provider, slot } = self.authority.scope
-            && self.authority.manifest.provider(provider)?.slot != slot
-        {
-            return Err(invalid("original provider operation scope changed"));
-        }
-        self.authority.validate_operation_custody()
+        self.authority.validate_scoped_operation_custody()
     }
 
     pub(super) fn finish(self) -> Result<()> {
@@ -353,12 +347,16 @@ impl ServiceAuthority {
         Ok(OriginalServiceIntent { authority: self })
     }
 
+    /// Whether this read may project an existing immutable shared original.
+    pub(super) fn shares_original_for_read(&self) -> bool {
+        !norito::core::decode_limits_active()
+            && matches!(&self.profile, AuthorityProfile::Shared(_))
+    }
+
     /// Borrow immutable constructor intent only outside active physical decode admission.
     /// Owned originals and active callers must use their original standalone producer.
     pub(super) fn original_intent_if_shared(&self) -> Result<Option<OriginalServiceIntent<'_>>> {
-        if norito::core::decode_limits_active()
-            || matches!(&self.profile, AuthorityProfile::Owned(_))
-        {
+        if !self.shares_original_for_read() {
             return Ok(None);
         }
         self.original_intent().map(Some)
@@ -739,6 +737,21 @@ impl ServiceAuthority {
         self.profile.original_publication_plan()
     }
 
+    /// Sign this provider's deterministic refresh under its live, exclusive original purpose.
+    pub(super) fn sign_provider_advert(
+        &self,
+        now_seconds: u64,
+    ) -> Result<sorafs_manifest::provider_advert::ProviderAdvertV1> {
+        let provider = self.provider_id()?;
+        if !self.shares_original_for_read() {
+            return self.prepared.provider_advert(provider, now_seconds);
+        }
+        self.validate_profile()?;
+        let advert = self.profile.sign_provider_advert(provider, now_seconds)?;
+        self.validate_profile()?;
+        Ok(advert)
+    }
+
     /// Sign through the sole generated catalog owner, retaining full source and lock custody.
     pub(super) fn sign_gateway_compliance_catalog(
         &self,
@@ -834,6 +847,18 @@ impl ServiceAuthority {
             return Err(invalid("managed native operation lock was replaced"));
         }
         Ok(())
+    }
+
+    /// Reopen the operation lock on both sides of the original provider-slot check.
+    /// The caller owns the associated full profile validation.
+    pub(super) fn validate_scoped_operation_custody(&self) -> Result<()> {
+        self.validate_operation_custody()?;
+        if let Scope::Provider { provider, slot } = self.scope
+            && self.manifest.provider(provider)?.slot != slot
+        {
+            return Err(invalid("original provider operation scope changed"));
+        }
+        self.validate_operation_custody()
     }
 
     pub(super) fn validate_profile_with_runtime(

@@ -1,8 +1,11 @@
 //! Exercise the genuine installed-owner transfer, without touching retained custody.
 //!
-//! The real experimental programs are authorized by the engineering installation's
-//! root for this installation-only test. Re-scoping that signed manifest does not
-//! claim that its monetary circuits match the legacy corpus or migrate funded heads.
+//! The real experimental programs are authorized for this installation-only test
+//! by an engineering Artifact-role key that the installation's root certifies
+//! (wire §1 signing-domain table and §3.1: the root signs certificates, the
+//! Artifact-role signer signs manifests). Re-scoping that signed v2 manifest
+//! does not claim that its monetary circuits match the legacy corpus or migrate
+//! funded heads.
 use super::*;
 use ff::PrimeField;
 use iroha_core_zk::{
@@ -126,8 +129,9 @@ fn manifest_from_bytes(bytes: &[u8]) -> ParameterManifest {
     value
 }
 
-fn manifest_message(bytes: &[u8]) -> [u8; 32] {
-    // Independently encode the specified length-delimited 31-byte Poseidon words.
+/// `P_bytes(domain, bytes)`: independently encode the specified
+/// length-delimited 31-byte Poseidon words.
+fn p_bytes(domain: &[u8; 8], bytes: &[u8]) -> [u8; 32] {
     let values: Vec<_> = std::iter::once(Fp::from(bytes.len() as u64))
         .chain(bytes.chunks(31).map(|chunk| {
             let mut word = [0; 32];
@@ -135,17 +139,45 @@ fn manifest_message(bytes: &[u8]) -> [u8; 32] {
             Option::<Fp>::from(Fp::from_repr(word)).unwrap()
         }))
         .collect();
-    poseidon::hash_with_domain(u64::from_le_bytes(*b"kgwparm1"), &values).to_repr()
+    poseidon::hash_with_domain(u64::from_le_bytes(*domain), &values).to_repr()
 }
 
-fn sign(bytes: &[u8], key: &SigningKey) -> [u8; 64] {
+fn manifest_message(bytes: &[u8]) -> [u8; 32] {
+    p_bytes(b"kgwparm1", bytes)
+}
+
+fn sign_message(message: &[u8; 32], key: &SigningKey) -> [u8; 64] {
     // The canonical P-256 adapter hashes these 32 little-endian field bytes.
-    let signature: Signature = key.sign(&manifest_message(bytes));
+    let signature: Signature = key.sign(message);
     signature.normalize_s().to_bytes().into()
 }
 
+fn sign(bytes: &[u8], key: &SigningKey) -> [u8; 64] {
+    sign_message(&manifest_message(bytes), key)
+}
+
+/// The engineering Artifact-role key; the installation root certifies it.
+fn artifact_key() -> SigningKey {
+    SigningKey::from_bytes((&[0x15; 32]).into()).unwrap()
+}
+
+/// Exact 172-byte signer certificate original (wire §3.1): `LE16 version ‖
+/// scheme_id ‖ role ‖ SEC1 key ‖ LE64 serial`, then the root's signature over
+/// `P_bytes(kgwcert1, body)`.
+fn signer_certificate(scheme: [u8; 32], role: u8, key: &SigningKey, root: &SigningKey) -> Vec<u8> {
+    let mut body = Vec::with_capacity(108);
+    body.extend_from_slice(&1u16.to_le_bytes());
+    body.extend_from_slice(&scheme);
+    body.push(role);
+    body.extend_from_slice(key.verifying_key().to_sec1_point(false).as_bytes());
+    body.extend_from_slice(&5u64.to_le_bytes());
+    assert_eq!(body.len(), 108);
+    let signature = sign_message(&p_bytes(b"kgwcert1", &body), root);
+    [body.as_slice(), &signature].concat()
+}
+
 #[test]
-#[ignore = "requires the saved experimental parameter manifest and signature"]
+#[ignore = "requires a saved v2 experimental parameter manifest and its Artifact-role signature"]
 fn experimental_manifest_codec_and_signer_preflight() {
     use p256::ecdsa::signature::Verifier as _;
     let directory = std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS")
@@ -157,23 +189,48 @@ fn experimental_manifest_codec_and_signer_preflight() {
     let bytes = bounded(&directory.join("parameter-manifest.norito"), 16 << 10);
     let parsed = manifest_from_bytes(&bytes);
     assert_eq!(manifest_bytes(&parsed), bytes);
-    let key = SigningKey::from_bytes((&[0x11; 32]).into()).unwrap();
+    assert_eq!(
+        parsed.version,
+        zk_spartan::native::PARAMETER_MANIFEST_VERSION
+    );
+    let root = SigningKey::from_bytes((&[0x11; 32]).into()).unwrap();
+    let key = artifact_key();
+    // The embedded signer: an Artifact-role (5) certificate for this scheme,
+    // naming the artifact key and signed by the root.
+    let certificate = &parsed.signer_certificate;
+    assert_eq!(certificate.len(), 172);
+    let (body, certificate_signature) = certificate.split_at(108);
+    assert_eq!(&body[..2], &1u16.to_le_bytes());
+    assert_eq!(&body[2..34], &parsed.scheme);
+    assert_eq!(body[34], 5, "Artifact role");
+    assert_eq!(
+        &body[35..100],
+        key.verifying_key().to_sec1_point(false).as_bytes()
+    );
+    root.verifying_key()
+        .verify(
+            &p_bytes(b"kgwcert1", body),
+            &Signature::from_slice(certificate_signature).unwrap(),
+        )
+        .expect("the root certifies the artifact key");
     let original =
         Signature::from_slice(&bounded(&directory.join("parameter-signature.bin"), 64)).unwrap();
     key.verifying_key()
         .verify(&manifest_message(&bytes), &original)
-        .expect("independent signer/message agrees with the actual saved root signature");
+        .expect("independent signer/message agrees with the actual saved Artifact-role signature");
     let fresh = Signature::from_slice(&sign(&bytes, &key)).unwrap();
     key.verifying_key()
         .verify(&manifest_message(&bytes), &fresh)
         .unwrap();
-    let wrong = SigningKey::from_bytes((&[0x12; 32]).into()).unwrap();
-    let wrong = Signature::from_slice(&sign(&bytes, &wrong)).unwrap();
-    assert!(
-        key.verifying_key()
-            .verify(&manifest_message(&bytes), &wrong)
-            .is_err()
-    );
+    for other in [root, SigningKey::from_bytes((&[0x12; 32]).into()).unwrap()] {
+        let wrong = Signature::from_slice(&sign(&bytes, &other)).unwrap();
+        assert!(
+            key.verifying_key()
+                .verify(&manifest_message(&bytes), &wrong)
+                .is_err(),
+            "only the Artifact-role key signs manifests"
+        );
+    }
 }
 
 fn refused(
@@ -237,12 +294,15 @@ fn installed_spartan_transfer_preserves_owner_on_refusal_and_moves_it_once() {
     let original_manifest = bounded(&artifacts.join("parameter-manifest.norito"), 16 << 10);
     let bundle_hash: [u8; 32] = Sha256::digest(&bundle).into();
     let mut manifest = manifest_from_bytes(&original_manifest);
-    // Root-authorized installation scope only. All eight exact program pins remain unchanged.
+    // Root-certified, Artifact-signed installation scope only. All eight exact
+    // program pins and the generator/table profile remain unchanged.
+    let artifact = artifact_key();
     manifest.scheme = scheme.scheme_id();
     manifest.finality_network = reader.network().to_string();
     manifest.finality_chain = reader.chain_id().to_owned();
+    manifest.signer_certificate = signer_certificate(manifest.scheme, 5, &artifact, &root);
     let bytes = manifest_bytes(&manifest);
-    let signature = sign(&bytes, &root);
+    let signature = sign(&bytes, &artifact);
     // Catch fixture framing/scope mistakes before the deliberately genuine,
     // comparatively expensive legacy source qualification.
     {
@@ -315,29 +375,50 @@ fn installed_spartan_transfer_preserves_owner_on_refusal_and_moves_it_once() {
         MemoryBudget::new(128 << 20),
     );
     assert_retained();
-    let wrong_root = SigningKey::from_bytes((&[0x12; 32]).into()).unwrap();
-    let mut runtime = refused(
-        runtime,
-        &bundle,
-        &bytes,
-        sign(&bytes, &wrong_root),
-        |e| matches!(e, SpartanError::Rejected(message) if message == "P-256 signature"),
-    );
-    assert_retained();
-    for case in 0..3 {
+    // Neither another key nor the root itself signs manifests.
+    let wrong_signer = SigningKey::from_bytes((&[0x12; 32]).into()).unwrap();
+    let mut runtime = runtime;
+    for signer in [&wrong_signer, &root] {
+        runtime = refused(
+            runtime,
+            &bundle,
+            &bytes,
+            sign(&bytes, signer),
+            |e| matches!(e, SpartanError::Rejected(message) if message == "P-256 signature"),
+        );
+        assert_retained();
+    }
+    for case in 0..6 {
         let mut changed = manifest_from_bytes(&bytes);
         let expected = match case {
             0 => {
+                // A root-issued certificate for the changed scheme: the
+                // manifest authenticates, then the installed scheme refuses it.
                 changed.scheme[0] ^= 1;
+                changed.signer_certificate =
+                    signer_certificate(changed.scheme, 5, &artifact, &root);
                 "installed native scheme"
             }
             1 => {
+                changed.scheme[0] ^= 1;
+                "signer certificate scheme"
+            }
+            2 => {
+                changed.signer_certificate =
+                    signer_certificate(changed.scheme, 1, &artifact, &root);
+                "signer certificate role"
+            }
+            3 => {
                 changed.finality_chain.push_str("-foreign");
                 "parameter ledger root"
             }
-            _ => {
+            4 => {
                 changed.primary[0][0] ^= 1;
                 "exact compiled monetary program"
+            }
+            _ => {
+                changed.table_vector[0][0] ^= 1;
+                "payment table known answer"
             }
         };
         let changed = manifest_bytes(&changed);
@@ -345,7 +426,7 @@ fn installed_spartan_transfer_preserves_owner_on_refusal_and_moves_it_once() {
             runtime,
             &bundle,
             &changed,
-            sign(&changed, &root),
+            sign(&changed, &artifact),
             |e| matches!(e, SpartanError::AuthorityMismatch(message) if *message == expected),
         );
         assert_retained();
@@ -385,6 +466,6 @@ fn installed_spartan_transfer_preserves_owner_on_refusal_and_moves_it_once() {
     assert_eq!(fs::metadata(custody.join("lock")).unwrap().ino(), inode);
     assert_eq!(fs::read(custody.join("root.norito")).unwrap(), sentinel);
     eprintln!(
-        "installed Spartan transfer: real installation/catalog/genesis; five exact refusals; same owner and lock; successful move and single drop"
+        "installed Spartan transfer: real installation/catalog/genesis; nine exact refusals; same owner and lock; successful move and single drop"
     );
 }

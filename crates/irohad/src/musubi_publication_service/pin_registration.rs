@@ -161,33 +161,12 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
             &query.transaction,
             query.manifest_digest,
         )?;
-        let height = usize::try_from(query.finalized_height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .ok_or(Invalid)?;
-        if height.get() > view.block_hashes().len() {
-            return Err(LocallyAhead);
-        }
-        let canonical_hash = view
-            .block_hashes()
-            .get(height.get() - 1)
-            .copied()
-            .ok_or(Invalid)?;
-        let block = view
-            .kura()
-            .get_block(height, &view.execution_budget())?
-            .ok_or(Invalid)?;
-        if !validate_finalized_block_wire(
+        require_finalized_transaction(
             &view,
             &self.network_id,
             query.finalized_height,
-            canonical_hash,
-            &block,
-        )? || block.validate_output_merkle_cache().is_err()
-            || !exact_successful_pin_transaction(&query.transaction, &block)?
-        {
-            return Err(Invalid);
-        }
+            &query.transaction,
+        )?;
         let record = view
             .world()
             .pin_manifests()
@@ -203,6 +182,39 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
         }
         Ok(record.clone())
     }
+}
+
+/// Authenticate one exact successful ordinary envelope at its selected canonical height.
+pub(super) fn require_finalized_transaction(
+    view: &iroha_core::state::StateQueryView<'_>,
+    network: &NetworkId,
+    finalized_height: u64,
+    transaction: &SignedTransaction,
+) -> Result<(), MusubiPublicationFinalizedPinRegistrationReadErrorV1> {
+    use MusubiPublicationFinalizedPinRegistrationReadErrorV1::{Invalid, LocallyAhead};
+    let height = usize::try_from(finalized_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or(Invalid)?;
+    if height.get() > view.block_hashes().len() {
+        return Err(LocallyAhead);
+    }
+    let canonical_hash = view
+        .block_hashes()
+        .get(height.get() - 1)
+        .copied()
+        .ok_or(Invalid)?;
+    let block = view
+        .kura()
+        .get_block(height, &view.execution_budget())?
+        .ok_or(Invalid)?;
+    if !validate_finalized_block_wire(view, network, finalized_height, canonical_hash, &block)?
+        || block.validate_output_merkle_cache().is_err()
+        || !exact_successful_external_transaction(transaction, &block)?
+    {
+        return Err(Invalid);
+    }
+    Ok(())
 }
 
 pub(super) fn validate_signed_pin_intent(
@@ -299,7 +311,7 @@ pub(super) fn codec_refusal(
     }
 }
 
-fn exact_successful_pin_transaction(
+fn exact_successful_external_transaction(
     expected: &SignedTransaction,
     block: &iroha_data_model::block::SignedBlock,
 ) -> Result<bool, MusubiPublicationFinalizedPinRegistrationReadErrorV1> {
@@ -338,11 +350,11 @@ fn exact_successful_pin_transaction(
         }
         let Some((_, output)) = u32::try_from(input_index)
             .ok()
-            .and_then(|index| block.network_output_at(index))
+            .and_then(|index| block.network_execution_output_at(index))
         else {
             return Ok(false);
         };
-        if found || output.result.is_err() {
+        if found || output.result().is_err() {
             return Ok(false);
         }
         let actual = transaction
@@ -642,13 +654,13 @@ mod tests {
         // This block exercises the existing output matcher only, not a native-finality proof.
         let block = result_bearing_block(transaction.clone(), true);
         let refused = norito::with_decode_limits_scope(zero, || {
-            exact_successful_pin_transaction(&transaction, &block)
+            exact_successful_external_transaction(&transaction, &block)
         });
         assert!(matches!(
             refused,
             Err(MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
         ));
-        assert!(exact_successful_pin_transaction(&transaction, &block).unwrap());
+        assert!(exact_successful_external_transaction(&transaction, &block).unwrap());
     }
 
     #[test]
@@ -744,9 +756,9 @@ mod tests {
         let transaction = signed_pin(network, authority, &key, &manifest, false);
         let successful = result_bearing_block(transaction.clone(), true);
         assert!(successful.validate_output_merkle_cache().is_ok());
-        assert!(exact_successful_pin_transaction(&transaction, &successful).unwrap());
+        assert!(exact_successful_external_transaction(&transaction, &successful).unwrap());
         let rejected = result_bearing_block(transaction.clone(), false);
-        assert!(!exact_successful_pin_transaction(&transaction, &rejected).unwrap());
+        assert!(!exact_successful_external_transaction(&transaction, &rejected).unwrap());
         let other = signed_pin(
             network,
             AccountId::new(key.public_key().clone()),
@@ -754,6 +766,6 @@ mod tests {
             &manifest,
             true,
         );
-        assert!(!exact_successful_pin_transaction(&other, &successful).unwrap());
+        assert!(!exact_successful_external_transaction(&other, &successful).unwrap());
     }
 }

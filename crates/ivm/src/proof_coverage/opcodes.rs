@@ -729,7 +729,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         MEMORY,
         ["PrivacyViolation"],
-        ["memory.load_u64", "memory_load_privacy_tag"],
+        ["memory.load_guest_word", "memory_load_privacy_tag"],
         ["memory_load_privacy_tag", "set_tag", "tag"],
     ),
     op!(

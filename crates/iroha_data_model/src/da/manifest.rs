@@ -175,6 +175,32 @@ pub struct DaManifestV1 {
 impl DaManifestV1 {
     /// Current manifest version number.
     pub const VERSION: u16 = 1;
+
+    /// Largest encoded V1 DA manifest accepted by Torii and cold readers.
+    pub const MAX_ENCODED_BYTES: usize = 2 << 20;
+
+    /// Decode the canonical manifest frame under the DA allocation and nesting limits.
+    ///
+    /// # Errors
+    /// Returns a codec error if the frame is oversized, malformed, or noncanonical.
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, norito::Error> {
+        if bytes.len() > Self::MAX_ENCODED_BYTES {
+            return Err(norito::Error::ArchiveLengthExceeded {
+                length: bytes.len() as u64,
+                limit: Self::MAX_ENCODED_BYTES as u64,
+            });
+        }
+        norito::decode_canonical_with_limits(
+            bytes,
+            norito::DecodeLimits::new(
+                Self::MAX_ENCODED_BYTES,
+                Self::MAX_ENCODED_BYTES,
+                4 << 20,
+                32 << 20,
+                64,
+            ),
+        )
+    }
 }
 
 #[cfg(test)]

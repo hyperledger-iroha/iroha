@@ -18,11 +18,12 @@
 //!     .build();
 //! // ... attach host, load programs, run, etc.
 //! ```
+use crate::error::VmTrap;
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 pub use crate::stack_policy::IvmStackPolicy;
-use crate::{VMError, host::IVMHost, ivm::IVM};
+use crate::{VMError, host::IVMHost};
 use std::any::Any;
 /// Wrapper that enforces syscall policy and retains the host's prepared argument owner.
 pub(crate) struct SyscallDispatcher<H> {
@@ -38,12 +39,20 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn prepared_entrypoint_arguments(&self) -> Option<crate::PreparedArgumentRecord> {
         self.inner.prepared_entrypoint_arguments()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        if !self.allows_syscall(vm.syscall_policy(), number) {
-            return Err(VMError::UnknownSyscall(number));
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
+        if !self.allows_syscall(vm.quote().syscall_policy(), number) {
+            return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
         }
         self.inner.syscall(number, vm)
     }
@@ -76,7 +85,9 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
     use crate::PreparedArgumentRecord;
+    use crate::error::VmTrap;
     use iroha_primitives::json::Json;
     use std::sync::Arc;
 
@@ -87,11 +98,19 @@ mod tests {
             Some(self.0.clone())
         }
 
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
-            Err(VMError::PermissionDenied)
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         }
 
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             panic!("prepared arguments must not request public input")
         }
 
@@ -142,7 +161,10 @@ mod tests {
         unpaid.load_program(&program).unwrap();
         unpaid.select_entrypoint("echo").unwrap();
         unpaid.set_host(PreparedHost(prepared));
-        assert!(matches!(unpaid.run(), Err(VMError::DecodeError)));
+        assert!(matches!(
+            unpaid.run(),
+            Err(VMError::Trap(VmTrap::DecodeError))
+        ));
         assert!(unpaid.call_result_word_count().is_err());
         #[cfg(debug_assertions)]
         assert_eq!(crate::argument_record_decode_count(), 1);
@@ -156,10 +178,18 @@ mod tests {
         fn prepared_entrypoint_arguments(&self) -> Option<PreparedArgumentRecord> {
             Some(self.arguments.clone())
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             self.inner.syscall(number, vm)
         }
         fn as_any(&mut self) -> &mut dyn Any {

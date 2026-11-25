@@ -27,7 +27,7 @@ tokio = { workspace = true, features = ["signal"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 
 [dev-dependencies]
-iroha_deploy = { workspace = true }
+iroha_deploy = { workspace = true, features = ["test-fixtures"] }
 iroha_test_samples = { path = "../../crates/iroha_test_samples" }
 mochi-core = { path = "../mochi-core", features = ["test"] }
 tempfile = { workspace = true }

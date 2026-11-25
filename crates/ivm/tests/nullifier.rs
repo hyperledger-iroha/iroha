@@ -6,6 +6,7 @@ use ivm::{
     host::{DefaultHost, IVMHost, registered_host_syscall_gas_formula},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 #[test]
 fn invocation_local_u64_nullifier_is_rejected_by_abi_v1() {
     let removed_number = 0xFB;
@@ -19,22 +20,22 @@ fn invocation_local_u64_nullifier_is_rejected_by_abi_v1() {
     let mut direct_host = DefaultHost::new();
     let mut direct_vm = IVM::new(u64::MAX);
     assert!(
-        matches!(direct_host.prepare_syscall(removed_number, &direct_vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (removed_number))
+        matches!(direct_host.prepare_syscall(removed_number, direct_vm.syscall_quote()), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (removed_number))
     );
     assert!(
-        matches!(direct_host.syscall(removed_number, &mut direct_vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (removed_number))
+        matches!(direct_host.syscall(removed_number, &mut direct_vm), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (removed_number))
     );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(DefaultHost::new());
     let program = assemble_syscalls(&[removed_number as u8]);
     if let Err(error) = vm.load_program(&program) {
         assert!(
-            matches!(error, VMError::UnknownSyscall(__actual_error_field) if __actual_error_field == (removed_number))
+            matches!(error, VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field)) if __actual_error_field == (removed_number))
         );
         return;
     }
     vm.set_register(10, 123);
     assert!(
-        matches!(vm.run(), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (removed_number))
+        matches!(vm.run(), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (removed_number))
     );
 }

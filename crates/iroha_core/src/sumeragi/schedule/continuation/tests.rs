@@ -338,10 +338,15 @@ fn requested<'a>(block: &'a StateBlock<'_>) -> &'a NativeExecutionInputs {
 #[test]
 fn ordinary_continuation_native_world_request_and_done_drop_return_original_custody() {
     let _retirement = crossbeam_epoch::pin();
-    let chain = chain();
+    verify_continuation_drops(&chain());
+}
+
+// Construct the certified genesis before reserving space for the three World overlays.
+#[inline(never)]
+fn verify_continuation_drops(chain: &CertifiedTestChain) {
     let proposal = chain.proposal(Some(2_000), Vec::new());
     let header = proposal.header();
-    let expected = expected(&chain, &header);
+    let expected = expected(chain, &header);
     let mut original = SuccessorContextPreparation::default();
     {
         let view = chain.state().view();

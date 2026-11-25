@@ -4,7 +4,7 @@ This document lists IVM syscall numbers and their ABI for `abi_version = 1`.
 The host and VM enforce the execution root's exact selected ABI V1 host profile.
 The baseline and the separately named `iroha.ivm.runtime_lifecycle.v1` profile use
 the same syscall numbers and pointer type IDs. Unknown or disallowed syscall
-numbers are rejected with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`).
+numbers are rejected with `E_SCALL_UNKNOWN` (mapped to `VmTrap::UnknownSyscall`).
 The number policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
 
 ABI policy
@@ -64,10 +64,10 @@ Admission/host guardrails
 - Admission decodes the instruction stream and rejects `SCALL` numbers outside the ABI surface with
   `ValidationFail::NotPermitted` before execution, so mutated or malformed bytecode never reaches the
   host.
-- Runtime hosts must return `VMError::UnknownSyscall` for disallowed syscall numbers; the executor
+- Runtime hosts must return `VmTrap::UnknownSyscall` for disallowed syscall numbers; the executor
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
-  `VMError::NotImplemented` instead.
+  `VmTrap::NotImplemented` instead.
 - The ten extended `0x00FE0001..=0x00FE000A` Kotodama test helpers (fixture actors, seiyaku calls
   and rejection expectations, assertion failure reports, block height and transaction time
   control, and helper call-site records) are not ABI-v1 syscalls and do
@@ -75,7 +75,7 @@ Admission/host guardrails
   only in unreachable local test bodies, and the VM dispatches them only when the private
   test-suite loader capability is present and the host opts in; the runner supplies
   `KotoTestHost`. Production artifact admission, public raw/program/prepared loaders, adjacent
-  `0x00FE` IDs, and permissive custom hosts all fail with `VMError::UnknownSyscall`.
+  `0x00FE` IDs, and permissive custom hosts all fail with `VmTrap::UnknownSyscall`.
 - Reserved-metering host calls compute a deterministic, side-effect-free upper gas quote before
   dispatch, debit it before effects, and reconcile unused reserve afterward. Numeric V1 calls use
   staged metering instead: each phase is debited immediately before its bounded work, and no staged
@@ -684,13 +684,13 @@ Soracloud runtime host surface
 - 0xC8 SORACLOUD_READ_CONFIG — Args: `r10=&SoracloudRequest(ReadConfig)` → `r10=&SoracloudResponse(ReadConfig)`. Reads authoritative service config payload bytes for the active revision and is valid from ordinary Soracloud handlers.
 - IDs `0xC5` through `0xC7` are retired holes and must report `UnknownSyscall`; validator execution exposes neither plaintext node-local secrets nor nondeterministic network egress.
 - 0xC9 SORACLOUD_READ_SECRET_ENVELOPE — Args: `r10=&SoracloudRequest(ReadSecretEnvelope)` → `r10=&SoracloudResponse(ReadSecretEnvelope)`. Reads the authoritative committed client-ciphertext secret envelope for the active revision and is valid from ordinary Soracloud handlers.
-- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Gas: G_soracloud + request bytes + response bytes. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
+- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Gas: G_soracloud + request bytes + response bytes. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VmTrap::UnknownSyscall`.
 - Dedicated Soracloud handler execution uses `irohad`'s `SoracloudIvmHost` to
   produce response envelopes and stage deterministic runtime side effects.
   Ordinary contract execution through `CoreHostImpl` is fail-closed for these
   numbers: it validates the `SoracloudRequest` pointer type, schema version,
   syscall operation, and payload variant, then returns metered
-  `VMError::NotImplemented` with `G_soracloud + request bytes` and queues no
+  `VmTrap::NotImplemented` with `G_soracloud + request bytes` and queues no
   ISI. Wrong pointer types or operation/payload mismatches fail during request
   validation.
 
@@ -788,6 +788,36 @@ Named-profile artifacts require deployable `CNTR` metadata. The header,
 generic programs and local test-harness artifacts cannot select this profile.
 The generated hash table in [`ivm_header.md`](../../../specs/ivm_header.md) lists
 the two distinct definitions. No ABI V2 or node-local policy toggle is introduced.
+
+## Restricted generic carrier profile (ABI v1)
+
+`iroha.ivm.generic_carrier.v1` is a distinct C10 profile for the separately selected
+carrier kernel. It remains unavailable for governed activation until its complete
+execution and physical storage path passes qualification. Existing host definitions
+and ordinary raw, deployed and trigger interfaces retain their original behavior.
+
+The initial contract accepts one original externally signed carrier instruction,
+executed at raw `main` without `CNTR` or debug sections. Methods are public: payload
+fields never establish authenticated caller identity or account permissions. Initial
+`r10` points to the original complete canonical carrier frame as `NoritoBytes`;
+successful `HALT` returns `r10 = 0`. Only `NoritoBytes` pointers are admitted.
+
+| Syscall | Arguments | Result |
+| --- | --- | --- |
+| `STATE_GET` (`0x50`) | `r10`: declared read index; `r11`: canonical bare key TLV | `r10`: complete canonical record TLV, or zero if absent |
+| `STATE_SET` (`0x51`) | `r10`: declared write index; `r11`: key TLV; `r12`: complete record TLV | Zero |
+| `STATE_DEL` (`0x52`) | `r10`: declared write index; `r11`: key TLV | Zero |
+| `INPUT_PUBLISH_TLV` (`0xE0`), `ALLOC` (`0xF0`) | Existing C10 arguments | Existing C10 result |
+
+Each index resolves to the immutable dependency list of the selected implementation.
+A write dependency never grants reads. Reads consult the existing ordered effect queue
+before the original State, but still require a read dependency. Writes remain queued
+until the VM succeeds and the complete group passes original-source, schema, storage
+and effect-limit admission; the existing World transaction owns rollback. The new
+typed group debits one item and `64 + key bytes + value frame bytes` per write against
+the original signed root's limits. VM gas remains chargeable after semantic rejection;
+local resource refusals retain the original unpublished attempt owner. Scans, nested
+calls, native instructions, events, parameters and permission operations are absent.
 
 ## ABI Stability (ABI v1)
 

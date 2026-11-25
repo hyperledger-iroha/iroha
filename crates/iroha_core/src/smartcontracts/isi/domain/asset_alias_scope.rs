@@ -2192,6 +2192,16 @@ impl Execute for Unregister<Account> {
                     &trigger_id,
                 );
             });
+        let c10 = state_transaction
+            .world
+            .c10_triggers
+            .iter()
+            .filter(|(_, stored)| stored.trigger().action.authority() == &account_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in c10 {
+            crate::smartcontracts::isi::triggers::isi::remove_c10_trigger(state_transaction, &id);
+        }
         state_transaction
             .world
             .account_permissions

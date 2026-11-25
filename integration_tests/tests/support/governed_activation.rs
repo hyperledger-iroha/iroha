@@ -81,8 +81,10 @@ pub fn notice_policy() -> RuntimeUpgradePolicyV1 {
     }
 }
 
-/// Add what the governed path needs to a network's signed genesis: the committed
-/// `runtime_upgrade_policy_v1` notice and `CanProposeRuntimeChangeSet` for Alice.
+/// Add what the governed path needs to a network: in its signed genesis, the committed
+/// `runtime_upgrade_policy_v1` notice and `CanProposeRuntimeChangeSet` for Alice; in node
+/// configuration, the Parliament governance module the universal lane requires before it
+/// admits a runtime-upgrade proposal.
 ///
 /// The default test-network genesis already grants Alice `CanManageParliament`, which opens
 /// the attempt; a second grant would be a genuine genesis repetition rejection. Neither the
@@ -96,6 +98,22 @@ pub fn with_governed_activation_genesis(builder: NetworkBuilder) -> Result<Netwo
         .to_custom_parameter()
         .map_err(|error| eyre!("runtime upgrade notice policy: {error}"))?;
     Ok(builder
+        // The universal lane admits a runtime-upgrade proposal only under a Parliament
+        // governance module, configured as on Taira (`configs/soranexus/taira/config.toml`).
+        .with_config_layer(|layer| {
+            layer
+                .write(["nexus", "governance", "default_module"], "parliament")
+                .write(
+                    [
+                        "nexus",
+                        "governance",
+                        "modules",
+                        "parliament",
+                        "module_type",
+                    ],
+                    "parliament_sortition_jit",
+                );
+        })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(policy)))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanProposeRuntimeChangeSet),
@@ -325,7 +343,7 @@ pub fn block_time_ms(network: &Network, client: &Client, height: u64) -> Result<
     )?)
 }
 
-fn submit_applied(client: &Client, instruction: InstructionBox) -> Result<u64> {
+pub(super) fn submit_applied(client: &Client, instruction: InstructionBox) -> Result<u64> {
     let hash = client.submit(instruction, fee())?;
     client
         .wait_for_transaction_applied(hash, TransactionWaitOptions::default())?

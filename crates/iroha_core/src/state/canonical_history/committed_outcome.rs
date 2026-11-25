@@ -40,6 +40,7 @@ use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
+    block::execution_output::{ExecutionSourceC10V1, ProfiledTransactionRejection},
     block::{
         BlockHeader, CommitCertificate, SignedBlock,
         execution_context::{BlockExecutionContextBundle, ExternalExecutionContext},
@@ -47,7 +48,7 @@ use iroha_data_model::{
     },
     query::error::{CanonicalHistoryError, QueryExecutionFail},
     sumeragi_finality::{CertifiedResultError, CertifiedResultV1, EpochValidationScope},
-    transaction::{TransactionEntrypoint, error::TransactionRejectionReason},
+    transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::types::Hash32;
 
@@ -708,7 +709,7 @@ impl<'a> FrameWindows<'a> {
         inputs: usize,
         matches: &BTreeSet<u32>,
         commitment: Option<MerkleTreeCommitment<ExecutionOutputV1>>,
-    ) -> Result<Vec<Result<(), TransactionRejectionReason>>, ReadError> {
+    ) -> Result<Vec<Result<(), ProfiledTransactionRejection>>, ReadError> {
         let result = self
             .option(layout.result)?
             .ok_or_else(|| invalid("finalized carrier holds no execution outputs"))?;
@@ -719,13 +720,21 @@ impl<'a> FrameWindows<'a> {
         let mut results = Vec::new();
         let mut failure = None;
         let mut at = first;
+        let mut governance_prefix = 0_u64;
         let mut index = 0_u64;
         let root = {
             let leaves = std::iter::from_fn(|| {
                 if failure.is_some() || index == count {
                     return None;
                 }
-                match self.output_leaf(&mut at, outputs, index, matches, &mut results) {
+                match self.output_leaf(
+                    &mut at,
+                    outputs,
+                    index,
+                    &mut governance_prefix,
+                    matches,
+                    &mut results,
+                ) {
                     Ok(leaf) => {
                         index += 1;
                         Some(leaf)
@@ -764,12 +773,26 @@ impl<'a> FrameWindows<'a> {
         at: &mut u64,
         outputs: Span,
         index: u64,
+        governance_prefix: &mut u64,
         matches: &BTreeSet<u32>,
-        results: &mut Vec<Result<(), TransactionRejectionReason>>,
+        results: &mut Vec<Result<(), ProfiledTransactionRejection>>,
     ) -> Result<HashOf<ExecutionOutputV1>, ReadError> {
         let element = self.prefixed(*at, outputs)?;
         *at = element.end()?;
-        let selected = u32::try_from(index).is_ok_and(|index| matches.contains(&index));
+        // Only leading GovernanceBlockStart rows (canonical tag 6) shift Network positions.
+        // Their complete bytes are still hashed under the same certified commitment.
+        if *governance_prefix == index {
+            let tag = self.read(element.within(element.offset, 4)?)?;
+            if tag.as_slice() == 6_u32.to_le_bytes() {
+                if index >= u64::from(iroha_data_model::governance::anonymous_ballot::GOVERNANCE_START_OUTPUT_ROWS_V1) {
+                    return Err(invalid("governance prefix exceeds its certified limit"));
+                }
+                *governance_prefix = index + 1;
+                return Ok(HashOf::from_untyped_unchecked(self.hash(&[], element)?));
+            }
+        }
+        let network_index = index - *governance_prefix;
+        let selected = u32::try_from(network_index).is_ok_and(|index| matches.contains(&index));
         if !selected {
             return Ok(HashOf::from_untyped_unchecked(self.hash(&[], element)?));
         }
@@ -778,7 +801,7 @@ impl<'a> FrameWindows<'a> {
         if HashOf::from_untyped_unchecked(self.hash(&[], element)?) != leaf {
             return Err(invalid("matched execution output is not canonical"));
         }
-        results.push(matched_network_result(output, index)?);
+        results.push(matched_network_result(output, network_index)?);
         Ok(leaf)
     }
 }
@@ -788,16 +811,34 @@ impl<'a> FrameWindows<'a> {
 fn matched_network_result(
     output: ExecutionOutputV1,
     index: u64,
-) -> Result<Result<(), TransactionRejectionReason>, ReadError> {
-    let row = match output {
-        ExecutionOutputV1::Network(row) => row,
-        ExecutionOutputV1::NetworkWithLifecycle(row) => row.execution,
-        _ => return Err(invalid("matched Network input has no Network output")),
+) -> Result<Result<(), ProfiledTransactionRejection>, ReadError> {
+    let Some(source) = output.network_index() else {
+        return Err(invalid("matched Network input has no Network output"));
     };
-    if u64::from(row.input_index) != index {
+    if u64::from(source) != index {
         return Err(invalid("matched Network output names another input"));
     }
-    Ok(row.result.0.map(drop))
+    match output {
+        ExecutionOutputV1::Network(row) => Ok(row
+            .result
+            .0
+            .map(drop)
+            .map_err(ProfiledTransactionRejection::Baseline)),
+        ExecutionOutputV1::NetworkWithLifecycle(row) => Ok(row
+            .execution
+            .result
+            .0
+            .map(drop)
+            .map_err(ProfiledTransactionRejection::Baseline)),
+        ExecutionOutputV1::C10(row) if matches!(row.source, ExecutionSourceC10V1::Network(_)) => {
+            Ok(row
+                .result
+                .0
+                .map(drop)
+                .map_err(ProfiledTransactionRejection::C10))
+        }
+        _ => Err(invalid("matched Network input has no Network output")),
+    }
 }
 
 fn missing(height: u64, expected: HashOf<BlockHeader>) -> ReadError {
@@ -956,7 +997,7 @@ fn target_outcome(
     certificate: &CommitCertificate,
     scope: iroha_data_model::block::consensus::SumeragiRootScope,
     identity: &HashOf<TransactionEntrypoint>,
-) -> Result<Vec<Result<(), TransactionRejectionReason>>, ReadError> {
+) -> Result<Vec<Result<(), ProfiledTransactionRejection>>, ReadError> {
     let height = frame.height;
     let certified = CertifiedResultV1::decode_with_validation(
         certificate.result_preimage(),

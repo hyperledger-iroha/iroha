@@ -3,6 +3,7 @@
 
 use super::*;
 use ivm::{IvmEngine, IvmProfileId};
+use ivm_abi::error::VmTrap;
 
 const BASELINE: IvmProfileId = IvmProfileId::BASELINE_ABI_V1;
 const NAMED: IvmProfileId = IvmProfileId::C10_RUNTIME_LIFECYCLE;
@@ -16,7 +17,7 @@ fn abi(profile: IvmProfileId) -> [u8; 32] {
 fn is_mismatch(error: &ivm::VMError, requested: IvmProfileId, bound: IvmProfileId) -> bool {
     matches!(
         error,
-        ivm::VMError::ArtifactAbiHashMismatch { expected, actual }
+        ivm::VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual })
             if *expected == abi(requested) && *actual == abi(bound)
     )
 }
@@ -33,23 +34,29 @@ fn keys_of_one_code_hash_differ_by_profile_and_engine_scope() {
         "tests address baseline keys"
     );
     assert_eq!(baseline, SummaryKey::for_profile(BASELINE, hash));
-    assert_eq!(
-        SummaryKey::every_profile(hash).collect::<Vec<_>>(),
-        vec![baseline, named]
-    );
-    // ABI V1 runs the baseline engine and the runtime lifecycle policy runs C10, so neither
-    // implemented profile has a foreign key of its own engine.
+    let c10 = SummaryKey::for_profile(IvmProfileId::C10_ABI_V1, hash);
+    let carrier = SummaryKey::for_profile(IvmProfileId::C10_GENERIC_CARRIER, hash);
+    let keys = [baseline, named, c10, carrier];
+    assert_eq!(SummaryKey::every_profile(hash).collect::<Vec<_>>(), keys);
     assert_eq!(baseline.profile.engine(), IvmEngine::Baseline);
     assert_eq!(named.profile.engine(), IvmEngine::C10);
-    for key in [baseline, named] {
-        assert_eq!(key.same_engine_foreign().count(), 0);
-    }
-    let runtime = RuntimeKey::for_profile(baseline.profile, hash, 1, 2);
-    let other = RuntimeKey::for_profile(named.profile, hash, 1, 2);
-    assert_ne!(runtime, other);
-    assert_eq!(runtime, RuntimeKey::new(hash, 1, 2));
-    assert_eq!(runtime.summary_key(), baseline);
-    assert_eq!(other.summary_key(), named);
+    assert_eq!(baseline.same_engine_foreign().count(), 0);
+    assert_eq!(
+        named.same_engine_foreign().collect::<Vec<_>>(),
+        [c10, carrier]
+    );
+    assert_eq!(
+        c10.same_engine_foreign().collect::<Vec<_>>(),
+        [named, carrier]
+    );
+    assert_eq!(
+        carrier.same_engine_foreign().collect::<Vec<_>>(),
+        [named, c10]
+    );
+    let runtimes = keys.map(|key| RuntimeKey::for_profile(key.profile, hash, 1, 2));
+    assert_eq!(runtimes[0], RuntimeKey::new(hash, 1, 2));
+    assert_eq!(runtimes.map(|key| key.summary_key()), keys);
+    assert_eq!(std::collections::BTreeSet::from(runtimes).len(), keys.len());
     assert_eq!(
         generic_program_profile(),
         BASELINE,
@@ -70,6 +77,7 @@ fn baseline_engine_keys_are_disjoint_from_every_c10_key() {
     for profile in [
         IvmProfileId::C10_ABI_V1,
         IvmProfileId::C10_RUNTIME_LIFECYCLE,
+        IvmProfileId::C10_GENERIC_CARRIER,
     ] {
         let key = SummaryKey::for_profile(profile, hash);
         assert_eq!(key.profile.engine(), IvmEngine::C10);

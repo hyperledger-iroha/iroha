@@ -2,7 +2,7 @@
 #[test]
 fn abi_hash_markdown_matches_computed_values() {
     let table = ivm::syscalls::render_abi_hashes_markdown_table();
-    // Both immutable host profiles use ABI version 1 and have separate exact identities.
+    // Every immutable named host profile uses ABI version 1 with a separate exact identity.
     let mut rows = Vec::new();
     for line in table.lines() {
         if line.starts_with("|---") {
@@ -18,8 +18,8 @@ fn abi_hash_markdown_matches_computed_values() {
     }
     assert_eq!(
         rows.len(),
-        2,
-        "expected baseline and named lifecycle profile rows"
+        3,
+        "expected baseline, lifecycle and carrier profile rows"
     );
     let mut parsed = Vec::new();
     for row in rows {
@@ -44,4 +44,14 @@ fn abi_hash_markdown_matches_computed_values() {
     let named_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
     assert_eq!(named.1, hex::encode(named_hash));
     assert_ne!(named.1, v1.1);
+    let carrier = parsed
+        .iter()
+        .find(|(name, _)| name == ivm::syscalls::GENERIC_CARRIER_HOST_PROFILE)
+        .unwrap();
+    assert_eq!(
+        carrier.1,
+        hex::encode(ivm::IvmProfileId::C10_GENERIC_CARRIER.abi_hash())
+    );
+    assert_ne!(carrier.1, named.1);
+    assert_ne!(carrier.1, v1.1);
 }

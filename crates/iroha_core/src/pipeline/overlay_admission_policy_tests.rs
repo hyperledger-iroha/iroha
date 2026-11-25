@@ -6,9 +6,11 @@ fn analysis_refusals_keep_their_original_owner_in_overlay() {
     for metadata in [false, true] {
         for allocation in [true, false] {
             let original = if allocation {
-                IvmError::AllocationDeferred(refusal.clone())
+                IvmError::Deferred(ivm::error::VmDeferral::AllocationDeferred(refusal.clone()))
             } else {
-                IvmError::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable)
+                IvmError::Deferred(ivm::error::VmDeferral::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable,
+                ))
             };
             let expected_reason = original.execution_deferral().unwrap();
             let error = if metadata {
@@ -26,8 +28,9 @@ fn analysis_refusals_keep_their_original_owner_in_overlay() {
             );
         }
     }
-    let malformed =
-        map_program_analysis_error(ProgramAnalysisError::Metadata(IvmError::InvalidMetadata));
+    let malformed = map_program_analysis_error(ProgramAnalysisError::Metadata(IvmError::Trap(
+        ivm::error::VmTrap::InvalidMetadata,
+    )));
     assert!(matches!(malformed, OverlayBuildError::IvmHeaderParse));
     assert!(matches!(
         malformed.into_execution_deferral(),
@@ -57,7 +60,9 @@ fn generic_preparation_preserves_original_pool_refusal_in_overlay() {
     );
     let original = cache.summarize_executable(&program).unwrap_err();
     let expected = match &original {
-        IvmError::AllocationDeferred(original) => original.clone(),
+        IvmError::Deferred(ivm::error::VmDeferral::AllocationDeferred(original)) => {
+            original.clone()
+        }
         _ => panic!("original allocation refusal"),
     };
     assert!(matches!(expected, AllocationRefusal::Capacity { .. }));

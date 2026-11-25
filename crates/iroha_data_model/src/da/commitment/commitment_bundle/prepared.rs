@@ -125,7 +125,7 @@ struct Row {
     blob: Option<BlobDigest>,
     manifest: Option<ManifestDigest>,
     scheme: Option<DaProofScheme>,
-    chunk_root: Option<Hash>,
+    chunk_root: Option<BlobDigest>,
     proof_digest: DecodedField<Option<Hash>>,
     hot: Option<u64>,
     cold: Option<u64>,
@@ -290,7 +290,7 @@ macro_rules! digest_record_field {
 digest_record_field!(3, BlobDigest, blob);
 digest_record_field!(4, ManifestDigest, manifest);
 scalar_record_field!(5, DaProofScheme, scheme);
-scalar_record_field!(6, Hash, chunk_root);
+digest_record_field!(6, BlobDigest, chunk_root);
 impl DecodeField<7, Option<Hash>> for RecordFields<'_> {
     type Value = ();
     fn decode_field(

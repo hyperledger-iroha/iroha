@@ -1,6 +1,6 @@
 # IVM baseline and C10 host profiles
 
-Status: owner decision recorded 2026-11-16; implementation in progress (phases 1–4 done: `AbiV1` runs the frozen baseline engine and Kotodama targets it by default; phase 5 partly done: profile threading, the C10 result families, the mixed-profile call refusal, the `koto` C10 target and the declared C10 ABI hash; the addition `iroha.runtime.ivm_c10.v1` itself is open, see the Phase 5 record). This record
+The November 18 owner decision authorizes a distinct release wire identity and coordinated decoder rollout for certified C10 outputs. The candidate implements the dormant C10 catalog addition, governed registration, captured storage and result-family dispatch. Combined-source qualification is in progress. ABI V1 and the default Kotodama target continue to use Taira’s frozen baseline engine. This record
 couples to `specs/live_runtime_upgrades.md` (immutable definitions, selection-based dispatch,
 governed retirement) and `specs/runtime_baseline_catalog.json`.
 
@@ -67,7 +67,14 @@ re-pinned) until phase 4 closes them.
 - Whether the first C10 profile permits mixed-profile nested calls, and their budgeting/error contract.
 - Whether C10 and the runtime-lifecycle profile ship as one composition.
 - Which networks and obligations must drain before the baseline engine is retired and deleted.
-- Approval of the successor result/event contract and any kernel/commitment scope it implies.
+The owner authorized a new release wire identity for the certified C10 output family on November 18. The decoder rollout precedes activation. The installed selections, baseline ABI and gas, and Ironwood fixtures stay pinned.
+
+In the November 18 candidate the release catalog compiles the two C10 registration interfaces, the C10 host and event definitions, and the manifest, captured profile and trigger tables. The universal root can draft this selection through the existing runtime-upgrade route. Only a governed change effective at a certified height opens it. The native registration code checks the selected host, the artifact's advertised C10 ABI, its code hash, the authenticated compiler interface and the C10 manifest signing frame. Restore authenticates the stored registration in both the current and rollback cuts.
+
+The signed contract-artifact GET serves a registered C10 manifest when the request explicitly accepts `application/vnd.iroha.c10-manifest.v1+json`. It returns the network, data-space-scoped artifact, captured host definition and signed C10 manifest. The Rust client checks those identities and verifies the signature under the caller's budget. Original artifact reads retain their previous representation.
+
+The phase records below describe their named snapshots. Release qualification of the combined source requires the certified execution, activation, restore, consumer-decoder and frozen release gates.
+
 
 ## Phase 1 record (2026-11-16)
 
@@ -380,10 +387,11 @@ engine's ABI and gas-schedule descriptors with the fixture bytes and their hashe
   (the low 16 bits of the word). C10 values, texts and debug forms are unchanged; the diagnostic
   context keeps its `u8` slot and drops a baseline value that does not fit.
 - The baseline's proof-trace producers are not reconstructed: a baseline run with ZK trace
-  collection, an active scoped register logger, `TraceMode::DeltaRegisters`, native execution
-  packets or a diagnostic step recorder is refused locally with
-  `ExecutionDeferred(TraceOwnerUnavailable)`. The corpus covers none of them; consensus execution
-  requests none of them.
+  collection, an active scoped register logger, native execution packets or a diagnostic step
+  recorder is refused locally with `ExecutionDeferred(TraceOwnerUnavailable)`. The corpus covers
+  none of them; consensus execution requests none of them. (`TraceMode::DeltaRegisters` was
+  refused too until phase 5; it now records the baseline's 256-register geometry, see the Phase 5
+  record.)
 - The same artifact bytes prepared under two engines are distinct prepared-cache entries.
 - Raw code (`IVM::load_code`, no header) always installs the C10 interface profile; the baseline
   engine runs only artifacts with a baseline header.
@@ -683,13 +691,11 @@ binary ran alone from its package directory.
 
 ## Phase 5 record (2026-11-17)
 
-Phase 5 is partly done. What is built is a coherent subset that changes no installed definition,
-selection, layout, golden or digest: the phase-4 test follow-through, profile threading, the C10
-result families and their projections, the mixed-profile call refusal, the `koto` C10 target and
-the declared C10 ABI hash. The release addition `iroha.runtime.ivm_c10.v1` itself (its storage,
-selected dispatch, catalog entry, draft route and activation tests) is not published yet; see
-"Not done in phase 5". C10's own ABI V1 surface therefore stays unselectable:
-`IvmProfileId::C10_ABI_V1` is still outside `IvmProfileId::IMPLEMENTED`.
+The November 17 candidate contained the phase-4 test follow-through, profile threading,
+C10 result families and projections, mixed-profile call refusal, the `koto` C10 target and
+its declared ABI hash. At that revision the catalog omitted `IvmProfileId::C10_ABI_V1`,
+so governance could select only the earlier host profiles. The November 18 integration
+below records publication of the dormant addition and its governed activation tests.
 
 ### As built
 
@@ -733,12 +739,9 @@ selected dispatch, catalog entry, draft route and activation tests) is not publi
   when a cached artifact's profile was not selected by the executing root (phase 2's
   `require_prepared_policy` fallback). Fixed here (As built, "Warm and cold caches agree"); it was
   reachable only with the runtime-lifecycle profile selected in one root and not in another.
-- `koto test --trace` (`TraceMode::DeltaRegisters`) on a default (baseline) build is refused
-  locally (`ExecutionDeferred(TraceOwnerUnavailable)`): the baseline engine does not reconstruct
-  the proof-trace and step-recorder producers (phase 3). `kotodama_toolchain`'s
-  `coverage_and_trace_attribute_runtime_and_test_steps_separately` fails on this since phase 4; it
-  is left failing and visible (a fix compiles traced test runs for C10 or reconstructs the
-  baseline producers).
+- Local `koto test trace` records the selected engine's register deltas, including all 256
+  baseline registers. Baseline proof traces, native packets and diagnostic step records
+  remain unimplemented.
 - The guard's artifact-map rule is stricter: a row the ABI V1 carrier leaves out must carry a
   declared profile hash. `test_artifact_map_carrier_owners_exclude_other_engine_rows` now
   declares the other engine's profile instead of leaving its row undeclared.
@@ -753,7 +756,9 @@ selected dispatch, catalog entry, draft route and activation tests) is not publi
 - The successor result/event contract and its kernel and commitment scope: the C10 families stop
   at `TransactionStatusC10V1`. Pipeline events, event filters, trigger descriptors, manifests and
   certified execution outputs (`TransactionResult` in block execution outputs) of C10 executions
-  need new enclosing definitions whose commitment scope is the owner's to approve.
+  need new enclosing definitions whose commitment scope is the owner's to approve. Decided
+  2026-11-17: C10 executions get new enclosing definitions for these, effective only where a
+  governed change set activates `iroha.runtime.ivm_c10.v1`. The November 18 owner decision authorizes the distinct certified-output wire identity and coordinated decoder rollout.
 - Whether C10's descriptor names its own fault frame (`IvmFaultC10V1`), which changes `bdd5188f…`.
 - Whether the runtime-lifecycle profile moves to the C10 result families.
 - Whether the mixed-call refusal also covers baseline and runtime-lifecycle contracts, which
@@ -781,7 +786,7 @@ Test binaries ran from their package directories. Logs: `artifacts/continuation-
 | `ivm` | same run | lib 1 574 (6 ignored); `ivm_group_01` … `_10`: 136, 79, 86, 152, 244, 108, 88, 129, 66, 29; custody 1, 9; 0 failed |
 | `ivm_artifact_admission` | same run | lib 60, `current_artifact` 16, `preparation_error_custody` 3; 0 failed |
 | `kotodama_lang` | same run | lib 1 575 (6 ignored), `kotodama_integration` 104; 0 failed |
-| `kotodama_toolchain` | same run | lib 140/1, `koto` 39/1 (the new `host_profile_names_select_their_compiled_profiles` passes), `cli_smoke` 12/2. The lib failure is the `koto test --trace` regression under Findings; the other three were fixed afterwards (test fixtures only, strict Clippy clean) but not rerun: the shared host's free-disk gate refused the rebuild. |
+| `kotodama_toolchain` | same run | lib 140/1, `koto` 39/1 (the new `host_profile_names_select_their_compiled_profiles` passes), `cli_smoke` 12/2. The library failure exposed the missing baseline delta trace, fixed in the Phase 5 continuation. The three fixture fixes later passed strict Clippy. The shared host's free-disk gate prevented a test rerun at the time. |
 | Torii, `irohad`, CLI (earlier binaries) | `test --locked --offline --no-run -p iroha_torii -p irohad_lib -p iroha_cli_lib --lib` before the warm/cold cache fix; filters below | `irohad` `soracloud_runtime` 287 (1 ignored), CLI `contracts::` 58, Torii `validation_fee contract gov test_utils multisig` 637; 0 failed |
 | Strict Clippy | `clippy --locked --offline --all-targets -p iroha_data_model -p ivm_abi -p ivm -p ivm_artifact_admission -p kotodama_lang -p kotodama_toolchain -p iroha_core -p iroha_torii -p irohad_lib -p iroha_cli_lib -p integration_tests --keep-going -- -D warnings`; then `clippy --locked --offline --all-targets -p iroha_core -- -D warnings` | the first pass stopped on the pre-existing `block.rs` expectation; after its fix both exit 0 (warnings only in vendored crates and `zk-spartan`) |
 | Format | `rustfmt --edition 2024 --check` over the 45 changed Rust files | clean; the only reported diff is the unchanged, pre-existing `iroha_data_model/src/sumeragi_finality.rs`, reached through `lib.rs` |
@@ -792,37 +797,160 @@ Test binaries ran from their package directories. Logs: `artifacts/continuation-
 | After hand-back, final copy (2026-11-17 05:38–06:10) | `test --locked --offline --no-run -p iroha_core --features iroha-core-tests --test iroha_core_group_01` … `_05`; `test --locked --offline --no-run -p iroha_torii -p irohad_lib -p iroha_cli_lib --lib`; `test --locked --offline --no-run -p kotodama_toolchain` | Core groups 01–05: 77, 26, 134 (2 ignored), 63, 5, all 0 failed; `irohad` `soracloud_runtime` 287/0, CLI `contracts::` 58/0, Torii focused set 637/0; `kotodama_toolchain` lib 140/1 (the `--trace` regression), `koto` 40/0, `cli_smoke` 14/0 |
 | After landing, live tree | the JS current artifact regenerated with `--write` from the final copy's `koto`, then `--check`; `regenerate_kotodama_goldens.py --check` with tools rebuilt from the final copy; `check_first_release_history.py` | fixture verified (only `source_provenance` changed: closure `53cbd738…`, 4 593 files); 58 mappings, no change; history guard matches |
 
-### Not done in phase 5, and what remains
+### Continuation (2026-11-17, frozen copy `r-phase5b`)
 
-- Step 2 remainder: the event-filter, trigger-descriptor, manifest and trigger parents and the
-  registrations `RegisterSmartContractCodeC10V1` (`iroha.smart_contract.code.c10.register.v1`)
-  and `RegisterTriggerC10V1` (`iroha.trigger.c10.register.v1`). A tolerant wire ID must be
-  claimed by a catalog addition (`exactly_the_added_instructions_decode_tolerantly`), so they land
-  with the addition. `ExecuteIvmC10V1` stays deferred; raw `Executable::Ivm` stays baseline-bound.
-- Step 3: storage definitions for the C10 manifest, trigger and profile bindings (the baseline
-  `ContractManifest` storage is not widened).
-- Step 4: selected dispatch of admission, execution, trigger scheduling and completion, metering,
-  queries, event projection, snapshots and replay by the selected or captured profile, using
-  `c10_wire_fault_kind` and `c10_admission_error_v1`, and the JSON forms of the C10 rejection
-  parents that events and Torii need (the baseline `TransactionRejectionReason` has a base64 JSON
-  form; `TransactionRejectionReasonC10V1` has none yet). Host-syscall metering is keyed by the
-  named policy (`require_host_syscall_metering_spec`); if C10's schedule prices a host call
-  differently from the baseline's, that key must become the profile.
-- Step 6: the independent addition `iroha.runtime.ivm_c10.v1` (C10 host profile with
-  `abi_version = 1`, its descriptor and the C10 gas schedule `46aa31d8…`; `C10_ABI_V1` joins
-  `IvmProfileId::IMPLEMENTED`), its explicit dependencies outside the ordered chain and a draft
-  that activates its complete closure (host profile, services, result families, interfaces)
-  through the existing draft route.
-- Step 9: activation in a test-only governed change set, typed refusal of C10 registrations
-  before activation, and the assertion that publishing the addition leaves the baseline, the
-  Time, Ironwood and repaired selections, `PINNED_CHANGE_SET_IDS`, the frozen layouts, the ABI,
-  gas and host-profile goldens and every `taira_activation` expectation unchanged.
-- Integration: the `integration_tests` targets that use the converted fixtures
+Base: `68d313b18a`, which merged upstream into the phase-5 subset (`a8647cfd91`). The merge
+needed no fixture repair: the step-0 gates below pass on the merged tree as it was copied.
+
+#### As built
+
+| Area | Files | Change |
+|---|---|---|
+| `koto test trace` on baseline builds | `ivm/src/zk/delta_rows.rs`, `ivm/src/ivm/trace_logging.rs`, `ivm/src/ivm/trace_logging/change_counts/baseline.rs`, `ivm/src/ivm/baseline.rs`, `ivm/src/proof_coverage/traps.rs` | Cause: phase 3 refused `TraceMode::DeltaRegisters` in the baseline run loop, because the delta log, its first-row image and its public destination spans had C10's 32-register geometry; phase 4 made the baseline the default Kotodama target, so every `koto test trace` of a default build deferred with `TraceOwnerUnavailable`. The delta log now records the geometry of the engine that runs. Baseline observations take the anchor's 256-register image (`prepare_baseline_batch`, `record_baseline_reserved`; the first observation of a geometry records the complete image, later rows only changes) and the anchor's change-count table (`change_counts::baseline`, verbatim against the baseline decoder: vector spans follow the current logical vector length, `SCALL`/`SYSTEM` admit 255). The invocation token carries the engine; a baseline completed-cycle proof trace is refused there as well as in `run_baseline`. C10's arms are the previous code, so its rows, spans and hashes are unchanged. Tracing only observes: under `Off`, `PcOnly` and `DeltaRegisters` a baseline run produces the same registers, tags, register root, gas, cycles and PC (tested). Register authentication logs, step recorders and native packets stay refused for the baseline. Nothing falls back to C10. |
+| C10 public parents | `iroha_data_model/src/ivm_c10.rs`, `ivm_c10/{events, manifest, trigger, result}.rs` | New definitions, each under its own nominal schema identity and keeping the baseline parent's members, order and tags with the C10 member in place of the changed one: `TransactionEventC10V1`, `PipelineEventBoxC10V1`, `EventBoxC10V1` (pipeline events); `TransactionEventFilterC10V1` (with `matches`), `PipelineEventFilterBoxC10V1`, `EventFilterBoxC10V1` (event filters); `TriggerDescriptorC10V1`, `EntrypointDescriptorC10V1`, `ContractManifestC10V1` (manifests; their closure reaches a status through trigger filters); `ActionC10V1`, `TriggerC10V1` (the baseline `Action` invariants, enforced by the constructor and by decoding with the baseline decoder's rules and errors); `TransactionResultC10V1` (the certified result, with the baseline result's JSON object form); `RegisterSmartContractCodeC10V1` (`iroha.smart_contract.code.c10.register.v1`) and `RegisterTriggerC10V1` (`iroha.trigger.c10.register.v1`, member `object` as in `Register<Trigger>`), with the baseline registrations' canonical field decoders. `TransactionRejectionReasonC10V1` and `TransactionStatusC10V1` gain the base64 JSON form of their baseline counterparts. Unchanged leaves (block, warning and witness events, every other filter, data events, manifest tables, `Executable`, `Repeats`) are the baseline's types. No existing type, tag, layout or wire ID changed, and nothing new is reachable from a covered wire root, so the release wire identity is unchanged. Tests: framed, bare and JSON roundtrips of every family, layout parity with the baseline parent wherever the C10 member is absent or unchanged, filter matching, the action invariants and decode refusal, the registrations' wire IDs (new and not yet registered), and distinct schema identities. `ExecuteIvmC10V1` stays deferred; raw `Executable::Ivm` stays baseline-bound. |
+
+#### Findings
+
+- The baseline execution summary (`SYSCALL_EXECUTION_SUMMARY`) of a traced run hashes the delta
+  log and counts its rows in the syscall's price, as at the anchor and as C10 does. Only hosts
+  that enable tracing (`koto test --trace`, `koto test trace`, or local debugging) see this.
+  Consensus execution never traces.
+- A delta row of a baseline program names registers 0–255, a C10 row 0–31. `koto`'s reports keep
+  each program's capture apart (test projection and runtime artifact), and a combined runtime
+  capture joins calls into one artifact, so no report mixes geometries; a consumer that combines
+  captures of different engines has to keep that distinction itself.
+- **The retained phase 5b build stopped at certified C10 execution outputs.** A
+  C10 transaction's certified outcome is `TransactionResultC10V1`, which a block must carry in its
+  execution outputs (`ExecutionOutputV1` and its `*ExecutionOutputV*` rows hold the baseline
+  `TransactionResult`). Every type a block reaches is part of the release wire identity
+  (`release_identity::wire_schema_hash` hashes the closed schema of `SignedBlock`, the consensus
+  messages and the execution result), so appending C10 output rows, as the trigger-lifecycle
+  successor appended its `*WithLifecycle` rows, changes the release wire identity, which the
+  original brief required the addition to preserve (`9d96f872…`, pinned by
+  `lifecycle_compact_wire_identity_and_unchanged_ivm_abi` and
+  `snapshot_accounting_keeps_release_wire_and_abi_pins`). Carrying C10 bytes inside an existing
+  baseline field would be a second decoder for one field. Without certified C10 outputs, an
+  activated C10 execution could only report through the baseline families, contrary to the
+  2026-11-17 contract. The addition, its storage, dispatch and activation tests (steps 3–6) are
+  therefore stopped at their data-model prerequisites on the retained copy.
+- `TriggerC10V1` compares structurally; the baseline `Trigger` compares, orders and hashes by its
+  id (`IdEqOrdHash`) for its storage maps. The C10 trigger storage decides its key when it is
+  built.
+- `ContractManifestC10V1` carries the baseline manifest's fields; its provenance signature payload
+  and admission checks (entrypoint, event and permission tables) belong to the C10 registration
+  handler.
+
+#### November 18 owner decision
+
+- On November 18 the owner authorized the new release wire identity for certified C10 outputs and a coordinated decoder rollout. The decoder-readiness gate in `ironwood_runtime_transition.md` applies before activation.
+- Unchanged and kept as built: C10's descriptor names its fault frame `IvmFaultV1`
+  (`bdd5188f…`); the runtime-lifecycle profile keeps its result types and its C10 engine
+  binding; the mixed-profile nested-call refusal, including baseline and runtime-lifecycle
+  contracts; bundled lifecycle and C10 activation, the activation-bootstrap authority and
+  baseline retirement.
+
+#### Gates
+
+The retained copy is based on `68d313b18a`. A receipt applies to that base plus the
+phase 5b files in the copy. The gate logs are under
+`artifacts/continuation-20261114/r-phase5b/runs/`.
+
+| Gate | Retained result |
+|---|---|
+| Data model, IVM, ABI, admission, Kotodama compiler and toolchain | 11,798 passed, 178 ignored across 50 executables. This includes the 141 toolchain library tests (the baseline trace regression passes), 40 `koto` tests and 14 CLI smoke tests. |
+| Core integration groups 01–05 | 305 passed and two ignored. |
+| Full Core library | 15,822 passed, four failed and 42 ignored in 10,832.39 s. Three State inventory tests independently reported the same two unclassified C10 wire names. The tiered snapshot worker exceeded its deadline and passed in 10.31 s alone on the same executable. The pinned-history replay passed. |
+| Frozen wire and artifact checks | First-release history, the Parliament source check, strict Clippy on the two changed crates and the 58 Kotodama golden mappings passed. The JavaScript artifact comparison differed only in the source-closure digest and file count. |
+| Service tests | The gate stopped before compilation at its disk threshold. The November 18 recovery log tracks the service rerun separately. |
+
+### Acceptance items at the retained phase 5 cutoff
+
+- Registering the two C10 registrations as instructions. A tolerant wire ID must be claimed by a
+  catalog addition (`exactly_the_added_instructions_decode_tolerantly`), so they are registered
+  (`built_in_wire_id!(.. tolerant)`, `seal::Instruction`) with the addition. `ExecuteIvmC10V1`
+  stays deferred; raw `Executable::Ivm` stays baseline-bound.
+- Step 3, storage: new storage definitions (World tables) for C10 manifests, C10 triggers and
+  their profile bindings; the baseline `ContractManifest` storage is not widened.
+- Step 4, selected dispatch: admission, execution, trigger scheduling and completion, metering,
+  queries, event projection (`EventBoxC10V1`, matching `EventFilterBoxC10V1` against C10 events
+  and the baseline events a C10 trigger observes), execution outputs, snapshots and replay by the
+  selected or captured profile, through `ivm_abi::profile::c10_wire_fault_kind` and
+  `projection::c10_admission_error_v1`. The baseline interfaces must keep resolving only their own
+  profiles once C10's surface is selectable (`profile::resolve_artifact` iterates
+  `IvmProfileId::IMPLEMENTED`). Host-syscall metering is keyed by the named policy
+  (`require_host_syscall_metering_spec`); if C10's schedule prices a host call differently from
+  the baseline's, that key must become the profile. Blocked on the owner decision above for the
+  certified outputs.
+- Step 5, the independent addition `iroha.runtime.ivm_c10.v1` in `runtime/catalog/additions.rs`
+  and `catalog.rs`: the C10 host profile (`abi_version = 1`, `bdd5188f…`, gas schedule
+  `46aa31d8…`; `C10_ABI_V1` joins `IvmProfileId::IMPLEMENTED`), its interfaces, implementation,
+  storage, services and result-family definitions, explicit dependencies outside the ordered
+  chain (like `CONTRACT_LIFECYCLE`) and a draft that activates its complete closure through the
+  existing route (`iroha ops runtime upgrade draft --addition iroha.runtime.ivm_c10.v1`,
+  `POST /v1/runtime/upgrades/draft`).
+- Step 6: activation in a test-only governed change set, typed refusal of C10 registrations and
+  artifacts before activation, a C10 contract registered and executed after activation reporting
+  C10 results and events, baseline contracts unchanged, the mixed-call refusal, and the assertion
+  that publishing the addition leaves the baseline, the Time, Ironwood and repaired selections,
+  `PINNED_CHANGE_SET_IDS`, the frozen layouts, every `taira_activation` expectation, the ABI
+  (`7531b45d…`), gas (`af5a27f5…`) and host-profile (`d50c38a8…`) goldens and the release wire
+  identity unchanged under the original brief. The November 18 decision supersedes the release-wire constraint.
+- Integration: the `integration_tests` targets that use the converted phase-5 fixtures
   (`events_and_triggers`' subscriptions, the Parliament smoke and committee-transition tests)
   pass strict Clippy but were neither built as test binaries nor run on a network.
-- Verification the shared host's free-disk gate (40 GiB) refused after the final changes: the
-  grouped Core binaries and the Torii, `irohad` and CLI suites were not rebuilt against the final
-  Core (their results above predate the warm/cold cache fix), `kotodama_toolchain` was not rerun
-  after its three test fixes, and `ivm_artifact_admit` was not rebuilt. Rerun them on the landed
-  tree. The JS current-artifact fixture records the copy's source closure and is regenerated
-  after landing (`scripts/regenerate_current_rust_contract_artifact.py --write`, then `--check`).
+- After landing: regenerate the JS current-artifact fixture against the live tree
+  (`scripts/regenerate_current_rust_contract_artifact.py --write`, then `--check`).
+
+
+### November 18 integration and qualification
+
+The release catalog publishes `iroha.runtime.ivm_c10.v1` as a dormant addition. Its draft
+binds the C10 host, registration interfaces, storage declarations, event family and certified
+result service in one successor selection. A governed boundary can install this closure.
+The installed baseline still selects its original host. Raw IVM transactions continue to use
+their original interface. Explicit registration and deployed execution resolve the separate C10
+ABI and check its selected definition and restrictions.
+
+The approved certified block schema has wire identity
+`6dd75f608b5935ee4de7fb9c72b1c192c6c906b0963b52cbc83a9865184727b1`. The November 18 C10
+identity `f06b6d0e…` gained the DA proof scheme's corrected label and the exact BLAKE3
+commitment `chunk_root` under the same coordinated decoder rollout; Taira has committed no DA
+records, and the stored pin-intent types keep the frozen baseline layout.
+A C10 output carries its own typed result. Native proof consumers bind an observation to the
+signed input and its certified output position. The coordinated rollout includes account-signed
+C10 manifest reads, negotiated C10 event delivery and the mixed-output proof fixture in
+`fixtures/sumeragi/native-finality/c10-mixed`. Decoder acceptance and governance decisions
+follow the [release transition record](../ironwood_runtime_transition.md).
+
+The certified Core tests in `runtime/catalog/ivm_c10/tests.rs` stage a scheduled fixture
+record with all four test validators' support for the exact change. The ordinary executor
+applies it at the certified boundary. Signed transactions then register, deploy and invoke a
+C10 manifest, dispatch direct and deployed callbacks, reject malformed C10 metadata and
+preserve the baseline result of an ordinary call. A World-only history restarts by replaying
+the original certified suffix. With the complete-State commitment selected through its two
+governed transitions, a successor authenticates the captured C10 manifests, host bindings
+and trigger repeats on snapshot restore. A tip snapshot without a certified successor is
+refused. Network governance and bootstrap authorization remain with each root's owners.
+
+On signed `c4bbbe38602f5499d0d9bcd7973b4357ebb34255`, the 18 C10 Core cases passed in
+27.469 seconds. The same library executable passed the four retained Core failures in
+26.169 seconds and the frozen selection, Ironwood, wire and State inventory checks in
+32.347 seconds (41 passed, two ignored). A separate data-model suite exercises the
+binary and JSON round trips for C10 faults, admission errors, result rows, events and
+filters in `ivm_c10.rs` and `ivm_c10/family_tests.rs`.
+
+The CLI accepts `koto test --trace` and `koto test trace`. The
+`trace_flag_and_subcommand_share_the_selected_baseline_execution` smoke test checks
+both forms. The November 18 coffee fixture yielded the same 71 rows with both spellings.
+The full Core, services, strict workspace and decoder release gates have separate
+revision-specific receipts in `artifacts/continuation-20261114/qualification-20261118.md`.
+
+### Node-local VM error ownership
+
+The Rust engine returns `VMError::Trap(VmTrap)` for deterministic execution and admission
+failures. A metered trap owns another `VmTrap` and its deterministic gas. An unfinished
+invocation returns `VMError::Deferred(VmDeferral)`. The deferral owns the original allocation,
+decoder, verifier or host cause and carries no charge. Core moves that cause through the
+disposable transaction and keeps its local phase when present. The proof coverage inventory
+records the owner family for every leaf. Baseline and C10 each project their deterministic
+failures onto their governed result definitions.

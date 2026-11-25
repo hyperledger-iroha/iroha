@@ -171,6 +171,39 @@ impl<'a, V: CellValue, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
         self.released = true;
     }
 
+    /// Move checked original native writers back into execution without cloning generations.
+    /// The returned cleanup retains original identity-release custody beside those writers.
+    pub(super) fn resume_execution(mut self) -> (CellWriters<'a, V, C>, PublicationCleanup<()>) {
+        assert!(
+            self.complete && !self.released,
+            "original execution pair must be checked"
+        );
+        let blocks = self
+            .blocks
+            .take()
+            .expect("original current")
+            .into_held()
+            .map_preserving_release(|slot| slot.abort());
+        let revert = self
+            .revert
+            .take()
+            .expect("original undo")
+            .into_held()
+            .map_preserving_release(|slot| slot.abort());
+        let identity = self.identity.take().map(PreparedIdentity::abort);
+        self.released = true;
+        (
+            CellWriters::new(revert, blocks),
+            PublicationCleanup {
+                _readers: [None, None],
+                _writers: [None, None],
+                writer_batches: [None, None],
+                identities: [self.probe.take(), identity],
+                installation: Some(()),
+            },
+        )
+    }
+
     pub(super) fn abort<I>(
         mut self,
         installation: I,

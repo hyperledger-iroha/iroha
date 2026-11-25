@@ -42,6 +42,54 @@ use mv::storage::StorageReadOnly as _;
 use super::{catalog::additions::RUNTIME_LIFECYCLE, release_catalog};
 use crate::state::{WorldBlock, WorldTransaction};
 
+mod scratch;
+pub mod storage;
+
+/// A migration result preserving original local refusal independently of a completed rejection.
+/// This local type is never serialized into migration records.
+pub type MigrationResult<T> = Result<T, crate::execution_attempt::ExecutionAttemptError<String>>;
+
+/// Original operation failure at an existing World/MV child boundary.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MigrationBoundaryError {
+    #[error(transparent)]
+    Execution(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
+    #[error(transparent)]
+    Storage(#[from] crate::state::StateStorageAdmissionError),
+}
+pub(crate) type MigrationBoundaryResult<T> = Result<T, MigrationBoundaryError>;
+
+/// The actual block-start context, shared by each independently disposable World child.
+/// Migration callbacks never receive this context or the World itself.
+pub(crate) struct MigrationContext<'context, 'world> {
+    pub(crate) lane_config: &'context iroha_config::parameters::actual::LaneConfig,
+    pub(crate) current_slot: u64,
+    pub(crate) lane_map: &'context std::collections::BTreeMap<
+        iroha_model_base::topology::DataSpaceId,
+        iroha_model_base::topology::LaneId,
+    >,
+    pub(crate) quantity_candidate:
+        &'context mut crate::state::fastpq_quantity_capture::QuantityCandidateArchive,
+    #[cfg(feature = "telemetry")]
+    pub(crate) telemetry: Option<&'world crate::telemetry::StateTelemetry>,
+    pub(crate) world_lifetime: core::marker::PhantomData<&'world ()>,
+}
+impl<'world> MigrationContext<'_, 'world> {
+    fn child<'block>(
+        &self,
+        world: &'block mut WorldBlock<'world>,
+    ) -> Result<Box<WorldTransaction<'block, 'world>>, crate::state::StateStorageAdmissionError>
+    {
+        world.try_transaction_with_axt_lane_map(
+            #[cfg(feature = "telemetry")]
+            self.telemetry,
+            self.lane_config.clone(),
+            self.current_slot,
+            self.lane_map.clone(),
+        )
+    }
+}
+
 /// Whether `selection` installs the kernel's lifecycle State: the storage of the
 /// `iroha.runtime.lifecycle.v1` addition.
 ///
@@ -348,41 +396,58 @@ pub(super) fn activated(
     }
 }
 
-/// Run one stage of every migration the root's selection activates, at the start of the block
-/// at `height` (§5.4): copy the next old rows while the migration runs, mark the cutover once
-/// the selection restricts a complete migration to completion only, and drain the next old rows
-/// after it. A migration whose admission is closed or that is disabled is suspended.
-///
-/// A root that holds no migration pays one emptiness check.
-pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
+/// Run each migration in its own existing World child at the original block-start cut.
+/// A successful child applies once; deterministic stage rejection discards its writes before
+/// a separate child records `Faulted`. Any local refusal aborts the enclosing State start.
+/// Earlier successful children are still unpublished and disappear with that original block.
+pub(crate) fn run_stages<'world>(
+    world: &mut WorldBlock<'world>,
+    height: u64,
+    context: &mut MigrationContext<'_, 'world>,
+) -> MigrationBoundaryResult<()> {
+    use crate::execution_attempt::ExecutionAttemptError;
     if world.runtime_migrations.iter().next().is_none() {
-        return;
+        return Ok(());
     }
-    let Ok(catalog) = release_catalog() else {
-        return;
-    };
-    let selection = world.runtime_selection.get();
-    let due: Vec<(DefinitionId, MigrationRecordV1, Option<RestrictionV1>)> = world
-        .runtime_migrations
-        .iter()
-        .filter(|(id, _)| selection.active.binary_search(id).is_ok())
-        .map(|(id, record)| {
-            (
-                *id,
-                record.clone(),
-                super::blocking_restriction(selection, id, height),
-            )
-        })
-        .collect();
-    for (id, mut record, restriction) in due {
-        // A release that does not compile an active migration stops before this height, because
-        // the selection relies on a definition it lacks (§6).
+    let catalog = release_catalog().map_err(|error| {
+        MigrationBoundaryError::Execution(ExecutionAttemptError::Rejected(error.to_string()))
+    })?;
+    let due = scratch::stage_census(world, height)?;
+    for entry in due.as_slice() {
+        let (id, restriction) = (entry.id, entry.restriction);
         let Some(migration) = catalog.migration(&id).copied() else {
             continue;
         };
+        // Only the current row becomes a persistence candidate. Earlier callbacks
+        // hold capabilities for their declared tables, never these engine records.
+        // TODO: retain native table/payload charges with this record and its cursor;
+        // the funded ID census does not fund the eventual persisted record graph.
+        let mut record = world
+            .runtime_migrations
+            .get(&id)
+            .expect("selected engine-owned migration record remains present")
+            .clone();
+        if !matches!(
+            (record.status, restriction),
+            (MigrationStatusV1::Running, None)
+                | (
+                    MigrationStatusV1::Complete(_),
+                    Some(RestrictionV1::CompletionOnly(_))
+                )
+                | (
+                    MigrationStatusV1::CutOver(_),
+                    Some(RestrictionV1::CompletionOnly(_))
+                )
+        ) {
+            continue;
+        }
+        let mut child = context.child(world)?;
         match (record.status, restriction) {
             (MigrationStatusV1::Running, None) => {
-                match (migration.stage)(world, &record.cursor, migration.rows_per_stage) {
+                match migration
+                    .code
+                    .stage(&mut child, &record.cursor, migration.rows_per_stage)
+                {
                     Ok(outcome) => {
                         record.cursor = outcome.cursor;
                         record.rows = record.rows.saturating_add(u64::from(outcome.rows));
@@ -391,9 +456,19 @@ pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
                             record.status = MigrationStatusV1::Complete(height);
                         }
                     }
-                    Err(reason) => {
+                    Err(ExecutionAttemptError::Deferred(original)) => {
+                        return Err(ExecutionAttemptError::Deferred(original).into());
+                    }
+                    Err(ExecutionAttemptError::Rejected(reason)) => {
+                        // Restore exact original roots/touches before recording the terminal
+                        // failure. No inverse writes or copied journal reconstruct the source.
+                        drop(child);
                         iroha_logger::error!(migration = %id, %reason, "migration stage faulted");
                         record.status = MigrationStatusV1::Faulted(height);
+                        let mut fault = context.child(world)?;
+                        fault.runtime_migrations.insert(id, record);
+                        context.quantity_candidate.apply_migration_child(fault);
+                        continue;
                     }
                 }
             }
@@ -401,16 +476,31 @@ pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
                 record.status = MigrationStatusV1::CutOver(height);
             }
             (MigrationStatusV1::CutOver(_), Some(RestrictionV1::CompletionOnly(_))) => {
-                let outcome = (migration.drain)(world, migration.rows_per_stage);
+                let outcome = migration.code.drain(&mut child, migration.rows_per_stage)?;
                 record.stages = record.stages.saturating_add(1);
                 if outcome.empty {
                     record.status = MigrationStatusV1::Drained(height);
                 }
             }
-            _ => continue,
+            _ => unreachable!("checked migration stage eligibility"),
         }
-        world.runtime_migrations.insert(id, record);
+        child.runtime_migrations.insert(id, record);
+        context.quantity_candidate.apply_migration_child(child);
     }
+    Ok(())
+}
+
+/// The whole barrier of [`resume_barrier`] from fresh progress, for tests that need no resume.
+#[cfg(test)]
+pub(crate) fn barrier(world: &mut WorldBlock<'_>, height: u64) -> MigrationBoundaryResult<()> {
+    resume_barrier(world, height, &mut BarrierProgress::default())
+}
+
+/// Private progress of the same completed World tail. The enclosing publisher
+/// retains this cursor; callers cannot supply or modify a completed prefix.
+#[derive(Default)]
+pub(crate) struct BarrierProgress {
+    completed_through: Option<DefinitionId>,
 }
 
 /// Keep every staged successor exact at the end of the block at `height` (§5.4): mirror the old
@@ -420,44 +510,58 @@ pub(crate) fn run_stages(world: &mut WorldTransaction<'_, '_>, height: u64) {
 /// It reads the block's own journal of touched rows, so it covers every writer of the old
 /// storage: instructions, hooks and the block's tail writes alike. It runs as the last World
 /// write before the block's World commitment is folded. A root that holds no migration pays one
-/// emptiness check.
-pub(crate) fn barrier(world: &mut WorldBlock<'_>, height: u64) {
+/// emptiness check. Any error prevents publication of this entire original block; no
+/// incomplete barrier is recorded as success.
+///
+/// It resumes only the first unfinished migration in the unchanged original World. An
+/// individual failed callback rolls back its existing successor child; prior successful
+/// siblings, recorded in `progress`, remain private and are never executed a second time.
+pub(crate) fn resume_barrier(
+    world: &mut WorldBlock<'_>,
+    height: u64,
+    progress: &mut BarrierProgress,
+) -> MigrationBoundaryResult<()> {
     if world.runtime_migrations.iter().next().is_none() {
-        return;
+        return Ok(());
     }
-    let Ok(catalog) = release_catalog() else {
-        return;
-    };
-    let selection = world.runtime_selection.get();
-    let held: Vec<(DefinitionId, MigrationRecordV1)> = world
-        .runtime_migrations
-        .iter()
-        .filter(|(id, _)| selection.active.binary_search(id).is_ok())
-        .map(|(id, record)| (*id, record.clone()))
-        .collect();
-    for (id, mut record) in held {
+    let catalog = release_catalog().map_err(|error| {
+        MigrationBoundaryError::Execution(
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string()),
+        )
+    })?;
+    let held = scratch::barrier_census(world, progress.completed_through)?;
+    for entry in held.entries() {
+        let id = entry.id;
         let Some(migration) = catalog.migration(&id).copied() else {
+            progress.completed_through = Some(id);
             continue;
         };
-        if record.barrier_holds() {
-            (migration.barrier)(world, &record.cursor);
+        if entry.barrier_holds {
+            migration.code.barrier(world, held.cursor(entry))?;
         } else if matches!(
-            record.status,
+            entry.status,
             MigrationStatusV1::CutOver(_) | MigrationStatusV1::Drained(_)
-        ) && (migration.stale)(world)
+        ) && migration.code.stale(world)
         {
             iroha_logger::error!(
                 migration = %id,
                 "a write reached the old storage after the cutover; the drain stops"
             );
-            record.status = MigrationStatusV1::StaleWrite(height);
-            world.runtime_migrations.insert(id, record);
+            // The original map owns this persistent mutation. Its node and
+            // nested record cloning remain a separate physical funding boundary.
+            world
+                .runtime_migrations
+                .get_mut(&id)
+                .expect("selected engine-owned migration record remains present")
+                .status = MigrationStatusV1::StaleWrite(height);
         }
+        progress.completed_through = Some(id);
     }
+    Ok(())
 }
 
-/// The change set of one step of the migration `module` on the universal root of `world`
-/// ([`super::ReleaseCatalog::migration_step`]); an operator endorses and proposes it.
+/// The change set of one step of the migration `module` on the authenticated root of `world`
+/// ([`super::ReleaseCatalog::migration_step`]); its root's governance authorizes scheduling.
 ///
 /// # Errors
 /// `module` is not a migration of this release, or the step does not apply to the committed
@@ -470,7 +574,7 @@ pub fn draft_step(
     effective_height: u64,
     qualification: [u8; 32],
 ) -> Result<ChangeSetV1, super::CatalogError> {
-    release_catalog()?.migration_step(
+    let change = release_catalog()?.migration_step(
         module,
         step,
         world.runtime_selection(),
@@ -478,7 +582,13 @@ pub fn draft_step(
         network,
         effective_height,
         qualification,
-    )
+    )?;
+    super::draft_scope::bind(world, network, change).map_err(|error| {
+        super::CatalogError::Addition {
+            module: module.into(),
+            reason: error.to_string(),
+        }
+    })
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Destination spans checked against original ordinary register transitions.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::{
     IVM, ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
@@ -49,7 +50,7 @@ fn every_admitted_opcode_has_a_bounded_public_destination_span() {
             ),
             // The rejection names the opcode byte, never the operand bits (0x0506 here).
             Err(error) => assert!(
-                matches!(error, VMError::InvalidOpcode(reported) if reported == u16::from(opcode)),
+                matches!(error, VMError::Trap(VmTrap::InvalidOpcode(reported)) if reported == u16::from(opcode)),
                 "{opcode:#04x}: {error:?}"
             ),
         }

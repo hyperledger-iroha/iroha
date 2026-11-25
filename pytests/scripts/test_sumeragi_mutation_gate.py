@@ -4746,9 +4746,9 @@ def test_checkpoint_status_preserves_g1_h2_and_internal_full_prefix_boundaries()
     source = (ROOT / "crates/iroha_torii/src/lib_pipeline_handlers.rs").read_text()
     selected = source.split("fn read_pipeline_transaction_carrier(", 1)[1].split("\nfn ", 1)[0]
     assert "read_pipeline_execution_carrier(app, anchor.height)" in selected
-    wrapper = named_rust_function(source, "read_pipeline_execution_carrier")
-    assert "read_pipeline_execution_carrier_within(app, height, work, bytes)" in wrapper
-    http = named_rust_function(source, "read_pipeline_execution_carrier_within")
+    http = named_rust_function(source, "read_pipeline_execution_carrier")
+    assert "let work = routing::app_query_limits().max_fetch_size;" in http
+    assert "let bytes = iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work);" in http
     assert "HistoryProducerOwner::authentication_read(app)?" in http
     assert "read_execution_carrier_under_owner(app, owner, height, work, bytes)" in http
     assert "or_else" not in http and "unwrap_or" not in http
@@ -8796,7 +8796,10 @@ def test_native_append_physical_state_refusal_keeps_actual_driver_release_owner(
                        "scheduler.next(u64::MAX - 1)", "Arc::ptr_eq(&original, &append)",
                        "drop(state.crypto.read())", "drop(blocker)", "worker.join()"):
         assert re.sub(r"\s+", "", obligation) in re.sub(r"\s+", "", controls)
-    assert "if !self.appended" in fixture and "self.appended = true" in fixture
+    publish = fixture.split("pub fn publish(&mut self, signers: Signers)", 1)[1]
+    retry = publish.index("while !self.appended {")
+    assert retry < publish.index("match self.append_prepared()", retry) < publish.index("self.chain.executor.commit", retry)
+    assert "self.chain.blocks.append(&self.block, qc)?;\n        self.appended = true;" in fixture
     assert "super::driver::run_original_append_for_test" in fixture
     assert "AllocationBudget::new" not in controls and "set_limit_bytes" not in controls
     rows = re.findall(r"^\| HC275 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
@@ -12441,7 +12444,7 @@ def test_execution_prefix_mutation_pins_actual_retained_charge_and_native_cause(
     ), "original unresolved or applied custody must refuse a fresh signature after journal reset"),
     ("HC490", "pending_custody.rs", "pending_custody/tests.rs", (
         "amx_relay::pending_custody::tests::cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group",
-    ), "a full ordinary pool must not strand its prerequisite handoff"),
+    ), "a full ordinary pool must not strand its prerequisite handoff: Capacity"),
 ])
 def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control_owner, selectors, cause):
     rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
@@ -12455,8 +12458,26 @@ def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control
         if mid == "HC488":
             assert "exercise_pair(" in body
             assert cause in named_rust_function(controls, "exercise_pair")
+        elif mid == "HC490":
+            assertion, error = cause.rsplit(": ", 1)
+            assert f'.expect("{assertion}")' in body
+            assert error == "Capacity"
+            assert "return Err(CustodyError::Capacity);" in (
+                ROOT / "crates/irohad/src/amx_relay" / owner
+            ).read_text()
         else:
             assert cause in body
+
+
+def test_pending_handoff_mutation_requires_the_capacity_error_from_its_exact_call():
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)["HC490"]
+    name, = rule.tests
+    expected, = rule.causes
+    assertion = "a full ordinary pool must not strand its prerequisite handoff"
+    panic = {"thread": name, "source": expected.source, "message": assertion + ": Capacity"}
+    assert gate.expected_test_failure(name, expected, [panic])
+    for message in (assertion, assertion + ": Storage"):
+        assert not gate.expected_test_failure(name, expected, [{**panic, "message": message}])
 
 
 @pytest.mark.parametrize("mid", ["HC488", "HC489", "HC490"])

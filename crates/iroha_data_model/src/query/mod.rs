@@ -2197,6 +2197,9 @@ mod model {
     #[norito(tag = "kind", content = "content")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::model::QueryResponse")]
+    // Keep the established eight padding bytes after the 40-byte Norito frame header
+    // on targets where the largest query variant naturally aligns to eight bytes.
+    #[repr(align(16))]
     pub enum QueryResponse {
         /// Singular query output.
         Singular(SingularQueryOutputBox),
@@ -2382,22 +2385,21 @@ impl CommittedTransaction {
         if signed.network_id() != Some(expected_network) || signed.verify_signature().is_err() {
             return false;
         }
-        let Some(output) = self.output.network() else {
-            return false;
-        };
         let (Some(inputs), Some(outputs)) = (
             commitment.transaction_input_commitment,
             commitment.transaction_output_commitment,
         ) else {
             return false;
         };
-        output.input_index == self.entrypoint_proof.leaf_index()
-            && self.entrypoint_proof.verify(&self.entrypoint_hash, &inputs)
+        self.output.matches_network_proof_positions(
+            self.entrypoint_proof.leaf_index(),
+            self.output_proof.leaf_index(),
+        ) && self.entrypoint_proof.verify(&self.entrypoint_hash, &inputs)
             && self.output_proof.verify(&self.output_hash, &outputs)
     }
 
     /// Borrow the sole full result from this query's typed output.
-    pub fn result(&self) -> &crate::transaction::TransactionResult {
+    pub fn result(&self) -> crate::block::execution_output::TransactionResultRef<'_> {
         self.output.result()
     }
     /// Verify executed-wire binding against an independently authenticated execution commitment.
@@ -2431,19 +2433,17 @@ impl CommittedTransaction {
     /// that wire separately. Header signatures alone never authenticate outputs.
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
-        let Some(output) = self.output.network() else {
+        let Some(input_index) = self.output.network_index() else {
             return false;
         };
         if block.hash() != self.block_hash
             || self.entrypoint_hash != self.entrypoint.hash()
             || self.output_hash != HashOf::new(&self.output)
-            || output.input_index != self.entrypoint_proof.leaf_index()
+            || input_index != self.entrypoint_proof.leaf_index()
             || block.validate_output_merkle_cache().is_err()
-            || block.network_entrypoint_at(output.input_index as usize) != Some(&self.entrypoint)
-            || block
-                .execution_outputs()
-                .get(self.output_proof.leaf_index() as usize)
-                != Some(&self.output)
+            || block.network_entrypoint_at(input_index as usize) != Some(&self.entrypoint)
+            || block.network_execution_output_at(input_index)
+                != Some((self.output_proof.leaf_index(), &self.output))
         {
             return false;
         }
@@ -2864,6 +2864,17 @@ impl CommittedTransaction {
             }
             crate::block::execution_output::ExecutionOutputV1::TimeWithLifecycle(row) => {
                 &mut row.execution.result.0
+            }
+            crate::block::execution_output::ExecutionOutputV1::C10(row) => {
+                row.result.0 = if row.result.0.is_ok() {
+                    Err(crate::ivm_c10::TransactionRejectionReasonC10V1::Validation(
+                        crate::ivm_c10::ValidationFailC10V1::InternalError("result swapped".into()),
+                    ))
+                } else {
+                    Ok(Vec::new())
+                };
+                self.output_hash = HashOf::new(&self.output);
+                return;
             }
             // A governance block-start row has no result to swap.
             crate::block::execution_output::ExecutionOutputV1::GovernanceBlockStart(_) => return,

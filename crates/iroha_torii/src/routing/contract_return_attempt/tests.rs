@@ -3,6 +3,7 @@
 use axum::{http::StatusCode, response::IntoResponse as _};
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use ivm::{IVM, VMError, error::ExecutionDeferral};
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 use super::*;
 use crate::routing::{
@@ -47,7 +48,11 @@ fn exhaust_read_capacity(vm: &IVM, original: &AllocationBudget) -> VMError {
     for _ in 0..65_536 {
         match vm.memory.load_u64(vm.register(10)) {
             Ok(_) => {}
-            Err(error @ VMError::AllocationDeferred(AllocationRefusal::Capacity { .. })) => {
+            Err(
+                error @ VMError::Deferred(VmDeferral::AllocationDeferred(
+                    AllocationRefusal::Capacity { .. },
+                )),
+            ) => {
                 return error;
             }
             Err(error) => panic!("unexpected return read failure: {error:?}"),
@@ -64,7 +69,7 @@ fn assert_transport_refusal<E>(
         panic!("return resource refusal cannot complete an execution attempt");
     };
     assert_eq!(Some(owner.reason()), expected.execution_deferral());
-    let VMError::AllocationDeferred(expected) = expected else {
+    let VMError::Deferred(VmDeferral::AllocationDeferred(expected)) = expected else {
         panic!("actual return read must retain its original allocation refusal");
     };
     assert_eq!(owner.allocation_refusal(), Some(expected));
@@ -141,30 +146,32 @@ fn nested_metered_trace_and_allocation_refusals_keep_their_original_owners() {
     let held = original.try_reserve_bytes(8).unwrap();
     let capacity = original.try_reserve_bytes(1).unwrap_err();
     let failures = [
-        VMError::AllocationDeferred(capacity),
-        VMError::AllocationDeferred(AllocationRefusal::DemandOverflow),
-        VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
-            requested_bytes: 9,
-            limit_bytes: 8,
-        }),
-        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable),
-        VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
+        VMError::Deferred(VmDeferral::AllocationDeferred(capacity)),
+        VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::DemandOverflow,
+        )),
+        VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::ExceedsLimit {
+                requested_bytes: 9,
+                limit_bytes: 8,
+            },
+        )),
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::TraceOwnerUnavailable,
+        )),
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ExecutionDeferral::AllocationUnavailable,
+        )),
     ];
     for expected in failures {
         let expected_reason = expected.execution_deferral().unwrap();
         let expected_allocation = match &expected {
-            VMError::AllocationDeferred(original) => Some(original.clone()),
+            VMError::Deferred(VmDeferral::AllocationDeferred(original)) => Some(original.clone()),
             _ => None,
         };
         let refusal = classify(EntrypointReturnDecodeError::ExecutionDeferred {
             word_index: 0,
-            reason: VMError::Metered {
-                gas: 31,
-                source: Box::new(VMError::Metered {
-                    gas: 17,
-                    source: Box::new(expected),
-                }),
-            },
+            reason: VMError::metered(31, VMError::metered(17, expected)),
         });
         let ExecutionAttemptError::Deferred(owner) = refusal else {
             panic!("wrapped local refusal must not become a contract result");
@@ -183,10 +190,7 @@ fn nested_metered_trace_and_allocation_refusals_keep_their_original_owners() {
 fn nonlocal_error_in_return_wrapper_keeps_completed_payload_and_word_index() {
     let error = classify(EntrypointReturnDecodeError::ExecutionDeferred {
         word_index: 19,
-        reason: VMError::Metered {
-            gas: 41,
-            source: Box::new(VMError::PermissionDenied),
-        },
+        reason: VMError::metered(41, VMError::Trap(VmTrap::PermissionDenied)),
     });
     let ExecutionAttemptError::Rejected(EntrypointReturnDecodeError::ExecutionDeferred {
         word_index,
@@ -197,7 +201,10 @@ fn nonlocal_error_in_return_wrapper_keeps_completed_payload_and_word_index() {
     };
     assert_eq!(word_index, 19);
     assert_eq!(reason.metered_gas(), Some(41));
-    assert!(matches!(reason.into_unmetered(), VMError::PermissionDenied));
+    assert!(matches!(
+        reason.into_unmetered(),
+        VMError::Trap(VmTrap::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -215,18 +222,15 @@ fn captured_decoder_and_shared_verifier_owners_survive_both_route_classifiers() 
         let expected = captured.local_refusal().unwrap();
         let original = captured.into_local_refusal().unwrap();
         let reason = if shared {
-            VMError::VerificationDeferred(ivm::error::VerificationRefusal::from_decode_refusal(
-                original,
+            VMError::Deferred(VmDeferral::VerificationDeferred(
+                ivm::error::VerificationRefusal::from_decode_refusal(original),
             ))
         } else {
-            VMError::DecodeDeferred(original)
+            VMError::Deferred(VmDeferral::DecodeDeferred(original))
         };
         let returned = classify(EntrypointReturnDecodeError::ExecutionDeferred {
             word_index: 0,
-            reason: VMError::Metered {
-                gas: 17,
-                source: Box::new(reason),
-            },
+            reason: VMError::metered(17, reason),
         });
         let ExecutionAttemptError::Deferred(original) = returned else {
             panic!("original local owner cannot become a public result");

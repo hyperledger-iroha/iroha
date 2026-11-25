@@ -5,6 +5,7 @@ use ivm::{
     host::{self, DefaultHost, ZkVerifyLimits},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(type_id as u16).to_be_bytes());
@@ -68,5 +69,5 @@ fn zk_verify_batch_syscall_rejects_non_norito_pointer_before_backend_status() {
     let err = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
         .expect_err("non-NoritoBytes pointer must be rejected");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }

@@ -915,6 +915,29 @@ pub struct StartupArgs {
     /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
     #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
     pub check_replay: bool,
+    /// Restore the exact retained checkpoint at HEIGHT and reproduce the stopped store's
+    /// certified suffix before signing one startup-floor statement as Norito JSON.
+    ///
+    /// This explicit signing action is separate from `--check-replay`, which never signs.
+    /// It starts no live node or runtime-provider service and writes no original chain State.
+    #[arg(
+        long,
+        value_name = "HEIGHT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        conflicts_with_all = [
+            "check_replay", "check_config", "check_storage", "json",
+            "managed_listeners", "managed_listener_deadline_ns",
+            "export_runtime_checkpoint", "receive_runtime_checkpoint_from",
+            "runtime_checkpoint_api_token_file", "runtime_checkpoint_output",
+            "rehearse_sorafs_repair", "repair_execution_time_ms",
+            "rehearse_taira_activation", "rehearse_taira_sponsor_stage",
+            "runtime_addition_review_request", "runtime_addition_review_output",
+            "world_payout_export_request", "world_payout_export_output",
+            "ironwood_context_export_request", "ironwood_context_export_output",
+            "require_genesis_inrou_deployment_authority"
+        ]
+    )]
+    pub attest_runtime_floor: Option<u64>,
     /// After matched replay, export an existing checkpoint at H with certified prefix rows,
     /// full signed genesis and H+1. The fresh output contains no transaction bodies 2..=H.
     #[arg(long, value_name = "HEIGHT", requires_all = ["check_replay", "runtime_checkpoint_output"], conflicts_with_all = ["rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request", "world_payout_export_request", "ironwood_context_export_request"])]
@@ -1450,6 +1473,19 @@ fn freeze_lane_manifests_for_startup_replay(
 fn freeze_lane_compliance_for_startup_replay(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
+    let engine = load_lane_compliance_for_startup_replay(nexus)?;
+    if let Some(engine) = &engine {
+        engine
+            .validate_active_catalog(&nexus.lane_catalog)
+            .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    }
+    Ok(engine)
+}
+
+/// Retain policy files once; exact checkpoint restore validates their effective catalog later.
+fn load_lane_compliance_for_startup_replay(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
     if !nexus.compliance.enabled {
         return Ok(None);
     }
@@ -1458,9 +1494,6 @@ fn freeze_lane_compliance_for_startup_replay(
             .attach("lane compliance enabled but no policy_dir configured")
     })?;
     let engine = LaneComplianceEngine::from_directory(dir, nexus.compliance.audit_only)
-        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-    engine
-        .validate_active_catalog(&nexus.lane_catalog)
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
     Ok(Some(Arc::new(engine)))
 }
@@ -2128,6 +2161,39 @@ fn validate_reputation_archive_presence(
         }
     }
 }
+fn provider_ingest_archive_start_report(
+    error: sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1,
+) -> Report<StartError> {
+    use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+    use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+
+    // These protocol failures contain only public network identities, heights and bounds.
+    // Other native causes can carry filesystem paths or underlying I/O and codec text.
+    let report = match &error {
+        Startup::Archive { source, .. }
+            if matches!(
+                source.as_ref(),
+                Cause::ArchiveCoverageGap { .. }
+                    | Cause::ArchiveAheadOfKura { .. }
+                    | Cause::ArchiveKuraTipLagExceeded { .. }
+                    | Cause::FinalizedFork { .. }
+                    | Cause::PredecessorSubstitution { .. }
+            ) =>
+        {
+            Report::new(error).change_context(StartError::StartP2p)
+        }
+        Startup::KuraBoundary { .. } => Report::new(StartError::StartP2p)
+            .attach(
+                "finalized provider-ingest startup could not read the exact durable Kura boundary",
+            )
+            .attach_opaque(error),
+        _ => Report::new(StartError::StartP2p)
+            .attach(error.to_string())
+            .attach_opaque(error),
+    };
+    report.attach("failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup")
+}
+
 fn validate_provider_ingest_archive_presence(
     runtime_enabled: bool,
     archive_present: bool,
@@ -2453,9 +2519,12 @@ impl Iroha {
             lifetime,
             listeners,
         } = prepared;
-        let (p2p_listener, torii_listener) = match listeners {
-            Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
-            None => (None, None),
+        let managed_launch = listeners.is_some();
+        let (p2p_listener, torii_listener, managed_startup_deadline) = match listeners {
+            Some((listeners, deadline)) => {
+                (Some(listeners.p2p), Some(listeners.torii), Some(deadline))
+            }
+            None => (None, None, None),
         };
         let PreparedNative {
             mut config,
@@ -3392,11 +3461,7 @@ impl Iroha {
                             .sorafs_provider_ingest_retention_authority
                             .clone(),
                     )
-                    .map_err(|error| {
-                        Report::new(StartError::StartP2p).attach(format!(
-                            "failed to qualify the daemon-owned finalized provider-ingest archive before Sumeragi startup: {error}"
-                        ))
-                    })?;
+                    .map_err(provider_ingest_archive_start_report)?;
             if let Some(retention) = prepared.retention_authority() {
                 iroha_logger::info!(
                     authority_handle = retention.authority().handle(),
@@ -3633,6 +3698,7 @@ impl Iroha {
                 Some(handle)
             }
         };
+        let da_relay_period = config.transaction_gossiper.gossip_period;
         let tx_gossiper = if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup did not launch the transaction-gossip actor"
@@ -3666,6 +3732,22 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
+        // Native service commissioning can itself need a transaction committed by the peers.
+        let (torii_started, relay_task) = network_relay::NetworkRelay {
+            state: Arc::clone(&state),
+            local_peer: config.common.trusted_peers.value().myself.id().clone(),
+            da_relay_period,
+            tx_gossiper,
+            peers_gossiper,
+            network: network.clone(),
+            streaming: streaming.clone(),
+            low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
+                &config.network,
+            ),
+            emergency_fast,
+        }
+        .commission(managed_launch, supervisor.shutdown_signal());
+        supervisor.monitor(task::spawn(relay_task));
         if let Some(handle) = sumeragi.as_ref() {
             // Storage maintenance is authorized only by completed native recovery.
             // A failed consensus owner revokes further snapshot publication.
@@ -4404,9 +4486,9 @@ impl Iroha {
                 stream_token_reputation_delivery,
             )
             .map_err(|error| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to initialise qualified stream-token gateway admission: {error:#}"
-                ))
+                Report::new(error)
+                    .change_context(StartError::StartTorii)
+                    .attach("failed to initialise qualified stream-token gateway admission")
             })?
         };
         if let Some(capture) = sorafs_stream_token_admission_capture.as_ref() {
@@ -4687,13 +4769,15 @@ impl Iroha {
             )
         });
         let musubi_publication_factory =
-            musubi_publication_service::stock_installation::select_factory(
+            musubi_publication_service::stock_installation::select_factory_at_startup(
                 &config.musubi_publication,
                 musubi_publication_context.as_ref(),
                 shared_sorafs_cache.clone(),
                 musubi_publication_factory,
                 emergency_fast,
-            )
+                managed_startup_deadline,
+                supervisor.shutdown_signal(),
+            ).await
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let runtime_checkpoint_package = if config.torii.runtime_checkpoint.package_dir.is_some() {
             let source_config = config.torii.runtime_checkpoint.clone();
@@ -4985,20 +5069,7 @@ impl Iroha {
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
-        let network_relay_shutdown = supervisor.shutdown_signal();
-        supervisor.monitor(task::spawn(
-            network_relay::NetworkRelay {
-                tx_gossiper,
-                peers_gossiper,
-                network: network.clone(),
-                streaming: streaming.clone(),
-                low_priority_ingress: network_relay::LowPriorityIngressLimiter::from_config(
-                    &config.network,
-                ),
-                emergency_fast,
-            }
-            .run(network_relay_shutdown),
-        ));
+        let _ = torii_started.send(());
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
@@ -5942,7 +6013,7 @@ fn ivm_stack_settings_snapshot(
     }
 }
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
-fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
+fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) -> usize {
     let stack_outcome = apply_ivm_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
@@ -5966,7 +6037,6 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         if max == 0 { None } else { Some(max) },
     );
     let (effective_min, _effective_max) = ivm::parallel::default_scheduler_limits();
-    println!("{}", scheduler_banner_line(effective_min));
     if concurrency.rayon_global_threads > 0
         && let Err(err) = ivm::init_global_rayon(concurrency.rayon_global_threads)
     {
@@ -5977,6 +6047,7 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
             "Failed to set IVM Rayon global pool with the requested stack size; using existing pool"
         );
     }
+    effective_min
 }
 /// Create the missing node-local identities, then check the custody of the `<data_dir>/secrets/`
 /// key files the configuration parser may read ([`node_secrets::create_local_identities`],
@@ -6198,15 +6269,22 @@ fn read_config_and_genesis_with_filesystem_space(
     // stdout reserved for its single result, and leave scheduler setup to the real
     // daemon startup path.
     if !args.startup.check_config && !args.startup.check_storage {
-        if config.kura.init_mode == InitMode::Fast {
+        let core_count = if config.kura.init_mode == InitMode::Fast {
             // Fast constructs one inert State VM for structural completeness. Cap
             // that VM at one minimum-stack worker and leave the global Rayon pool
             // uninitialized; no contract or proof route is available in this mode.
             let _ = apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
             ivm::set_scheduler_thread_limits(Some(1), Some(1));
-            println!("{}", scheduler_banner_line(1));
+            1
         } else {
-            apply_concurrency_config(&config.concurrency);
+            apply_concurrency_config(&config.concurrency)
+        };
+        let banner = scheduler_banner_line(core_count);
+        if args.startup.check_replay || args.startup.attest_runtime_floor.is_some() {
+            // Offline replay and explicit floor signing reserve stdout for one JSON result.
+            eprintln!("{banner}");
+        } else {
+            println!("{banner}");
         }
     }
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
@@ -8447,6 +8525,9 @@ fn run_main_with_config_guard(
             ))
         })?;
     }
+    if let Some(height) = args.startup.attest_runtime_floor {
+        return replay_check::run_runtime_floor_attestation(&config, height);
+    }
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
     }
@@ -8754,7 +8835,7 @@ fn run_main_with_config_guard(
 fn adopt_managed_listeners(
     startup: &StartupArgs,
     config: &Config,
-) -> ReportResult<Option<iroha_managed_ipc::RuntimeListeners>, MainError> {
+) -> ReportResult<Option<(iroha_managed_ipc::RuntimeListeners, u128)>, MainError> {
     match (
         &startup.managed_listeners,
         startup.managed_listener_deadline_ns,
@@ -8777,7 +8858,7 @@ fn adopt_managed_listeners(
                 numeric(config.torii.address.value())?,
                 deadline,
             )
-            .map(Some)
+            .map(|listeners| Some((listeners, deadline)))
             .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))
         }
         _ => Err(Report::new(MainError::Config)
@@ -10287,6 +10368,41 @@ mod tests {
         );
     }
     #[test]
+    fn provider_ingest_startup_reports_typed_coverage_and_keeps_private_paths_opaque() {
+        use iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Cause;
+        use sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupErrorV1 as Startup;
+        let stage = "exact Kura-tip reconciliation";
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"ingest-startup-report"),
+            ));
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::ArchiveCoverageGap {
+                network_id,
+                missing_height: 33,
+                observed_height: 34,
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(diagnostic.contains("missing height 33 before 34"));
+        let private = "private-path-must-remain-opaque";
+        let report = provider_ingest_archive_start_report(Startup::Archive {
+            stage,
+            source: Box::new(Cause::InvalidStorage {
+                path: private.into(),
+                reason: "unexpected object",
+            }),
+        });
+        assert!(report.contains::<Startup>());
+        let diagnostic = format!("{report:?}");
+        assert!(diagnostic.contains(stage));
+        assert!(!diagnostic.contains(private));
+    }
+
+    #[test]
     fn provider_ingest_archive_presence_matches_runtime_enablement() {
         assert!(validate_provider_ingest_archive_presence(false, false).is_ok());
         assert!(validate_provider_ingest_archive_presence(true, true).is_ok());
@@ -10579,10 +10695,10 @@ mod tests {
         ));
         assert!(
             compact_source
-                .contains("if!args.startup.check_config&&!args.startup.check_storage{ifconfig.kura.init_mode==InitMode::Fast{")
+                .contains("if!args.startup.check_config&&!args.startup.check_storage{letcore_count=ifconfig.kura.init_mode==InitMode::Fast{")
         );
         assert!(compact_source.contains(
-            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
+            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));1}else{apply_concurrency_config(&config.concurrency)};"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
@@ -10641,14 +10757,21 @@ mod tests {
                 .contains("lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};")
         );
 
-        // Fast registers one bounded peer/trust subscriber and nothing else.
-        let relay: String = include_str!("network_relay.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        assert!(relay.contains(
-            "letsubscriptions=ifshared.emergency_fast{vec![(SubscriberFilter::topics([Topic::PeerGossip,Topic::TrustGossip]),EMERGENCY_FAST_SUBSCRIBER_CAP,)]}"
-        ));
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        assert!(
+            network_relay::early_subscription(network_relay::RelayStartup::EmergencyFast, 64)
+                .is_none()
+        );
+        assert_eq!(
+            network_relay::subscriptions_after_torii(
+                network_relay::RelayStartup::EmergencyFast,
+                64
+            ),
+            vec![(
+                SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip]),
+                32
+            )]
+        );
     }
     #[test]
     fn emergency_fast_disables_streaming_persistence_and_control() {
@@ -11462,6 +11585,82 @@ mod tests {
     mod cli_args {
         #[allow(unused_imports)]
         use super::*;
+        #[test]
+        fn runtime_floor_attestation_is_standalone_and_requires_positive_height() {
+            for height in ["1", "42", "18446744073709551615"] {
+                let parsed =
+                    Args::try_parse_from(["iroha3d", "--attest-runtime-floor", height]).unwrap();
+                assert_eq!(
+                    parsed.startup.attest_runtime_floor,
+                    Some(height.parse().unwrap())
+                );
+                assert!(!parsed.startup.check_replay);
+                assert!(!parsed.startup.check_config);
+                assert!(!parsed.startup.check_storage);
+            }
+            assert_eq!(
+                Args::try_parse_from(["iroha3d", "--attest-runtime-floor", "0"])
+                    .unwrap_err()
+                    .kind(),
+                clap::error::ErrorKind::ValueValidation
+            );
+            let replay = Args::try_parse_from(["iroha3d", "--check-replay"]).unwrap();
+            assert!(replay.startup.check_replay);
+            assert_eq!(replay.startup.attest_runtime_floor, None);
+        }
+
+        #[test]
+        fn runtime_floor_attestation_conflicts_with_other_startup_actions() {
+            let incompatible: &[&[&str]] = &[
+                &["--check-replay"],
+                &["--check-config"],
+                &["--check-storage"],
+                &["--json"],
+                &[
+                    "--managed-listeners",
+                    "/private/listeners",
+                    "--managed-listener-deadline-ns",
+                    "42",
+                ],
+                &["--managed-listener-deadline-ns", "42"],
+                &[
+                    "--receive-runtime-checkpoint-from",
+                    "https://peer.example",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+                &[
+                    "--check-replay",
+                    "--export-runtime-checkpoint",
+                    "2",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+                &["--runtime-checkpoint-api-token-file", "/private/token"],
+                &["--runtime-checkpoint-output", "/private/checkpoint"],
+                &["--rehearse-sorafs-repair", "/private/repair.nrt"],
+                &["--repair-execution-time-ms", "1000"],
+                &["--rehearse-taira-activation", "/private/pool.json"],
+                &["--rehearse-taira-sponsor-stage", "/private/stage.json"],
+                &["--runtime-addition-review-request", "/private/request.json"],
+                &["--runtime-addition-review-output", "/private/review"],
+                &["--world-payout-export-request", "/private/request.json"],
+                &["--world-payout-export-output", "/private/payout"],
+                &["--ironwood-context-export-request", "/private/request.json"],
+                &["--ironwood-context-export-output", "/private/ironwood"],
+                &["--require-genesis-inrou-deployment-authority", "account"],
+            ];
+            for other in incompatible {
+                let mut arguments = vec!["iroha3d", "--attest-runtime-floor", "42"];
+                arguments.extend_from_slice(other);
+                assert_eq!(
+                    Args::try_parse_from(arguments).unwrap_err().kind(),
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "floor signing must refuse {other:?} even when its required action is absent"
+                );
+            }
+        }
+
         #[test]
         fn runtime_checkpoint_receive_requires_fresh_output_and_excludes_other_startup_actions() {
             let valid = [
@@ -12732,9 +12931,11 @@ mod tests {
             };
             assert!(matches!(
                 rejection.reason.as_ref(),
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InstructionFailed(
-                        iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                iroha_data_model::block::execution_output::ProfiledTransactionRejection::Baseline(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::InstructionFailed(
+                            iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                        )
                     )
                 )
             ));
@@ -13036,6 +13237,7 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    attest_runtime_floor: None,
                     export_runtime_checkpoint: None,
                     receive_runtime_checkpoint_from: None,
                     runtime_checkpoint_api_token_file: None,
@@ -13134,6 +13336,7 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    attest_runtime_floor: None,
                     export_runtime_checkpoint: None,
                     receive_runtime_checkpoint_from: None,
                     runtime_checkpoint_api_token_file: None,

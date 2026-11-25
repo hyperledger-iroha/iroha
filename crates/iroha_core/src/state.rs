@@ -368,6 +368,7 @@ mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_anonymous_tables;
 pub(crate) mod parliament_candidate_testing;
 pub(crate) mod parliament_registration;
+mod parliament_runtime;
 pub use parliament_registration::{CredentialHistoryErrorV1, resolve_credential_registration_v1};
 mod privacy_transaction_intent;
 mod sccp_forgery_entrypoint;
@@ -379,6 +380,8 @@ mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 #[cfg(test)]
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
+pub(crate) mod c10_execution;
+pub(crate) mod c10_trigger_runtime;
 pub(crate) mod governance_start;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
@@ -391,7 +394,7 @@ pub(crate) use output_capacity::{
 };
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
-mod fastpq_quantity_capture;
+pub(crate) mod fastpq_quantity_capture;
 pub(crate) use fastpq_quantity_capture::{
     AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
 };
@@ -1278,7 +1281,14 @@ macro_rules! with_world_overlay_fields {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            c10_contract_manifests,
+            c10_contract_profiles,
+            c10_triggers,
+            c10_trigger_candidates,
+            kagemusha_spartan_programs,
             runtime_retirements,
+            runtime_generic_values,
+            runtime_generic_artifacts,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -1323,6 +1333,7 @@ macro_rules! with_world_overlay_fields {
             runtime_containments,
             runtime_definitions,
             runtime_selection,
+            runtime_child_admin_state,
             privacy_consensus_policy,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
@@ -1544,6 +1555,12 @@ mod publication_lock_tests;
 )]
 pub(crate) mod authority_registry;
 pub(crate) mod keyed_state;
+#[expect(
+    dead_code,
+    reason = "TODO(N14): offline source candidate awaits the source-removed oldest-floor release rehearsal"
+)]
+mod runtime_retirement_cut;
+pub(crate) use runtime_retirement_cut::{OriginalRetirementCut, RetirementCutError};
 mod world_commit;
 #[cfg_attr(
     not(test),
@@ -1556,8 +1573,8 @@ mod world_journals;
 pub use keyed_state::FundedKeyedStateRows;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
-    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
-    WorldStateSnapshotError, WorldStateVerificationError,
+    NativeProviderSnapshotV1, NativeResourceNamesSnapshotV1, NativeZkX509StateV1,
+    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError, WorldStateVerificationError,
 };
 
 /// Exercise actual World capture while retaining journals through a test observation.
@@ -1609,6 +1626,12 @@ use scalar_cell_custody::ScalarCellFixtureBlock;
 
 // Execution-pool cells reserve their original capacity; other fields start empty.
 macro_rules! initial_world_field {
+    (runtime_generic_artifacts, $execution:ident) => {
+        ArtifactStorage::try_new_admitted($execution.clone())?
+    };
+    (runtime_generic_values, $execution:ident) => {
+        CarrierStorage::try_new_admitted($execution.clone())?
+    };
     (parameters, $execution:ident) => {{
         let controls =
             mv::cell::CellInitialization::<RetainedStateParameters>::try_reserve($execution)?;
@@ -1705,6 +1728,12 @@ impl Default for WorldData {
 
 // Quantity storages wrap their child checkpoints; other fields open ordinary ones.
 macro_rules! world_field_transaction {
+    ($field:expr, runtime_generic_artifacts) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, runtime_generic_values) => {
+        $field.try_transaction_admitted()?
+    };
     ($field:expr, runtime_selection) => {
         crate::runtime::execution::SelectionTransaction::new($field.transaction())
     };
@@ -3512,7 +3541,9 @@ pub enum BlockProofError {
 /// Consensus key identifying one authority-owned pending contract-code upload.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::SmartContractCodeUploadKey")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
 pub struct SmartContractCodeUploadKey {
     /// Account that owns and may finalize or cancel the upload.
     pub authority: AccountId,
@@ -3615,7 +3646,9 @@ impl SmartContractCodeUploadKey {
 /// Consensus key identifying one chunk within an authority-owned pending upload.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::SmartContractCodeUploadChunkKey")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
 pub struct SmartContractCodeUploadChunkKey {
     /// Pending upload that owns the chunk.
     pub upload: SmartContractCodeUploadKey,
@@ -3687,6 +3720,7 @@ impl norito::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct SmartContractCodeUploadDescriptor {
     /// Declared byte length of the complete artifact.
@@ -3720,6 +3754,7 @@ pub struct SmartContractCodeUploadProgress {
     JsonDeserialize,
 )]
 #[repr(transparent)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct MusubiResolverIndexRevisionV1(u64);
 impl MusubiResolverIndexRevisionV1 {
     /// Construct a non-zero resolver-index revision.
@@ -4362,11 +4397,43 @@ pub struct WorldData {
     /// Native game transfers and their original completion captures, installed by its service.
     pub(crate) runtime_game_transfers:
         Storage<iroha_crypto::Hash, iroha_data_model::runtime::native_game::NativeGameTransferV1>,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: Storage<
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: Storage<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    #[norito(skip)]
+    pub(crate) c10_trigger_candidates: Storage<
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: Storage<
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    #[norito(json = "generic_carrier_storage::snapshot_json")]
+    pub(crate) runtime_generic_values: CarrierStorage,
+    /// Originally admitted immutable code owned by the selected carrier staging service.
+    #[norito(json = "generic_carrier_storage::artifact_snapshot_json")]
+    pub(crate) runtime_generic_artifacts: ArtifactStorage,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures:
         Storage<EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>,
@@ -4527,6 +4594,9 @@ pub struct WorldData {
     >,
     /// The one selection the universal root executes.
     pub(crate) runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Explicit child-root administrator authority and replay cursor; absent before foundation.
+    pub(crate) runtime_child_admin_state:
+        Cell<Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy and pending update.
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
@@ -5447,11 +5517,54 @@ pub struct WorldBlockFields<'world> {
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
     >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageField<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    #[norito(skip)]
+    pub(crate) c10_trigger_candidates: StorageField<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageField<
+        'world,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageField<
         'world,
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
+    >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    #[norito(json = "generic_carrier_storage::snapshot_block_json")]
+    pub(crate) runtime_generic_values:
+        StorageField<'world, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code with exact current and undo custody.
+    #[norito(json = "generic_carrier_storage::artifact_snapshot_block_json")]
+    pub(crate) runtime_generic_artifacts: StorageField<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageField<
@@ -5596,6 +5709,9 @@ pub struct WorldBlockFields<'world> {
     /// The root's selection for this block scope.
     pub(crate) runtime_selection:
         CellField<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Selected child-root administrator authority for this block.
+    pub(crate) runtime_child_admin_state:
+        CellField<'world, Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy for this block scope.
     pub(crate) privacy_consensus_policy:
         CellField<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -6627,6 +6743,7 @@ impl WorldBlock<'_> {
             governance_unlock_stats,
             parliament_attempt_counts,
             privacy_consensus_policy,
+            runtime_child_admin_state,
             runtime_selection,
             musubi_registry_policy,
             musubi_resolver_index_revision,
@@ -6724,7 +6841,14 @@ impl WorldBlock<'_> {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            c10_contract_manifests,
+            c10_contract_profiles,
+            c10_triggers,
+            c10_trigger_candidates,
+            kagemusha_spartan_programs,
             runtime_retirements,
+            runtime_generic_values,
+            runtime_generic_artifacts,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -7314,11 +7438,51 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
     >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageTransaction<
+        'block,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    pub(crate) c10_trigger_candidates: StorageTransaction<
+        'block,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageTransaction<
+        'block,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageTransaction<
         'block,
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
+    >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    pub(crate) runtime_generic_values:
+        StorageTransaction<'block, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code.
+    pub(crate) runtime_generic_artifacts: StorageTransaction<
+        'block,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageTransaction<
@@ -7457,6 +7621,12 @@ pub struct WorldTransaction<'block, 'world> {
     >,
     /// The root's selection for this transaction.
     pub(crate) runtime_selection: crate::runtime::execution::SelectionTransaction<'block, 'world>,
+    /// Selected child-root administrator authority for this transaction.
+    pub(crate) runtime_child_admin_state: CellTransaction<
+        'block,
+        'world,
+        Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>,
+    >,
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -9648,11 +9818,51 @@ pub struct WorldView<'world> {
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
     >,
+    /// Authenticated manifests of C10 contract artifacts.
+    pub(crate) c10_contract_manifests: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::ivm_c10::ContractManifestC10V1,
+    >,
+    /// Captured host-profile definition of each registered C10 artifact.
+    pub(crate) c10_contract_profiles: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        iroha_data_model::runtime::definition::DefinitionId,
+    >,
+    /// Registered triggers owned by the C10 execution profile.
+    pub(crate) c10_triggers: StorageView<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::ivm_c10::StoredC10TriggerV1,
+    >,
+    /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    pub(crate) c10_trigger_candidates: StorageView<
+        'world,
+        iroha_data_model::trigger::TriggerId,
+        iroha_data_model::events::TriggeringEventType,
+    >,
+    /// Exact reserve-authorized Spartan installation, selected by governance.
+    pub(crate) kagemusha_spartan_programs: StorageView<
+        'world,
+        [u8; 32],
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1,
+    >,
     /// Permanent definition history and exclusion receipts, installed by its selected service.
     pub(crate) runtime_retirements: StorageView<
         'world,
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
+    >,
+    /// Definition-owned generic values, separate from every installed native storage owner.
+    pub(crate) runtime_generic_values:
+        StorageView<'world, RetainedCarrierKey, RetainedCarrierBytes, CarrierStorageMode>,
+    /// Originally admitted staged carrier code.
+    pub(crate) runtime_generic_artifacts: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractArtifactId,
+        RetainedCarrierBytes,
+        ArtifactStorageMode,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageView<
@@ -9815,6 +10025,9 @@ pub struct WorldView<'world> {
     /// The root's selection.
     pub(crate) runtime_selection:
         CellView<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
+    /// Selected child-root administrator authority in this immutable World cut.
+    pub(crate) runtime_child_admin_state:
+        CellView<'world, Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>>,
     /// Singleton chain-wide privacy admission policy view.
     pub(crate) privacy_consensus_policy:
         CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -10805,7 +11018,15 @@ mod private_settlement_ledger_evidence_tests {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ZkAssetVerifierBinding")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ZkAssetVerifierBinding {
     /// Verifying key identifier recorded in the registry.
@@ -10838,6 +11059,7 @@ pub struct ZkAssetVerifierBinding {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(iroha_schema::IntoSchema)]
 pub enum ConfidentialTreeProfile {
     /// Fixed depth-16 Pasta Poseidon tree used by all confidential V1 circuits.
     #[default]
@@ -10993,6 +11215,7 @@ pub(crate) const MAX_STANDALONE_ELECTION_BALLOTS_V1: usize = 1_000;
     NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct StandaloneBallotCorpusEntryV1 {
     /// Nullifier presented by the accepted operation; credential linkage is not inferred here.
     pub nullifier: [u8; 32],
@@ -11007,6 +11230,7 @@ pub struct StandaloneBallotCorpusEntryV1 {
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct ElectionState {
     /// Number of options (K).
     pub options: u32,
@@ -11194,6 +11418,7 @@ fn validate_election_state_for_restore_v1(
 #[norito_schema(name = "iroha_core::state::GovernanceProposalRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceProposalRecord {
     /// Account that submitted the proposal.
     pub proposer: iroha_data_model::account::AccountId,
@@ -11406,7 +11631,9 @@ impl GovernanceProposalRecord {
 /// Lifecycle status of a governance proposal.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceProposalStatus")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+)]
 pub enum GovernanceProposalStatus {
     /// Proposal has been submitted and its latest attempt is active or certified.
     Proposed,
@@ -11614,6 +11841,7 @@ fn update_oracle_change_pipeline(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceReferendumRecord {
     /// Enactment window start height (inclusive)
     pub h_start: u64,
@@ -11718,7 +11946,9 @@ pub fn plain_governance_tally(
 /// Lifecycle status of a referendum
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceReferendumStatus")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+)]
 pub enum GovernanceReferendumStatus {
     /// Referendum proposed but not yet open for voting
     Proposed,
@@ -11764,7 +11994,17 @@ impl json::JsonDeserialize for GovernanceReferendumStatus {
 /// Voting mode for a referendum
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceReferendumMode")]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+)]
 pub enum GovernanceReferendumMode {
     /// Zero-knowledge verified (ZK) voting mode
     #[default]
@@ -11810,6 +12050,7 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceLockCustody {
     /// Whether the lock amount was actually transferred into escrow.
     pub escrowed: bool,
@@ -11825,6 +12066,7 @@ pub struct GovernanceLockCustody {
 #[norito_schema(name = "iroha_core::state::GovernanceLockRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
     pub owner: iroha_data_model::account::AccountId,
@@ -11887,7 +12129,14 @@ impl GovernanceLockRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceLocksForReferendum")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceLocksForReferendum {
     /// Map of voter account -> lock record for this referendum.
@@ -11908,6 +12157,7 @@ pub struct GovernanceLocksForReferendum {
     JsonDeserialize,
     NoritoSerialize,
     NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceUnlockStatsSnapshot {
     /// Block height whose start-of-block sweep produced this snapshot.
@@ -11975,7 +12225,15 @@ pub enum AssetDefinitionAliasLeaseStatus {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AssetDefinitionAliasBindingRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct AssetDefinitionAliasBindingRecord {
     /// Bound alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
@@ -12038,7 +12296,15 @@ pub enum ContractAliasLeaseStatus {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ContractAliasBindingRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct ContractAliasBindingRecord {
     /// Bound alias literal (`<name>::<domain>.<dataspace>` or `<name>::<dataspace>`).
@@ -12089,7 +12355,15 @@ impl ContractAliasBindingRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::CitizenshipRecord")]
 #[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct CitizenshipRecord {
     /// Citizen account id.
@@ -12119,7 +12393,14 @@ impl CitizenshipRecord {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceSlashEntry")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceSlashEntry {
     /// Exact total amount slashed so far.
@@ -12135,7 +12416,14 @@ pub struct GovernanceSlashEntry {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceSlashLedger")]
 #[derive(
-    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone,
+    Debug,
+    Default,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct GovernanceSlashLedger {
     /// Map of voter account -> slashing ledger entry.
@@ -12878,6 +13166,9 @@ mod view_lock_contention_log_tests {
 pub struct State {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: World,
+    /// Opt-in delivery of the original published block to local C10 event readers.
+    c10_event_blocks:
+        OnceLock<tokio::sync::broadcast::Sender<iroha_data_model::block::SharedSignedBlock>>,
     /// Blockchain.
     pub block_hashes: BlockHashes,
     /// Latest committed block header cached for hot paths that do not need full block bodies.
@@ -13408,6 +13699,9 @@ pub struct StateBlockFields<'state> {
     /// Original signed staking instruction, retained through unpublished execution.
     pub(crate) genesis_staking_policy:
         Option<crate::block::genesis_staking_policy::GenesisStakingPolicy>,
+    /// Exact signed fresh-child foundation retained only through its original genesis overlay.
+    pub(crate) genesis_child_runtime:
+        Option<crate::block::genesis_child_runtime::GenesisChildRuntime>,
     /// First local storage refusal, sticky across every child rollback and error handler.
     local_storage_refusal: Option<StateStorageAdmissionError>,
     /// Immutable policy inputs captured with this scope's actual predecessor.
@@ -14811,11 +15105,16 @@ pub(crate) fn standalone_governance_ballot_instruction_v1(
 }
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
+    /// Result-family custody of this one disposable execution attempt.
+    c10_execution: Option<c10_execution::C10Execution>,
     /// Borrow the original genesis authentication evidence, never infer it from height.
     genesis_crypto_policy: Option<&'block crate::block::genesis_crypto_policy::GenesisCryptoPolicy>,
     /// Borrow the original authenticated staking source through the whole child attempt.
     genesis_staking_policy:
         Option<&'block crate::block::genesis_staking_policy::GenesisStakingPolicy>,
+    /// Borrowed original signed child recipe; no live instruction can manufacture this owner.
+    pub(crate) genesis_child_runtime:
+        Option<&'block crate::block::genesis_child_runtime::GenesisChildRuntime>,
     /// Original signed genesis committee, borrowed from the pristine native schedule owner.
     pub(crate) native_genesis_context:
         Option<&'block iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1>,
@@ -14838,6 +15137,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) taira_activation_entrypoint:
         Option<crate::runtime::taira_activation::AdmittedSchedule>,
+    /// One-use exact sole child-admin instruction from the original signed external input.
+    pub(crate) child_runtime_admin_entrypoint:
+        Option<crate::runtime::child_admin::DirectInstruction>,
     /// Captured call graph of the registered obligation's terminal effect being executed
     /// (`specs/live_runtime_upgrades.md` §7.2). Admission closure and completion-only permit
     /// only the bindings this capture reaches; unrelated callback instructions retain ordinary
@@ -15047,6 +15349,8 @@ pub struct StateTransaction<'block, 'state> {
         Option<parliament_candidate_testing::DirectCandidateTesting>,
     /// One-use original anonymous credential instruction; absent in nested execution.
     direct_parliament_registration: Option<parliament_registration::DirectRegistrationCapture>,
+    /// One-use original signed anonymous runtime proposal instruction.
+    direct_parliament_runtime: Option<parliament_runtime::DirectRuntimeCapture>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -15530,13 +15834,28 @@ fn time_trigger_action_requires_clock_progress(
     action: &LoadedAction<TimeEventFilter>,
     parent_creation_time: Duration,
 ) -> bool {
-    if action.repeats.is_depleted() || !trigger_is_enabled(action.metadata()) {
+    time_action_requires_clock_progress(
+        &action.filter,
+        action.metadata(),
+        action.repeats,
+        action.retry_state.is_some(),
+        parent_creation_time,
+    )
+}
+fn time_action_requires_clock_progress(
+    filter: &TimeEventFilter,
+    metadata: &Metadata,
+    repeats: iroha_data_model::trigger::action::Repeats,
+    retry: bool,
+    parent_creation_time: Duration,
+) -> bool {
+    if repeats.is_depleted() || !trigger_is_enabled(metadata) {
         return false;
     }
-    if action.retry_state.is_some() {
+    if retry {
         return true;
     }
-    match action.filter.0 {
+    match filter.0 {
         ExecutionTime::PreCommit => true,
         ExecutionTime::Schedule(schedule) => schedule.period_ms.map_or_else(
             || u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
@@ -15618,6 +15937,13 @@ impl<'state> StateView<'state> {
                         .saturating_add(1),
                 ) && time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
+            || c10_trigger_runtime::clock_progress_required(
+                &self.world,
+                u64::try_from(self.height())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+                parent_creation_time,
+            )
     }
     #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
@@ -15653,6 +15979,14 @@ impl<'state> StateView<'state> {
                     current_block_height,
                     current_block_time_ms,
                 )
+            })
+            || c10_trigger_runtime::time_rows(&self.world).any(|(_, row)| {
+                c10_trigger_runtime::time_occurrences(
+                    row,
+                    &event,
+                    current_block_height,
+                    current_block_time_ms,
+                ) > 0
             })
     }
     /// Previous committed block hash (if any) for this snapshot.
@@ -21984,10 +22318,25 @@ macro_rules! world_ro_accessors {
             storage runtime_game_transfers:
                 iroha_crypto::Hash
                     => iroha_data_model::runtime::native_game::NativeGameTransferV1;
+            /// Authenticated manifests of C10 contract artifacts.
+            storage c10_contract_manifests: iroha_data_model::smart_contract::ContractArtifactId => iroha_data_model::ivm_c10::ContractManifestC10V1;
+            /// Captured host-profile definition of each registered C10 artifact.
+            storage c10_contract_profiles: iroha_data_model::smart_contract::ContractArtifactId => iroha_data_model::runtime::definition::DefinitionId;
+            /// Registered triggers owned by the C10 execution profile.
+            storage c10_triggers: iroha_data_model::trigger::TriggerId => iroha_data_model::ivm_c10::StoredC10TriggerV1;
+            /// Event category of each registered C10 trigger, rebuilt from the committed actions.
+            storage c10_trigger_candidates: iroha_data_model::trigger::TriggerId => iroha_data_model::events::TriggeringEventType;
+            /// Exact installed Spartan original, keyed by registered scheme.
+            storage kagemusha_spartan_programs: [u8; 32]
+                => iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1;
             /// Permanent definition history and exclusion receipts (read-only).
             storage runtime_retirements:
                 iroha_data_model::runtime::definition::DefinitionId
                     => iroha_data_model::runtime::retirement::RuntimeRetirementStateV1;
+            /// Exact generic storage positions and canonical carrier frames (read-only).
+            storage runtime_generic_values: RetainedCarrierKey => RetainedCarrierBytes;
+            /// Exact scoped artifacts of the selected carrier staging service.
+            storage runtime_generic_artifacts: iroha_data_model::smart_contract::ContractArtifactId => RetainedCarrierBytes;
             /// Original native escrow completion captures (read-only).
             storage runtime_escrow_captures:
                 EscrowId
@@ -22110,6 +22459,8 @@ macro_rules! world_ro_accessors {
                 iroha_data_model::runtime::definition::DefinitionDescriptorV1;
             /// The selection the universal root executes.
             cell_ref runtime_selection: iroha_data_model::runtime::definition::RootSelectionV1;
+            /// Selected child-root administrator authority and replay cursor (read-only).
+            cell_ref runtime_child_admin_state: Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>;
             /// Retained canonical merge-hint values.
             cell_ref merge_hint_roots: Vec<Hash>;
             /// Retained canonical reduced merge-root value; not the World state root.
@@ -23752,7 +24103,7 @@ impl<'world> WorldBlock<'world> {
             axt_lane_map,
         )
     }
-    fn try_transaction_with_axt_lane_map(
+    pub(crate) fn try_transaction_with_axt_lane_map(
         &mut self,
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
@@ -24029,6 +24380,8 @@ impl WorldTransaction<'_, '_> {
                 .parameters
                 .try_retain_authoring(|parameter| {
                     !is_consensus_owned_custom_parameter(parameter.id())
+                        && !(self.runtime_child_admin_state.get().is_some()
+                            && parameter.id() == iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id())
                         && !crate::runtime::committed_policy::consensus_owned(
                             self.runtime_selection.get(),
                             parameter.id(),
@@ -24305,6 +24658,8 @@ impl WorldTransaction<'_, '_> {
         let selection = self.runtime_selection.get();
         let owned = |id| {
             is_consensus_owned_custom_parameter(id)
+                || (self.runtime_child_admin_state.get().is_some()
+                    && id == iroha_data_model::runtime::child_admin::foundation::ChildRuntimeFoundationV1::parameter_id())
                 || crate::runtime::committed_policy::consensus_owned(selection, id)
         };
         // Walk the existing maps by reference: no cloned model, ID set, or
@@ -25919,7 +26274,14 @@ impl WorldTransaction<'_, '_> {
             runtime_deferred_consents: _,
             runtime_amx_captures: _,
             runtime_game_transfers: _,
+            c10_contract_manifests: _,
+            c10_contract_profiles: _,
+            c10_triggers: _,
+            c10_trigger_candidates: _,
+            kagemusha_spartan_programs: _,
             runtime_retirements: _,
+            runtime_generic_values: _,
+            runtime_generic_artifacts: _,
             runtime_escrow_captures: _,
             runtime_migrations: _,
             runtime_boundaries: _,
@@ -25970,6 +26332,7 @@ impl WorldTransaction<'_, '_> {
             runtime_containments: _,
             runtime_definitions: _,
             runtime_selection: _,
+            runtime_child_admin_state: _,
             privacy_consensus_policy: _,
             privacy_protocol_policies: _,
             kagemusha_wallet_ledger: _,
@@ -26200,6 +26563,7 @@ impl WorldTransaction<'_, '_> {
         self.runtime_containments.apply();
         self.runtime_definitions.apply();
         self.runtime_selection.apply();
+        self.runtime_child_admin_state.apply();
         self.privacy_consensus_policy.apply();
         self.privacy_protocol_policies.apply();
         self.kagemusha_wallet_ledger.apply();
@@ -26390,7 +26754,14 @@ impl WorldTransaction<'_, '_> {
         self.runtime_deferred_consents.apply();
         self.runtime_amx_captures.apply();
         self.runtime_game_transfers.apply();
+        self.c10_contract_manifests.apply();
+        self.c10_contract_profiles.apply();
+        self.c10_triggers.apply();
+        self.c10_trigger_candidates.apply();
+        self.kagemusha_spartan_programs.apply();
         self.runtime_retirements.apply();
+        self.runtime_generic_values.apply();
+        self.runtime_generic_artifacts.apply();
         self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();
         self.runtime_boundaries.apply();
@@ -27214,6 +27585,7 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
     }
 }
 include!("state/runtime_configuration.rs");
+include!("state/restored_replay_configuration.rs");
 include!("state/lifecycle_configuration.rs");
 mod authorization_read;
 pub use authorization_read::{AuthorizationDataSpaceCatalog, AuthorizationRead};
@@ -27223,6 +27595,31 @@ mod recorded_carrier_scope;
 mod state_block_construction;
 mod uaid_dataspace_restore;
 impl State {
+    /// Receive the shared original blocks that contain newly published C10 Network outcomes.
+    /// Slow readers observe explicit lag. A subscription holds at most one buffered block.
+    pub fn subscribe_c10_event_blocks(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<iroha_data_model::block::SharedSignedBlock> {
+        self.c10_event_blocks
+            .get_or_init(|| tokio::sync::broadcast::channel(1).0)
+            .subscribe()
+    }
+
+    /// Publish only after the certified decision and its required archive writes have finished.
+    pub(crate) fn publish_c10_event_block(
+        &self,
+        block: iroha_data_model::block::SharedSignedBlock,
+    ) {
+        use iroha_data_model::block::execution_output::{ExecutionOutputV1, ExecutionSourceC10V1};
+        if let Some(sender) = self.c10_event_blocks.get()
+            && sender.receiver_count() > 0
+            && block.execution_outputs().iter().any(|row| matches!(row,
+                ExecutionOutputV1::C10(output) if matches!(output.source, ExecutionSourceC10V1::Network(_))))
+        {
+            let _ = sender.send(block);
+        }
+    }
+
     fn disable_nexus_fees_for_testing(&mut self) {
         // Fixture authoring only. Preserve an already committed/root-specific schedule.
         // Every ordinary test execution still reads the real StateParameters projection.
@@ -28904,7 +29301,17 @@ impl State {
         let catalog = crate::runtime::release_catalog().map_err(|error| {
             MergeLedgerCommitError::ExecutionStatePublication(error.to_string())
         })?;
-        if let Some(definition) = catalog.unsupported(world.runtime_selection.view().get()) {
+        let support =
+            crate::runtime::attestation::committed_release_support(catalog, &world.view())
+                .map_err(|original| match original.into_attempt() {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                        MergeLedgerCommitError::ExecutionDeferred(original)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
+                        MergeLedgerCommitError::ExecutionStatePublication(original.to_string())
+                    }
+                })?;
+        if let crate::runtime::attestation::ReleaseSupport::Missing(definition) = support {
             return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
                 "this release cannot execute the restored runtime selection: definition {definition} is not implemented"
             )));
@@ -29105,6 +29512,7 @@ impl State {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
+            c10_event_blocks: OnceLock::new(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
                 pipeline_cache_size, PreparedContractCache::with_execution_budget(
                     pipeline_cache_size, execution_budget.clone(),
@@ -30576,8 +30984,7 @@ impl State {
         // Keep independent transaction phases in separate frames. Unoptimized
         // builds otherwise reserve all of their large overlay temporaries for
         // this entire constructor, even when a phase has no work to apply.
-        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)
-            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)?;
         Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h)
             .map_err(StateBlockStartError::Storage)?;
         Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot)
@@ -30701,15 +31108,14 @@ impl State {
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]
-    fn apply_block_start_world_transitions(
+    fn apply_block_start_world_transitions<E: std::fmt::Debug>(
         sb: &mut StateBlock<'_>,
         now_h: u64,
         current_slot: u64,
-    ) -> Result<(), StateStorageAdmissionError> {
+    ) -> Result<(), StateBlockStartError<E>> {
         let sb = sb.fields.as_mut().expect("original executing State");
         let transitions = collect_confidential_transitions(&sb.world, now_h);
         let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-        let static_policy = sb.runtime_policy.static_inputs();
         let mut wtx = sb.world.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             Some(sb.telemetry),
@@ -30804,7 +31210,51 @@ impl State {
         crate::runtime::containment::expire_due(&mut wtx, now_h, now_ms);
         // One bounded stage of every migration the selection activates, after the height's
         // change sets and containment leases decided which run (§5.4).
-        crate::runtime::migration::run_stages(&mut wtx, now_h);
+        // Keep the baseline's original child and ordering unchanged when no active migration
+        // exists. An actual migration runs after the exact activation/containment prefix, in
+        // independently disposable World children, before the original transition suffix.
+        if wtx
+            .runtime_migrations
+            .iter()
+            .any(|(id, _)| wtx.runtime_selection.get().active.binary_search(id).is_ok())
+        {
+            let axt_lane_map = core::mem::take(&mut wtx.axt_lane_map);
+            let mut quantity_candidate =
+                fastpq_quantity_capture::QuantityCandidateArchive::default();
+            quantity_candidate.observe(&wtx);
+            wtx.apply();
+            sb.fastpq_quantity_candidate.apply(quantity_candidate);
+            let fields = &mut *sb;
+            let mut context = crate::runtime::migration::MigrationContext {
+                lane_config: &fields.nexus.lane_config,
+                current_slot,
+                lane_map: &axt_lane_map,
+                quantity_candidate: &mut fields.fastpq_quantity_candidate,
+                #[cfg(feature = "telemetry")]
+                telemetry: Some(fields.telemetry),
+                world_lifetime: core::marker::PhantomData,
+            };
+            crate::runtime::migration::run_stages(&mut fields.world, now_h, &mut context).map_err(
+                |error| match error {
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original),
+                    ) => StateBlockStartError::ExecutionDeferred(original),
+                    crate::runtime::migration::MigrationBoundaryError::Execution(
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(reason),
+                    ) => StateBlockStartError::Policy(reason),
+                    crate::runtime::migration::MigrationBoundaryError::Storage(original) => {
+                        StateBlockStartError::Storage(original)
+                    }
+                },
+            )?;
+            wtx = sb.world.try_transaction_with_axt_lane_map(
+                #[cfg(feature = "telemetry")]
+                Some(sb.telemetry),
+                sb.nexus.lane_config.clone(),
+                current_slot,
+                axt_lane_map,
+            )?;
+        }
         // Collect candidates to open (avoid borrow conflicts)
         let to_open: Vec<(String, u64, u64)> = wtx
             .governance_referenda
@@ -30924,6 +31374,7 @@ impl State {
                     },
                 )));
             } else if decision_ready {
+                let static_policy = sb.runtime_policy.static_inputs();
                 let decision =
                     crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
                         rid.clone(),
@@ -32404,7 +32855,7 @@ impl State {
         world.triggers().time_triggers().iter().any(|(id, action)| {
             crate::runtime::deferred_consent::trigger_ready(&world, id, height)
                 && time_trigger_action_requires_clock_progress(action, parent_creation_time)
-        })
+        }) || c10_trigger_runtime::clock_progress_required(&world, height, parent_creation_time)
     }
     #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
@@ -32441,6 +32892,13 @@ impl State {
                 current_block_height,
                 current_block_time_ms,
             )
+        }) || c10_trigger_runtime::time_rows(&world).any(|(_, row)| {
+            c10_trigger_runtime::time_occurrences(
+                row,
+                &event,
+                current_block_height,
+                current_block_time_ms,
+            ) > 0
         })
     }
     /// Latest committed block hash derived from the block hash journal.
@@ -40366,8 +40824,10 @@ impl<'state> StateBlock<'state> {
         );
         let axt_next_handle_counters_after_block = fields.axt_next_handle_counters.clone();
         Ok(StateTransaction {
+            c10_execution: None,
             genesis_crypto_policy: fields.genesis_crypto_policy.as_ref(),
             genesis_staking_policy: fields.genesis_staking_policy.as_ref(),
+            genesis_child_runtime: fields.genesis_child_runtime.as_ref(),
             native_epoch_boundary: fields.sumeragi_schedule.frozen_boundary(),
             native_genesis_context: fields.sumeragi_schedule.original_genesis_context(),
             local_storage_refusal: &mut fields.local_storage_refusal,
@@ -40377,6 +40837,7 @@ impl<'state> StateBlock<'state> {
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
             taira_activation_entrypoint: None,
+            child_runtime_admin_entrypoint: None,
             completing_obligation: None,
             native_execution: None,
             deferred_expectations: Vec::new(),
@@ -40474,6 +40935,7 @@ impl<'state> StateBlock<'state> {
             genesis_execution_scope: None,
             direct_parliament_candidate_testing: None,
             direct_parliament_registration: None,
+            direct_parliament_runtime: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,
@@ -44500,6 +44962,7 @@ impl StateTransaction<'_, '_> {
             native_execution_tip: _,
             sorafs_repair_entrypoint: _,
             taira_activation_entrypoint: _,
+            child_runtime_admin_entrypoint: _,
             completing_obligation: _,
             native_execution: _,
             deferred_expectations: _,
@@ -44738,6 +45201,13 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         callback_index: Option<u32>,
     ) -> bool {
+        if self.world.c10_triggers.get(id).is_some() {
+            return self.with_trigger_lifecycle_policy(
+                callback_index,
+                iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeRepeat,
+                |tx| tx.consume_c10_repeat(id),
+            );
+        }
         let removed = self.with_trigger_lifecycle_policy(
             callback_index,
             iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeRepeat,
@@ -44772,51 +45242,83 @@ impl StateTransaction<'_, '_> {
         let permission_granted =
             self.can_execute_trigger_for(event.authority(), event.trigger_id());
         let action_generation = self.world.triggers.registration_generation(id);
-        let (executable, action_authority) = {
-            let action = self
-                .world
+        let c10 = self.world.c10_triggers.get(id).is_some();
+        if c10 {
+            self.mark_c10_execution();
+        }
+        let missing = || ValidationFail::from(Error::from(FindError::Trigger(id.clone())));
+        let (action_authority, filter, enabled, depleted) =
+            if let Some(stored) = self.world.c10_triggers.get(id) {
+                let action = &stored.trigger().action;
+                let iroha_data_model::ivm_c10::EventFilterBoxC10V1::ExecuteTrigger(filter) =
+                    action.filter()
+                else {
+                    return Err(missing().into());
+                };
+                (
+                    action.authority(),
+                    filter,
+                    trigger_is_enabled(action.metadata()),
+                    action.repeats().is_depleted(),
+                )
+            } else {
+                let action = self
+                    .world
+                    .triggers
+                    .by_call_triggers()
+                    .get(id)
+                    .ok_or_else(missing)?;
+                (
+                    action.authority(),
+                    &action.filter,
+                    trigger_is_enabled(action.metadata()),
+                    action.repeats.is_depleted(),
+                )
+            };
+        if !enabled {
+            return Err(missing().into());
+        }
+        if depleted {
+            warn!(trigger_id = %id, "by-call trigger is depleted; removing");
+            if c10 {
+                crate::smartcontracts::isi::triggers::isi::remove_c10_trigger(self, id);
+            } else if self.world.triggers.remove(id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    self, id,
+                );
+            }
+            return Err(missing().into());
+        }
+        let mut filter_event = event.clone();
+        if permission_granted {
+            filter_event.authority = action_authority.clone();
+        }
+        if !filter.matches(&filter_event) {
+            return Err(ValidationFail::NotPermitted(
+                "trigger cannot be executed manually: filter mismatch".into(),
+            )
+            .into());
+        }
+        if action_authority != event.authority() && !permission_granted {
+            return Err(ValidationFail::NotPermitted(
+                "trigger cannot be executed manually: not permitted".into(),
+            )
+            .into());
+        }
+        let action_authority = action_authority.clone();
+        let executable = if let Some(row) = self.world.c10_triggers.get(id) {
+            crate::runtime::deferred_consent::trigger_executable_ref(
+                row.trigger().action.executable(),
+            )
+            .map_err(ValidationFail::InstructionFailed)?
+        } else {
+            self.world
                 .triggers
                 .by_call_triggers()
                 .get(id)
-                .ok_or_else(|| FindError::Trigger(id.clone()))
-                .map_err(Error::from)
-                .map_err(ValidationFail::from)?;
-            if !trigger_is_enabled(action.metadata()) {
-                return Err(
-                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
-                );
-            }
-            if action.repeats.is_depleted() {
-                warn!(
-                    trigger_id = %id,
-                    "by-call trigger is depleted; removing"
-                );
-                if self.world.triggers.remove(id) {
-                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                        self, id,
-                    );
-                }
-                return Err(
-                    ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
-                );
-            }
-            let mut filter_event = event.clone();
-            if permission_granted {
-                filter_event.authority = action.authority().clone();
-            }
-            if !action.filter.matches(&filter_event) {
-                return Err(ValidationFail::NotPermitted(
-                    "trigger cannot be executed manually: filter mismatch".to_owned(),
-                )
-                .into());
-            }
-            if action.authority() != event.authority() && !permission_granted {
-                return Err(ValidationFail::NotPermitted(
-                    "trigger cannot be executed manually: not permitted".to_owned(),
-                )
-                .into());
-            }
-            (action.executable().clone(), action.authority().clone())
+                .ok_or_else(missing)?
+                .executable()
+                .clone()
         };
         // Execute the trigger entrypoint and collect its step.
         let step = self.execute_trigger(
@@ -44946,7 +45448,13 @@ impl StateTransaction<'_, '_> {
         &mut self,
         first_step_index: u32,
     ) -> TransactionResultInner {
-        if self.world.triggers.data_triggers().is_empty() {
+        if self.world.triggers.data_triggers().is_empty()
+            && !self
+                .world
+                .c10_trigger_candidates
+                .iter()
+                .any(|(_, kind)| *kind == iroha_data_model::events::TriggeringEventType::Data)
+        {
             // No data triggers registered; drop buffered events to keep memory bounded.
             self.world.internal_event_buf.clear();
             return Ok(Vec::new());
@@ -44991,7 +45499,33 @@ impl StateTransaction<'_, '_> {
                 continue;
             }
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger recheck")?;
-            let (executable, trigger_authority) = {
+            let (executable, trigger_authority) = if let Some(row) =
+                self.world.c10_triggers.get(&trg_id)
+            {
+                let action = &row.trigger().action;
+                let iroha_data_model::ivm_c10::EventFilterBoxC10V1::Data(filter) = action.filter()
+                else {
+                    continue;
+                };
+                let EventBox::Data(data) = &event else {
+                    continue;
+                };
+                if !c10_trigger_runtime::data_matches(row, data)
+                    || !crate::smartcontracts::isi::triggers::isi::data_scope_is_authorized(
+                        self,
+                        action.authority(),
+                        filter,
+                        action.metadata(),
+                    )
+                {
+                    continue;
+                }
+                (
+                    crate::runtime::deferred_consent::trigger_executable_ref(action.executable())
+                        .map_err(ValidationFail::InstructionFailed)?,
+                    action.authority().clone(),
+                )
+            } else {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
                     warn!(
                         trigger_id = %trg_id,
@@ -45104,12 +45638,25 @@ impl StateTransaction<'_, '_> {
                 let scan_work = self
                     .world
                     .triggers
-                    .data_trigger_candidate_scan_work(event.as_ref());
+                    .data_trigger_candidate_scan_work(event.as_ref())
+                    .saturating_add(self.world.c10_trigger_candidates.len());
                 self.charge_trigger_work_gas(
                     u64::try_from(scan_work).unwrap_or(u64::MAX),
                     "data trigger index scan",
                 )?;
                 scan.candidates = self.world.triggers.data_trigger_candidates(event.as_ref());
+                if !self.world.c10_trigger_candidates.is_empty() {
+                    scan.candidates.extend(
+                        self.world
+                            .c10_trigger_candidates
+                            .iter()
+                            .filter(|(_, kind)| {
+                                **kind == iroha_data_model::events::TriggeringEventType::Data
+                            })
+                            .map(|(id, _)| id.clone()),
+                    );
+                    scan.candidates.sort_unstable();
+                }
                 scan.candidate_index = 0;
                 scan.event_index = scan.event_index.saturating_add(1);
                 continue;
@@ -45122,11 +45669,19 @@ impl StateTransaction<'_, '_> {
                 .expect("a candidate list always belongs to its preceding event")
                 .clone();
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger filter checks")?;
-            let Some(generation) = self.world.triggers.data_trigger_matching_generation(
-                scan.snapshot,
-                &trg_id,
-                event.as_ref(),
-            ) else {
+            let generation = if let Some(row) = self.world.c10_triggers.get(&trg_id) {
+                self.world
+                    .triggers
+                    .eligible_data_generation(scan.snapshot, &trg_id)
+                    .filter(|_| c10_trigger_runtime::data_matches(row, event.as_ref()))
+            } else {
+                self.world.triggers.data_trigger_matching_generation(
+                    scan.snapshot,
+                    &trg_id,
+                    event.as_ref(),
+                )
+            };
+            let Some(generation) = generation else {
                 continue;
             };
             return Ok(Some((
@@ -45173,21 +45728,27 @@ impl StateTransaction<'_, '_> {
     }
     fn trigger_args_from_event(
         &self,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
     ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
-            EventBox::ExecuteTrigger(ev) => Ok(ev.args().clone()),
-            EventBox::Data(shared) => self.trigger_args_from_data_event(shared.as_ref()),
+            c10_trigger_runtime::CallbackEvent::Event(EventBox::ExecuteTrigger(ev)) => {
+                Ok(ev.args().clone())
+            }
+            c10_trigger_runtime::CallbackEvent::Event(EventBox::Data(shared)) => {
+                self.trigger_args_from_data_event(shared.as_ref())
+            }
             _ => Ok(Json::default()),
         }
     }
     fn trigger_host_args(
         &self,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         fallback: Json,
     ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
-            EventBox::ExecuteTrigger(_) | EventBox::Data(_) => self.trigger_args_from_event(event),
+            c10_trigger_runtime::CallbackEvent::Event(
+                EventBox::ExecuteTrigger(_) | EventBox::Data(_),
+            ) => self.trigger_args_from_event(event),
             _ => Ok(fallback),
         }
     }
@@ -45367,7 +45928,7 @@ impl StateTransaction<'_, '_> {
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
-        event: &EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         metadata: &Metadata,
         summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
         nft_seq_base_override: Option<u64>,
@@ -45464,9 +46025,10 @@ impl StateTransaction<'_, '_> {
                 .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
+                drop(host);
+                self.record_vm_execution(&vm, &error);
                 let attempt =
                     crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
-                drop(host);
                 drop(vm);
                 let error = match attempt {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
@@ -45573,6 +46135,48 @@ impl StateTransaction<'_, '_> {
             Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)))
         }
     }
+    /// Resolve the raw executable from the registered C10 action under its exact profile.
+    fn resolve_c10_trigger_program(
+        &mut self,
+        id: &TriggerId,
+        hash: &HashOf<iroha_data_model::transaction::IvmBytecode>,
+    ) -> Result<Option<ResolvedIvmTriggerProgram>, ValidationFail> {
+        let Some(stored) = self.world.c10_triggers.get(id) else {
+            return Ok(None);
+        };
+        let iroha_data_model::transaction::Executable::Ivm(bytes) =
+            stored.trigger().action.executable()
+        else {
+            return Err(ValidationFail::NotPermitted(
+                "C10 trigger changed its executable kind".into(),
+            ));
+        };
+        if HashOf::new(bytes) != *hash {
+            return Err(ValidationFail::NotPermitted(
+                "C10 trigger executable changed after matching".into(),
+            ));
+        }
+        let profile = ivm::IvmProfileId::C10_ABI_V1;
+        crate::smartcontracts::ivm::host_profile::ensure_in_transaction(self, profile)?;
+        let summary = IvmCache::with_locked(self.ivm_cache, |cache| {
+            cache.summarize_executable_for_profile(bytes.as_ref(), profile)
+        })
+        .map_err(|error| {
+            self.record_c10_admission_error(&error);
+            match crate::execution_attempt::ExecutionDeferred::try_from_vm_error(error) {
+                Ok(reason) => self.world.defer_execution(reason),
+                Err(error) => crate::smartcontracts::ivm::program_admission_error(error),
+            }
+        })?;
+        Ok(Some(match summary {
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(program) => {
+                ResolvedIvmTriggerProgram::Contract(program.prepared_contract().clone())
+            }
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(program) => {
+                ResolvedIvmTriggerProgram::Generic(program)
+            }
+        }))
+    }
     /// Actual synchronous trigger scope, including generic and nested by-call bodies.
     pub(crate) fn execution_callback_active(&self) -> bool {
         self.active_trigger_execution_depth != 0
@@ -45590,10 +46194,38 @@ impl StateTransaction<'_, '_> {
         step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        self.execute_trigger_event(
+            id,
+            authority,
+            executable,
+            c10_trigger_runtime::CallbackEvent::Event(&event),
+            step_index,
+            nft_seq_base_override,
+        )
+    }
+
+    fn execute_trigger_event(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        if self.world.c10_triggers.get(id).is_some() {
+            self.mark_c10_execution();
+        }
         let expectation =
             crate::runtime::deferred_consent::trigger_expectation(self, id, authority, executable)
                 .map_err(ValidationFail::InstructionFailed)?;
         crate::runtime::deferred_consent::with_scope(self, expectation, |tx| {
+            if tx.world.c10_triggers.get(id).is_some() {
+                crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+                    tx,
+                    ivm::IvmProfileId::C10_ABI_V1,
+                )?;
+            }
             tx.execute_trigger_with_consent_scope(
                 id,
                 authority,
@@ -45611,7 +46243,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
-        event: EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
@@ -45635,7 +46267,14 @@ impl StateTransaction<'_, '_> {
                 callback_index: Some(lifecycle_index),
             },
             |tx| {
-                tx.world.triggers.lifecycle_invoke(id, lifecycle_index);
+                if tx.world.c10_triggers.get(id).is_some() {
+                    let snapshot = tx.c10_trigger_snapshot(id);
+                    tx.world
+                        .triggers
+                        .lifecycle_invoke_snapshot(id, lifecycle_index, snapshot);
+                } else {
+                    tx.world.triggers.lifecycle_invoke(id, lifecycle_index);
+                }
                 let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());
                 let result = if tx.active_trigger_execution_depth >= max_depth {
                     Err(TriggerExecutionFail::MaxDepthExceeded.into())
@@ -45679,7 +46318,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
-        event: EventBox,
+        event: c10_trigger_runtime::CallbackEvent<'_>,
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
@@ -45911,28 +46550,21 @@ impl StateTransaction<'_, '_> {
                         summary.profile(),
                         &summary.metadata,
                     )?;
-                let manifest = self
-                    .world
-                    .contract_manifests
-                    .get(
-                        &ContractArtifactId::for_address(
-                            &identity.contract_address,
-                            identity.code_hash,
-                        )
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
-                    )
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(format!(
-                            "contract instance `{}` has no manifest",
-                            identity.contract_address
-                        ))
-                    })?;
-                crate::smartcontracts::ivm::validate_manifest_hashes(
-                    manifest,
+                if self.world.c10_triggers.get(id).is_some()
+                    || summary.prepared_contract().profile_id() == ivm::IvmProfileId::C10_ABI_V1
+                {
+                    self.mark_c10_execution();
+                    crate::executor::ensure_contract_invocation_code_hash(
+                        invocation,
+                        identity.code_hash,
+                    )?;
+                }
+                c10_trigger_runtime::validate_callback_manifest(
+                    &*self.world,
+                    &identity,
                     summary.code_hash,
                     summary.abi_hash,
-                )
-                .map_err(ValidationFail::IvmAdmission)?;
+                )?;
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
                 } else {
@@ -45973,7 +46605,7 @@ impl StateTransaction<'_, '_> {
                     ))
                 })?;
                 let trigger_args = self
-                    .trigger_args_from_event(&event)
+                    .trigger_args_from_event(event)
                     .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                 let contract_call_context =
                     crate::executor::parse_prepared_trigger_invocation_execution_context(
@@ -46066,11 +46698,13 @@ impl StateTransaction<'_, '_> {
                     .and_then(|()| vm.run_with_host(&mut host))
                     .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                let run_error = run_result.err().map(|error| {
-                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
-                });
-                if let Some(attempt) = run_error {
+                if let Err(error) = run_result {
                     drop(host);
+                    self.record_vm_execution(&vm, &error);
+                    let attempt =
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &vm, error,
+                        );
                     let error = match attempt {
                         crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                             return Err(self.defer_execution(reason).into());
@@ -46088,7 +46722,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                         context,
                         summary.prepared_contract().artifact(),
-                        &event,
+                        event.scheduled_time(),
                         id,
                     )
                 });
@@ -46113,22 +46747,34 @@ impl StateTransaction<'_, '_> {
                 (Ok(cvs.into()), None)
             }
             ExecutableRef::Ivm(blob_hash) => {
-                if let Some(admitted) = self.resolve_ivm_trigger_program(blob_hash)? {
-                    let contract_call_metadata = self
-                        .world
-                        .triggers
-                        .inspect_by_id(id, |action| action.metadata().clone())
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "IVM trigger `{id}` disappeared before callback dispatch"
-                            ))
-                        })?;
+                let c10 = self.world.c10_triggers.get(id).is_some();
+                let program = if c10 {
+                    self.resolve_c10_trigger_program(id, blob_hash)?
+                } else {
+                    self.resolve_ivm_trigger_program(blob_hash)?
+                };
+                if let Some(admitted) = program {
+                    let contract_call_metadata = if c10 {
+                        self.world
+                            .c10_triggers
+                            .get(id)
+                            .map(|row| row.trigger().action.metadata().clone())
+                    } else {
+                        self.world
+                            .triggers
+                            .inspect_by_id(id, |action| action.metadata().clone())
+                    }
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "IVM trigger `{id}` disappeared before callback dispatch"
+                        ))
+                    })?;
                     match admitted {
                         ResolvedIvmTriggerProgram::Generic(summary) => (
                             self.execute_generic_ivm_trigger_program(
                                 id,
                                 authority,
-                                &event,
+                                event,
                                 &contract_call_metadata,
                                 &summary,
                                 nft_seq_base_override,
@@ -46205,30 +46851,12 @@ impl StateTransaction<'_, '_> {
                                 ))
                                 .into());
                             }
-                            let manifest = self
-                                .world
-                                .contract_manifests
-                                .get(
-                                    &ContractArtifactId::for_address(
-                                        &runtime_identity.contract_address,
-                                        runtime_identity.code_hash,
-                                    )
-                                    .map_err(|error| {
-                                        ValidationFail::NotPermitted(error.to_string())
-                                    })?,
-                                )
-                                .ok_or_else(|| {
-                                    ValidationFail::NotPermitted(format!(
-                                        "contract instance `{}` has no manifest",
-                                        runtime_identity.contract_address
-                                    ))
-                                })?;
-                            crate::smartcontracts::ivm::validate_manifest_hashes(
-                                manifest,
+                            c10_trigger_runtime::validate_callback_manifest(
+                                &*self.world,
+                                &runtime_identity,
                                 prepared_contract.code_hash(),
                                 Hash::prehashed(prepared_contract.contract_interface().abi_hash),
-                            )
-                            .map_err(ValidationFail::IvmAdmission)?;
+                            )?;
                             let entrypoint_authorization =
                                 crate::executor::authorize_prepared_raw_contract_selector(
                                     &self.world,
@@ -46262,7 +46890,7 @@ impl StateTransaction<'_, '_> {
                                 "trigger lifecycle selectors are rejected before state validation"
                             );
                             let trigger_args = self
-                                .trigger_args_from_event(&event)
+                                .trigger_args_from_event(event)
                                 .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let mut contract_call_context =
                                 crate::executor::parse_prepared_trigger_call_execution_context(
@@ -46296,7 +46924,7 @@ impl StateTransaction<'_, '_> {
                         })?;
                             }
                             let host_args = self
-                                .trigger_host_args(&event, contract_call_context.args().clone())
+                                .trigger_host_args(event, contract_call_context.args().clone())
                                 .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let contract_runtime_context = contract_call_context.runtime_context();
                             // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
@@ -46364,13 +46992,10 @@ impl StateTransaction<'_, '_> {
                                 .and_then(|()| vm.run_with_host(&mut host))
                                 .and_then(|()| host.finish_contract_result(&vm).map(|_| ()));
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                            let run_error = run_result.err().map(|error| {
-                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &vm, error,
-                                )
-                            });
-                            if let Some(attempt) = run_error {
+                            if let Err(error) = run_result {
                                 drop(host);
+                                self.record_vm_execution(&vm, &error);
+                                let attempt = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
                                 let error = match attempt {
                                     crate::execution_attempt::ExecutionAttemptError::Deferred(
                                         reason,
@@ -46397,7 +47022,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                                     context,
                                     prepared_contract.artifact(),
-                                    &event,
+                                    event.scheduled_time(),
                                     id,
                                 )
                             });
@@ -46573,8 +47198,15 @@ mod proof_status_restore;
 mod sccp_delta;
 pub(crate) mod sccp_snapshot_state;
 pub use sccp_snapshot_state::SccpRestoreError;
+pub(crate) mod generic_carrier_storage;
 pub(crate) mod snapshot_service_state;
 pub(crate) mod snapshot_storage;
+#[cfg(test)]
+use generic_carrier_storage::CarrierFixtureStorage;
+use generic_carrier_storage::{
+    ArtifactStorage, ArtifactStorageMode, CarrierStorage, CarrierStorageMode, RetainedCarrierBytes,
+    RetainedCarrierKey,
+};
 mod verifying_key_index_validation;
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotNoritoBlob {

@@ -772,7 +772,7 @@ impl ModuleBuildGraph {
                         None,
                     ))
                 })?;
-        let suite = session.build_typed_program(suite_typed, Some(source_name))?;
+        let suite = session.build_test_harness(suite_typed, source_name)?;
         let has_runtime_entrypoint = runtime_typed.items.iter().any(|item| {
             let TypedItem::Function(function) = item;
             function.modifiers.kind != FunctionKind::Private

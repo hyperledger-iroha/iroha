@@ -16,10 +16,11 @@ mod credential;
 pub mod issuer_worker;
 mod owner;
 mod prekey;
+mod spartan_credential;
 pub use carrier::{
     ANDROID_CERTIFICATE_MAX_BYTES, ANDROID_CHAIN_MAX, ANDROID_CHAIN_MAX_BYTES, ANDROID_CHAIN_MIN,
     EVIDENCE_MAX_BYTES, IssuerEvidenceV1, PlatformEvidenceV1, REQUEST_MAX_BYTES, RESULT_MAX_BYTES,
-    RequestBodyV1, RequestV1, ResultV1,
+    RequestBodyV1, RequestV1, ResultV1, verify_initial_credential_fields_v1,
 };
 pub(crate) use credential::platform_key_profile;
 pub use owner::{
@@ -28,3 +29,7 @@ pub use owner::{
 };
 pub(crate) use prekey::GenerationAuthorizationV1;
 pub use prekey::{PREKEY_DISPATCH_MAX_BYTES, PreKeyDispatchV1};
+pub use spartan_credential::{
+    SPARTAN_CREDENTIAL_BYTES_V1, SPARTAN_SIGNER_CERTIFICATE_BYTES_V1, SpartanCredentialProfileV1,
+    spartan_signer_certificate_original_v1,
+};

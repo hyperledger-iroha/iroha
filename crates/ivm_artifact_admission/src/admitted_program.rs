@@ -8,6 +8,7 @@
 
 use super::VerifiedContractArtifact;
 use iroha_crypto::Hash;
+use ivm_abi::error::VmTrap;
 use ivm_abi::{IvmProfileId, SyscallPolicy, VMError, metadata::ProgramMetadata};
 
 /// Fixed scalar identity derived only by the native admission owner.
@@ -102,11 +103,11 @@ impl VerifiedContractArtifact {
             || seal.code_offset < seal.header_len
             || ivm_abi::metadata::contract_code_hash(artifact) != seal.code_hash
         {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::Trap(VmTrap::InvalidMetadata));
         }
         let code = artifact
             .get(seal.code_offset..)
-            .ok_or(VMError::InvalidMetadata)?;
+            .ok_or(VMError::Trap(VmTrap::InvalidMetadata))?;
         Ok(AdmittedProgram {
             metadata: &seal.metadata,
             syscall_policy: seal.profile.policy(),
@@ -118,6 +119,7 @@ impl VerifiedContractArtifact {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ivm_abi::error::VmTrap;
 
     fn actual() -> (Vec<u8>, VerifiedContractArtifact) {
         let bytes = kotodama_lang::compiler::Compiler::new_c10()
@@ -168,7 +170,7 @@ mod tests {
         verified.syscall_policy = SyscallPolicy::AbiV1;
         assert!(matches!(
             verified.borrow_admitted_program(&bytes),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
     }
 
@@ -199,14 +201,14 @@ mod tests {
         ] {
             assert!(matches!(
                 changed.borrow_admitted_program(&bytes),
-                Err(VMError::InvalidMetadata)
+                Err(VMError::Trap(VmTrap::InvalidMetadata))
             ));
         }
         let mut changed_bytes = bytes.clone();
         changed_bytes[8] ^= 1;
         assert!(matches!(
             verified.borrow_admitted_program(&changed_bytes),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
     }
 }

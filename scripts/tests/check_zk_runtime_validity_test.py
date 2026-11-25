@@ -1303,7 +1303,10 @@ def test_canonical_ballot_decode_refusal_is_distinct_from_missing_execution() ->
     assert (decoding["status"], decoding["owner"]) == ("local_resource", "P.8")
     assert {tuple(site) for site in decoding["sites"]} == {
         (f"crates/iroha_data_model/src/governance/anonymous_ballot/{name}.rs",
-         "unavailable", "unavailable", 2) for name in ("ballot", "context", "framing")
+         "unavailable", "unavailable", count)
+        for name, count in (
+            ("ballot", 2), ("context", 4), ("framing", 3), ("governance_certificate/checked", 3),
+        )
     }
     source = (ROOT / decoding["path"]).read_text()
     assert "norito::decode_canonical_for_admission(bytes, limits).map_err(|error|" in source
@@ -1386,6 +1389,7 @@ def test_native_lifecycle_evidence_does_not_hide_deployment_bootstrap_authority(
         "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
         "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
         "crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs",
+        "crates/iroha_data_model/src/governance/anonymous_ballot/runtime_upgrade.rs",
         "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
     }
     bootstrap = entry(CENSUS, "privacy.taira_bootstrap_authority")

@@ -19,8 +19,8 @@ use std::{ffi::OsStr, sync::Arc};
 #[path = "body_history/records.rs"]
 mod records;
 pub(in crate::managed) use records::MAX_BODY_BYTES;
-pub(super) use records::UnsignedEnrollment;
 use records::*;
+pub(super) use records::{MAX_BODIES, UnsignedEnrollment};
 
 #[path = "body_history/publication.rs"]
 mod publication;
@@ -54,7 +54,7 @@ impl EnrollmentReads for NativeEnrollmentReads {
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
-        owner.read_current(&policy.binding, checkpoint, deadline)
+        owner.historical_custody(&policy.binding, checkpoint, deadline)
     }
 }
 
@@ -2364,6 +2364,7 @@ impl SigningTurn<'_> {
     }
 }
 impl BodyHistory {
+    #[cfg(test)]
     pub(super) fn initialize(
         owner: &ManagedStreamTokenCustody,
         purpose: CustodyPurpose,
@@ -2372,11 +2373,31 @@ impl BodyHistory {
         turn: &SigningTurn<'_>,
         deadline: Instant,
     ) -> Result<Self> {
+        Self::initialize_with_witness(
+            owner,
+            purpose,
+            unsigned,
+            fees,
+            turn,
+            deadline,
+            SelectionWitness::PreviouslyUncaptured,
+        )
+    }
+    pub(super) fn initialize_with_witness(
+        owner: &ManagedStreamTokenCustody,
+        purpose: CustodyPurpose,
+        unsigned: UnsignedEnrollment,
+        fees: &Fees,
+        turn: &SigningTurn<'_>,
+        deadline: Instant,
+        witness: SelectionWitness<'_>,
+    ) -> Result<Self> {
         if Self::open(owner, purpose)?.is_some() {
             return Err(invalid("enrollment operation already selected"));
         }
         let selection = Selection::new(owner, purpose, &unsigned, fees)?;
         turn.check(&selection, deadline)?;
+        let proof_hash = unsigned.statement.anchor.block_hash;
         let reservation = Reservation {
             ordinal: 1,
             outer: selection.digest()?,
@@ -2395,6 +2416,7 @@ impl BodyHistory {
         let anchor_bytes = encode(&anchor, MAX_BODY_BYTES)?;
         let parent = private_parent(&owner.authority.directory)?;
         turn.check(&selection, deadline)?;
+        witness.publish(owner, &proof_hash)?;
         let root = parent.publish_private_child(
             purpose.directory_name()?,
             &[
@@ -2503,6 +2525,7 @@ impl BodyHistory {
         Ok(plan)
     }
     /// Retain exactly one successor after live native qualification and complete unsigned inspection.
+    #[cfg(test)]
     pub(super) fn reserve_successor(
         self,
         owner: &ManagedStreamTokenCustody,
@@ -2510,6 +2533,25 @@ impl BodyHistory {
         current: &VerifiedStreamTokenCustodyStateV1,
         authorization: &dyn DispatchAuthorization,
         deadline: Instant,
+    ) -> Result<Self> {
+        Self::reserve_successor_with_witness(
+            self,
+            owner,
+            unsigned,
+            current,
+            authorization,
+            deadline,
+            SelectionWitness::PreviouslyUncaptured,
+        )
+    }
+    pub(super) fn reserve_successor_with_witness(
+        self,
+        owner: &ManagedStreamTokenCustody,
+        unsigned: UnsignedEnrollment,
+        current: &VerifiedStreamTokenCustodyStateV1,
+        authorization: &dyn DispatchAuthorization,
+        deadline: Instant,
+        witness: SelectionWitness<'_>,
     ) -> Result<Self> {
         if self.anchor.pending.is_some() {
             return Err(ManagedBootstrapFailure::TransitionPending.into());
@@ -2593,6 +2635,10 @@ impl BodyHistory {
         };
         // The exact typed claim is durable before the first successor write. Uncertain outcomes
         // consume this selection and can never redraw its statement or interval in the same epoch.
+        witness.publish(
+            owner,
+            &planned.reservation.unsigned.statement.anchor.block_hash,
+        )?;
         authorization.claim_body_replacement(&planned, deadline)?;
         let next = Anchor {
             outer: self.selection.digest()?,

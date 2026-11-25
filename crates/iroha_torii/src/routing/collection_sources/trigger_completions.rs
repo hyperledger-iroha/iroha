@@ -115,7 +115,7 @@ pub(crate) fn visit_block_rows(
             .execution_call_hash(block.hash(), block)
             .map_err(conversion_error)?
             .to_string();
-        let entrypoint_index = output.network().map(|row| u64::from(row.input_index));
+        let entrypoint_index = output.network_index().map(u64::from);
         for (completion_index, completion) in completions.iter().enumerate().rev() {
             let coordinate = (block_height, output_index, completion_index as u64);
             if after.is_some_and(|after| coordinate >= after) {

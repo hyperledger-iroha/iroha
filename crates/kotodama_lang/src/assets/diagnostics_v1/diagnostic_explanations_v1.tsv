@@ -110,8 +110,8 @@ E_LOCAL_IMPORT_CYCLE	Resolve	local module imports form a cycle	Remove an import 
 E_LOCAL_SHADOWING	Resolve	a local binding duplicates or shadows another visible symbol	Rename the binding so every local and source-unit declaration remains unambiguous.	-	-
 E_MALFORMED_CALL	Semantic	resolved call metadata was internally inconsistent	Report this compiler defect with a minimal source reproducer; malformed resolved calls never produce artifacts.	-	-
 E_MATCH_DUPLICATE_PATTERN	Semantic	a match expression repeats a variant pattern	Keep exactly one arm for each variant in the matched sum family.	-	-
-E_MATCH_EMPTY	Semantic	a match expression has no arms	Add the complete namespaced pattern set for the matched Option or Result.	-	-
-E_MATCH_NON_EXHAUSTIVE	Semantic	a sum match omits an active or inactive variant	Cover both Option variants or both Result variants explicitly.	-	-
+E_MATCH_EMPTY	Semantic	a match expression has no arms	Add an arm for each variant of the matched type.	-	-
+E_MATCH_NON_EXHAUSTIVE	Semantic	a match omits one or more variants	Add an explicit arm for each missing variant of the matched type.	-	-
 E_MATCH_WILDCARD	Parse	a match arm uses a `_` wildcard pattern	Name every variant: `Option::some(value)` and `Option::none`, or `Result::ok(value)` and `Result::err(error)`; bind an unused payload as `_`.	match maybe {\n    Option::some(v) => v,\n    _ => 0,\n}	match maybe {\n    Option::some(v) => v,\n    Option::none => 0,\n}
 E_MISSING_DECLARATION_TYPE	Parse	a parameter, state, constant or field declaration names no type	Write the type before the name, for example `fn run(int value)` or `state int count;`.	fn run(value) {\n}	fn run(int value) {\n}
 E_MISSING_EXPORT	Resolve	a package export names no module function	Define the exported function in exactly one module or remove the stale export.	-	-

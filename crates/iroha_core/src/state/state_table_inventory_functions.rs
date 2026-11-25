@@ -22,6 +22,7 @@ pub(super) struct StateHashFunction {
 }
 
 const BLOCK_HASH: &str = "Reads committed block hashes or the hash of the current block header: authenticated history and block identity, not a digest of State content";
+const RETIREMENT_ROOT_IDENTITY: &str = "Validates the original certified execution tip and returns the network, root scope and consensus instance that own the retirement cut";
 const RECORD_IDENTITY: &str = "Returns the identifier, content hash or stored digest of one record, transaction or message: no digest over a table or cell";
 const DERIVED_SEED: &str =
     "Derives a sampling seed or an identifier from committed records or from the current block";
@@ -268,6 +269,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Roots(&["execution_witness_roots"]),
     ),
     function(
+        "crates/iroha_core/src/runtime/retirement/source_candidate.rs",
+        "original_root",
+        1,
+        UseOwner::Other(Use::Record, RETIREMENT_ROOT_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/runtime/taira_activation.rs",
         "validate_boundary",
         1,
@@ -282,6 +289,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/runtime/taira_read_scope.rs",
         "validate_context",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/code.rs",
+        "fetch_bound_contract_program",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
@@ -1538,6 +1551,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "proof_from_chain",
         1,
         UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/sumeragi/finality/certified_history.rs",
+        "header_digest",
+        1,
+        UseOwner::Other(Use::Record, BLOCK_HASH),
     ),
     function(
         "crates/iroha_core/src/sumeragi/genesis_meta.rs",

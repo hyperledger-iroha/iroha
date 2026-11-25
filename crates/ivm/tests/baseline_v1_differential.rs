@@ -246,17 +246,24 @@ struct Recorder<H> {
     inner: H,
     trace: Trace,
 }
-fn args_json(registers: &[u64; ivm::BASELINE_REGISTER_COUNT]) -> Value {
-    Value::Array(registers[10..=17].iter().map(|value| n(*value)).collect())
+fn public_args(vm: &dyn ivm::host::SyscallContext) -> Result<[u64; 8], VMError> {
+    let mut words = [0; 8];
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = vm.public_register(index + 10)?;
+    }
+    Ok(words)
 }
-fn pointer_args_json(vm: &IVM, registers: &[u64; ivm::BASELINE_REGISTER_COUNT]) -> Value {
+fn args_json(registers: &[u64; 8]) -> Value {
+    Value::Array(registers.iter().map(|value| n(*value)).collect())
+}
+fn pointer_args_json(vm: &dyn ivm::host::SyscallContext, registers: &[u64; 8]) -> Value {
     let mut out = Vec::new();
-    for (index, pointer) in registers.iter().enumerate().take(18).skip(10) {
-        let Ok(tlv) = vm.validate_tlv(*pointer) else {
+    for (index, pointer) in registers.iter().enumerate() {
+        let Ok(tlv) = vm.public_tlv(*pointer) else {
             continue;
         };
         let mut entry = Map::new();
-        entry.insert("register".to_owned(), n(index as u64));
+        entry.insert("register".to_owned(), n((index + 10) as u64));
         entry.insert("type_id".to_owned(), n(u64::from(tlv.type_id as u16)));
         entry.insert("payload".to_owned(), blob(tlv.payload));
         out.push(Value::Object(entry));
@@ -273,7 +280,11 @@ impl<H: IVMHost + 'static> IVMHost for Recorder<H> {
     fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
         self.inner.prepared_entrypoint_arguments()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         let result = self.inner.prepare_syscall(number, vm);
         self.trace.push(obj([
             ("event", s("prepare")),
@@ -282,12 +293,16 @@ impl<H: IVMHost + 'static> IVMHost for Recorder<H> {
         ]));
         result
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        let before = vm.registers.baseline_snapshot();
-        let gas_before = vm.remaining_gas();
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
+        let before = public_args(vm)?;
+        let gas_before = vm.quote().remaining_gas();
         let pointers = pointer_args_json(vm, &before);
         let result = self.inner.syscall(number, vm);
-        let after = vm.registers.baseline_snapshot();
+        let after = public_args(vm)?;
         self.trace.push(obj([
             ("event", s("call")),
             ("number", n(u64::from(number))),
@@ -300,7 +315,7 @@ impl<H: IVMHost + 'static> IVMHost for Recorder<H> {
             ("result", gas_result_json(&result)),
             ("ret", args_json(&after)),
             ("gas_before", n(gas_before)),
-            ("gas_after", n(vm.remaining_gas())),
+            ("gas_after", n(vm.quote().remaining_gas())),
         ]));
         result
     }

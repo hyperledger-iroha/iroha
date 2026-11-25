@@ -1,6 +1,7 @@
 //! Predecoder golden vectors for the wide 32-bit encoding. These assertions ensure the cached
 //! decode stream preserves instruction words and lengths across metadata variations.
 use ivm::{ProgramMetadata, VMError, encoding, instruction, ivm_cache::IvmCache, ivm_mode};
+use ivm_abi::error::VmTrap;
 fn push_word(buf: &mut Vec<u8>, word: u32) {
     buf.extend_from_slice(&word.to_le_bytes());
 }
@@ -103,7 +104,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
     artifact.extend_from_slice(&code);
     assert!(matches!(
         IvmCache::decode_artifact(&artifact),
-        Err(VMError::MaxCyclesWithoutZk { max_cycles: 65 })
+        Err(VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 65 }))
     ));
 }
 #[test]
@@ -124,17 +125,17 @@ fn decode_artifact_rejects_retired_or_unknown_minor_version() {
     assert!(match (
         &(IvmCache::decode_artifact(&retired_artifact)
             .expect_err("the sole header policy rejects retired 1.0 artifacts")),
-        &(VMError::UnsupportedProgramVersion { major: 1, minor: 0 })
+        &(VMError::Trap(VmTrap::UnsupportedProgramVersion { major: 1, minor: 0 }))
     ) {
         (
-            VMError::UnsupportedProgramVersion {
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: actual_field_0,
                 minor: actual_field_1,
-            },
-            VMError::UnsupportedProgramVersion {
+            }),
+            VMError::Trap(VmTrap::UnsupportedProgramVersion {
                 major: expected_field_0,
                 minor: expected_field_1,
-            },
+            }),
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
@@ -147,20 +148,20 @@ fn decode_artifact_rejects_retired_or_unknown_minor_version() {
         assert!(
             match (
                 &(err),
-                &(VMError::UnsupportedProgramVersion {
+                &(VMError::Trap(VmTrap::UnsupportedProgramVersion {
                     major: 1,
                     minor: vmin,
-                })
+                }))
             ) {
                 (
-                    VMError::UnsupportedProgramVersion {
+                    VMError::Trap(VmTrap::UnsupportedProgramVersion {
                         major: actual_field_0,
                         minor: actual_field_1,
-                    },
-                    VMError::UnsupportedProgramVersion {
+                    }),
+                    VMError::Trap(VmTrap::UnsupportedProgramVersion {
                         major: expected_field_0,
                         minor: expected_field_1,
-                    },
+                    }),
                 ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
                 _ => false,
             },

@@ -1,4 +1,5 @@
 use ivm::{Memory, Perm, VMError, decode};
+use ivm_abi::error::VmTrap;
 fn decode_from_bytes(bytes: &[u8]) -> Result<u32, VMError> {
     let mut mem = Memory::new();
     mem.load_code(bytes)
@@ -32,10 +33,10 @@ fn compressed_forms_are_rejected_in_wide_mode() {
         let bytes = inst16.to_le_bytes();
         let err = decode_from_bytes(&bytes).expect_err(name);
         match err {
-            VMError::MemoryAccessViolation {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::EXECUTE,
                 ..
-            } => {}
+            }) => {}
             other => panic!("{name} returned unexpected error: {other:?}"),
         }
     }

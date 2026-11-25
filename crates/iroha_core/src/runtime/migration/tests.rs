@@ -12,6 +12,9 @@ use iroha_data_model::{
 };
 
 use super::*;
+
+mod funding_tests;
+mod refusal_tests;
 use crate::{
     runtime::{
         catalog::{
@@ -153,11 +156,31 @@ fn run_block(world: &World, height: u64, writes: impl FnOnce(&mut crate::state::
     let mut transaction = block
         .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
     activate_due(&mut transaction, height, 1_000, &committee()).expect("block start");
-    run_stages(&mut transaction, height);
     transaction.apply();
+    run_stages_for_testing(&mut block, height).expect("migration stages complete");
     writes(&mut block);
-    barrier(&mut block, height);
+    barrier(&mut block, height).expect("migration barrier completes");
     block.commit();
+}
+
+fn run_stages_for_testing(world: &mut WorldBlock<'_>, height: u64) -> MigrationBoundaryResult<()> {
+    let config = iroha_config::parameters::actual::LaneConfig::default();
+    let lane_map = std::collections::BTreeMap::new();
+    let mut quantity_candidate =
+        crate::state::fastpq_quantity_capture::QuantityCandidateArchive::default();
+    run_stages(
+        world,
+        height,
+        &mut MigrationContext {
+            lane_config: &config,
+            current_slot: 0,
+            lane_map: &lane_map,
+            quantity_candidate: &mut quantity_candidate,
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
+            world_lifetime: core::marker::PhantomData,
+        },
+    )
 }
 
 fn migration_id(world: &World) -> DefinitionId {
@@ -304,7 +327,15 @@ fn a_migration_copies_cuts_over_drains_and_retires_its_old_storage() {
             "draining leaves the successor alone"
         );
 
-        // Retirement: the empty old storage leaves the selection with the migration.
+        // Retirement adds exactly the empty old storage to the already omitted members.
+        // Independently dormant owners (including generic carrier backing) stay omitted.
+        let mut omitted =
+            crate::runtime::uninstalled_world_members(world.view().runtime_selection())
+                .unwrap()
+                .members;
+        assert!(!omitted.contains(&"tx_sequences"));
+        omitted.push("tx_sequences");
+        omitted.sort_unstable();
         let migration = migration_id(&world);
         let retire = schedule_step(&world, MigrationStep::Retire, 18);
         run_block(&world, 18, |_| {});
@@ -328,8 +359,8 @@ fn a_migration_copies_cuts_over_drains_and_retires_its_old_storage() {
             crate::runtime::uninstalled_world_members(view.runtime_selection())
                 .unwrap()
                 .members,
-            ["tx_sequences"],
-            "the retired field leaves snapshots"
+            omitted,
+            "only the retired field additionally leaves snapshots"
         );
     });
 }
@@ -396,11 +427,67 @@ fn a_restriction_suspends_a_migration_and_a_stale_write_stops_its_drain() {
 }
 
 #[test]
+fn live_barrier_mirrors_the_stage_fault_sentinel_before_and_after_copy_completion() {
+    with_migration(|| {
+        let world = world();
+        let accounts = accounts();
+        schedule_step(&world, MigrationStep::Start, 10);
+
+        // The first copying stage stores the even sequence 2. A later write in the same
+        // block changes that staged source row to the odd sentinel; it must reach the barrier.
+        run_block(&world, 10, |block| {
+            block.tx_sequences.insert(accounts[1].clone(), u64::MAX);
+        });
+        let (old, new) = rows(&world);
+        assert_eq!(old[1], (accounts[1].clone(), u64::MAX));
+        let staged_key = successor(&accounts[1], 0).unwrap().0;
+        assert!(
+            new.contains(&(staged_key, true)),
+            "the barrier kept a stale even value"
+        );
+        assert_eq!(new, copied(&old[..2]));
+        assert_eq!(record(&world).status, MigrationStatusV1::Running);
+
+        run_block(&world, 11, |_| {});
+        run_block(&world, 12, |_| {});
+        assert_eq!(record(&world).status, MigrationStatusV1::Complete(12));
+        let (old, new) = rows(&world);
+        assert_eq!(new, copied(&old));
+
+        // Completed copying still owes the live barrier. Change another even row so a stale
+        // successor is observable, then verify the governed cutover preserves the exact copy.
+        run_block(&world, 13, |block| {
+            block.tx_sequences.insert(accounts[3].clone(), u64::MAX);
+        });
+        let (old, new) = rows(&world);
+        assert_eq!(old[3], (accounts[3].clone(), u64::MAX));
+        let completed_key = successor(&accounts[3], 0).unwrap().0;
+        assert!(
+            new.contains(&(completed_key, true)),
+            "the completed barrier kept a stale even value"
+        );
+        assert_eq!(new, copied(&old));
+        assert_eq!(record(&world).status, MigrationStatusV1::Complete(12));
+
+        let cutover = schedule_step(&world, MigrationStep::CutOver, 14);
+        run_block(&world, 14, |_| {});
+        assert_eq!(
+            status_of(&world, &cutover),
+            ChangeSetStatusV1::Activated(14)
+        );
+        assert_eq!(record(&world).status, MigrationStatusV1::CutOver(14));
+        let (old, new) = rows(&world);
+        assert_eq!(new, copied(&old));
+    });
+}
+
+#[test]
 fn a_failing_stage_faults_the_migration_without_writing() {
     with_migration(|| {
         let world = world();
         let accounts = accounts();
-        // A row no stage accepts lies in the second batch.
+        // A copying-stage fault sentinel lies in the second batch. The shared row transform
+        // remains total so the barrier can still mirror every already-staged source row.
         let mut block = world.block();
         block.tx_sequences.insert(accounts[3].clone(), u64::MAX);
         block.commit();

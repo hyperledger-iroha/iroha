@@ -215,6 +215,53 @@ mod tests {
     use rand_chacha::ChaCha20Rng;
     use rand_core::{Rng, SeedableRng};
 
+    /// Bound both rounded Babai coefficients for every pair of positive halves
+    /// produced by the 126-bit transcript. This also checks the basis determinant
+    /// and the rounded-multiplier constants used by `decompose`.
+    #[test]
+    fn transcript_126_bit_halves_have_no_raw_scalar_exceptions() {
+        use num_bigint::{BigInt, Sign};
+
+        fn integer(limbs: &[u64; 4]) -> BigInt {
+            let bytes = limbs.map(u64::to_le_bytes).concat();
+            BigInt::from_bytes_le(Sign::Plus, &bytes)
+        }
+
+        fn check<C: GlvParams>() {
+            let modulus = integer(&(-C::ScalarExt::ONE).to_canonical_limbs()) + BigInt::from(1);
+            let zeta = integer(&C::ScalarExt::ZETA.to_canonical_limbs());
+            let scale = BigInt::from(1) << 256usize;
+            // Each signed doubling stream starts at 2 and consumes 63 pairs.
+            let max_half = BigInt::from(3) * (BigInt::from(1) << 63usize) - BigInt::from(1);
+            let b1 = integer(&C::B1);
+            let b2 = integer(&C::B2);
+            let centered_image = |basis: &BigInt| {
+                let half = &modulus >> 1usize;
+                ((&zeta * basis + &half) % &modulus) - half
+            };
+            let t1 = centered_image(&b1);
+            let t2 = centered_image(&b2);
+            assert_eq!(&b2 * &t1 - &b1 * &t2, modulus);
+
+            for (basis, image, gamma) in [(&b1, t1, C::GAMMA1), (&b2, t2, C::GAMMA2)] {
+                assert_eq!(integer(&gamma), (&scale * basis) / &modulus);
+                let abs_image = if image.sign() == Sign::Minus {
+                    -image
+                } else {
+                    image
+                };
+                // k = (b + a*zeta) mod r. Its exact Babai coefficient is
+                // within max_half*(basis + |image|)/r of the target integer.
+                // Truncating the multiplier adds less than r/2^256. Their sum
+                // is below 1/2, so rounding recovers that integer on both axes.
+                let deviation = &max_half * (basis + abs_image);
+                assert!(2 * (deviation * &scale + &modulus * &modulus) < &modulus * &scale);
+            }
+        }
+        check::<Ep>();
+        check::<Eq>();
+    }
+
     fn check_decomposition<C: PastaCurve>(k: C::ScalarExt) {
         let d = C::glv_decompose(&k).expect("lattice bound");
         let k1 = C::ScalarExt::from_u128(d.k1);

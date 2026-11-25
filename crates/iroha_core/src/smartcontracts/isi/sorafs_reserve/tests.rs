@@ -953,6 +953,23 @@ fn committed_record_queries_are_finalized_exclusive_and_deterministic() {
         Err(QueryExecutionFail::Expired)
     );
 }
+// A query fixture can build several independent corrupt states in one test. Keep
+// each block and transaction in its own call frame while acquiring the next one.
+#[inline(never)]
+fn commit_reserve_query_fixture(
+    state: &mut State,
+    label: &'static str,
+    update: impl FnOnce(&mut StateTransaction<'_, '_>),
+) {
+    let header = block_header_at(2, NOW + 1);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    update(&mut transaction);
+    transaction.apply();
+    block.commit_world_overlay_for_testing().expect(label);
+    state.push_block_hash_for_testing(header.hash());
+}
+
 #[test]
 fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let governance = account(&keypair(0x85));
@@ -985,43 +1002,39 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
         ));
     }
     let mut maximum_page = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = maximum_page.block(header);
-        let mut transaction = block.transaction();
-        for marker in 1_u8..=129 {
-            let provider_id = ProviderId::new([marker; 32]);
-            let account = ReserveProviderAccountV1 {
-                terms: terms_for(provider_id, provider.clone()),
-                policy_digest: read_policy(transaction.world())
-                    .expect("read active policy")
-                    .expect("active policy")
-                    .policy_digest,
-                revision: 1,
-                reserve_balance: XorQuantity::zero(),
-                debt_principal: XorQuantity::zero(),
-                accrued_interest: XorQuantity::zero(),
-                credit_cap: xor_micro(1_000_000_000),
-                lifecycle_stage: ReserveLifecycleStage::Warning,
-                days_past_due: 0,
-                pending_movements: 0,
-                open_appeals: 0,
-                rent_charged_through_unix: NOW + 1,
-                interest_accrued_at_unix: NOW + 1,
-                updated_at_unix: NOW + 1,
-            };
-            transaction.world.smart_contract_state.insert(
-                reserve_provider_key(provider_id),
-                encode_state(&account, "maximum reserve provider page")
-                    .expect("encode provider account"),
-            );
-        }
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit maximum provider page");
-        maximum_page.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut maximum_page,
+        "commit maximum provider page",
+        |transaction| {
+            for marker in 1_u8..=129 {
+                let provider_id = ProviderId::new([marker; 32]);
+                let account = ReserveProviderAccountV1 {
+                    terms: terms_for(provider_id, provider.clone()),
+                    policy_digest: read_policy(transaction.world())
+                        .expect("read active policy")
+                        .expect("active policy")
+                        .policy_digest,
+                    revision: 1,
+                    reserve_balance: XorQuantity::zero(),
+                    debt_principal: XorQuantity::zero(),
+                    accrued_interest: XorQuantity::zero(),
+                    credit_cap: xor_micro(1_000_000_000),
+                    lifecycle_stage: ReserveLifecycleStage::Warning,
+                    days_past_due: 0,
+                    pending_movements: 0,
+                    open_appeals: 0,
+                    rent_charged_through_unix: NOW + 1,
+                    interest_accrued_at_unix: NOW + 1,
+                    updated_at_unix: NOW + 1,
+                };
+                transaction.world.smart_contract_state.insert(
+                    reserve_provider_key(provider_id),
+                    encode_state(&account, "maximum reserve provider page")
+                        .expect("encode provider account"),
+                );
+            }
+        },
+    );
     let maximum = FindSorafsReserveProviders::new(None, None, RESERVE_QUERY_MAX_ITEMS_V1)
         .execute(&maximum_page.view())
         .expect("maximum provider page remains within query budgets");
@@ -1045,60 +1058,52 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     assert!(maximum.has_more);
     assert_eq!(maximum.next_after, Some(ProviderId::new([128; 32])));
     let mut mismatched_key = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = mismatched_key.block(header);
-        let mut transaction = block.transaction();
-        let mut account = ReserveProviderAccountV1 {
-            terms: terms_for(ProviderId::new([0x21; 32]), provider.clone()),
-            policy_digest: read_policy(transaction.world())
-                .expect("read active policy")
-                .expect("active policy")
-                .policy_digest,
-            revision: 1,
-            reserve_balance: XorQuantity::zero(),
-            debt_principal: XorQuantity::zero(),
-            accrued_interest: XorQuantity::zero(),
-            credit_cap: xor_micro(1_000_000),
-            lifecycle_stage: ReserveLifecycleStage::Warning,
-            days_past_due: 0,
-            pending_movements: 0,
-            open_appeals: 0,
-            rent_charged_through_unix: NOW + 1,
-            interest_accrued_at_unix: NOW + 1,
-            updated_at_unix: NOW + 1,
-        };
-        account.terms.provider_id = ProviderId::new([0x22; 32]);
-        transaction.world.smart_contract_state.insert(
-            reserve_provider_key(ProviderId::new([0x21; 32])),
-            encode_state(&account, "mismatched reserve provider")
-                .expect("encode mismatched provider"),
-        );
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit mismatched provider key");
-        mismatched_key.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut mismatched_key,
+        "commit mismatched provider key",
+        |transaction| {
+            let mut account = ReserveProviderAccountV1 {
+                terms: terms_for(ProviderId::new([0x21; 32]), provider.clone()),
+                policy_digest: read_policy(transaction.world())
+                    .expect("read active policy")
+                    .expect("active policy")
+                    .policy_digest,
+                revision: 1,
+                reserve_balance: XorQuantity::zero(),
+                debt_principal: XorQuantity::zero(),
+                accrued_interest: XorQuantity::zero(),
+                credit_cap: xor_micro(1_000_000),
+                lifecycle_stage: ReserveLifecycleStage::Warning,
+                days_past_due: 0,
+                pending_movements: 0,
+                open_appeals: 0,
+                rent_charged_through_unix: NOW + 1,
+                interest_accrued_at_unix: NOW + 1,
+                updated_at_unix: NOW + 1,
+            };
+            account.terms.provider_id = ProviderId::new([0x22; 32]);
+            transaction.world.smart_contract_state.insert(
+                reserve_provider_key(ProviderId::new([0x21; 32])),
+                encode_state(&account, "mismatched reserve provider")
+                    .expect("encode mismatched provider"),
+            );
+        },
+    );
     assert!(matches!(
         FindSorafsReserveProviders::new(None, None, 1).execute(&mismatched_key.view()),
         Err(QueryExecutionFail::Conversion(message)) if message.contains("key does not match")
     ));
     let mut oversized_record = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = oversized_record.block(header);
-        let mut transaction = block.transaction();
-        transaction.world.smart_contract_state.insert(
-            reserve_provider_key(ProviderId::new([0x31; 32])),
-            vec![0xFF; RESERVE_QUERY_MAX_RECORD_BYTES_V1 + 1],
-        );
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit oversized provider record");
-        oversized_record.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut oversized_record,
+        "commit oversized provider record",
+        |transaction| {
+            transaction.world.smart_contract_state.insert(
+                reserve_provider_key(ProviderId::new([0x31; 32])),
+                vec![0xFF; RESERVE_QUERY_MAX_RECORD_BYTES_V1 + 1],
+            );
+        },
+    );
     assert!(matches!(
         FindSorafsReserveProviders::new(None, None, 1).execute(&oversized_record.view()),
         Err(QueryExecutionFail::Conversion(message)) if message.contains("record exceeds")
@@ -1499,69 +1504,57 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
         state
     };
     let mut missing_head = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = missing_head.block(header);
-        let mut transaction = block.transaction();
-        let mut reserve_state = read_reserve_state(transaction.world())
-            .expect("read reserve state")
-            .expect("reserve state exists");
-        reserve_state.journal_head.last_sequence = 0;
-        transaction.world.smart_contract_state.insert(
-            reserve_state_key().clone(),
-            encode_state(&reserve_state, "corrupt reserve state")
-                .expect("encode corrupt reserve state"),
-        );
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit missing-head corruption");
-        missing_head.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut missing_head,
+        "commit missing-head corruption",
+        |transaction| {
+            let mut reserve_state = read_reserve_state(transaction.world())
+                .expect("read reserve state")
+                .expect("reserve state exists");
+            reserve_state.journal_head.last_sequence = 0;
+            transaction.world.smart_contract_state.insert(
+                reserve_state_key().clone(),
+                encode_state(&reserve_state, "corrupt reserve state")
+                    .expect("encode corrupt reserve state"),
+            );
+        },
+    );
     assert!(matches!(
         FindSorafsReserveEvents::new(None, None, 10).execute(&missing_head.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
     let mut oversized = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = oversized.block(header);
-        let mut transaction = block.transaction();
-        transaction.world.smart_contract_state.insert(
-            event_key(1),
-            vec![0xFF; RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 + 1],
-        );
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit oversized-event corruption");
-        oversized.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut oversized,
+        "commit oversized-event corruption",
+        |transaction| {
+            transaction.world.smart_contract_state.insert(
+                event_key(1),
+                vec![0xFF; RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 + 1],
+            );
+        },
+    );
     assert!(matches!(
         FindSorafsReserveEvents::new(None, None, 10).execute(&oversized.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
     let mut orphan = build_policy_state();
-    {
-        let header = block_header_at(2, NOW + 1);
-        let mut block = orphan.block(header);
-        let mut transaction = block.transaction();
-        let mut record = read_persisted_event(transaction.world(), 1)
-            .expect("read policy event")
-            .expect("policy event exists");
-        record.sequence = 2;
-        record.target_block_height = 2;
-        record.event_index = 0;
-        transaction.world.smart_contract_state.insert(
-            event_key(2),
-            encode_state(&record, "orphan event").expect("encode orphan reserve event"),
-        );
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit orphan-event corruption");
-        orphan.push_block_hash_for_testing(header.hash());
-    }
+    commit_reserve_query_fixture(
+        &mut orphan,
+        "commit orphan-event corruption",
+        |transaction| {
+            let mut record = read_persisted_event(transaction.world(), 1)
+                .expect("read policy event")
+                .expect("policy event exists");
+            record.sequence = 2;
+            record.target_block_height = 2;
+            record.event_index = 0;
+            transaction.world.smart_contract_state.insert(
+                event_key(2),
+                encode_state(&record, "orphan event").expect("encode orphan reserve event"),
+            );
+        },
+    );
     assert!(matches!(
         FindSorafsReserveEvents::new(None, None, 10).execute(&orphan.view()),
         Err(QueryExecutionFail::Conversion(_))

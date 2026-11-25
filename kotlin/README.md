@@ -582,10 +582,11 @@ surface supports that contract.
 
 `HttpClientTransport.newDaToriiClient()` returns the typed DA client. It covers
 the proof-policy, commitment list/prove/verify, and pin-intent
-list/prove/verify routes. DA digests use `DaModels.Digest32`; proof counters use
+list/prove/verify routes for Kotlin and Java. Each pin proof carries the signed ingest authorization and the signed scope binding the exact storage ticket, manifest, commitment and alias. DA digests use `DaModels.Digest32`; proof counters use
 `BigInteger` so the full unsigned 64-bit wire range remains exact.
 
 ```kotlin
+// The transport ClientConfig supplies its LocalSigningContext and ToriiCanonicalRequestAuth.
 val da = transport.newDaToriiClient()
 var page = da.listPinIntents(
     DaModels.PinIntentListRequest(limit = BigInteger.valueOf(100)),
@@ -607,6 +608,10 @@ if (proof != null) {
     check(da.verifyPinIntent(proof).join().valid)
 }
 ```
+
+A direct `DaToriiClient.builder()` uses `.authenticatedProofs(context, auth)`
+to sign each prove and verify request over its exact network, URI, and body.
+Listings and proof policies are public.
 
 List routes use immutable, server-issued snapshot cursors and return an explicit
 nullable `nextCursor`. Proof routes use separate selector-only request types;
@@ -723,6 +728,32 @@ the same connection with `IrohaPeerNfcReaderExchangeV1.run` (Payment in, Credite
 The receiver durably admits the header and calls `receiveWithCompanion(requestId, payment, companion)`
 (execute selector 10) at COMMIT, persisting the Credited acknowledgement before exposing it.
 Reconnect only to recover interrupted contact; an exact retry never creates another Send.
+
+The wallet V1 profile is bound by reading its messages: the Payment must carry the hosted
+Request's completion and Credited must name its scheme. `KAGEMUSHA_SPARTAN_PAYMENT_V3` cannot be
+bound that way: its Payment restores its completed Request only inside the installed wallet, and
+its folded CreditStatus names no scheme. For it the carrier checks profile, kind, frozen sizes and
+exact bytes, and the same commands, chunks and resume carry it, but every binding is the wallet's:
+construct `IrohaPeerNfcProfilePolicyV1(profile, exchangeVerifier)` with an
+`IrohaPeerNfcExchangeVerifierV1` and use that policy for `readRequest`,
+`IrohaPeerNfcRequestReadV1.senderCheckpoint(payment, profilePolicy)`, `run`, the receiver session
+and its restored records. The verifier must accept a Request only for the wallet's signed scheme
+and asset, an outgoing Payment only as the wallet's exact retained Payment of the Send made for
+that Request, a received status only after the wallet verified it cryptographically against that
+Payment (`KagemushaSpartanWalletV1.verifyCreditStatus(sendOperationId, request, status)`), and a
+card's answered status only as the wallet's status for exactly the Payment it answers
+(`KagemushaSpartanWalletV1.receivedCreditStatus(requestId, receiveOperationId, payment)`: Native
+compares the complete IPM1 Payment, at most 12,182 bytes, with the one its released Receive
+retains, also after later operations moved the head, and refuses another Payment of the same
+Request). The two-argument `receivedCreditStatus` names no Payment and only shows a selected
+Receive; it is never a receipt handed to a payer. The status is verified once
+when its last byte arrives, before it is persisted or confirmed, and again whenever a checkpoint
+that carries it is restored. Without the verifier no Spartan checkpoint, card session or
+acknowledgement record exists (`CONTINUITY_MISMATCH`); a message of another profile is
+`INVALID_PROFILE`. A receiver that hosts the same Request again under a new session is another
+peer for a saved checkpoint and receives nothing from it. The payer reads that Request with
+`readRequest` and builds the checkpoint for the new session from the same retained Payment; the
+verifier admits no other Payment for that Request, so redelivery is a replay and never a new Send.
 
 There are three user-visible codes: receiver Request, payer Payment, receiver Credited.
 The Request carrier is `KWRQAC1` (envelope plus canonical destination account original,
@@ -1183,17 +1214,20 @@ adapter produced, so a dense payload is signed over its dense hash.
 `SignedTransactionEncoder.encode(transaction, layout)` and `decode(bytes, layout)`
 carry the bare signed transaction. Bytes of one layout are refused by the other.
 
+Instructions keep one typed form in both layouts: the framed `WirePayload` that
+the typed builders produce. A dense envelope carries the instruction's bare dense
+payload, which the native bridge (`connect_norito_transcode_instruction_v1`)
+transcodes from and to that frame by wire ID, so the dense codec needs
+`IROHA_NATIVE_LIBRARY_PATH` like every other native-backed test. The SDK's typed
+checks (privacy admission, Kaigi and plain-conviction canonical frames) read the
+frame in either layout. Only a wire ID the bridge does not register stays an
+opaque `DenseWirePayload` (`InstructionBox.fromDenseWirePayload`), which encodes
+only into the dense transaction it came from.
+
 No ledger definition selects the dense layout yet (`TODO(dense-activation)` in
 `../norito.md`), so nodes accept compact transactions only. Until one does, the
 dense transaction codec has these limits:
 
-- An instruction is an opaque `DenseWirePayload` envelope: its wire ID and its
-  bare dense payload (`InstructionBox.fromDenseWirePayload`). It encodes only into
-  a dense transaction, and a framed `WirePayload` encodes only into a compact one.
-  The typed instruction builders produce framed payloads only.
-- Dense envelopes of the privacy submissions, the Kaigi instructions and
-  `UpdatePlainConviction` are refused, because the SDK's typed checks for them
-  read framed payloads.
 - Signed attachments are refused in a dense payload.
 - `encodeVersioned` and `decodeVersioned` stay compact: no version byte names the
   dense layout.

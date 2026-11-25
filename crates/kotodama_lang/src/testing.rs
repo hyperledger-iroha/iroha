@@ -2,6 +2,7 @@
 //! in-process runner.
 use iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor;
 use ivm_abi::error::VmTrapKind;
+use ivm_abi::error::{VmErrorRef, VmTrap};
 
 /// Exact reason requested by a test-only nested invocation.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -141,7 +142,7 @@ impl RejectionExpectation {
         match self {
             Self::Any => true,
             Self::Contract { descriptor, code } => matches!(error.as_unmetered(),
-                ivm_abi::VMError::ContractAbort { error_type, schema_hash, code: actual, .. }
+                VmErrorRef::Trap(VmTrap::ContractAbort { error_type, schema_hash, code: actual, .. })
                     if error_type == &descriptor.identity && schema_hash == &descriptor.schema_hash() && actual == code),
             Self::Trap(expected) => trap == Some(expected.trap_kind()),
             Self::PermissionDenied | Self::InvalidArguments => false,
@@ -177,6 +178,7 @@ impl RejectionExpectation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ivm_abi::error::VmTrap;
     #[test]
     fn assertion_sites_roundtrip_the_canonical_codec() {
         for site in [
@@ -264,63 +266,65 @@ mod tests {
             descriptor: descriptor.clone(),
             code,
         };
-        let error = ivm_abi::VMError::ContractAbort {
+        let error = ivm_abi::VMError::Trap(VmTrap::ContractAbort {
             contract: "test".into(),
             name: "Failure".to_owned(),
             message: None,
             error_type: descriptor.identity.clone(),
             schema_hash: descriptor.schema_hash(),
             code,
-        };
+        });
         assert!(expected.matches_runtime(&error, Some(VmTrapKind::ContractAbort)));
         assert!(expected.matches_runtime(
-            &ivm_abi::VMError::Metered {
-                gas: 1,
-                source: Box::new(error)
-            },
+            &ivm_abi::VMError::metered(1, error),
             Some(VmTrapKind::ContractAbort)
         ));
-        let wrong_type = ivm_abi::VMError::ContractAbort {
+        let wrong_type = ivm_abi::VMError::Trap(VmTrap::ContractAbort {
             message: None,
             contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: "Other".to_owned(),
             schema_hash: descriptor.schema_hash(),
             code,
-        };
-        let wrong_schema = ivm_abi::VMError::ContractAbort {
+        });
+        let wrong_schema = ivm_abi::VMError::Trap(VmTrap::ContractAbort {
             message: None,
             contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: descriptor.identity.clone(),
             schema_hash: [0; 32],
             code,
-        };
-        let wrong_code = ivm_abi::VMError::ContractAbort {
+        });
+        let wrong_code = ivm_abi::VMError::Trap(VmTrap::ContractAbort {
             message: None,
             contract: "test".into(),
             name: "Failure".to_owned(),
             error_type: descriptor.identity.clone(),
             schema_hash: descriptor.schema_hash(),
             code: code + 1,
-        };
+        });
         for error in [
             wrong_type,
             wrong_schema,
             wrong_code,
-            ivm_abi::VMError::OutOfGas,
+            ivm_abi::VMError::Trap(VmTrap::OutOfGas),
         ] {
             assert!(!expected.matches_runtime(&error, Some(VmTrapKind::ContractAbort)));
         }
         assert!(!RejectionExpectation::PermissionDenied.matches_runtime(
-            &ivm_abi::VMError::PermissionDenied,
+            &ivm_abi::VMError::Trap(VmTrap::PermissionDenied),
             Some(VmTrapKind::PermissionDenied)
         ));
         assert!(
-            RejectionExpectation::Trap(RejectionTrap::OutOfGas)
-                .matches_runtime(&ivm_abi::VMError::OutOfGas, Some(VmTrapKind::OutOfGas))
+            RejectionExpectation::Trap(RejectionTrap::OutOfGas).matches_runtime(
+                &ivm_abi::VMError::Trap(VmTrap::OutOfGas),
+                Some(VmTrapKind::OutOfGas)
+            )
         );
-        assert!(RejectionExpectation::Any.matches_runtime(&ivm_abi::VMError::OutOfGas, None));
+        assert!(
+            RejectionExpectation::Any
+                .matches_runtime(&ivm_abi::VMError::Trap(VmTrap::OutOfGas), None)
+        );
     }
 }
 

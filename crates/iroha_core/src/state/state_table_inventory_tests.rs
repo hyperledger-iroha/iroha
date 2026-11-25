@@ -562,6 +562,7 @@ const ROOTS: &[Root] = &[
         disposition: "Retained as the governed keyed profile in the same two result slots as its predecessor. Native publication retains execution and published versions; restart rebuilds and cross-checks them by certified replay.",
         defect: None,
         domains: &[
+            r"iroha carrier keyed State profile and schema v1",
             r"iroha keyed State profile and schema v1",
             r"iroha:keyed-state:radix:blake3:v1\0",
             r"iroha:state-keyed-commitment:schema:v1\0",
@@ -4754,6 +4755,14 @@ const CARRIERS: &[Carrier] = &[
             (FASTPQ_MODEL, "pub struct TransferDeltaTranscript {"),
             (FASTPQ_MODEL, "pub struct TransferSmtWitness {"),
             (OUTPUT_MODEL, "pub enum ExecutionOutputV1 {"),
+            (
+                "crates/iroha_data_model/src/block/execution_output/c10.rs",
+                "pub struct ExecutionOutputC10V1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/execution_output/c10.rs",
+                "pub enum ExecutionSourceC10V1 {",
+            ),
             (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct TimeExecutionOutputV1 {"),
@@ -5025,7 +5034,7 @@ const CARRIERS: &[Carrier] = &[
             ),
             (
                 "DaPinScopeAuthorizationV1",
-                "producer signatures over the ticket, manifest and alias scope of the pin intent: proposal input",
+                "producer signatures over the ticket, manifest, complete commitment digest and alias of the pin intent: proposal input",
             ),
             (
                 "Evidence",
@@ -5069,6 +5078,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "TransactionResult",
                 "result of one executed input or invocation: its data trigger sequence or its rejection reason",
+            ),
+            (
+                "TransactionResultC10V1",
+                "complete C10 outcome of one input or trigger invocation, including its data trigger sequence or rejection, per-leg receipts, fee and contract emissions",
             ),
             (
                 "GovernanceBlockStartOutputV1",
@@ -6096,6 +6109,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "NetworkMessage.TransactionGossiper",
                 "gossiped transactions with their routes and routing plans: admission input, no consensus object",
+            ),
+            (
+                "NetworkMessage.DaProposal",
+                "bounded producer-authorized DA commitment and pin scope submitted to route validators",
             ),
             (
                 "NetworkMessage.PeersGossiper",
@@ -10524,6 +10541,7 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     // owner (slice 4) decides each signerless ballot of a block against the board recomputed
     // from World, through the board's own block execution, and the queue's ballot partition
     // admits a ballot through the board's own admission checks before claiming its nullifier.
+    // The codec refusal adapter borrows the original local cause through typed ballot errors.
     assert_eq!(
         node_uses,
         [
@@ -10538,6 +10556,10 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/ballot_lifecycle.rs",
                 "use iroha_parliament_ballot::board::BallotBoardV1;"
+            ),
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous/codec_refusal.rs",
+                "use iroha_parliament_ballot::{"
             ),
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs",

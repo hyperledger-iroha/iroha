@@ -12,6 +12,7 @@
 //! values and the initialized image; caller copies
 //! and stack temporaries are not a production private-witness custody boundary.
 
+use crate::error::{VmDeferral, VmTrap};
 use std::sync::Arc;
 
 use iroha_allocation::AllocationBudget;
@@ -162,12 +163,16 @@ impl DiagnosticMemoryAccessRecorder {
     ) -> Result<ExecutionMemoryPlan, VMError> {
         if let Some(image_bytes) = image_bytes {
             let maximum = usize::try_from(Memory::STACK_START + Memory::STACK_SIZE)
-                .map_err(|_| VMError::MemoryOutOfBounds)?;
+                .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
             if image_bytes == 0 || image_bytes > maximum {
-                return Err(VMError::MemoryOutOfBounds);
+                return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
             }
         }
-        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let mut plan = ExecutionMemoryPlan::array::<DiagnosticMemoryAccess>(capacity)
             .map_err(|_| unavailable())?;
         if let Some(image_bytes) = image_bytes {
@@ -185,8 +190,11 @@ impl DiagnosticMemoryAccessRecorder {
         budget: &AllocationBudget,
     ) -> Result<Self, VMError> {
         let plan = Self::allocation_plan(capacity, image_bytes)?;
-        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity))?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            ))
+        })?;
         Self::try_new_from_lease(capacity, image_bytes, &mut lease)
     }
 
@@ -196,7 +204,11 @@ impl DiagnosticMemoryAccessRecorder {
         lease: &mut ExecutionMemoryLease,
     ) -> Result<Self, VMError> {
         Self::allocation_plan(capacity, image_bytes)?;
-        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let rows = ExecutionBuffer::new(capacity, lease).map_err(|_| unavailable())?;
         let initial_image = image_bytes
             .map(|len| ExecutionBuffer::new(len, lease).map_err(|_| unavailable()))
@@ -264,7 +276,7 @@ impl DiagnosticMemoryAccessRecorder {
     pub(crate) fn begin_run(&self, zk_mode: bool) -> Result<(), VMError> {
         let mut inner = self.inner.lock();
         if inner.started {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         inner.started = true;
         inner.default_tag = if zk_mode {
@@ -289,18 +301,20 @@ impl DiagnosticMemoryAccessRecorder {
             || state.image_bytes != bytes.len()
             || bytes.len() != capacity
         {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         let image = inner
             .initial_image
             .as_mut()
-            .ok_or(VMError::HostUnavailable)?;
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         if !image.as_slice().is_empty() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
-        image
-            .append(bytes)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        image.append(bytes).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         inner.initial_state = Some(state);
         Ok(())
     }
@@ -312,9 +326,9 @@ impl DiagnosticMemoryAccessRecorder {
     pub(crate) fn ensure_remaining(&self, additional: usize) -> Result<(), VMError> {
         let inner = self.inner.lock();
         if additional > inner.capacity.saturating_sub(inner.rows.as_slice().len()) {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity,
-            ));
+            )));
         }
         Ok(())
     }
@@ -336,14 +350,14 @@ impl DiagnosticMemoryAccessRecorder {
         kind: DiagnosticMemoryAccessKind,
     ) -> Result<(), VMError> {
         if before.len() != after.len() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         self.record_with(address, before, kind, |offset| after[offset])
     }
 
     pub(crate) fn record_code_install(&self, before: &[u8], code: &[u8]) -> Result<(), VMError> {
         if code.len() > before.len() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         self.record_with(
             0,
@@ -371,24 +385,30 @@ impl DiagnosticMemoryAccessRecorder {
     ) -> Result<(), VMError> {
         let mut inner = self.inner.lock();
         if !inner.started {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         let remaining = inner.capacity.saturating_sub(inner.rows.as_slice().len());
         if before.len() > remaining {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity,
-            ));
+            )));
         }
-        u32::try_from(before.len()).map_err(|_| VMError::HostUnavailable)?;
-        let span = u64::try_from(before.len()).map_err(|_| VMError::HostUnavailable)?;
-        address.checked_add(span).ok_or(VMError::HostUnavailable)?;
+        u32::try_from(before.len()).map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
+        let span = u64::try_from(before.len())
+            .map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
+        address
+            .checked_add(span)
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         let ordinal = inner.next_access_ordinal;
-        inner.next_access_ordinal = ordinal.checked_add(1).ok_or(VMError::HostUnavailable)?;
+        inner.next_access_ordinal = ordinal
+            .checked_add(1)
+            .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
         for (offset, &old) in before.iter().enumerate() {
-            let byte_offset = u32::try_from(offset).map_err(|_| VMError::HostUnavailable)?;
+            let byte_offset = u32::try_from(offset)
+                .map_err(|_| VMError::Deferred(VmDeferral::HostUnavailable))?;
             let byte_address = address
                 .checked_add(offset as u64)
-                .ok_or(VMError::HostUnavailable)?;
+                .ok_or(VMError::Deferred(VmDeferral::HostUnavailable))?;
             let row = DiagnosticMemoryAccess {
                 step_ordinal: inner.step_ordinal,
                 access_ordinal: ordinal,
@@ -411,7 +431,9 @@ impl DiagnosticMemoryAccessRecorder {
                 },
             };
             inner.rows.append(&[row]).map_err(|_| {
-                VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
         }
         Ok(())
@@ -456,6 +478,7 @@ impl DiagnosticMemoryAccessRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::{
         IVM, Memory, decoder,
         encoding::wide,
@@ -565,9 +588,9 @@ mod tests {
                 image_bytes,
                 &budget_for_initial_image(4, image_bytes - 1),
             )
-            .err()), &(VMError::ExecutionDeferred(
+            .err()), &(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity
-            ))), (Some(VMError::ExecutionDeferred(__actual_value)), VMError::ExecutionDeferred(__expected_value)) if __actual_value == __expected_value)
+            )))), (Some(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_value))), VMError::Deferred(VmDeferral::ExecutionDeferred(__expected_value))) if __actual_value == __expected_value)
         );
         assert!(matches!(
             DiagnosticMemoryAccessRecorder::try_new_with_initial_image(
@@ -576,7 +599,7 @@ mod tests {
                 &budget_for_initial_image(4, 0),
             )
             .err(),
-            Some(VMError::MemoryOutOfBounds)
+            Some(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         let budget = budget_for_initial_image(4, image_bytes - 1);
         let accesses =
@@ -590,7 +613,7 @@ mod tests {
                 &mut steps,
                 &accesses,
             ),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
         assert!(steps.records().is_empty());
         assert!(accesses.is_empty());
@@ -656,7 +679,7 @@ mod tests {
             .install_diagnostic_access_recorder(recorder.shared())
             .unwrap();
         assert!(
-            matches!(memory.store_bytes(Memory::OUTPUT_START, &[0xaa, 0xbb]), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(memory.store_bytes(Memory::OUTPUT_START, &[0xaa, 0xbb]), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
@@ -673,7 +696,7 @@ mod tests {
         recorder.with_records(|rows| assert_eq!(rows[0].after, 0xcc));
         let mut input_cursor = 0;
         assert!(
-            matches!(memory.input_write_aligned(&mut input_cursor, &[0xdd], 8), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(memory.input_write_aligned(&mut input_cursor, &[0xdd], 8), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
@@ -693,7 +716,7 @@ mod tests {
             .unwrap();
         let mut output = [0xa5];
         assert!(
-            matches!(memory.load_bytes(Memory::HEAP_START, &mut output), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(memory.load_bytes(Memory::HEAP_START, &mut output), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
@@ -733,7 +756,7 @@ mod tests {
         });
         assert!(matches!(
             recorder.begin_run(true),
-            Err(VMError::HostUnavailable)
+            Err(VMError::Deferred(VmDeferral::HostUnavailable))
         ));
     }
 
@@ -804,17 +827,17 @@ mod tests {
             .install_diagnostic_access_recorder(recorder.shared())
             .unwrap();
         assert!(
-            matches!(vm.memory.clear_program_heap(), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(vm.memory.clear_program_heap(), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
         assert!(
-            matches!(vm.memory.clear_output(), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(vm.memory.clear_output(), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
         assert!(
-            matches!(vm.load_code(&[9, 8]), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+            matches!(vm.load_code(&[9, 8]), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 ExecutionDeferral::ActiveMemoryCapacity
             ))
         );
@@ -965,7 +988,7 @@ mod tests {
             &mut DefaultHost::default(),
             &mut steps,
             &accesses,
-        ), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        ), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             ExecutionDeferral::ActiveMemoryCapacity
         )));
         assert!(accesses.is_empty());
@@ -986,7 +1009,7 @@ mod tests {
 
         assert!(matches!(
             memory.diagnostic_record_prepared_fetch(0, u32::from_le_bytes([9, 2, 3, 4])),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert!(recorder.is_empty());
         memory
@@ -1090,7 +1113,7 @@ mod tests {
             ] {
                 assert!(matches!(
                     vm.memory.diagnostic_record_prepared_fetch(pc, word),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ));
                 assert!(accesses.is_empty());
                 assert!(vm.memory.try_read_log_snapshot().unwrap().is_empty());

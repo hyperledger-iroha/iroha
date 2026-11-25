@@ -1,6 +1,6 @@
 # Kagami and Mochi developer experience
 
-Status: localnet, contract deployment and disposable parent/private attachment pass
+Status: localnet and contract deployment pass
 end-to-end checks using both the standalone CLI package and an extracted Mochi bundle
 on macOS ARM64, built unsigned with Cargo's release profile. Mochi's headless walkthrough
 and native-window local startup, source deployment, calls, views, recovery and restart
@@ -8,8 +8,11 @@ also pass against its packaged runtime. Native Torii discovery uses signed genes
 and consensus proofs without a separate publisher. Official Taira attachment
 remains unverified: its deployed account capability response includes a retired field
 and a noncanonical signing-algorithm order rejected by the current client.
-The disposable parent/private fixture uses explicit
-loopback HTTP; public remote profiles require HTTPS.
+The disposable attachment check passes against a separately generated Sora Nexus
+parent with funded faucet and account onboarding on loopback. The native macOS ARM64
+window also verifies the selected child, parent confirmation and UI-initiated stop
+after retrying the original child. Ordinary developer
+localnets remain faucet-free; public remote profiles require HTTPS.
 The wider native-platform and release gates below remain open. This first release
 requires no backward-compatible command aliases, old wire layouts, or parallel
 orchestration implementations.
@@ -79,6 +82,10 @@ Prepared archive clients retain their exclusive build-registry discovery journal
 lifetime. Startup and Ready maintenance use an independent service-observation journal and lock;
 both authenticate the original profile and fresh native finality. A build holding its archive
 client therefore does not block the worker's bounded freshness observations.
+Each provider starts discovery at its own original validator and can use the remaining three.
+If a row receives only explicit current-proof unavailability responses, the worker may
+authenticate one strictly newer height and repeat all three reads within the original deadline.
+It accepts the three providers together at the same certified height.
 Generation leaves token services disabled. The startup worker composes one reserve activation,
 three independent funded provider/custody/gateway histories and one reputation policy through
 their native owners. It promotes each signed compliance catalog and restarts all four owned peers
@@ -179,6 +186,8 @@ workflow likewise does not claim reference-host latency qualification. See
   implementations into this owner; it must not depend on either frontend.
 - `iroha_managed_ipc` owns the owner-authenticated local transport and the handoff of bound
   listeners. A validator adopts its sockets through it and links no deployment or wallet crate.
+  The worker starts the four validators under the original deadline. As each child requests
+  adoption, the worker matches its native process ID to its seat and transfers that seat’s sockets.
 - Musubi exposes the canonical typed compiler/deployment adapter. It accepts an
   immutable SDK configuration and alias scope, and calls `iroha_contract_deploy`.
   It does not depend on the environment engine.
@@ -252,9 +261,9 @@ Installed-runtime fixtures exercise both the local four-validator workflow and a
 disposable four-parent/four-private attachment. They check all three contract inputs,
 exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
 ownership, private execution and independently authenticated parent anchoring.
-The installed macOS attachment fixture passes with four parent and four private
-validators, including native discovery, all three deployments, execution and exact
-recovery. Restricted transaction gossip selects the independently signed private
+The installed macOS attachment check verifies a four-validator private root
+against its four-validator parent and confirms shutdown of both and the ingress.
+Restricted transaction gossip selects the independently signed private
 root's authenticated next-height committee; it does not require a parent lane record.
 The local workflow covers retained restart and fresh reset without releasing reserved
 ports during startup. Mochi’s headless walkthrough exercises genuine quickstart,
@@ -264,11 +273,14 @@ A native macOS ARM64 window walkthrough also verifies Quickstart, fee-reviewed s
 deployment, initialization and mutable calls, views, saved-journal recovery, retained
 state after Stop/Start, all five state collections and zero-peer shutdown. Its Taira
 attempt reports the current discovery failure and restores the original local selection.
-The attachment fixture also checks
-that its private canary, complete artifact bytes and listener token are absent
+The interactive loopback fixture compares the Network ID on the Endpoints page and
+the Home attachment receipt with the signed parent registration. The initial listener
+handoff timed out. Retrying the retained child from the window completed attachment.
+Stop showed zero of four validators, and teardown confirmed all 20 listeners closed.
+The CLI attachment fixture also checks that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
-does not establish universal secrecy, official Taira readiness, native desktop
-interaction, signed multi-platform release qualification or the DX7 latency targets.
+leaves universal secrecy, official Taira readiness, signed multi-platform release
+qualification and the DX7 latency targets open.
 
 Signed genesis context now selects a global or private dataspace root. A private root binds
 the exact parent network and full 64-bit dataspace identifier; its own genesis and chain label
@@ -401,10 +413,44 @@ discovery; a cold fetch authenticates the current provider policy and native tok
 signer against a newly observed parent decision. A private child context cannot
 select its own registry or forward its listener credentials.
 
+After consensus and the transaction gossiper start, managed validators receive transaction gossip
+through their bounded low-priority relay. This lets peers include the original signed gateway
+qualification Check while Torii is still starting. The relay keeps its per-peer ingress limits
+and its single low-priority queue through startup. Other messages enter normal service at the
+Torii handoff. Standalone daemons open all relay classes at the usual Torii handoff. Emergency Fast retains its bounded peer and trust subscription after that handoff.
+
+The daemon reports the native gateway qualification or initial pending-reconciliation phase on a
+startup refusal. Its provider-ingest archive startup report names the missing and observed heights
+for an authenticated coverage gap and keeps private filesystem and codec errors opaque.
+
 The composed cold-package workflow remains unqualified. Initial funding, governed token
 custody, signed compliance catalog installation and runtime activation are wired into the
 startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
-replacing its finite readiness observation. Restart reconstructs each provider's native-selected
+replacing its finite readiness observation. The worker services the longest-overdue provider
+on either clock first. A failed turn delays only the attempted provider. All three original
+expiries still bound every turn. After the three catalog and advertisement publications,
+startup verifies the three provider discoveries and custody records against one freshly
+authenticated Global decision. One cursor owns finality and each provider retains its own
+custody lock. A shared renderer supplies the immutable input for opening that cursor, Bootstrap
+and the existing promoted catalog journals. Each purpose reacquires its own physical lock and
+revalidates the source. Concurrent read-only verifiers join before the aggregate accepts any row.
+The common UTC and monotonic clocks start before the first proof. An active decode owner
+keeps the independent serial proof operations and requires the same certified decision across
+all three. Each bounded maintenance turn allows only the chosen provider to publish
+an advertisement or advance a catalog. It then checks every provider's exact promoted catalog,
+owns one fresh Global cut for all three independent signer/custody reads, and revalidates the
+owned launch. The old aggregate remains authoritative until every check has returned and all
+old UTC and monotonic bounds still hold. When publication succeeds before a later proof fails,
+the next turn can recover that provider’s signed, acknowledged and currently serving descendant
+from its original catalog chain. For a shared renderer, the three status GETs join between fresh
+original child, renderer, plan and private-catalog checks. Each gateway independently verifies its
+original chain, acknowledgement, endpoint, status and exclusive validity. The subsequent native
+read selects each provider's enrolled custody from the same authenticated original revision.
+Owned profiles and active decoder limits keep the independent per-provider reads. The selected writer keeps its previous
+anchor throughout the turn and checks any new promotion receipt against the independently
+authenticated head.
+Catalog recovery alone grants no readiness. A read-only refresh of another provider preserves
+that provider's place if its signed publication is due. Restart reconstructs each provider's native-selected
 enrollment and exact independent ancestry. Retained aggregate references can require original
 component material but cannot select native state or replace missing committed bodies. Automatic
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid
@@ -413,6 +459,17 @@ providers keep their original monotonic enrollment timers across another provide
 Startup continuation and aggregate construction select immutable provider plans through the
 retained renderer, with fresh whole-profile and operation-lock checks at each selection.
 Current enrollment, discovery, live gateway validation and observation clocks remain independent.
+
+Cold restart after an active storage launch remains open. In a four-validator restart, the
+Catalog launch committed H33 and H34 with provider ingest disabled. Each provider archive
+ended at H32. The next StreamTokens launch correctly refused the missing H33. The warm
+restart carries its paid receipt, native transaction carriers and validated revision in
+memory. A cold worker must independently authenticate the selected enrollments and their
+revocation and expiry before using a retained revision. Deploy and SoraFS own the choice of
+that cold-start proof or a design that continuously captures certified heights while retaining
+the exact sealed outbox and its admission pins. The [storage contract](sorafs/sorafs_node_storage.md)
+defines the archive's zero-gap startup check.
+
 Active decode owners and independently owned profiles keep standalone capture. Ordinary refresh
 also keeps its standalone capture after releasing its gateway owner.
 Each runtime selection owns one bounded checkpoint-import scope across its three temporary custody
@@ -819,8 +876,9 @@ authenticate the active lease owner and generation. Committed parent execution r
 that generation when applying registration; only its verified receipt establishes
 anchoring. Provisioning and relay turns share absolute deadlines. The native supervisor,
 Kagami command and Mochi profile picker call these shared owners. The installed CLI
-passes the disposable eight-validator attachment and execution fixture; live Taira and
-desktop attachment qualification remain separate. A retained context rejects substituted endpoints, chain labels,
+attachment and execution check and the macOS desktop attachment check pass against
+a faucet-enabled disposable parent. Live Taira qualification remains open. A retained
+context rejects substituted endpoints, chain labels,
 address prefixes and network identities without replacing its private ledger.
 
 Update source-coupled specifications as behavior lands. Public guides belong in

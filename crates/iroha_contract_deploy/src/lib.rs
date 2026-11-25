@@ -319,6 +319,14 @@ impl AppliedCharge {
     /// Project the committed fee receipt of one transaction result.
     #[must_use]
     pub fn from_result(result: &TransactionResult) -> Option<Self> {
+        Self::from_profiled_result(
+            iroha::data_model::block::execution_output::TransactionResultRef::Baseline(result),
+        )
+    }
+
+    fn from_profiled_result(
+        result: iroha::data_model::block::execution_output::TransactionResultRef<'_>,
+    ) -> Option<Self> {
         result.nexus_fee_receipt().map(|receipt| Self {
             gas_used: receipt.schedule.gas_used,
             fee_asset: receipt.fee_asset_id.clone(),
@@ -394,7 +402,7 @@ pub(crate) fn read_applied_charge(
         .client()
         .get_successful_transaction_details(entrypoint)
         .ok()?;
-    AppliedCharge::from_result(details.transaction.result())
+    AppliedCharge::from_profiled_result(details.transaction.result())
 }
 /// Public receipt emitted only after atomic commit reaches `Applied` and contract readback agrees.
 #[derive(Clone, Debug, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
@@ -1085,9 +1093,11 @@ fn read_rejection_reason(client: &Client, transaction: &SignedTransaction) -> Op
         }
         if let Ok(reason) = client
             .client()
-            .get_transaction_rejection_reason(transaction)
+            .get_profiled_transaction_rejection_reason(transaction)
         {
-            return Some(iroha::client::rejection_summary(&reason));
+            return Some(iroha::client::profiled_rejection_summary(
+                reason.as_borrowed(),
+            ));
         }
     }
     None

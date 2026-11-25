@@ -106,8 +106,9 @@ impl NativeFixture {
             return entry.state.clone();
         }
         let state = self
-            .bootstrap_custody_snapshot(authority, policy, checkpoint, None)
-            .unwrap();
+            .bootstrap_custody_captured(authority, policy, checkpoint, None)
+            .unwrap()
+            .state;
         self.proved_custody.lock().unwrap().push(
             crate::managed::native_operation::test_support::native_fixture::ProvedCustody {
                 cut,
@@ -130,16 +131,17 @@ impl NativeFixture {
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         require_deadline(deadline)?;
-        self.bootstrap_custody_snapshot(authority, policy, checkpoint, Some(deadline))
+        self.bootstrap_custody_captured(authority, policy, checkpoint, Some(deadline))
+            .map(|captured| captured.state)
     }
 
-    fn bootstrap_custody_snapshot(
+    pub(in crate::managed) fn bootstrap_custody_captured(
         &self,
         authority: &ServiceAuthority,
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
         deadline: Option<Instant>,
-    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+    ) -> Result<crate::managed::stream_token_custody::original_proof::CapturedCustody> {
         let tip = self.chain.committed(self.chain.height());
         let budget = self.chain.state().ivm_execution_budget();
         let capture = || {
@@ -175,7 +177,12 @@ impl NativeFixture {
         if let Some(deadline) = deadline {
             require_deadline(deadline)?;
         }
-        Ok(current)
+        Ok(
+            crate::managed::stream_token_custody::original_proof::CapturedCustody {
+                state: current,
+                frame: bytes,
+            },
+        )
     }
 
     pub(in crate::managed) fn bootstrap_reserve(
@@ -616,6 +623,10 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         temporary: &tempfile::TempDir,
         peers: &mut UnavailablePeers,
     ) {
+        // Every offline recovery here repeats one local graph and dependency census over the
+        // 29 retained originals. It contacts no peer and signs nothing, so its local deadline
+        // only guards against a hang; the original signing deadline is separate and unchanged.
+        const OFFLINE_RECOVERY_GUARD: Duration = Duration::from_secs(120);
         let policies = &original.policies;
         for _ in 0..2 {
             let mut owner = ManagedServiceBootstrap::open(prepared).unwrap();
@@ -623,7 +634,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             // signing deadline; a loaded host spends seconds in each.
             let fresh = original
                 .fees
-                .options(Instant::now() + Duration::from_secs(120));
+                .options(Instant::now() + OFFLINE_RECOVERY_GUARD);
             let recovery_started = Instant::now();
             assert_eq!(finalities(owner.recover(fresh.deadline).unwrap()), expected);
             eprintln!(
@@ -747,19 +758,31 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             .write_atomic("carrier.nrt", &foreign_carrier, PublishMode::Replace)
             .unwrap();
         let mut owner = ManagedServiceBootstrap::open(prepared).unwrap();
+        // Recovery refuses each substituted carrier with its own original cause. Any other
+        // error, including an expired hang guard, cannot stand in for that refusal.
+        let foreign = owner.recover(Instant::now() + OFFLINE_RECOVERY_GUARD);
         assert!(
-            owner
-                .recover(Instant::now() + Duration::from_secs(30))
-                .is_err()
+            matches!(
+                &foreign,
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "original native operation transaction absent from certified carrier"
+            ),
+            "certified foreign carrier refusal: {:?}",
+            foreign.as_ref().err()
         );
         assert!(peers.requests.lock().unwrap().is_empty());
         reputation
             .write_atomic("carrier.nrt", &[0xA5], PublishMode::Replace)
             .unwrap();
+        let malformed = owner.recover(Instant::now() + OFFLINE_RECOVERY_GUARD);
         assert!(
-            owner
-                .recover(Instant::now() + Duration::from_secs(30))
-                .is_err()
+            matches!(
+                &malformed,
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "invalid retained native operation checkpoint"
+            ),
+            "malformed carrier refusal: {:?}",
+            malformed.as_ref().err()
         );
         assert!(peers.requests.lock().unwrap().is_empty());
         reputation
@@ -768,7 +791,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         assert_eq!(
             finalities(
                 owner
-                    .recover(Instant::now() + Duration::from_secs(30))
+                    .recover(Instant::now() + OFFLINE_RECOVERY_GUARD)
                     .unwrap()
             ),
             expected
@@ -829,7 +852,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         assert_eq!(
             finalities(
                 owner
-                    .recover(Instant::now() + Duration::from_secs(30))
+                    .recover(Instant::now() + OFFLINE_RECOVERY_GUARD)
                     .unwrap()
             ),
             expected

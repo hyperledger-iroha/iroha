@@ -8,7 +8,6 @@ use crate::{
     },
 };
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
-use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     NetworkId,
@@ -31,8 +30,9 @@ pub use iroha_torii_shared::da::{
     DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaQueryValidationError,
     MAX_DA_QUERY_PAGE_SIZE,
 };
-use norito::decode_from_bytes;
 use sorafs_manifest::pdp::PdpCommitmentV1;
+/// Maximum JSON response for a DA upload acknowledgment or signed ingest receipt.
+pub const DA_INGEST_RESPONSE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Canonical HTTP header carrying the base64-encoded PDP commitment bytes.
 pub const PDP_COMMITMENT_HEADER: &str = "sora-pdp-commitment";
 /// Decode the `sora-pdp-commitment` header into a typed PDP commitment.
@@ -42,6 +42,10 @@ pub const PDP_COMMITMENT_HEADER: &str = "sora-pdp-commitment";
 /// Returns an error if the header is not valid base64 or the decoded bytes fail
 /// Norito deserialization.
 pub fn decode_pdp_commitment_header(value: &str) -> Result<PdpCommitmentV1> {
+    eyre::ensure!(
+        value.len() <= 4 * sorafs_manifest::pdp::PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1.div_ceil(3),
+        "oversized PDP commitment header"
+    );
     let bytes = Base64Standard
         .decode(value.as_bytes())
         .map_err(|err| eyre!("invalid {PDP_COMMITMENT_HEADER} header: {err}"))?;
@@ -53,7 +57,11 @@ pub fn decode_pdp_commitment_header(value: &str) -> Result<PdpCommitmentV1> {
 ///
 /// Returns an error if the bytes cannot be decoded via Norito.
 pub fn decode_pdp_commitment_bytes(bytes: &[u8]) -> Result<PdpCommitmentV1> {
-    decode_from_bytes(bytes).map_err(|err| eyre!("failed to decode PDP commitment: {err}"))
+    eyre::ensure!(
+        bytes.len() <= sorafs_manifest::pdp::PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        "oversized PDP commitment"
+    );
+    norito::decode_canonical(bytes).map_err(|err| eyre!("failed to decode PDP commitment: {err}"))
 }
 /// Decode the optional PDP commitment embedded in a DA receipt.
 ///
@@ -65,6 +73,116 @@ pub fn receipt_pdp_commitment(receipt: &DaIngestReceipt) -> Result<Option<PdpCom
         || Ok(None),
         |bytes| decode_pdp_commitment_bytes(bytes).map(Some),
     )
+}
+/// Authenticate a prepared DA receipt and reproduce its storage commitments from the producer's bytes.
+///
+/// The operator key must come from the publisher's trusted configuration.
+///
+/// # Errors
+///
+/// Rejects invalid witnesses, substituted scopes or receipts, and inconsistent source commitments.
+pub fn verify_da_pin_receipt(
+    request: &DaIngestRequest,
+    scope: &iroha_data_model::da::ingest::DaPinScopeProposalV1,
+    receipt: &DaIngestReceipt,
+    operator: &iroha_crypto::PublicKey,
+) -> Result<()> {
+    use sorafs_manifest::pdp::{PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PdpCommitmentV1};
+    request
+        .verify_signatures()
+        .wrap_err("invalid original DA request witnesses")?;
+    eyre::ensure!(
+        scope.matches_authorization(&request.authorization())
+            && receipt.matches_request_and_pin_scope(request, scope),
+        "DA receipt does not match the submitted request and exact pin scope"
+    );
+    receipt
+        .verify_operator_signature(request.sequence, operator)
+        .wrap_err("DA receipt failed verification against the pinned operator key")?;
+    let bytes = receipt
+        .pdp_commitment
+        .as_deref()
+        .ok_or_else(|| eyre!("DA receipt omitted its PDP commitment"))?;
+    eyre::ensure!(
+        bytes.len() <= PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        "oversized DA receipt PDP commitment"
+    );
+    let pdp: PdpCommitmentV1 =
+        norito::decode_canonical(bytes).wrap_err("invalid DA receipt PDP encoding")?;
+    pdp.validate()
+        .wrap_err("invalid DA receipt PDP commitment")?;
+    eyre::ensure!(
+        pdp.manifest_digest == *receipt.manifest_hash.as_bytes()
+            && pdp.payload_len == request.total_size
+            && pdp.sealed_at == receipt.queued_at_unix,
+        "PDP commitment does not match the prepared DA manifest, payload or sealing time"
+    );
+    // Only replay bounded work after authenticating both artifacts. The original file
+    // supplies the bytes for this check; no provider, gateway or Torii is consulted.
+    let canonical = iroha_torii_shared::da::payload::decode(
+        request.compression,
+        &request.payload,
+        request.total_size,
+    )?;
+    eyre::ensure!(
+        blake3::hash(&canonical).as_bytes() == request.payload_hash.as_bytes(),
+        "original DA payload differs from its signed digest"
+    );
+    let (root, expected_pdp) = sorafs_manifest::da::source_commitments(
+        &canonical,
+        request.chunk_size,
+        *receipt.manifest_hash.as_bytes(),
+        iroha_torii_shared::da::sampling::compute_sample_window(request.total_size),
+        receipt.queued_at_unix,
+    )?;
+    eyre::ensure!(
+        &root == receipt.chunk_root.as_bytes(),
+        "DA chunk root differs from the original payload"
+    );
+    eyre::ensure!(
+        pdp == expected_pdp,
+        "DA PDP commitment differs from the original payload"
+    );
+    if !request.pin_scope_signatures.is_empty() {
+        eyre::ensure!(
+            request
+                .pin_scope_authorization(scope.scope())
+                .has_valid_canonical_signatures(&scope.commitment_digest),
+            "existing pin witnesses do not verify for the prepared DA scope"
+        );
+    }
+    Ok(())
+}
+
+/// Verify the original producer and receipt before adding a controller's pin witness.
+///
+/// # Errors
+///
+/// Rejects an untrusted operator, mismatched source bytes, network, owner or signing key,
+/// and duplicate witnesses.
+pub fn authorize_da_pin_receipt(
+    request: &mut DaIngestRequest,
+    scope: &iroha_data_model::da::ingest::DaPinScopeProposalV1,
+    receipt: &DaIngestReceipt,
+    operator: &iroha_crypto::PublicKey,
+    network: NetworkId,
+    owner: &AccountId,
+    key: &KeyPair,
+) -> Result<()> {
+    eyre::ensure!(
+        request.network_id == network && &request.owner == owner,
+        "DA request network or producer differs from the selected configuration"
+    );
+    eyre::ensure!(
+        request
+            .signatures
+            .iter()
+            .any(|w| &w.signer == key.public_key()),
+        "selected signing key did not authorize the original request"
+    );
+    verify_da_pin_receipt(request, scope, receipt, operator)?;
+    request.try_add_pin_scope_signature(scope, key)?;
+    Ok(())
 }
 /// Canonical ingest parameters shared by CLI and SDK clients.
 #[derive(Debug, Clone)]
@@ -122,7 +240,7 @@ fn default_retention_policy() -> RetentionPolicy {
 ///
 /// # Errors
 ///
-/// Returns an error if signature generation fails (should be infallible under normal conditions).
+/// Rejects unsupported source geometry, oversized encoded manifests and signature failures.
 pub fn build_da_request(
     network_id: NetworkId,
     owner: AccountId,
@@ -132,11 +250,16 @@ pub fn build_da_request(
     key_pair: &KeyPair,
     manifest_bytes: Option<Vec<u8>>,
 ) -> Result<DaIngestRequest> {
-    let client_blob_id = params.client_blob_id.unwrap_or_else(|| {
-        let mut hasher = Hasher::new();
-        hasher.update(&payload_bytes);
-        BlobDigest::from_hash(hasher.finalize())
-    });
+    sorafs_manifest::da::validate_source_geometry(payload_bytes.len() as u64, params.chunk_size)?;
+    eyre::ensure!(
+        manifest_bytes
+            .as_ref()
+            .is_none_or(|bytes| bytes.len()
+                <= iroha_data_model::da::manifest::DaManifestV1::MAX_ENCODED_BYTES),
+        "DA manifest exceeds the encoded manifest limit"
+    );
+    let payload_hash = BlobDigest::from_hash(blake3::hash(&payload_bytes));
+    let client_blob_id = params.client_blob_id.unwrap_or(payload_hash);
     DaIngestRequestIntentV1 {
         network_id,
         owner,
@@ -150,7 +273,7 @@ pub fn build_da_request(
         retention_policy: params.retention_policy.clone(),
         chunk_size: params.chunk_size,
         total_size: payload_bytes.len() as u64,
-        payload_hash: BlobDigest::from_hash(blake3::hash(&payload_bytes)),
+        payload_hash,
         compression: Compression::Identity,
         norito_manifest: manifest_bytes,
         payload: payload_bytes,
@@ -310,11 +433,31 @@ mod tests {
             None,
         )
         .expect("build DA request");
-        let mut hasher = Hasher::new();
+        let mut hasher = blake3::Hasher::new();
         hasher.update(&payload);
         let expected = BlobDigest::from_hash(hasher.finalize());
         assert_eq!(request.client_blob_id, expected);
         assert_eq!(request.payload, payload);
+    }
+    #[test]
+    fn build_da_request_rejects_unpublishable_geometry_before_signing() {
+        let key = checked_seed_keypair(0x41);
+        for (size, payload) in [(1025, vec![1]), (1024, vec![])] {
+            let mut params = sample_ingest_params(None);
+            params.chunk_size = size;
+            assert!(
+                build_da_request(
+                    crate::client::test_network_id(),
+                    AccountId::new(key.public_key().clone()),
+                    payload,
+                    &params,
+                    ExtraMetadata::default(),
+                    &key,
+                    None
+                )
+                .is_err()
+            );
+        }
     }
     #[test]
     fn build_da_request_respects_digest_override() {
@@ -337,7 +480,7 @@ mod tests {
     #[test]
     fn header_decodes_commitment() {
         let commitment = sample_commitment();
-        let bytes = norito::to_bytes(&commitment).expect("encode commitment");
+        let bytes = norito::encode_canonical(&commitment).expect("encode commitment");
         let header_value = BASE64.encode(&bytes);
         let decoded = decode_pdp_commitment_header(&header_value).expect("decode header");
         assert_eq!(decoded, commitment);
@@ -355,7 +498,7 @@ mod tests {
     #[test]
     fn receipt_helper_decodes_bytes() {
         let commitment = sample_commitment();
-        let bytes = norito::to_bytes(&commitment).expect("encode commitment");
+        let bytes = norito::encode_canonical(&commitment).expect("encode commitment");
         let mut receipt = sample_receipt();
         receipt.pdp_commitment = Some(bytes);
         let decoded = receipt_pdp_commitment(&receipt)
@@ -546,6 +689,7 @@ mod tests {
             manifest_hash: iroha_data_model::da::types::BlobDigest::new([0xDD; 32]),
             storage_ticket: iroha_data_model::da::types::StorageTicketId::new([0u8; 32]),
             pdp_commitment: None,
+            retention_policy: Default::default(),
             stripe_layout: DaStripeLayout {
                 total_stripes: 1,
                 shards_per_stripe: 1,

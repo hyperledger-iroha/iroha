@@ -34,7 +34,8 @@ fn generated_command_requires_exact_revision_and_invalidation_prevents_reuse() {
     let _resources = crate::managed::native_test_guard();
     let (_temporary, prepared, launch) = launch();
     let daemon = std::path::Path::new("iroha3d");
-    let command = launch.command(daemon, 0).unwrap();
+    let mut reads = launch.owner.catalog_launch_reads();
+    let command = launch.command(daemon, 0, Some(&mut reads)).unwrap();
     let peer = launch.revision.peer(0).unwrap();
     let digest = hex::encode(peer.blake3());
     assert_eq!(
@@ -51,7 +52,13 @@ fn generated_command_requires_exact_revision_and_invalidation_prevents_reuse() {
         command.get_current_dir(),
         prepared.context.client_config.parent()
     );
-    assert!(launch.command(daemon, 4).is_err());
+    assert!(launch.command(daemon, 4, Some(&mut reads)).is_err());
+    let changed = launch.revision.peer(2).unwrap().path();
+    let prior = std::fs::read(changed).unwrap();
+    std::fs::write(changed, b"unexpected launch configuration").unwrap();
+    assert!(launch.command(daemon, 1, Some(&mut reads)).is_err());
+    std::fs::write(changed, &prior).unwrap();
+    assert!(launch.command(daemon, 1, Some(&mut reads)).is_ok());
     let mut owner = PeerProcesses {
         children: Vec::new(),
         launch: Some(Arc::clone(&launch)),
@@ -66,7 +73,7 @@ fn generated_command_requires_exact_revision_and_invalidation_prevents_reuse() {
     assert!(owner.gateways().is_err());
     owner.stop().unwrap();
     assert!(!launch.active.load(Ordering::Acquire));
-    assert!(launch.command(daemon, 0).is_err());
+    assert!(launch.command(daemon, 0, Some(&mut reads)).is_err());
     assert!(launch.validate().is_err());
 }
 

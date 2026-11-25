@@ -47,9 +47,8 @@ pub fn program_syscall_numbers_for_profile(
 pub fn prepared_syscall_numbers(contract: &PreparedContract) -> impl Iterator<Item = u32> + '_ {
     let engine = contract.profile_id().engine();
     contract
-        .decoded()
+        .instructions()
         .iter()
-        .copied()
         .filter_map(move |op| syscall_number(engine, op))
 }
 

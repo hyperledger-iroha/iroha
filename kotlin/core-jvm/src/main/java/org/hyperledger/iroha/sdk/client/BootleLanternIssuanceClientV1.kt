@@ -3,17 +3,12 @@ package org.hyperledger.iroha.sdk.client
 import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 
 import java.net.URI
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.norito.NoritoHeader
-import org.hyperledger.iroha.sdk.norito.SchemaHash
-import org.hyperledger.iroha.sdk.norito.Varint
 
 /**
  * Opaque issuer credential for the first-release Bootle/Lantern issuance routes.
@@ -383,8 +378,6 @@ class BootleLanternIssuanceClientV1 private constructor(builder: Builder) : Auto
         private val RESPONSE_MAGIC: ByteArray = "ILR1".toByteArray(StandardCharsets.US_ASCII)
         private const val WWW_AUTHENTICATE_VALUE: String =
             "Bearer realm=\"iroha-bootle-lantern-issuance\""
-        private const val ERROR_ENVELOPE_TYPE_NAME: String =
-            "iroha_torii_shared::ErrorEnvelope"
 
         /** Creates a client builder. */
         @JvmStatic
@@ -441,65 +434,9 @@ class BootleLanternIssuanceClientV1 private constructor(builder: Builder) : Auto
             magic.indices.all { body[offset + it] == magic[it] }
 
         private fun decodeNoritoErrorEnvelope(body: ByteArray): ErrorEnvelopeV1 {
-            val decoded = NoritoHeader.decode(
-                body,
-                SchemaHash.hash16(ERROR_ENVELOPE_TYPE_NAME),
-            )
-            require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE)
-            require(decoded.header.flags == NoritoHeader.COMPACT_LEN)
-            require(body.size == NoritoHeader.HEADER_LENGTH + decoded.header.payloadLength) {
-                "error envelope must not contain alignment padding"
-            }
-            decoded.header.validateChecksum(decoded.payload)
-            var offset = 0
-            val code = readStrictNoritoStringField(decoded.payload, offset)
-            offset = code.second
-            val message = readStrictNoritoStringField(decoded.payload, offset)
-            offset = message.second
-            val details = readStrictNoritoField(decoded.payload, offset)
-            offset = details.second
-            require(details.first.size == 1 && details.first[0].toInt() == 0) {
-                "error details must be absent"
-            }
-            require(offset == decoded.payload.size) { "trailing error-envelope payload" }
-            return ErrorEnvelopeV1(code.first, message.first)
-        }
-
-        private fun readStrictNoritoField(payload: ByteArray, offset: Int): Pair<ByteArray, Int> {
-            val length = Varint.decode(payload, offset)
-            require(length.value in 0..Int.MAX_VALUE.toLong()) { "field length overflow" }
-            val start = length.nextOffset
-            val fieldLength = length.value.toInt()
-            require(start >= 0 && start <= payload.size - fieldLength) {
-                "truncated error-envelope field"
-            }
-            val end = start + fieldLength
-            return payload.copyOfRange(start, end) to end
-        }
-
-        private fun readStrictNoritoStringField(
-            payload: ByteArray,
-            offset: Int,
-        ): Pair<String, Int> {
-            val field = readStrictNoritoField(payload, offset)
-            val decoded = readStrictNoritoString(field.first, 0)
-            require(decoded.second == field.first.size) {
-                "trailing bytes in error-envelope string field"
-            }
-            return decoded.first to field.second
-        }
-
-        private fun readStrictNoritoString(payload: ByteArray, offset: Int): Pair<String, Int> {
-            val length = Varint.decode(payload, offset)
-            require(length.value in 0..Int.MAX_VALUE.toLong()) { "string length overflow" }
-            val start = length.nextOffset
-            val end = start + length.value.toInt()
-            require(end >= start && end <= payload.size) { "truncated string" }
-            val decoder = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-            val value = decoder.decode(ByteBuffer.wrap(payload, start, end - start)).toString()
-            return value to end
+            val envelope = NoritoErrorEnvelope.decode(body)
+            require(!envelope.hasDetails) { "error details must be absent" }
+            return ErrorEnvelopeV1(envelope.code, envelope.message)
         }
 
         private fun headerValues(

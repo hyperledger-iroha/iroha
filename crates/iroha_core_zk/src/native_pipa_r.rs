@@ -106,6 +106,40 @@ pub struct CompiledVerifyingKeyV1 {
     pub key: Vec<u8>,
 }
 
+// The V1 relations and parameters are fixed. Pin their public registration
+// bytes so each node can replay genesis without deriving the verifier key.
+// The export_registry_keys example derives both components directly from the circuits.
+// Proof verification also checks the derived identity before using the verifier.
+fn kaigi_registry_components(kind: KaigiRelation) -> (&'static [u8], &'static [u8]) {
+    match kind {
+        KaigiRelation::Authorization => (
+            include_bytes!("kaigi_registry_v1/authorization.descriptor"),
+            include_bytes!("kaigi_registry_v1/authorization.vk"),
+        ),
+        KaigiRelation::Usage => (
+            include_bytes!("kaigi_registry_v1/usage.descriptor"),
+            include_bytes!("kaigi_registry_v1/usage.vk"),
+        ),
+    }
+}
+
+fn kaigi_proof_verifier(
+    kind: KaigiRelation,
+) -> Result<
+    &'static kaigi_zk::native::NativeVerifierV1,
+    VerificationAttemptError<NativeVerificationError>,
+> {
+    let verifier = kind.verifier().map_err(kaigi_initialization)?;
+    if kaigi_registry_components(kind) != (verifier.descriptor_bytes(), verifier.key_bytes()) {
+        return Err(kaigi_initialization(
+            iroha_plonk::verification_attempt::NativeVerifierInitError::Invariant(
+                "built-in Kaigi verifier differs from its V1 registration",
+            ),
+        ));
+    }
+    Ok(verifier)
+}
+
 fn kaigi_compiled_key(
     kind: KaigiRelation,
 ) -> Result<&'static [u8], VerificationAttemptError<NativeVerificationError>> {
@@ -117,10 +151,9 @@ fn kaigi_compiled_key(
         KaigiRelation::Authorization => (&AUTHORIZATION, &AUTHORIZATION_INITIALIZING),
         KaigiRelation::Usage => (&USAGE, &USAGE_INITIALIZING),
     };
+    let (descriptor, key) = kaigi_registry_components(kind);
     initialize_compiled_key(cache, initializing, || {
-        let verifier = kind.verifier().map_err(kaigi_initialization)?;
-        crate::native_key_carrier::encode(verifier.descriptor_bytes(), verifier.key_bytes())
-            .map_err(kaigi_initialization)
+        crate::native_key_carrier::encode(descriptor, key).map_err(kaigi_initialization)
     })
 }
 
@@ -200,10 +233,7 @@ impl NativeRelationV1 {
     /// Deterministic verifier-key construction failed.
     pub fn proof_length(self) -> Result<usize, VerificationAttemptError<NativeVerificationError>> {
         if let Some(kind) = self.kaigi() {
-            Ok(kind
-                .verifier()
-                .map_err(kaigi_initialization)?
-                .proof_length())
+            Ok(kaigi_proof_verifier(kind)?.proof_length())
         } else {
             crate::confidential_v2::native::proof_length(
                 self.confidential().expect("closed relation"),
@@ -217,8 +247,7 @@ impl NativeRelationV1 {
         proof: &[u8],
     ) -> Result<(), VerificationAttemptError<NativeVerificationError>> {
         if let Some(kind) = self.kaigi() {
-            kind.verifier()
-                .map_err(kaigi_initialization)?
+            kaigi_proof_verifier(kind)?
                 .verify(public, proof)
                 .map_err(|error| native_verification_error(error, NativeVerificationError::Proof))
         } else {

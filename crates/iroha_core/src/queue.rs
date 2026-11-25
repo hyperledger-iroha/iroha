@@ -1198,7 +1198,7 @@ trait QueueAdmissionStateAccess {
     fn first_inactive_envelope(
         &mut self,
         transaction: &AcceptedTransaction<'_>,
-    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>;
+    ) -> Result<Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>, Error>;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1319,23 +1319,46 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
     fn first_inactive_envelope(
         &mut self,
         transaction: &AcceptedTransaction<'_>,
-    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+    ) -> Result<Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>, Error> {
         let signed = match transaction.entrypoint() {
             TransactionEntrypoint::External(signed) => signed,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
             TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::AnonymousBallot(_) => return None,
+            | TransactionEntrypoint::AnonymousBallot(_) => return Ok(None),
         };
         if matches!(transaction.entrypoint(), TransactionEntrypoint::External(_))
             && (crate::runtime::sorafs_repair::queue_admits(self.view, signed)
                 || crate::runtime::taira_activation::queue_admits(self.view, signed))
         {
-            return None;
+            return Ok(None);
         }
-        crate::runtime::envelope::first_unadmitted_envelope(
+        if matches!(transaction.entrypoint(), TransactionEntrypoint::External(_)) {
+            match crate::runtime::generic_carriers::admission::admit(
+                self.view.world(),
+                self.next_block_height,
+                signed.instructions(),
+            ) {
+                Ok(true) => return Ok(None),
+                Ok(false) => {}
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(original)) => {
+                    return Err(Error::Deferred(original));
+                }
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    iroha_data_model::ValidationFail::InstructionFailed(
+                        iroha_data_model::isi::error::InstructionExecutionError::Runtime(rejection),
+                    ),
+                )) => return Ok(Some(rejection)),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(rejection)) => {
+                    return Err(Error::UnsupportedTransactionAdmission {
+                        reason: rejection.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(crate::runtime::envelope::first_unadmitted_envelope(
             self.view.world().runtime_selection.get(),
             signed.instructions(),
-        )
+        ))
     }
     fn sccp_exempt_admission(
         &mut self,
@@ -2433,7 +2456,9 @@ impl Queue {
                         contract_targets_seen = true;
                     } else {
                         let any = instruction.as_any();
-                        if any.is::<RegisterSmartContractCode>()
+                        if (any.is::<RegisterSmartContractCode>()
+                            || any
+                                .is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                             || any.is::<RegisterSmartContractBytes>()
                             || any.is::<UploadSmartContractCodeChunk>()
                             || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2468,7 +2493,7 @@ impl Queue {
                                 contract_targets_seen = true;
                             } else {
                                 let any = instruction.as_any();
-                                if any.is::<RegisterSmartContractCode>()
+                                if (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                     || any.is::<RegisterSmartContractBytes>()
                                     || any.is::<UploadSmartContractCodeChunk>()
                                     || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2663,7 +2688,7 @@ impl Queue {
                     } else {
                         let modifies_contract_code = {
                             let any = instruction.as_any();
-                            any.is::<RegisterSmartContractCode>()
+                            (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                 || any.is::<RegisterSmartContractBytes>()
                                 || any.is::<UploadSmartContractCodeChunk>()
                                 || any.is::<FinalizeSmartContractCodeUpload>()
@@ -2705,7 +2730,7 @@ impl Queue {
                                 contract_targets.insert(deactivate.contract_address().clone());
                             } else {
                                 let any = instruction.as_any();
-                                if any.is::<RegisterSmartContractCode>()
+                                if (any.is::<RegisterSmartContractCode>() || any.is::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1>())
                                     || any.is::<RegisterSmartContractBytes>()
                                     || any.is::<UploadSmartContractCodeChunk>()
                                     || any.is::<FinalizeSmartContractCodeUpload>()
@@ -4409,8 +4434,12 @@ impl Queue {
         // Honest proposers never carry an envelope the committed selection does not admit; it
         // would only commit `definition_inactive` or `malformed_payload`
         // (`specs/live_runtime_upgrades.md` §5.2).
-        if let Some(rejection) = state_access.first_inactive_envelope(checked.as_accepted()) {
-            return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
+        match state_access.first_inactive_envelope(checked.as_accepted()) {
+            Ok(Some(rejection)) => {
+                return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
+            }
+            Err(original) => return Err(Self::refused(original, checked)),
+            Ok(None) => {}
         }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.

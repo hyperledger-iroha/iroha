@@ -1,5 +1,7 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
+mod certified_history;
+pub use certified_history::CertifiedHistorySource;
 mod compact_source;
 mod cursor;
 pub(crate) use cursor::NativeGenesisExecutionV1;
@@ -13,8 +15,8 @@ pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
 pub use cursor::{
-    NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
-    NativeFinalityCursorV1,
+    NativeCurrentFinalityV1, NativeCurrentStepV1, NativeFinalityAtHeightV1,
+    NativeFinalityCursorErrorV1, NativeFinalityCursorV1, NativeSupersededCutV1,
 };
 pub use interval::{
     NativeFinalityProofInterval, NativeFinalityProofIntervalError,

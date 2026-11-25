@@ -1,5 +1,6 @@
 //! Interval backing retains original active credit through growth and destruction.
 
+use crate::error::VmDeferral;
 use std::ops::{Deref, DerefMut, Range};
 
 use crate::{
@@ -149,5 +150,7 @@ impl std::fmt::Debug for Ranges {
 }
 
 pub(super) fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }

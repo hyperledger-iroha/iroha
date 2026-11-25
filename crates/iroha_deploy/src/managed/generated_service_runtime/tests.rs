@@ -444,7 +444,15 @@ impl Genuine {
         assert!(!retain_before_first_render || full_parent);
         let (temporary, prepared, ports) = fixture_with_ports(name);
         let mut options = options();
-        options.deadline = Instant::now() + Duration::from_secs(600);
+        // The full history builds and authenticates 29 real carriers in sequence before
+        // the material checks begin. Issue one bounded authorization for that whole history.
+        // Each child keeps the original UTC cutoff, including across recovery.
+        let setup_budget = if full_parent {
+            Duration::from_secs(29 * 120)
+        } else {
+            Duration::from_secs(600)
+        };
+        options.deadline = Instant::now() + setup_budget;
         let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
         let authorization = parent.authorize_test_startup(&options).unwrap().unwrap();
         let utc = authorization.test_terms().signing_deadline_unix_ms;
@@ -3275,3 +3283,27 @@ mod policy_projection_tests;
 
 #[path = "runtime_original_tests.rs"]
 mod runtime_original_tests;
+
+#[test]
+fn stream_token_revision_joins_the_three_original_custody_readers() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Genuine::new("parallel-runtime-custody", false, false);
+    let authority = &fixture.owner.authority;
+    let serial = RuntimeSelection::read(authority).unwrap();
+    assert!(serial.initial.iter().all(Option::is_some));
+    let joined = RuntimeSelection::read_provider_intervals(authority, true).unwrap();
+    assert_same_runtime_selection(authority, &joined, &serial);
+    for provider in &serial.plans {
+        let custody = ManagedStreamTokenCustody::open_existing_from_original(
+            authority,
+            provider.provider_id(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(RuntimeSelection::read_provider_intervals(authority, true).is_err());
+        drop(custody);
+        let restored = RuntimeSelection::read_provider_intervals(authority, true).unwrap();
+        assert_same_runtime_selection(authority, &restored, &serial);
+    }
+}

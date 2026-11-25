@@ -14,7 +14,7 @@ use iroha_model_base::topology::LaneId;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
-    to_bytes,
+    encode_canonical,
 };
 /// Maximum UTF-8 byte length admitted for a DA pin-intent alias.
 pub const MAX_DA_PIN_INTENT_ALIAS_BYTES: usize = 256;
@@ -115,9 +115,9 @@ impl DaPinIntentBundle {
                 *intent.storage_ticket.as_bytes(),
                 *intent.manifest_hash.as_bytes(),
                 intent.alias.clone(),
-                to_bytes(&intent.authorization)
+                encode_canonical(&intent.authorization)
                     .expect("DA ingest authorization must have a canonical Norito encoding"),
-                to_bytes(&intent.pin_scope_authorization)
+                encode_canonical(&intent.pin_scope_authorization)
                     .expect("DA pin-scope authorization must have a canonical Norito encoding"),
             )
         });
@@ -241,7 +241,7 @@ const DA_PIN_INTENT_MERKLE_COMMITMENT_DOMAIN_V1: &[u8] =
 /// Hash a pin intent into its domain-separated Merkle leaf value.
 #[must_use]
 pub fn pin_intent_leaf_hash(intent: &DaPinIntent) -> Hash {
-    let encoded = to_bytes(intent).expect("DaPinIntent Norito encoding must succeed");
+    let encoded = encode_canonical(intent).expect("DaPinIntent Norito encoding must succeed");
     let mut preimage =
         Vec::with_capacity(DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1.len() + encoded.len());
     preimage.extend_from_slice(DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1);
@@ -331,8 +331,9 @@ mod tests {
     ) -> DaPinIntent {
         let authorization = test_authorization(lane, epoch, sequence);
         let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &test_key_pair())
-            .expect("sign deterministic pin scope");
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &test_key_pair())
+                .expect("sign deterministic pin scope");
         DaPinIntent::new(authorization, scope_authorization)
     }
 
@@ -453,8 +454,13 @@ mod tests {
             ManifestDigest::new([2; 32]),
             None,
         );
-        let encoded = to_bytes(&intent).expect("encode pin intent");
-        assert_ne!(pin_intent_leaf_hash(&intent), Hash::new(encoded));
+        let encoded = encode_canonical(&intent).expect("encode pin intent");
+        let leaf = pin_intent_leaf_hash(&intent);
+        assert_ne!(leaf, Hash::new(encoded));
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(leaf, pin_intent_leaf_hash(&intent));
+        }
         let left = Hash::new(b"left");
         let right = Hash::new(b"right");
         let mut untagged = Vec::with_capacity(Hash::LENGTH * 2);

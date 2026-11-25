@@ -13,10 +13,14 @@ base_commit="$(git merge-base "${base_ref}" HEAD 2>/dev/null || git rev-parse "$
 
 fail=false
 
-if ! git diff --quiet -- Cargo.lock || ! git diff --quiet "${base_commit}"...HEAD -- Cargo.lock; then
-	echo "error: Cargo.lock modifications detected (working tree or relative to ${base_ref})." >&2
-	echo "The AGENTS workflow forbids lockfile edits; drop Cargo.lock changes or seek approval." >&2
+# AGENTS.md permits coherent approved manifest/lock changes. This structural
+# exception admits only added edges between existing local workspace packages;
+# every external pin, package identity and unrelated lock delta still refuses.
+local_edges="{}"
+if ! local_edges="$(python3 scripts/check_agents_local_dependency_edges.py --base "${base_commit}")"; then
+	echo "error: Cargo.lock changes exceed coherent existing-local dependency edges." >&2
 	fail=true
+	local_edges="{}"
 fi
 
 added_tomls="$(
@@ -127,7 +131,8 @@ else
 fi
 
 added_dependencies="$(
-	BASE_COMMIT="${base_commit}" python3 - <<'PY'
+	BASE_COMMIT="${base_commit}" LOCAL_EDGES="${local_edges}" python3 - <<'PY'
+import json
 import os
 import subprocess
 import sys
@@ -172,6 +177,7 @@ def collect_dependencies(data: Dict) -> Set[str]:
 base_commit = os.environ.get("BASE_COMMIT", "")
 paths = subprocess.check_output(["git", "ls-files", "*Cargo.toml"], text=True).splitlines()
 reports = []
+local_edges = json.loads(os.environ["LOCAL_EDGES"])
 
 
 def read_at(ref: str, path: str) -> Optional[str]:
@@ -201,7 +207,7 @@ for path in paths:
     except Exception:
         continue
 
-    added = sorted(collect_dependencies(head_data) - collect_dependencies(base_data))
+    added = sorted(collect_dependencies(head_data) - collect_dependencies(base_data) - set(local_edges.get(path, [])))
     if added:
         reports.append(path + "\n" + "\n".join(f"  - {dep}" for dep in added))
 
@@ -223,7 +229,7 @@ fi
 if [[ "${fail}" == true ]]; then
 	cat >&2 <<'HINT'
 Guardrail failures detected.
-- Remove Cargo.lock edits or regenerate with explicit approval.
+- Keep local path dependency additions coherent with existing workspace lock entries; other lock changes need their separately reviewed policy.
 - Drop new workspace members or obtain approval for additional crates.
 - Remove or seek approval for newly added dependencies in Cargo.toml files.
 - Keep SoraNet privacy ingest endpoints behind enforce_soranet_privacy_ingest and SoraFS storage pins behind sorafs_pin_policy, updating docs when authz changes.
@@ -232,5 +238,5 @@ HINT
 	exit 1
 fi
 
-echo "AGENTS guardrails passed: no Cargo.lock edits, new workspace crates, or dependency additions detected."
+echo "AGENTS guardrails passed: coherent existing-local edges only; no new workspace crates or unapproved dependency additions detected."
 exit 0

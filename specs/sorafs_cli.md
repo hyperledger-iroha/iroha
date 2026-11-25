@@ -65,7 +65,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --manifest-json-out artifacts/manifest.json \
   --pin-min-replicas=3 \
   --pin-storage-class=warm \
-  --pin-retention-epoch=42
+  --pin-retention-epoch="$SORAFS_RETENTION_EPOCH"
 
 ```
 
@@ -90,6 +90,17 @@ Key behaviours:
 - The manifest builder reads the JSON emitted by `car pack`, applies optional
   pin-policy overrides (`--pin-*` flags), and writes both Norito binary output
   and (optionally) a JSON view for debugging.
+- `iroha app sorafs toolkit pack` requires `--pin-retention-epoch` as an explicit
+  future absolute Unix second and accepts `--pin-min-replicas` (default three).
+  Standalone `manifest build` also accepts both policy fields. Select the prepaid
+  retention deadline explicitly; `86400` is a historical absolute timestamp, not a
+  one-day duration.
+- Core builds an automatic replication order when it registers a manifest, or when
+  the council approves it if approval is required. The order's 24-hour ingest
+  deadline must fall before the retention epoch, so Core refuses a retention
+  epoch that is not more than 86 400 seconds after the registration or approval
+  block time. `toolkit pack` refuses a deadline within 24 hours of the current
+  time. Leave enough margin for the time until registration and any approval.
 - The CLI writes a pretty-printed summary to STDOUT and, when `--summary-out`
   is supplied, mirrors the same JSON to disk. Downstream automation can diff the
   summary or extract digests/TLV metadata without parsing the CAR file directly.

@@ -684,6 +684,7 @@ pub struct EvidenceAttribution {
 )]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::EvidencePenaltyStatus")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum EvidencePenaltyStatus {
     /// The immutable consensus penalty delay has not elapsed.
     Pending,
@@ -723,6 +724,7 @@ impl EvidencePenaltyStatus {
     deny_unknown_fields
 )]
 #[norito_schema(name = "iroha_data_model::block::consensus::RecordedEvidenceV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub enum RecordedEvidenceV1 {
     /// Original native consensus evidence, using its existing bounded representation.
     #[codec(index = 0)]
@@ -751,6 +753,7 @@ pub enum RecordedEvidenceV1 {
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::EvidenceRecord")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct EvidenceRecord {
     /// Closed admitted material retained for the mandatory consensus penalty pipeline.
     pub evidence: RecordedEvidenceV1,

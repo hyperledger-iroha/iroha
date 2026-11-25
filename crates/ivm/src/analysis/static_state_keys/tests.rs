@@ -2,6 +2,7 @@
 
 use super::super::static_state_literals::TestLiterals;
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::instruction::wide;
 
 fn decoded(numbers: &[u32]) -> Vec<DecodedOp> {
@@ -33,7 +34,7 @@ fn sorted_unique_output_preserves_text_hex_wildcards_and_shared_final_owner() {
     let budget = AllocationBudget::new(1024 * 1024);
     let mut scratch = KeyScratch::new(
         crate::IvmEngine::C10,
-        &decoded(&[READ, READ, WRITE, WRITE, SCAN, READ]),
+        decoded(&[READ, READ, WRITE, WRITE, SCAN, READ]).into_iter(),
         &budget,
     )
     .unwrap();
@@ -111,7 +112,8 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
     )
     .unwrap();
     let make = || {
-        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
+        let mut scratch =
+            KeyScratch::new(crate::IvmEngine::C10, code.iter().copied(), &budget).unwrap();
         scratch.record(0, key, &literals).unwrap();
         scratch
     };
@@ -122,7 +124,7 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
         + "state:Map/00ff".len();
     budget.set_limit_bytes(scratch_bytes + output_bytes - 1);
     assert!(
-        matches!(scratch.finish(&literals, &budget), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == output_bytes)
+        matches!(scratch.finish(&literals, &budget), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == output_bytes)
     );
     assert_eq!(budget.reserved_bytes(), 0);
     budget.set_limit_bytes(scratch_bytes + output_bytes);
@@ -133,10 +135,10 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
     assert_eq!(budget.reserved_bytes(), 0);
     let zero = AllocationBudget::new(0);
     assert!(matches!(
-        KeyScratch::new(crate::IvmEngine::C10, &code, &zero),
-        Err(VMError::AllocationDeferred(_))
+        KeyScratch::new(crate::IvmEngine::C10, code.iter().copied(), &zero),
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
-    let empty = KeyScratch::new(crate::IvmEngine::C10, &[], &zero)
+    let empty = KeyScratch::new(crate::IvmEngine::C10, std::iter::empty(), &zero)
         .unwrap()
         .finish(&literals, &zero)
         .unwrap();
@@ -149,7 +151,8 @@ fn first_site_key_remains_after_ambiguity_and_different_exact_key_is_rejected() 
     let literals = literals();
     let budget = AllocationBudget::new(1024 * 1024);
     let read = crate::syscalls::SYSCALL_STATE_GET;
-    let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &decoded(&[read]), &budget).unwrap();
+    let mut scratch =
+        KeyScratch::new(crate::IvmEngine::C10, decoded(&[read]).into_iter(), &budget).unwrap();
     let original = Descriptor::new(StaticStatePath::Literal(0), read, &literals).unwrap();
     scratch.record(0, original, &literals).unwrap();
     // Distinct provenance with the same logical text is the same output key.
@@ -166,7 +169,7 @@ fn first_site_key_remains_after_ambiguity_and_different_exact_key_is_rejected() 
     let different = Descriptor::new(StaticStatePath::Literal(1), read, &literals).unwrap();
     assert!(matches!(
         scratch.record(0, different, &literals),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(
         Descriptor::new(
@@ -196,7 +199,8 @@ fn zero_retention_and_each_partial_output_failure_reclaim_only_original_pool() {
     let code = decoded(&[read]);
     let key = Descriptor::new(StaticStatePath::Literal(0), read, &literals).unwrap();
     for fault in 1..=4 {
-        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
+        let mut scratch =
+            KeyScratch::new(crate::IvmEngine::C10, code.iter().copied(), &budget).unwrap();
         scratch.record(0, key, &literals).unwrap();
         OUTPUT_FAULT.set(fault);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -207,15 +211,16 @@ fn zero_retention_and_each_partial_output_failure_reclaim_only_original_pool() {
         } else {
             assert!(matches!(
                 result,
-                Ok(Err(VMError::ExecutionDeferred(
+                Ok(Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     ExecutionDeferral::AllocationUnavailable
-                )))
+                ))))
             ));
         }
         assert_eq!(OUTPUT_FAULT.get(), 0);
         assert_eq!(budget.reserved_bytes(), 19);
     }
-    let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
+    let mut scratch =
+        KeyScratch::new(crate::IvmEngine::C10, code.iter().copied(), &budget).unwrap();
     scratch.record(0, key, &literals).unwrap();
     let (reads, writes) = scratch.finish(&literals, &budget).unwrap();
     let retained = budget.reserved_bytes();
@@ -345,7 +350,8 @@ fn diamond_and_loop_match_old_collecting_reference_with_first_key_per_site() {
         }
         let budget = AllocationBudget::new(4 * 1024 * 1024);
         let mut workspace = Workspace::new(code.len(), &budget).unwrap();
-        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
+        let mut scratch =
+            KeyScratch::new(crate::IvmEngine::C10, code.iter().copied(), &budget).unwrap();
         let mut actual = StaticStateAccessAnalysis {
             complete: true,
             ..Default::default()

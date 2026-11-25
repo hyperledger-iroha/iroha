@@ -1,6 +1,7 @@
 //! Regression coverage for an unassigned pre-release decimal-i64 map-key number.
 use crate::common;
 use ivm::{CoreHost, IVM, VMError, encoding, syscalls};
+use ivm_abi::error::VmTrap;
 #[test]
 fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
     let unassigned = 0x54;
@@ -21,7 +22,7 @@ fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
     let mut admitted = IVM::new(u64::MAX);
     admitted.set_host(CoreHost::new());
     assert!(
-        matches!(admitted.load_program(&common::assemble(&code)), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (unassigned)),
+        matches!(admitted.load_program(&common::assemble(&code)), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (unassigned)),
         "metadata-bearing programs reject the unassigned number during admission"
     );
     let mut raw = IVM::new(u64::MAX);
@@ -29,6 +30,6 @@ fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
     raw.load_code(&code)
         .expect("load raw unassigned-syscall fixture");
     assert!(
-        matches!(raw.run(), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (unassigned))
+        matches!(raw.run(), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (unassigned))
     );
 }

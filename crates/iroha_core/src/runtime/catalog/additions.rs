@@ -42,13 +42,6 @@ pub struct Addition {
 
 /// One canonical World field an addition adds.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a release declares its World-cell additions here; this release adds only a table"
-    )
-)]
 pub enum StorageAddition {
     /// A table, installed empty: its registry identity.
     Table(&'static str),
@@ -105,7 +98,84 @@ pub const ADDITIONS: &[Addition] = &[
     NATIVE_GAME_CAPTURE,
     CONTRACT_LIFECYCLE,
     RUNTIME_RETIREMENT,
+    IVM_C10,
+    KAGEMUSHA_SPARTAN,
+    CHILD_ADMIN,
+    GENERIC_CARRIER_ARTIFACTS,
 ];
+
+/// Stage exact restricted-profile artifacts before a governed carrier-kernel transition.
+/// Its own retained artifact table never widens the installed contract artifact codecs.
+pub const GENERIC_CARRIER_ARTIFACTS: Addition = Addition {
+    module: "iroha.runtime.generic_carrier_artifacts.v1",
+    instructions: &["iroha.runtime.generic_carrier.stage_artifact.v1"],
+    rebinds: &[],
+    storage: &[StorageAddition::Table("world.runtime_generic_artifacts")],
+};
+
+/// Explicit administrator authorization for an independently signed child root.
+/// Installation creates no authority: only the authenticated genesis foundation can seed it.
+pub const CHILD_ADMIN: Addition = Addition {
+    module: "iroha.runtime.child_admin.v1",
+    instructions: &[
+        "iroha.runtime.child_admin.authorize.v1",
+        "iroha.runtime.child_admin.attest.v1",
+    ],
+    rebinds: &[],
+    storage: &[StorageAddition::Cell(CellAddition {
+        field: "world.runtime_child_admin_state",
+        initial: child_admin_initial,
+        install: install_child_admin_initial,
+    })],
+};
+
+fn child_admin_initial() -> Result<Vec<u8>, String> {
+    norito::to_bytes(&None::<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>)
+        .map_err(|error| error.to_string())
+}
+
+fn install_child_admin_initial(
+    world: &mut WorldTransaction<'_, '_>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let value = norito::decode_from_bytes::<
+        Option<iroha_data_model::runtime::child_admin::ChildRuntimeAdminStateV1>,
+    >(bytes)
+    .map_err(|error| error.to_string())?;
+    if value.is_some() {
+        return Err("child administrator storage installation cannot create authority".into());
+    }
+    *world.runtime_child_admin_state.get_mut() = value;
+    Ok(())
+}
+
+/// Spartan verifier installation, activation and payout. The selected ledger successor keeps the
+/// same segregated reserve from acquiring a second verifier family.
+pub const KAGEMUSHA_SPARTAN: Addition = Addition {
+    module: "iroha.kagemusha.spartan.v1",
+    instructions: &[
+        iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1::WIRE_ID,
+        iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1::WIRE_ID,
+        iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1::WIRE_ID,
+    ],
+    rebinds: &[iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID],
+    storage: &[StorageAddition::Table("world.kagemusha_spartan_programs")],
+};
+
+/// Independently governed contract, trigger and certified output families of the C10 IVM.
+pub const IVM_C10: Addition = Addition {
+    module: "iroha.runtime.ivm_c10.v1",
+    instructions: &[
+        iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1::WIRE_ID,
+        iroha_data_model::ivm_c10::RegisterTriggerC10V1::WIRE_ID,
+    ],
+    rebinds: &[],
+    storage: &[
+        StorageAddition::Table("world.c10_contract_manifests"),
+        StorageAddition::Table("world.c10_contract_profiles"),
+        StorageAddition::Table("world.c10_triggers"),
+    ],
+};
 
 /// Permanent runtime history and certified exclusion receipts, independently governed.
 pub const RUNTIME_RETIREMENT: Addition = Addition {
@@ -317,6 +387,7 @@ pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
     module: "iroha.governance.parliament.anonymous.v1",
     instructions: &[
         "iroha.governance.parliament.anonymous.attempt.create.v1",
+        "iroha.governance.parliament.anonymous.runtime_upgrade.create.v1",
         "iroha.governance.parliament.anonymous.transition.submit.v1",
         "iroha.governance.parliament.credential.register.v1",
     ],

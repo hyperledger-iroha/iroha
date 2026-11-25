@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, IvmStackPolicy, Memory, VMError, encoding, instruction, runtime::IvmConfig};
+use ivm_abi::error::VmTrap;
 const GAS_LIMIT: u64 = 100_000;
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut code = Vec::with_capacity(words.len() * 4);
@@ -77,7 +78,7 @@ fn guest_stack_top_is_an_exclusive_memory_boundary() {
     outside_vm.set_register(1, 0xA5);
     assert!(matches!(
         outside_vm.run(),
-        Err(VMError::MemoryAccessViolation { .. })
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
     ));
 }
 

@@ -29,8 +29,8 @@ pub(super) fn analyze(
     {
         return Ok(None);
     }
-    let mut workspace = Workspace::new(contract.decoded().len(), budget)?;
-    let mut keys = KeyScratch::new(engine, contract.decoded(), budget)?;
+    let mut workspace = Workspace::new(contract.instructions().len(), budget)?;
+    let mut keys = KeyScratch::new(engine, contract.instructions().iter(), budget)?;
     let literals = PreparedLiterals::new(contract, budget)?;
     let Some(mut result) = traverse(contract, &roots, &mut workspace, &mut keys, &literals)? else {
         return Ok(None);
@@ -48,9 +48,9 @@ fn traverse(
 ) -> Result<Option<StaticStateAccessAnalysis>, VMError> {
     // The prepared image's engine decides every operand decoding below.
     let engine = contract.profile_id().engine();
-    let decoded = contract.decoded();
+    let instructions = contract.instructions();
     for root in roots.iter() {
-        let Ok(index) = decoded.binary_search_by_key(&root, |op| op.pc) else {
+        let Some(index) = instructions.index_of(root) else {
             return Ok(None);
         };
         if workspace
@@ -65,16 +65,16 @@ fn traverse(
         ..StaticStateAccessAnalysis::default()
     };
     while let Some((index, mut outgoing)) = workspace.pop() {
-        let Some(op) = decoded.get(index) else {
+        let Some(op) = instructions.get(index) else {
             return Ok(None);
         };
         let pc = op.pc;
         if let Some(key) =
-            transfer_static_state_facts(engine, op, literals, &mut outgoing, &mut result)
+            transfer_static_state_facts(engine, &op, literals, &mut outgoing, &mut result)
         {
             keys.record(pc, key, literals)?;
         }
-        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(engine, op) {
+        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(engine, &op) {
             // A general indirect edge has no authenticated target in the
             // prepared control-flow graph. Treat the proof as incomplete even
             // when the visible instruction itself is not a durable-state
@@ -92,17 +92,16 @@ fn traverse(
         let Some(successors) = contract.control_flow_successors(pc) else {
             return Ok(None);
         };
-        let call_edges = direct_call_edges(engine, op);
+        let call_edges = direct_call_edges(engine, &op);
         // Production Kotodama entrypoints are authenticated two-instruction
         // thunks (`call body; halt`). Crossing that compiler-owned boundary is
         // still direct entrypoint code; calls made by the body remain
         // conservative helper edges.
         let entrypoint_wrapper_call = call_edges.is_some_and(|(_, return_pc)| {
             roots.contains(pc)
-                && decoded
-                    .binary_search_by_key(&return_pc, |candidate| candidate.pc)
-                    .ok()
-                    .and_then(|index| decoded.get(index))
+                && instructions
+                    .index_of(return_pc)
+                    .and_then(|index| instructions.get(index))
                     .is_some_and(|candidate| wide::opcode(candidate.inst) == wide::control::HALT)
         });
         for successor in successors.iter().copied() {
@@ -121,8 +120,7 @@ fn traverse(
                     successor_facts.clear();
                 }
             }
-            let Ok(next) = decoded.binary_search_by_key(&successor, |candidate| candidate.pc)
-            else {
+            let Some(next) = instructions.index_of(successor) else {
                 return Ok(None);
             };
             if workspace.merge(next, &successor_facts).is_err() {

@@ -102,6 +102,7 @@ pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
 #[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nft::NftData")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct NftData {
     /// Content of the [`Nft`], as a key-value store.
     pub content: Metadata,

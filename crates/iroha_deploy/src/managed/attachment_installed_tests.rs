@@ -1,9 +1,14 @@
-//! Explicit eight-process attachment regression through the installed native CLI.
+//! Eight-validator attachment checks through the installed CLI and native macOS window.
 //!
 //! All authority material is independently generated in owner-private temporary
 //! custody. The parent is a disposable native Global root, never public Taira. This fixture
 //! establishes no release, native-platform matrix or reference-host latency qualification.
 
+#[cfg(target_os = "macos")]
+#[path = "attachment_installed_tests/desktop.rs"]
+mod desktop;
+#[path = "attachment_installed_tests/parent.rs"]
+mod parent;
 #[path = "attachment_installed_tests/timing.rs"]
 mod timing;
 
@@ -172,7 +177,8 @@ struct Harness {
     root: PrivateDirectory,
     kagami: PathBuf,
     profiles: PathBuf,
-    parent: ManagedStore,
+    parent: PrivateDirectory,
+    parent_peers: runtime::FixturePeers,
     child: ManagedStore,
     workspace: PrivateDirectory,
     sequence: usize,
@@ -180,6 +186,16 @@ struct Harness {
     timing: Option<timing::CampaignAttempt>,
     shutdown_confirmed: bool,
     verified: bool,
+}
+
+struct LoopbackParent {
+    prepared: PreparedLocalnet,
+    parent_config: Config,
+    anchor: GenesisAnchor,
+    faucet: iroha_config::parameters::actual::ToriiFaucet,
+    node_peers: Vec<PeerId>,
+    verifier: FinalityVerifier,
+    profiles: InstalledNetworkProfiles,
 }
 
 // Preserve original custody on every early return or panic. Only the successful
@@ -272,7 +288,8 @@ impl Harness {
         let timing = timing::CampaignAttempt::from_environment(installed, binaries.path())?;
         Ok(Self {
             temporary: Some(temporary),
-            parent: ManagedStore::open(&root.path().join("parent"))?,
+            parent: root.create_child("parent")?,
+            parent_peers: runtime::FixturePeers::default(),
             child: ManagedStore::open(&root.path().join("child"))?,
             root,
             kagami: binaries
@@ -289,11 +306,6 @@ impl Harness {
     }
 
     fn command(&mut self, args: &[&str]) -> TestResult<Value> {
-        let state = self.child.root().to_path_buf();
-        self.command_for_state(args, &state)
-    }
-
-    fn command_for_state(&mut self, args: &[&str], state: &Path) -> TestResult<Value> {
         self.sequence += 1;
         let output = format!("cli-{}.stdout", self.sequence);
         let error = format!("cli-{}.stderr", self.sequence);
@@ -301,7 +313,7 @@ impl Harness {
         command
             .args(args)
             .arg("--state")
-            .arg(state)
+            .arg(self.child.root())
             .arg("--json")
             .current_dir(self.workspace.path())
             .env("PATH", self.root.path().join("empty-path"))
@@ -375,28 +387,18 @@ impl Harness {
         verify_private_call(prepared, &initialized, "0")
     }
 
-    fn exercise(&mut self) -> TestResult<()> {
-        let parent_state = self.parent.root().to_path_buf();
-        // Both roots start through the copied installed frontend. The parent keeps
-        // its normal thirty-second readiness budget over its numeric-loopback listeners.
-        let ready = parse_parent_ready(
-            self.command_for_state(&["localnet", "up", "parent"], &parent_state)?,
-        )?;
-        let prepared = self.parent.prepared("parent")?;
-        ensure!(
-            ready.context == prepared.context && prepared.peers.len() == 4,
-            "parent CLI observation differs from its retained four-validator generation"
-        );
+    fn provision_parent(&mut self) -> TestResult<LoopbackParent> {
+        let prepared = self.start_loopback_parent()?;
         eprintln!("ATTACHMENT_PARENT_READY peers=4");
         let parent_config = prepared.context.load_client_config()?;
-        let (anchor, faucet, node_peers) = original_parent(&prepared)?;
-        let mut verifier =
+        let (anchor, faucet, node_peers) = original_parent(&prepared, true)?;
+        let faucet = faucet.ok_or_else(|| eyre!("disposable parent faucet absent"))?;
+        let verifier =
             independently_observed_parent(&prepared, &parent_config, &anchor, &node_peers)?;
         eprintln!(
             "ATTACHMENT_PARENT_VERIFIED height={}",
             verifier.checkpoint().height()
         );
-        let initial = verifier.clone();
         let ingress_directory = self.root.create_child("ingress")?;
         ensure!(
             self.ingress.is_none(),
@@ -420,7 +422,28 @@ impl Harness {
             PublishMode::CreateNew,
         )?;
         eprintln!("ATTACHMENT_PARENT_LOOPBACK_READY roots=4");
+        Ok(LoopbackParent {
+            prepared,
+            parent_config,
+            anchor,
+            faucet,
+            node_peers,
+            verifier,
+            profiles,
+        })
+    }
 
+    fn exercise(&mut self) -> TestResult<()> {
+        let LoopbackParent {
+            prepared,
+            parent_config,
+            anchor,
+            faucet,
+            node_peers,
+            mut verifier,
+            profiles,
+        } = self.provision_parent()?;
+        let initial = verifier.clone();
         // This one call owns real funding, paid SNS, authenticated generation binding,
         // owner-private genesis, registration and independently verified parent inclusion.
         let mut attachment_timing = self
@@ -763,7 +786,7 @@ impl Harness {
             captured > 0,
             "no original parent request capture was retained"
         );
-        inspect_parent_files(self.parent.root(), &needles)?;
+        inspect_parent_files(self.parent.path(), &needles)?;
         self.verified = true;
         eprintln!(
             "ATTACHMENT_SMOKE_PASSED={} parent_height={} private_height={}",
@@ -812,25 +835,27 @@ impl Harness {
     fn stop(&mut self) -> TestResult<()> {
         self.shutdown_confirmed = false;
         let mut failures = Vec::new();
-        for (store, name) in [(&self.child, "dpn"), (&self.parent, "parent")] {
-            match store.down(name) {
-                Ok(stopped)
-                    if stopped.phase == ManagedPhase::Stopped && stopped.running_peers == 0 => {}
-                Ok(status) if status.phase == ManagedPhase::Failed && status.running_peers == 0 => {
-                    eprintln!(
-                        "ATTACHMENT_CLEANUP {name}: authenticated zero live peers, original failure retained: {:?}",
-                        status.failure
-                    );
-                }
-                Ok(_) => failures.push(format!("{name}: authenticated shutdown was not confirmed")),
-                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => failures.push(format!("{name}: {error}")),
+        let name = "dpn";
+        match self.child.down(name) {
+            Ok(stopped) if stopped.phase == ManagedPhase::Stopped && stopped.running_peers == 0 => {
             }
+            Ok(status) if status.phase == ManagedPhase::Failed && status.running_peers == 0 => {
+                eprintln!(
+                    "ATTACHMENT_CLEANUP {name}: authenticated zero live peers, original failure retained: {:?}",
+                    status.failure
+                );
+            }
+            Ok(_) => failures.push(format!("{name}: authenticated shutdown was not confirmed")),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => failures.push(format!("{name}: {error}")),
         }
         if let Some(ingress) = self.ingress.as_mut()
             && ingress.stop().is_err()
         {
             failures.push("loopback controller shutdown was not confirmed".into());
+        }
+        if let Err(error) = self.parent_peers.stop() {
+            failures.push(format!("parent validator shutdown: {error}"));
         }
         ensure!(
             failures.is_empty(),
@@ -838,6 +863,7 @@ impl Harness {
             failures.join("; ")
         );
         self.shutdown_confirmed = true;
+        eprintln!("ATTACHMENT_CLEANUP_CONFIRMED parent=0 child=0 ingress=0");
         Ok(())
     }
 
@@ -872,24 +898,12 @@ impl Drop for Harness {
     }
 }
 
-fn parse_parent_ready(value: Value) -> TestResult<ManagedStatus> {
-    let ready: ManagedStatus = json::from_value(value)?;
-    ensure!(
-        ready.phase == ManagedPhase::Ready
-            && ready.running_peers == 4
-            && ready.context.name == "parent"
-            && ready.context.dataspace_id == 0
-            && ready.failure.is_none(),
-        "parent CLI did not report its exact Ready4 Global context"
-    );
-    Ok(ready)
-}
-
 pub(super) fn original_parent(
     prepared: &PreparedLocalnet,
+    sora: bool,
 ) -> TestResult<(
     GenesisAnchor,
-    iroha_config::parameters::actual::ToriiFaucet,
+    Option<iroha_config::parameters::actual::ToriiFaucet>,
     Vec<PeerId>,
 )> {
     use iroha_config::node_config::{NodeConfigOptions, NodeFile, open_node_config};
@@ -900,7 +914,7 @@ pub(super) fn original_parent(
     let _profile = ChainDiscriminantGuard::enter(profile);
     let reader = open_node_config(
         NodeFile::Path(prepared.peers[0].config_path.clone()),
-        NodeConfigOptions::default(),
+        NodeConfigOptions { sora },
     )
     .map_err(|_| eyre!("original parent node configuration could not be read"))?;
     let (user, _) = reader
@@ -909,6 +923,10 @@ pub(super) fn original_parent(
     let config = user
         .parse()
         .map_err(|_| eyre!("original parent node configuration failed validation"))?;
+    ensure!(
+        !sora || config.torii.account_onboarding.is_some(),
+        "disposable parent onboarding absent"
+    );
     // The generated bundle retains its manifest beside the client configuration;
     // running validators consume the bound signed wire, not an optional manifest.
     let generation = PrivateDirectory::open(
@@ -960,7 +978,7 @@ pub(super) fn original_parent(
     for peer in &prepared.peers {
         let reader = open_node_config(
             NodeFile::Path(peer.config_path.clone()),
-            NodeConfigOptions::default(),
+            NodeConfigOptions { sora },
         )
         .map_err(|_| eyre!("original parent peer configuration could not be read"))?;
         let (user, _) = reader
@@ -987,10 +1005,7 @@ pub(super) fn original_parent(
             genesis,
             validators,
         },
-        config
-            .torii
-            .faucet
-            .ok_or_else(|| eyre!("disposable parent faucet absent"))?,
+        config.torii.faucet,
         nodes,
     ))
 }
@@ -1816,61 +1831,6 @@ fn private_execution_report_requires_exact_separate_parent_and_child_bindings() 
             json::to_value(&ManagedParentObservation::NotConfigured).unwrap(),
         );
     assert!(verify_execution_report(&changed, child, scope).is_err());
-}
-
-#[test]
-fn parent_cli_status_requires_exact_ready_global_context() {
-    let status = ManagedStatus {
-        context: ManagedContext {
-            name: "parent".into(),
-            chain_id: "fixture-parent".into(),
-            network_id: "fixture-parent-network".into(),
-            account_id: "fixture-owner".into(),
-            dataspace_id: 0,
-            dataspace_alias: "universal".into(),
-            torii_url: "http://127.0.0.1:18080/".into(),
-            client_config: "/fixture/client.toml".into(),
-        },
-        phase: ManagedPhase::Ready,
-        running_peers: 4,
-        failure: None,
-        validators: (0..4)
-            .map(|index| ManagedValidatorStatus {
-                index,
-                state: ManagedValidatorState::Running,
-            })
-            .collect(),
-    };
-    let value = json::to_value(&status).unwrap();
-    assert_eq!(parse_parent_ready(value.clone()).unwrap(), status);
-    for (field, changed) in [
-        ("phase", Value::from("stopped")),
-        ("running_peers", Value::from(3_u64)),
-        ("failure", Value::from("not ready")),
-    ] {
-        let mut invalid = value.clone();
-        invalid
-            .as_object_mut()
-            .unwrap()
-            .insert(field.into(), changed);
-        assert!(parse_parent_ready(invalid).is_err());
-    }
-    for (field, changed) in [
-        ("name", Value::from("child")),
-        ("dataspace_id", Value::from(u64::MAX)),
-    ] {
-        let mut invalid = value.clone();
-        invalid
-            .as_object_mut()
-            .unwrap()
-            .get_mut("context")
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert(field.into(), changed);
-        assert!(parse_parent_ready(invalid).is_err());
-    }
-    assert!(parse_parent_ready(norito::json!({"status": "ready"})).is_err());
 }
 
 #[test]

@@ -886,10 +886,26 @@ opt-level = 1
 [profile.local-release.package.iroha_model_base]
 opt-level = 1
 
+# Fat LTO (`lto = true`) merges every Rust crate of a binary into one LLVM
+# module and optimizes it on one thread, once per shipped binary. On the same
+# inputs with two jobs, the iroha3d fat link peaked at 74 GiB and its ThinLTO
+# link at 11 GiB (aarch64 macOS, 2026-11-20). ThinLTO keeps cross-crate
+# inlining through per-module summaries and optimizes modules in parallel
+# within Cargo's job limit.
 [profile.deploy]
 inherits = "release"
 strip = "symbols"
-lto = true
+lto = "thin"
+
+# Nearly all of iroha_core's compile time and much of its memory is LLVM work
+# on monomorphized code: its check-only compile is about 1 of 28 CPU-minutes.
+# With the default 16 codegen units every LLVM module is huge, and the crate
+# compile and each ThinLTO link hold several at once. With two jobs, 64 units
+# lowered the crate's peak from 12.2 to 11.1 GiB and the iroha3d link's from
+# 10.9 to 9.3 GiB; with eight jobs both fell by 3-5 GiB. The link costs about
+# 7% more CPU and the binary is about 5% larger (aarch64 macOS, 2026-11-20).
+[profile.deploy.package.iroha_core]
+codegen-units = 64
 
 [profile.profiling]
 inherits = "release"

@@ -3,7 +3,7 @@
 use super::profile_files::private_log;
 #[cfg(windows)]
 use color_eyre::eyre::ensure;
-use color_eyre::eyre::{Result, WrapErr as _};
+use color_eyre::eyre::{Result, WrapErr as _, eyre};
 #[cfg(all(windows, test))]
 use iroha_fs::ProcessCommand as Command;
 use iroha_fs::{PrivateDirectory, ProcessStdio as Stdio, RetainedFile};
@@ -26,15 +26,33 @@ pub(super) fn configure_lifecycle(node: &mut toml::Table) {
     let _ = node;
 }
 
+/// Refuse first-boot authorization when either original consensus history already exists.
+fn require_unused_history(records: &Path, installation: &Path) -> Result<()> {
+    for path in [records, installation] {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err(eyre!(
+                    "fresh fixture already has consensus history at {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Running validators.
 pub(super) struct Peers {
     children: Vec<Child>,
-    logs: Vec<RetainedFile>,
+    logs: Vec<(String, RetainedFile)>,
     directory: Option<PrivateDirectory>,
 }
 
 impl Peers {
-    pub(super) fn spawn(
+    /// Start only the freshly generated seats of this new, private fixture.
+    pub(super) fn spawn_fresh(
         daemon: &ResolvedProgram,
         directory: &Path,
         node_files: &[PathBuf],
@@ -44,11 +62,19 @@ impl Peers {
             logs: Vec::new(),
             directory: Some(PrivateDirectory::open_exact(directory)?),
         };
+        for node_file in node_files {
+            let config = super::read_profile_node(node_file)?;
+            require_unused_history(
+                &config.sumeragi.records_dir,
+                &config.sumeragi.installation_log,
+            )?;
+        }
         for (index, node_file) in node_files.iter().enumerate() {
             let mut log = |stream: &str| -> Result<Stdio> {
-                let original = private_log(&directory.join(format!("peer{index}.{stream}.log")))?;
+                let name = format!("peer{index}.{stream}.log");
+                let original = private_log(&directory.join(&name))?;
                 let stream = Stdio::from(original.file().try_clone()?);
-                peers.logs.push(original);
+                peers.logs.push((name, original));
                 Ok(stream)
             };
             let mut command = daemon.command()?;
@@ -57,6 +83,7 @@ impl Peers {
                 .current_dir(directory)
                 .arg("--config")
                 .arg(node_file)
+                .arg("--sumeragi-assert-fresh-key")
                 .stdin(if cfg!(windows) {
                     Stdio::piped()
                 } else {
@@ -66,24 +93,30 @@ impl Peers {
                 .stderr(log("stderr")?)
                 .kill_on_drop(true);
             peers.children.push(command.spawn_async()?);
-            peers.revalidate()?;
+            peers.check_live_logs()?;
         }
         Ok(peers)
     }
 
-    fn revalidate(&self) -> Result<()> {
+    fn check_live_logs(&self) -> Result<()> {
+        // While the daemon appends, length and modification time may change between
+        // observations. Authenticate the private single-link name and original descriptor
+        // together in the retained directory.
         self.directory
             .as_ref()
             .expect("peer original directory")
-            .revalidate()?;
-        for original in &self.logs {
-            original.revalidate()?;
-        }
-        Ok(())
+            .read_scope(|reader| {
+                for (name, original) in &self.logs {
+                    reader.require_same_file(name, original.file(), || {
+                        eyre!("validator log no longer names its original: {name}")
+                    })?;
+                }
+                Ok(())
+            })
     }
 
     pub(super) fn exited(&mut self) -> Result<Option<String>> {
-        self.revalidate()?;
+        self.check_live_logs()?;
         for (index, child) in self.children.iter_mut().enumerate() {
             if let Some(status) = child.try_wait()? {
                 return Ok(Some(format!("validator {index} exited: {status}")));
@@ -93,7 +126,7 @@ impl Peers {
     }
 
     pub(super) async fn stop(&mut self, deadline: Instant) -> Result<()> {
-        self.revalidate()?;
+        self.check_live_logs()?;
         #[cfg(unix)]
         for child in &self.children {
             if let Some(pid) = child.id() {
@@ -118,10 +151,11 @@ impl Peers {
                 .await
                 .wrap_err("validator did not stop")??;
         }
-        for original in &self.logs {
+        for (_, original) in &self.logs {
             original.file().sync_all()?;
+            original.revalidate()?;
         }
-        self.revalidate()?;
+        self.check_live_logs()?;
         self.children.clear();
         Ok(())
     }
@@ -145,6 +179,52 @@ impl Drop for Peers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_fixture_refuses_either_surviving_consensus_history() {
+        let workspace = super::super::profile_files::workspace().unwrap();
+        let records = workspace.path().join("records");
+        let installation = workspace.path().join("installation");
+        assert!(require_unused_history(&records, &installation).is_ok());
+        std::fs::create_dir(&records).unwrap();
+        assert!(require_unused_history(&records, &installation).is_err());
+        let absent = workspace.path().join("unused");
+        let _original = private_log(&installation).unwrap();
+        assert!(require_unused_history(&absent, &installation).is_err());
+    }
+
+    #[test]
+    fn live_log_checks_follow_appends_and_require_the_named_original() {
+        use std::io::Write as _;
+
+        let workspace = super::super::profile_files::workspace().unwrap();
+        let name = "peer0.stdout.log";
+        let original = private_log(&workspace.path().join(name)).unwrap();
+        let mut writer = original.file().try_clone().unwrap();
+        let mut peers = Peers {
+            children: vec![],
+            logs: vec![(name.to_owned(), original)],
+            directory: Some(PrivateDirectory::open_exact(workspace.path()).unwrap()),
+        };
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..16_384 {
+                    writer.write_all(b"validator heartbeat\n").unwrap();
+                }
+            });
+            start.wait();
+            for _ in 0..32 {
+                peers.check_live_logs().unwrap();
+            }
+        });
+        peers.logs[0].1.revalidate().unwrap();
+        let other = "peer0.stderr.log";
+        let _original = private_log(&workspace.path().join(other)).unwrap();
+        peers.logs[0].0 = other.into();
+        assert!(peers.check_live_logs().is_err());
+    }
 
     #[test]
     fn lifecycle_configuration_matches_the_owned_shutdown_transport() {

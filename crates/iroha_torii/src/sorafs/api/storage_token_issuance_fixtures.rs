@@ -19,6 +19,7 @@ impl TokenTestContext {
 
     fn token_request(&self, overrides: TokenOverrides) -> StreamTokenRequestDto {
         StreamTokenRequestDto {
+            paid_readback: None,
             manifest_id_hex: self.manifest_id_hex.clone(),
             provider_id_hex: self.provider_id_hex.clone(),
             ttl_secs: overrides.ttl_secs,

@@ -1,6 +1,7 @@
 //! Native division, original public operands, exact quotient and remainder bounds.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 const OPS: [u8; 4] = [
     wide::arithmetic::DIV,
@@ -288,7 +289,7 @@ fn private_division_native_private_operands_refuse_even_matching_tags_and_rd0() 
                 let mut recorder = DiagnosticStepRecorder::try_new(8, &budget).unwrap();
                 assert!(matches!(
                     vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-                    Err(ivm::VMError::PrivacyViolation)
+                    Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
                 ));
                 let record = &recorder.records()[0];
                 assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
@@ -329,17 +330,20 @@ fn private_division_native_arithmetic_and_gas_traps_cannot_claim_completion() {
                 let outcome =
                     vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder);
                 if opcode_gas < 10 {
-                    assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+                    assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
                 } else {
                     assert!(if right == 0 {
                         matches!(
                             outcome,
-                            Err(ivm::VMError::NumericFault(
+                            Err(ivm::VMError::Trap(VmTrap::NumericFault(
                                 ivm::numeric::NumericFaultV1::DivisionByZero
-                            ))
+                            )))
                         )
                     } else {
-                        matches!(outcome, Err(ivm::VMError::RegisterIntegerOverflow))
+                        matches!(
+                            outcome,
+                            Err(ivm::VMError::Trap(VmTrap::RegisterIntegerOverflow))
+                        )
                     });
                 }
                 let record = &recorder.records()[0];

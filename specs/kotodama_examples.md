@@ -20,12 +20,15 @@ koto build examples/hello/hello.ko \
 ```
 
 ABI v1 is unconditional. Source cannot select an ABI or execution feature. Gas,
-supplied by the caller, is the only execution budget, so an ordinary artifact
-carries a zero cycle bound in its execution header.
+supplied by the caller, budgets execution. The default `abi-v1` profile builds for
+the frozen baseline engine, whose execution header carries a positive cycle
+ceiling (1,000,000 by default); the C10 profiles (`iroha.ivm.c10.v1` and
+`iroha.ivm.runtime_lifecycle.v1`) build for the C10 engine, whose ordinary
+artifacts carry a zero cycle bound.
 
 ZK contracts are checked, built, and documented with `--zk`. The flag selects a
 compiler capability; the source still cannot override execution-header metadata.
-A ZK artifact records its positive trace bound in the execution header, where the
+A ZK artifact records its positive cycle bound in the execution header, where the
 artifact hash covers it. The default is 1,000,000 cycles; `--zk-trace-cycles`
 selects another bound, up to node admission policy, and requires `--zk`.
 

@@ -2,13 +2,15 @@
 //! family (design §12.3).
 //!
 //! An anonymous attempt is created through its own interface and keeps its own State from
-//! creation; an attempt of the frozen baseline is never switched. The family has three
+//! creation; an attempt of the frozen baseline is never switched. The family has four
 //! interfaces:
 //!
 //! - [`CreateAnonymousParliamentAttemptV1`] admits exact proposal content. The caller
 //!   selects neither the purpose of the attempt nor its policy: Core records the purpose
 //!   from the network's original genesis policy or the release qualification, and freezes
 //!   the policy from committed parameters.
+//! - [`super::CreateAnonymousRuntimeUpgradeAttemptV1`] admits an original signed runtime
+//!   action or retries exact stored content; callers cannot supply notice or proposal time.
 //! - [`SubmitAnonymousParliamentTransitionV1`] carries the account-signed facts and intents
 //!   of design §8.1: risk escalation, early-close intents, the two inclusion-derived
 //!   sortition registrations, invitation responses, absences and endorsements.

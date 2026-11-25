@@ -35,7 +35,10 @@ mod fi_checkpoint_selection;
 mod fi_context_assertion;
 mod fi_context_continuation;
 mod gpu;
+mod instruction_layout;
 mod kagemusha_spartan;
+#[cfg(all(target_os = "android", feature = "spartan-device-fixture"))]
+pub use kagemusha_spartan::Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_confirm as android_fixture_debit_confirm;
 mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;

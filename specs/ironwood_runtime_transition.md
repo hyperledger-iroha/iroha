@@ -186,12 +186,24 @@ Ironwood namespace and enforces the same committed public-balance scope checks.
 ## Mandatory decoder rollout gate
 
 The chosen compatibility mechanism is **rebuild all decoders before activation**.
-`wire_schema_hash` is `9d96f872663204751490b9f22a67f1a7f0f23b0492eecd5f7ca0ac42915a045d`;
+The Ironwood qualification preceding the certified C10 addition recorded
+`wire_schema_hash` `9d96f872663204751490b9f22a67f1a7f0f23b0492eecd5f7ca0ac42915a045d`;
 its opaque instruction roots do not bind the privacy payload registry. It differs from
 `8c6e5380…` because covered wire roots changed since, among them the execution commitment's
 World roots becoming `KeyedStateRoot` (`sumeragi.md` §16.6): LtHash roots keep their bytes, but
 a reader built before that change refuses a keyed root whose marker bit is clear. IVM ABI V1 (the interface profile, the frozen
 baseline engine) is `7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7`.
+The candidate with certified C10 outputs has wire identity
+`6dd75f608b5935ee4de7fb9c72b1c192c6c906b0963b52cbc83a9865184727b1`. It extends the approved
+C10 identity `f06b6d0e…` with the DA proof scheme's corrected label (tag 0 `SorafsPorBlake3`,
+formerly `MerkleSha256`) and the exact BLAKE3 commitment `chunk_root`; the stored pin-intent
+types keep the frozen baseline layout. The new closure includes
+the tag-7 C10 result with its original rejection, receipts, emissions and source. The installed
+Taira selection, baseline ABI and Ironwood fixture bytes retain their recorded identities.
+Before C10 activation the rollout also covers BPNG and CBSI consumers of certified block
+output and transaction proofs. The opt-in event subprotocol `iroha.events.c10.norito.v1`
+uses a single `EventSubscriptionC10V1` and sends `EventMessageC10V1` for matching certified
+Network executions on the authenticated events WebSocket.
 Neither hash is a sufficient Ironwood support signal.
 
 Before approving activation, governance qualification must record a candidate

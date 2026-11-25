@@ -26,7 +26,7 @@ pub(super) fn store_config(root: &Path) -> Config {
 
 /// Persist original signed genesis and certified successors of a chain the configuration does
 /// not trust into a Strict Kura.
-fn populate_store(config: &Config, blocks: u64) {
+pub(super) fn populate_store(config: &Config, blocks: u64) {
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config.kura,
         &config.nexus.lane_config,
@@ -71,6 +71,31 @@ pub(super) fn tree(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
         }
     }
     files
+}
+
+#[test]
+fn configuration_template_keeps_original_funding_without_claiming_executed_history() {
+    let root = tempfile::tempdir().unwrap();
+    let config = store_config(root.path());
+    let (kura, _) = Kura::new_with_configured_lane_catalog(
+        &config.kura,
+        &config.nexus.lane_config,
+        &config.nexus.configured_lane_catalog,
+    )
+    .unwrap();
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let committed = chain.committed(1);
+    let genesis = committed.block();
+    kura.persist_block_immediate_for_bench(genesis).unwrap();
+    let budget = AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+    let before = tree(root.path());
+    let template =
+        state_configuration_template(&config, &kura, &budget, genesis, chain.network_id()).unwrap();
+    assert!(template.ivm_execution_budget().same_pool(&budget));
+    assert_eq!(template.committed_height(), 0);
+    assert!(template.view().native_execution_tip().is_none());
+    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
+    assert_eq!(tree(root.path()), before);
 }
 
 #[test]

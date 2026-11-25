@@ -65,6 +65,12 @@ mod progress;
 mod purpose;
 mod qualification;
 mod registration_input;
+mod runtime_enactment;
+mod runtime_upgrade;
+pub use runtime_enactment::{RuntimeEnactmentReceiptErrorV1, RuntimeEnactmentReceiptV1};
+pub use runtime_upgrade::{
+    AnonymousRuntimeUpgradeRequestV1, CreateAnonymousRuntimeUpgradeAttemptV1,
+};
 
 pub use self::registration_input::RegisterParliamentCredentialV1;
 
@@ -102,12 +108,15 @@ pub use self::{
     governance_certificate::{
         AnonymousBodyResultV1, AnonymousGovernanceCertificateErrorV1,
         AnonymousGovernanceCertificateV1, AnonymousParliamentBodyBindingV1,
-        AnonymousPublicFindingResultV1, AnonymousSealedBodyV1, anonymous_execution_failure_root_v1,
-        anonymous_governance_certificate_id_v1,
+        AnonymousPublicFindingResultV1, AnonymousSealedBodyV1,
+        CheckedAnonymousGovernanceCertificateErrorV1, anonymous_execution_failure_root_v1,
+        anonymous_governance_certificate_id_v1, checked_anonymous_execution_failure_root_v1,
+        checked_anonymous_governance_certificate_id_v1,
     },
     identity::{
         AnonymousGovernanceAttemptV1, anonymous_body_instance_id_v1,
-        anonymous_governance_attempt_id_v1,
+        anonymous_governance_attempt_id_v1, checked_anonymous_body_instance_id_v1,
+        checked_anonymous_governance_attempt_id_v1,
     },
     instruction::{
         AnonymousClosePhaseEarlyV1, AnonymousParliamentTransitionV1,

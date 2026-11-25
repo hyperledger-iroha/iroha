@@ -1,10 +1,12 @@
 # KAGEMUSHA Spartan experimental backend
 
-This crate contains the experimental four-operation proof engine, complete Payment
-codec and native custody integration for Bootstrap, Load, Send and Receive. It
-uses the canonical Iroha Pasta implementation and the existing wallet provider,
-hardware adapters, account identity and journal. It does not switch the installed
-wallet generation, change Taira state or migrate funded wallets.
+This crate implements the KAGEMUSHA proof engine, Payment codec and native
+custody integration used by the Iroha Swift and Kotlin wallets. The registered
+five-family profile covers Bootstrap, Control, Send, Receive and ArchiveSent.
+Control covers Load, RefreshTimeAnchor and Unload. ArchiveSent removes a
+confirmed outgoing Payment from the payer’s pending set and preserves its
+balance. The app opens the generation selected by its signed installation.
+Existing funded wallets retain the generation and custody already bound to them.
 
 The profile uses the future 532-byte credential body (596 bytes with its signature)
 and 30-field monetary Core. The installed credential generation remains separate.
@@ -23,21 +25,31 @@ for its operation kind. The primary relation authenticates the credential,
 certificate, hardware receipt, exact state and monetary transition. The secondary
 relation completes the cycle's recursive checks. Send irreversibly debits the
 amount plus fee and binds one receiver. Receive binds the original incoming
-Payment and proves credit or Burn from its actual total proof-verification result.
+Payment and derives credit or Burn from its actual total proof-verification result.
+Fresh Receive admission requires credit before hardware selection. Recovery verifies
+the recorded outcome of an already selected Receive, including a historical Burn.
 Load additionally verifies canonical Sumeragi finality against the installed
 signed genesis and exact ordinary Load receipt.
 
 Acceptance checks both scalar/point proofs, both accumulated matrix claims, and
 both own and inherited generator claims. A linked proof alone is insufficient.
-The fixed-program compiler first stabilizes eight public programs and then starts
-a fresh genuine Bootstrap → Load → Send → Receive chain. Intermediate sizing
-proofs cannot substitute for that final chain.
+The five-family compiler stabilizes ten public programs, one per family on
+each curve. It then proves a fresh monetary history and reimports the published
+programs against their registered digests. The four-family profile has eight
+programs. Both profiles bind proof verification to the installed manifest.
 
 Native proof masks and pair-binding masks use fresh OS entropy. Explicit test
 replay can supply deterministic entropy. The public program format contains
 verification instructions and constants, excluding private witness arrays and
-witness-producing closures. Programs are authenticated by exact digests under
-a small root-signed parameter manifest before monetary use.
+witness-producing closures. The installer authenticates the selected program digests
+against a manifest signed by the root-certified Artifact key. Manifest v4 selects
+two full-width LogUp challenges and the bounded program encoding. Its source and
+conditional security budget are described in the [Control soundness review](research/CONTROL-SOUNDNESS.md).
+
+Private commitments (witness rows, sumcheck round values, the IPA opening's L/R
+vectors and the generator-claim folds) use iroha_pasta's variable-time secret
+Pippenger MSMs. The owner accepted on 2026-11-24 that their timing and memory
+accesses follow the private values; proof bytes are unchanged ([TODO G8](TODO.md)).
 
 ## Payment and SDK integration
 
@@ -56,10 +68,10 @@ existing Ed25519 account's signature over a fresh Native challenge.
 
 Swift and Kotlin expose installation, account admission, prepare/review/execute,
 complete Payment verification, and exact retained-output recovery through the same
-native owner. Send confirmation uses hardware-backed biometric or device-credential
-authentication in the application before execution; it is not a proof of user
-confirmation against a malicious SDK caller. See [NATIVE_BACKEND.md](NATIVE_BACKEND.md) for the exact API sequence,
-custody boundaries and four-operation profile scope.
+native owner. The installed Spartan runtime refuses Send and Unload without
+protected authorization of the exact review. The isolated two-wallet fixture
+uses its own authenticated test scheme. The SDK and Native contracts are in
+[NATIVE_BACKEND.md](NATIVE_BACKEND.md).
 
 The physical device fixture uses the real Android/Apple platform adapters and
 canonical EnrollmentOwner. Its independently issued test parameters and separate
@@ -70,11 +82,97 @@ native payment and restart test.
 
 ## Validation
 
-The complete backend validation is in progress. Component tests, native API
-inventories, codec checks and hardware signatures have separate evidence; they do
-not establish a successful complete device payment, the 12,000-byte complete
-carrier target or a performance improvement. Record those conclusions only from
-the actual full-chain and physical runtime results.
+The selected five-family bundle is 6,973,167 bytes and has SHA-256
+`968f70cceba4ca9e7b249ffbb69f559d2a5d0bbc77179ee74effa8c14ee4f980`.
+On 2026-11-23 the iPhone 17 Pro Max passed all five launches of development
+fixture `2026.11.27`. The holder confirmed Send. Cold Receive authenticated
+the return Payment and restored the balance to 100. Restart recovered all four
+operations and both 10,231-byte Payments. ArchiveSent returned the same 29,763
+completion bytes at sequence 4 after restart.
+
+Normal Receive took **45.484491 s**, including 40.518284 s in Execute. The
+process reached **864,616,448 bytes peak RSS**. The release limits are 3 s
+and 730,144,440 bytes. The Pixel 6 result below covers the earlier v4 bundle.
+[Five-launch verifier](device/ios/verify-returned-launches.py)
+
+The previous five-family compiler reproduced the registered 9,263,339-byte bundle with
+SHA-256 `844b031c4b19448f46f52080e00ca4b3c846b4d8e58d83be20e3a9b3ece084a3`.
+The complete host wallet credited the 10,615-byte Payment and recovered both
+original Payments after a cold restart.
+
+On 2026-11-22 the iPhone 17 Pro Max completed all five launches with this bundle
+and development fixture build `2026.11.25`. The holder confirmed Send with the
+hardware-backed key. Cold Receive took **71.433612 s**, including 4.602389 s in
+Prepare and 65.957400 s in Execute. The process reached **1,169,113,088 bytes**
+peak RSS. These exceed the 3 s and 730,144,440-byte release targets. A fresh
+process recovered all four operations and both 10,615-byte Payments. ArchiveSent
+produced a 30,147-byte completion at sequence 4 and returned the identical bytes
+after restart. The complete soundness bound and retail issuer authorization
+remain open. [Five-launch verification](device/ios/verify-returned-launches.py) ·
+[Five-family compiler procedure](#bootstrap-the-five-kind-monetary-compiler) ·
+[Security assumptions](research/CONTROL-SOUNDNESS.md)
+
+The manifest-v4 compiler produced identical canonical bytes for all eight public
+programs on passes four and five. A fresh Bootstrap → Load → Send → Receive
+chain then passed, including its checked balances, exact Payment recovery,
+RefreshTimeAnchor and Unload. The Payment envelope was 9,862 bytes, the complete
+IPM1 message was 10,711 bytes, and the public program bundle was 5,663,732 bytes.
+One valid host Receive took 92.017 s across preparation, resume, finalization
+and completion recovery, including 55.50 s in finalization. With the signed v4
+shapes, Native requires at least 939,524,096 available bytes before it will
+start any of the four proof kinds. A phone reporting the target allowance of
+730,144,440 bytes would be refused at that check. The separate accounting for
+the Receive primary prover estimated 741,937,508 bytes from retained capacity
+and projected workspace. The v4 chain did not record process RSS.
+[Full v4 chain](output/production-20261119/chain-v4-final.log)
+
+On 2026-11-21 the physical Pixel 6 completed a holder-confirmed Send, received
+its counterparty’s 10,711-byte return Payment, and recovered both Payments after
+restart. The fresh-process Receive took **323.318487 s** from retained incoming
+bytes to verified durable output. Execute accounted for **309.055566 s**. Both
+its phase peak and the process-lifetime peak were **1,078,714,368 bytes RSS**.
+The third launch recovered all four operations with zero executions or prompts.
+The authenticated fixture APK was `a3812a9c…9a31`. The 3 s and 730,144,440-byte
+targets remain open on this device.
+[Pixel measurements and original report digests](output/production-20261119/pixel6-v4-protected-result.json)
+
+A separate three-launch v4 custody fixture measured the software counterparty on
+the first Mac launch. Its valid Receive took 263.666 s in finalization alone
+and reached 1,557,184,512 bytes RSS during that phase. Both Payments were
+10,711 bytes. In a fresh process the first wallet credited the return Payment and
+recovered its exact Send and Receive outputs. Its normal Receive flow took
+630.233 s and the process peaked at 1,055,408,128 bytes RSS. These timings
+were collected alongside other builds. [Counterparty measurements](output/production-20261119/device-host-current-v4-attempt2/device-measurements-launch-1.json) · [Fresh-process Receive](output/production-20261119/device-host-current-v4-attempt2/device-measurements-launch-2.json)
+
+The Payment envelope has 172 bytes of room under the 10,034-byte limit. The three
+layouts available in the fixture keep the same primary witness size and fail the current
+phone memory admission. Opus 5.5 projected that shrinking the rows enough to
+address latency would exceed the envelope budget with the current construction.
+The measured Pixel Receive exceeds the 3 s target. A different commitment layout or recursive
+construction would require new signed programs and a new soundness review.
+
+The authenticated manifest-v3 three-mode Mac chain produced a 10,780-byte Payment envelope
+and an 11,629-byte complete IPM1 message. The envelope exceeds the production
+10,034-byte limit by 746 bytes. The message fits the experimental 12,000-byte
+QR budget. Device latency, peak memory, and protected debit confirmation still
+require physical qualification. [Measured chain](output/takeover-20261118/recursive-control-result.json)
+and [wallet wire limits](../../specs/kagemusha_wallet_wire_v1.md).
+
+Re-encoding that signed historical Payment under future peer schema 3 yielded
+a 9,862-byte envelope and a 10,711-byte complete message. The decoder recovered
+the exact proof pair and the 749-byte credential companion. Encoding the eight
+historical public programs produced a 5,678,766-byte bundle with every instruction
+preserved. These historical measurements cover the saved v3 originals.
+[Payment measurement](output/production-20261119/historical-payment-v4-encoding.log) ·
+[Program round trip](output/production-20261119/compact-program-bundle.log)
+
+On November 19 the preserved v3 host wallet received the retained return
+Payment in a second process. The measured flow took 670.188 s and peaked at
+1,482,604,544 bytes RSS, including 623.57 s in Execute. This concurrent-build
+measurement used software custody and exceeded the 0.68 GiB phone budget. The
+third process recovered all four completed operations. The host test passed
+all three launches. [Restart result](output/production-20261119/two-wallet-retry.log) ·
+[Host Receive measurements](output/production-20261119/host-custody.gK4TLd/device-measurements-launch-2.json)
 
 The heavy `backend_chain_tests::complete_recursive_bootstrap_load_send_receive`
 test compiles the fixed programs, proves the fresh monetary chain, measures the
@@ -83,10 +181,12 @@ prepare/resume/finalize, and proves malformed-proof Receive/Burn. The device fix
 then uses those authenticated programs with real protected custody, account
 admission, hardware receipts, fresh device confirmation and restart recovery.
 
-The profile does not implement RefreshTimeAnchor. Controls-off Send uses its
-canonical local floor. Time-dependent controls require a protected matching anchor;
-a caller timestamp cannot install one. This experimental backend is not a full
-production wallet-generation cutover or a soundness-review approval.
+RefreshTimeAnchor verifies the certified time signer and advances the floor to
+the greater of the previous floor and the signed time. The v4 Bootstrap starts
+with lease and quota controls disabled. Its signed programs preserve that policy
+and the original Bootstrap credential. Enabling those controls or renewing a
+credential on the same funded lineage requires additional recursive relations.
+The outstanding release criteria are in [TODO.md](TODO.md).
 
 ## Reproduce
 
@@ -94,11 +194,11 @@ Run from this directory and preserve the warm target across iterations:
 
 ```sh
 export CARGO_TARGET_DIR="$PWD/target"
-cargo iroha-fast -- test --locked --offline --release --lib -- --test-threads=1
+cargo iroha-fast -- test --manifest-path "$PWD/Cargo.toml" --locked --offline --release --lib -- --test-threads=1
 run_dir="$PWD/output/full-backend-run-$(date -u +%Y%m%dT%H%M%SZ)"
 KAGEMUSHA_SPARTAN_TEST_LAYOUT=p18-s17 \
   KAGEMUSHA_SPARTAN_TEST_OUTPUT="$run_dir" \
-  cargo iroha-fast -- test --locked --offline --release --lib \
+  cargo iroha-fast -- test --manifest-path "$PWD/Cargo.toml" --locked --offline --release --lib \
   full::backend_chain_tests::complete_recursive_bootstrap_load_send_receive \
   -- --ignored --exact --nocapture --test-threads=1
 ```
@@ -110,6 +210,12 @@ layout must pass complete validation. The separately named
 `measure_recursive_layout_candidate` test records candidate costs and runs the
 actual monetary chain, but does not run the fifteen-case native containment gate.
 
+The four-family build uses `full::backend_chain_tests::compile_wallet_program_bundle`
+with the same layout and a fresh output directory. Once two successive compiler
+passes agree on all eight canonical programs, it writes `program-bundle.norito`.
+The artifact tool's `--verify-spartan-sources` command checks that bundle against
+the installed carrier and reimports each program against the signed manifest.
+
 The saved bundle can independently drive fresh native proof and containment
 checks with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS="$run_dir/native-device"` and
 the ignored test
@@ -119,6 +225,31 @@ A fresh checkout may need an initial dependency fetch before `--offline` works.
 The isolated physical fixture lives under `device/runtime`; the iOS runtime UI is
 `device/ios/RuntimeFixture.swift`. Build from this canonical checkout. Keep generated
 proof artifacts, device packages, signing scratch and logs in ignored outputs.
+
+### Bootstrap the five-kind monetary compiler
+
+The five-kind compiler starts with an actual signed four-kind software-wallet history. The [compiler runner](fixtures/compile_five_kind.py) builds those inputs locally, compiles ArchiveSent on both curves, then runs the five-kind fixed-point test on the two canonical warm Cargo targets. Its demo genesis, test Artifact certificate and software payment key are public. It needs no phone or operational issuer credentials.
+
+From the repository root, choose a new output directory under an existing parent.
+
+```sh
+exp="$PWD/experiments/kagemusha-spartan"
+mkdir -p "$exp/output"
+python3 "$exp/fixtures/compile_five_kind.py" --output "$exp/output/five-kind-build"
+```
+
+If a public four-kind `program-bundle.norito` is already available, pass `--four-kind-bundle /absolute/path/to/program-bundle.norito` or set `KAGEMUSHA_SPARTAN_FOUR_KIND_BUNDLE`. The software issuer checks its schema and all eight independently compiled pins. Without that input, the runner first creates the public bundle with `full::backend_chain_tests::compile_wallet_program_bundle` at the p18-s17 layout.
+
+To reuse a completed demo bootstrap, supply all four directories below. Keep the wallet and raw originals from the same host run. Its public software holder generates fresh operation IDs and signatures.
+
+| Environment variable | Producer and contents |
+|---|---|
+| `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` | `issue_software_device_fixture_from_public_bundle` emits the isolated issuer's program bundle, manifest and signature under the explicit fixture genesis. |
+| `KAGEMUSHA_SPARTAN_DEVICE_ROOT` | `host_tests::two_wallet_device_flow_on_host` starts with an empty owner-only directory. Launch three recovers all four operations. |
+| `KAGEMUSHA_SPARTAN_ARCHIVE_RAW_ORIGINALS` | [The exporter](fixtures/export_compiler_originals.py) pairs the host’s checksummed capsule and completion frames by selected generation and preserves its digest-checked peer originals. Run it with the completed software wallet and a new destination as positional arguments. |
+| `KAGEMUSHA_SPARTAN_ARCHIVE_PREVIOUS` | `compile_completed_archive_programs_group_four` verifies the retained signed history, proves both receiver forms and requires identical canonical programs. Its successful output contains `archive-primary.program` and `archive-secondary.program`. |
+
+The final `compile_five_kind_wallet_program_bundle_group_four` run checks two identical ten-tape generations against a fresh monetary history. Only its successful output becomes `--output`, containing `program-bundle.norito` and `public-program-profile.json`. On failure the runner identifies its private working directory so completed fixture stages and diagnostic tapes are available for investigation. A tape with an `.unqualified` filename is a compiler diagnostic.
 
 ## Design and research records
 

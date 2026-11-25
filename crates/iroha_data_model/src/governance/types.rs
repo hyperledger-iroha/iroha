@@ -25,6 +25,17 @@ use norito::codec::{Decode, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 use std::{collections::BTreeSet, fmt, str::FromStr, string::String, vec::Vec};
 
+/// Borrow the existing non-byte governance sequence through the codec's element writer.
+struct GovernanceElements<'a, T>(&'a [T]);
+
+impl<T: norito::core::SerializePayload> norito::core::SerializePayload
+    for GovernanceElements<'_, T>
+{
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::write_element_sequence::<T, _>(writer, self.0.iter())
+    }
+}
+
 /// Voting mode for a referendum.
 #[derive(
     Clone,
@@ -464,6 +475,23 @@ define_hash32_newtype!(
     "Stable network-scoped identifier for the logical Parliament beacon."
 );
 impl BeaconSessionId {
+    /// Derive the existing logical beacon identity while retaining its original codec refusal.
+    ///
+    /// # Errors
+    /// The original bare network-identity encoder error.
+    pub fn for_network_checked_v1(
+        network_id: &NetworkId,
+    ) -> Result<Self, norito::core::DecodeAttemptError> {
+        let mut bytes = crate::governance_fingerprint::checked_fingerprint(
+            crate::governance_fingerprint::LOGICAL_BEACON_SESSION_ID_V1,
+            network_id,
+        )?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            bytes[0] = 1;
+        }
+        Ok(Self::new(bytes))
+    }
+
     /// Derive the canonical stable Parliament beacon identifier for a network.
     ///
     /// This logical identifier deliberately does not name a DKG key session;
@@ -1436,6 +1464,31 @@ pub fn parliament_candidate_root_v1(
     )
 }
 
+/// Commit the existing candidate preimage without cloning its account sequence.
+///
+/// # Errors
+/// The original bare candidate-preimage encoder error.
+pub fn checked_parliament_candidate_root_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    body: ParliamentBody,
+    candidates: &[AccountId],
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    #[derive(Encode)]
+    struct BorrowedPreimage<'a> {
+        governance_attempt_id: GovernanceAttemptId,
+        body: ParliamentBody,
+        candidates: GovernanceElements<'a, AccountId>,
+    }
+    crate::governance_fingerprint::checked_fingerprint(
+        crate::governance_fingerprint::CANDIDATE_ROOT_V1,
+        &BorrowedPreimage {
+            governance_attempt_id,
+            body,
+            candidates: GovernanceElements(candidates),
+        },
+    )
+}
+
 /// Validation error for an immutable future-pulse sortition request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortitionRequestErrorV1 {
@@ -1526,6 +1579,17 @@ impl fmt::Display for SortitionRequestErrorV1 {
 }
 impl std::error::Error for SortitionRequestErrorV1 {}
 
+/// A deterministic sortition invariant failure or the original local identity refusal.
+#[derive(Debug, thiserror::Error)]
+pub enum CheckedSortitionRequestErrorV1 {
+    /// The installed request validation rules rejected the request.
+    #[error(transparent)]
+    Rejected(#[from] SortitionRequestErrorV1),
+    /// The original request identity encoder could not complete.
+    #[error(transparent)]
+    Codec(#[from] norito::core::DecodeAttemptError),
+}
+
 /// Immutable candidate-snapshot request committed before a future beacon pulse.
 #[derive(
     Clone,
@@ -1599,6 +1663,43 @@ impl SortitionRequestV1 {
                 beacon_session_id: self.beacon_session_id,
             },
         ))
+    }
+
+    /// Derive the same request identity while retaining its original codec refusal.
+    ///
+    /// # Errors
+    /// The original bare request-preimage encoder error.
+    pub fn canonical_id_checked_v1(
+        &self,
+    ) -> Result<SortitionRequestId, norito::core::DecodeAttemptError> {
+        crate::governance_fingerprint::checked_fingerprint(
+            crate::governance_fingerprint::SORTITION_REQUEST_ID_V1,
+            &SortitionRequestIdPreimageV1 {
+                governance_attempt_id: self.governance_attempt_id,
+                body_election_attempt_id: self.body_election_attempt_id,
+                body: self.body,
+                candidate_root: self.candidate_root,
+                candidate_count: self.candidate_count,
+                target_seats: self.target_seats,
+                request_height: self.request_height,
+                pulse_height: self.pulse_height,
+                beacon_session_id: self.beacon_session_id,
+            },
+        )
+        .map(SortitionRequestId::new)
+    }
+
+    /// Apply the installed request invariants without erasing an identity codec refusal.
+    ///
+    /// # Errors
+    /// The same ordered invariant rejection as [`Self::validate`], or the original codec error.
+    pub fn validate_checked_v1(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+    ) -> Result<(), CheckedSortitionRequestErrorV1> {
+        self.validate_with_identity(last_consumed_pulse_height, false, || {
+            self.canonical_id_checked_v1().map_err(Into::into)
+        })
     }
 
     /// Construct a request and derive its identifier from the complete V1 preimage.
@@ -1715,46 +1816,62 @@ impl SortitionRequestV1 {
         last_consumed_pulse_height: Option<u64>,
         allow_empty_candidate_snapshot: bool,
     ) -> Result<(), SortitionRequestErrorV1> {
+        self.validate_with_identity(
+            last_consumed_pulse_height,
+            allow_empty_candidate_snapshot,
+            || Ok(self.canonical_id()),
+        )
+    }
+
+    fn validate_with_identity<E: From<SortitionRequestErrorV1>>(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+        allow_empty_candidate_snapshot: bool,
+        identity: impl FnOnce() -> Result<SortitionRequestId, E>,
+    ) -> Result<(), E> {
         if self.id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
             || self.body_election_attempt_id.as_bytes() == &[0; 32]
             || self.candidate_root == [0; 32]
             || self.beacon_session_id.as_bytes() == &[0; 32]
         {
-            return Err(SortitionRequestErrorV1::ZeroBinding);
+            return Err(SortitionRequestErrorV1::ZeroBinding.into());
         }
-        if self.id != self.canonical_id() {
-            return Err(SortitionRequestErrorV1::NonCanonicalIdentifier);
+        if self.id != identity()? {
+            return Err(SortitionRequestErrorV1::NonCanonicalIdentifier.into());
         }
         if self.candidate_count == 0 && !allow_empty_candidate_snapshot {
-            return Err(SortitionRequestErrorV1::EmptyCandidateSnapshot);
+            return Err(SortitionRequestErrorV1::EmptyCandidateSnapshot.into());
         }
         if self.candidate_count > MAX_PARLIAMENT_CITIZENS_V1 {
             return Err(SortitionRequestErrorV1::CandidateCountExceedsMaximum {
                 candidate_count: self.candidate_count,
                 maximum: MAX_PARLIAMENT_CITIZENS_V1,
-            });
+            }
+            .into());
         }
         if self.target_seats == 0 {
-            return Err(SortitionRequestErrorV1::ZeroTargetSeats);
+            return Err(SortitionRequestErrorV1::ZeroTargetSeats.into());
         }
         if self.target_seats > MAX_PARLIAMENT_BODY_TARGET_SEATS_V1 {
             return Err(SortitionRequestErrorV1::TargetSeatsExceedMaximum {
                 target_seats: self.target_seats,
                 maximum: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
-            });
+            }
+            .into());
         }
         if self.request_height == 0 {
-            return Err(SortitionRequestErrorV1::ZeroRequestHeight);
+            return Err(SortitionRequestErrorV1::ZeroRequestHeight.into());
         }
         if self.pulse_height == 0 {
-            return Err(SortitionRequestErrorV1::ZeroPulseHeight);
+            return Err(SortitionRequestErrorV1::ZeroPulseHeight.into());
         }
         if self.pulse_height <= self.request_height {
             return Err(SortitionRequestErrorV1::PulseNotStrictlyFuture {
                 request_height: self.request_height,
                 pulse_height: self.pulse_height,
-            });
+            }
+            .into());
         }
         if let Some(last_consumed_pulse_height) = last_consumed_pulse_height
             && self.pulse_height <= last_consumed_pulse_height
@@ -1762,7 +1879,8 @@ impl SortitionRequestV1 {
             return Err(SortitionRequestErrorV1::PulseAlreadyConsumed {
                 pulse_height: self.pulse_height,
                 last_consumed_pulse_height,
-            });
+            }
+            .into());
         }
         Ok(())
     }
@@ -1879,6 +1997,26 @@ struct BodyElectionAttemptIdPreimageV1 {
 }
 
 impl BodyElectionAttemptId {
+    /// Derive the existing election identity without erasing its original codec refusal.
+    ///
+    /// # Errors
+    /// The original bare election-preimage encoder error.
+    pub fn derive_checked_v1(
+        governance_attempt_id: GovernanceAttemptId,
+        body: ParliamentBody,
+        sequence: u32,
+    ) -> Result<Self, norito::core::DecodeAttemptError> {
+        crate::governance_fingerprint::checked_fingerprint(
+            crate::governance_fingerprint::BODY_ELECTION_ATTEMPT_ID_V1,
+            &BodyElectionAttemptIdPreimageV1 {
+                governance_attempt_id,
+                body,
+                sequence,
+            },
+        )
+        .map(Self::new)
+    }
+
     /// Derive the only valid V1 identifier for one body-election retry.
     #[must_use]
     pub fn derive_v1(
@@ -2070,6 +2208,29 @@ struct AssignmentIdPreimageV1 {
 }
 
 impl AssignmentId {
+    /// Derive the existing assignment identity from a borrowed member with checked encoding.
+    ///
+    /// # Errors
+    /// The original bare assignment-preimage encoder error.
+    pub fn derive_checked_v1(
+        election_attempt_id: BodyElectionAttemptId,
+        member: &AccountId,
+    ) -> Result<Self, norito::core::DecodeAttemptError> {
+        #[derive(Encode)]
+        struct BorrowedPreimage<'a> {
+            election_attempt_id: BodyElectionAttemptId,
+            member: norito::core::PayloadRef<'a, AccountId>,
+        }
+        crate::governance_fingerprint::checked_fingerprint(
+            crate::governance_fingerprint::ASSIGNMENT_ID_V1,
+            &BorrowedPreimage {
+                election_attempt_id,
+                member: norito::core::PayloadRef(member),
+            },
+        )
+        .map(Self::new)
+    }
+
     /// Derive the V1 assignment identifier for a member in one election attempt.
     #[must_use]
     pub fn derive_v1(election_attempt_id: BodyElectionAttemptId, member: &AccountId) -> Self {
@@ -2136,6 +2297,34 @@ pub fn parliament_assignment_plan_root_v1(
             election_attempt_id,
             primary: primary.to_vec(),
             alternates: alternates.to_vec(),
+            cross_body_assignment_cap,
+        },
+    )
+}
+
+/// Commit the existing ranked draw plan without cloning its account/assignment sequences.
+///
+/// # Errors
+/// The original bare plan-preimage encoder error.
+pub fn checked_parliament_assignment_plan_root_v1(
+    election_attempt_id: BodyElectionAttemptId,
+    primary: &[ParliamentSeatAssignmentV1],
+    alternates: &[ParliamentSeatAssignmentV1],
+    cross_body_assignment_cap: u32,
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    #[derive(Encode)]
+    struct BorrowedPreimage<'a> {
+        election_attempt_id: BodyElectionAttemptId,
+        primary: GovernanceElements<'a, ParliamentSeatAssignmentV1>,
+        alternates: GovernanceElements<'a, ParliamentSeatAssignmentV1>,
+        cross_body_assignment_cap: u32,
+    }
+    crate::governance_fingerprint::checked_fingerprint(
+        crate::governance_fingerprint::ASSIGNMENT_PLAN_ROOT_V1,
+        &BorrowedPreimage {
+            election_attempt_id,
+            primary: GovernanceElements(primary),
+            alternates: GovernanceElements(alternates),
             cross_body_assignment_cap,
         },
     )
@@ -2707,6 +2896,37 @@ pub fn parliament_public_finding_endorsement_root_v1(
             body_instance_id,
             result_root,
             endorsing_assignments: endorsing_assignments.to_vec(),
+        },
+    )
+}
+
+/// Derive the existing public finding root from borrowed assignments with checked encoding.
+///
+/// This retains the exact bare record fields and sequence payload of
+/// [`parliament_public_finding_endorsement_root_v1`] without cloning the assignment list.
+///
+/// # Errors
+/// The original bare endorsement payload encoder error.
+pub fn checked_parliament_public_finding_endorsement_root_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    body_instance_id: BodyInstanceId,
+    result_root: [u8; 32],
+    endorsing_assignments: &[AssignmentId],
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    #[derive(Encode)]
+    struct BorrowedPreimage<'a> {
+        governance_attempt_id: GovernanceAttemptId,
+        body_instance_id: BodyInstanceId,
+        result_root: [u8; 32],
+        endorsing_assignments: GovernanceElements<'a, AssignmentId>,
+    }
+    crate::governance_fingerprint::checked_fingerprint(
+        crate::governance_fingerprint::PARLIAMENT_PUBLIC_FINDING_ENDORSEMENT_ROOT_V1,
+        &BorrowedPreimage {
+            governance_attempt_id,
+            body_instance_id,
+            result_root,
+            endorsing_assignments: GovernanceElements(endorsing_assignments),
         },
     )
 }
@@ -3579,7 +3799,19 @@ impl ProposalKind {
     /// Compute the deterministic, proposal-kind-separated fingerprint (`Blake2b-32`).
     #[must_use]
     pub fn fingerprint(&self) -> [u8; 32] {
-        let domain = match self {
+        crate::governance_fingerprint::fingerprint(self.fingerprint_domain(), self)
+    }
+
+    /// Derive the existing proposal fingerprint while retaining original codec refusals.
+    ///
+    /// # Errors
+    /// The original bare Norito payload encoder error.
+    pub fn checked_fingerprint_v1(&self) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+        crate::governance_fingerprint::checked_fingerprint(self.fingerprint_domain(), self)
+    }
+
+    fn fingerprint_domain(&self) -> &'static [u8] {
+        match self {
             Self::DeployContract(_) => crate::governance_fingerprint::DEPLOY_CONTRACT_V1,
             Self::RuntimeUpgrade(_) => crate::governance_fingerprint::RUNTIME_UPGRADE_V1,
             Self::SccpRouteGovernance(_) => crate::governance_fingerprint::SCCP_ROUTE_GOVERNANCE_V1,
@@ -3602,8 +3834,7 @@ impl ProposalKind {
             Self::GlobalDataTriggerPermissionGovernance(_) => {
                 crate::governance_fingerprint::GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1
             }
-        };
-        crate::governance_fingerprint::fingerprint(domain, self)
+        }
     }
 
     /// Hash the exact deterministic effect preimage under a purpose-distinct domain.
@@ -3614,6 +3845,19 @@ impl ProposalKind {
     #[must_use]
     pub fn effect_preimage_hash_v1(&self) -> [u8; 32] {
         crate::governance_fingerprint::fingerprint(
+            crate::governance_fingerprint::GOVERNANCE_EFFECT_PREIMAGE_V1,
+            self,
+        )
+    }
+
+    /// Derive the existing effect binding while retaining original codec refusals.
+    ///
+    /// # Errors
+    /// The original bare Norito payload encoder error.
+    pub fn checked_effect_preimage_hash_v1(
+        &self,
+    ) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+        crate::governance_fingerprint::checked_fingerprint(
             crate::governance_fingerprint::GOVERNANCE_EFFECT_PREIMAGE_V1,
             self,
         )
@@ -3698,6 +3942,28 @@ impl ProposalKind {
     }
 }
 
+/// Derive the existing runtime proposal subject without erasing identity codec refusals.
+///
+/// Scheduling and canceling the same change set retain the exact shared subject preimage
+/// used by [`ProposalKind::governed_subject_id_v1`].
+///
+/// # Errors
+/// The original change-set identity or subject payload encoder error.
+pub fn checked_runtime_upgrade_subject_id_v1(
+    action: &RuntimeUpgradeActionV1,
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    let change = match action {
+        RuntimeUpgradeActionV1::Schedule(change) => {
+            crate::runtime::lifecycle::checked_change_set_id_v1(change)?
+        }
+        RuntimeUpgradeActionV1::Cancel(id) => *id,
+    };
+    crate::governance_fingerprint::checked_fingerprint(
+        crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
+        &GovernanceSubjectPreimageV1::RuntimeUpgrade(change),
+    )
+}
+
 #[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::GovernanceSubjectPreimageV1")]
 enum GovernanceSubjectPreimageV1 {
@@ -3735,6 +4001,16 @@ impl ProposalContentId {
     pub fn derive_v1(proposal: &ProposalKind) -> Self {
         Self::new(proposal.fingerprint())
     }
+
+    /// Derive the existing content identifier while retaining original codec refusals.
+    ///
+    /// # Errors
+    /// The original bare proposal payload encoder error.
+    pub fn derive_checked_v1(
+        proposal: &ProposalKind,
+    ) -> Result<Self, norito::core::DecodeAttemptError> {
+        proposal.checked_fingerprint_v1().map(Self::new)
+    }
 }
 #[cfg(test)]
 #[path = "types/tests.rs"]
@@ -3742,6 +4018,10 @@ mod tests;
 
 #[cfg(test)]
 mod captured_types_schema_tests;
+
+#[cfg(test)]
+#[path = "types/checked_sortition_tests.rs"]
+mod checked_sortition_tests;
 
 #[cfg(test)]
 mod prepared_hash32_field_tests {

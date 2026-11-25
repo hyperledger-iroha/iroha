@@ -3,6 +3,7 @@ use crate::privacy_native_actions::network_id_from_genesis_hash_bytes;
 use crate::*;
 use iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1;
 use iroha_data_model::{
+    block::execution_output::TransactionResultRef,
     privacy::{PrivacyPoolIdV1, PrivacyRuntimeProtocolIdV1},
     sumeragi_finality::{
         SumeragiFinalityCheckpoint, SumeragiFinalityProof, VerifiedFinalityPage,
@@ -13,6 +14,16 @@ use iroha_data_model::{
 pub(crate) mod state_rows;
 #[path = "ironwood_world_replay.rs"]
 pub(crate) mod world_replay;
+
+/// Network-input coordinates and outcomes from either governed execution family.
+pub(super) fn network_outcomes(
+    block: &SignedBlock,
+) -> impl Iterator<Item = (u32, TransactionResultRef<'_>)> {
+    block
+        .execution_outputs()
+        .iter()
+        .filter_map(|output| Some((output.network_index()?, output.result())))
+}
 
 const MAX: usize = 16 * 1024 * 1024;
 use crate::state_rows::{bytes, finality_page, fixed, invalid};
@@ -177,22 +188,16 @@ fn verify_payment_from_context(
     }
     let block = page.tip().block();
     let mut matches = 0;
-    for output in block.execution_outputs() {
-        use iroha_data_model::block::execution_output::ExecutionOutputV1 as O;
-        let execution = match output {
-            O::Network(n) => n,
-            O::NetworkWithLifecycle(n) => &n.execution,
-            _ => continue,
-        };
-        let Some((hash, committed)) = block.external_signed_transaction_at(
-            usize::try_from(execution.input_index).map_err(|_| invalid())?,
-        ) else {
+    for (input_index, result) in network_outcomes(block) {
+        let Some((hash, committed)) = block
+            .external_signed_transaction_at(usize::try_from(input_index).map_err(|_| invalid())?)
+        else {
             continue;
         };
         if hash != signed.hash_as_entrypoint() {
             continue;
         }
-        if execution.result.0.is_err() || committed != &signed {
+        if !result.is_ok() || committed != &signed {
             return Err(invalid());
         }
         matches += 1;
@@ -247,3 +252,33 @@ pub(super) fn ironwood_pool_bootstrap_instruction_json_v1_py(
 #[cfg(test)]
 #[path = "tests/ironwood_payment_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod network_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_and_c10_outputs_keep_their_input_coordinates_and_outcomes() {
+        let bytes = include_bytes!(
+            "../../../../fixtures/sumeragi/native-finality/c10-mixed/height-2-checkpoint.nrt"
+        );
+        let proof: SumeragiFinalityProof = norito::decode_canonical(bytes).unwrap();
+        let block = decode_framed_signed_block(&proof.block_wire).unwrap();
+        let outputs = block.execution_outputs();
+        assert!(outputs[0].governance_block_start().is_some());
+        assert_eq!(
+            outputs
+                .iter()
+                .enumerate()
+                .filter_map(|(position, row)| Some((position, row.network_index()?)))
+                .collect::<Vec<_>>(),
+            [(1, 0), (2, 1), (3, 2)]
+        );
+        assert_eq!(
+            network_outcomes(&block)
+                .map(|(index, result)| (index, result.is_ok()))
+                .collect::<Vec<_>>(),
+            [(0, true), (1, false), (2, true)]
+        );
+    }
+}

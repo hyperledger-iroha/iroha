@@ -45,6 +45,9 @@ use crate::{
     },
 };
 
+mod checked;
+pub use checked::CheckedAnonymousGovernanceCertificateErrorV1;
+
 /// Why an anonymous governance certificate is not valid.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AnonymousGovernanceCertificateErrorV1 {
@@ -234,6 +237,15 @@ impl AnonymousSealedBodyV1 {
         governance_attempt_id: GovernanceAttemptId,
         policy: &FrozenParliamentAttemptPolicyV1,
     ) -> Result<(), AnonymousGovernanceCertificateErrorV1> {
+        self.validate_using(governance_attempt_id, policy, &checked::Installed)
+    }
+
+    fn validate_using<I: checked::Identities>(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        policy: &FrozenParliamentAttemptPolicyV1,
+        identities: &I,
+    ) -> Result<(), I::Error> {
         use AnonymousGovernanceCertificateErrorV1 as Error;
 
         let required = policy
@@ -246,40 +258,40 @@ impl AnonymousSealedBodyV1 {
             || self.roster_root.as_bytes() == &[0; 64]
             || self.assignment_root == [0; 32]
         {
-            return Err(Error::ZeroBinding);
+            return Err(Error::ZeroBinding.into());
         }
-        if request.validate(None).is_err()
+        if !identities.request_valid(request)?
             || (
                 request.governance_attempt_id,
                 request.body_election_attempt_id,
                 request.body,
             ) != (governance_attempt_id, self.election_attempt_id, self.body)
         {
-            return Err(Error::SortitionRequestMismatch);
+            return Err(Error::SortitionRequestMismatch.into());
         }
         // The request draws for exactly the frozen target; fewer seats may be sealed.
         if request.target_seats != u32::from(required.target_seats) {
-            return Err(Error::SortitionRequestMismatch);
+            return Err(Error::SortitionRequestMismatch.into());
         }
         if self.seats == 0
             || self.seats > required.target_seats
             || u32::from(self.seats) > request.candidate_count
         {
-            return Err(Error::InvalidSeatCount);
+            return Err(Error::InvalidSeatCount.into());
         }
         if self.election_attempt_sequence > policy.sortition_policy.max_sortition_retries {
-            return Err(Error::RetryLimitExceeded);
+            return Err(Error::RetryLimitExceeded.into());
         }
         if self.election_attempt_id
-            != BodyElectionAttemptId::derive_v1(
+            != identities.election(
                 governance_attempt_id,
                 self.body,
                 self.election_attempt_sequence,
-            )
+            )?
             || self.body_instance_id
-                != anonymous_body_instance_id_v1(self.election_attempt_id, &self.roster_root)
+                != identities.body(self.election_attempt_id, &self.roster_root)?
         {
-            return Err(Error::NonCanonicalIdentifier);
+            return Err(Error::NonCanonicalIdentifier.into());
         }
         Ok(())
     }
@@ -346,6 +358,15 @@ impl AnonymousSealedBodyV1 {
         governance_attempt_id: GovernanceAttemptId,
         result: &AnonymousPublicFindingResultV1,
     ) -> Result<(), AnonymousGovernanceCertificateErrorV1> {
+        self.validate_public_finding_using(governance_attempt_id, result, &checked::Installed)
+    }
+
+    fn validate_public_finding_using<I: checked::Identities>(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        result: &AnonymousPublicFindingResultV1,
+        identities: &I,
+    ) -> Result<(), I::Error> {
         use AnonymousGovernanceCertificateErrorV1 as Error;
 
         let finding = &result.finding;
@@ -366,14 +387,14 @@ impl AnonymousSealedBodyV1 {
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
             || finding.endorsement_root
-                != parliament_public_finding_endorsement_root_v1(
+                != identities.finding(
                     governance_attempt_id,
                     self.body_instance_id,
                     result.result_root,
                     &finding.endorsing_assignments,
-                )
+                )?
         {
-            return Err(Error::InvalidPublicFinding);
+            return Err(Error::InvalidPublicFinding.into());
         }
         Ok(())
     }
@@ -429,19 +450,42 @@ impl AnonymousParliamentBodyBindingV1 {
         risk_tier: RiskTierV1,
         policy: &FrozenParliamentAttemptPolicyV1,
     ) -> Result<(), AnonymousGovernanceCertificateErrorV1> {
+        self.validate_using(
+            proposal_content_id,
+            governance_attempt_id,
+            risk_tier,
+            policy,
+            &checked::Installed,
+        )
+    }
+
+    fn validate_using<I: checked::Identities>(
+        &self,
+        proposal_content_id: ProposalContentId,
+        governance_attempt_id: GovernanceAttemptId,
+        risk_tier: RiskTierV1,
+        policy: &FrozenParliamentAttemptPolicyV1,
+        identities: &I,
+    ) -> Result<(), I::Error> {
         use AnonymousGovernanceCertificateErrorV1 as Error;
 
         let sealed = &self.sealed;
-        sealed.validate(governance_attempt_id, policy)?;
+        sealed.validate_using(governance_attempt_id, policy, identities)?;
         if self.result_height <= sealed.sortition_request.pulse_height {
-            return Err(Error::InvalidLifecycle);
+            return Err(Error::InvalidLifecycle.into());
         }
         match (BodyDecisionModeV1::of(sealed.body), &self.result) {
             (BodyDecisionModeV1::PublicFinding, AnonymousBodyResultV1::PublicFinding(result)) => {
-                sealed.validate_public_finding(governance_attempt_id, result)
+                sealed.validate_public_finding_using(governance_attempt_id, result, identities)
             }
             (BodyDecisionModeV1::AnonymousBallot, AnonymousBodyResultV1::Ballot(ballot)) => {
-                ballot.validate(&policy.ballot_policy(risk_tier, sealed.body)?)?;
+                ballot
+                    .validate(
+                        &policy
+                            .ballot_policy(risk_tier, sealed.body)
+                            .map_err(Error::from)?,
+                    )
+                    .map_err(Error::from)?;
                 let closure = &ballot.closure;
                 let field = sealed
                     .closure_mismatch(proposal_content_id, governance_attempt_id, closure)
@@ -449,9 +493,9 @@ impl AnonymousParliamentBodyBindingV1 {
                         (closure.closure_anchor.height != self.result_height)
                             .then_some("closure_anchor")
                     });
-                field.map_or(Ok(()), |field| Err(Error::BallotContext { field }))
+                field.map_or(Ok(()), |field| Err(Error::BallotContext { field }.into()))
             }
-            _ => Err(Error::ResultKind { body: sealed.body }),
+            _ => Err(Error::ResultKind { body: sealed.body }.into()),
         }
     }
 }
@@ -547,11 +591,15 @@ impl AnonymousGovernanceCertificateV1 {
     /// # Errors
     /// The first violated rule as an [`AnonymousGovernanceCertificateErrorV1`].
     pub fn validate(&self) -> Result<(), AnonymousGovernanceCertificateErrorV1> {
+        self.validate_using(&checked::Installed)
+    }
+
+    fn validate_using<I: checked::Identities>(&self, identities: &I) -> Result<(), I::Error> {
         use AnonymousGovernanceCertificateErrorV1 as Error;
 
-        self.purpose.validate()?;
-        self.policy.validate()?;
-        self.validate_context()?;
+        self.purpose.validate().map_err(Error::from)?;
+        self.policy.validate().map_err(Error::from)?;
+        self.validate_context(identities)?;
 
         let mut instances = BTreeSet::new();
         let mut elections = BTreeSet::new();
@@ -560,20 +608,21 @@ impl AnonymousGovernanceCertificateV1 {
         let mut previous = None;
         for binding in &self.body_bindings {
             if previous.is_some_and(|previous| previous >= binding.sealed.body) {
-                return Err(Error::NonCanonicalBodyOrder);
+                return Err(Error::NonCanonicalBodyOrder.into());
             }
             previous = Some(binding.sealed.body);
-            binding.validate(
+            binding.validate_using(
                 self.proposal_content_id,
                 self.governance_attempt_id,
                 self.risk_tier,
                 &self.policy,
+                identities,
             )?;
             if !instances.insert(binding.sealed.body_instance_id)
                 || !elections.insert(binding.sealed.election_attempt_id)
                 || !requests.insert(binding.sealed.sortition_request.id)
             {
-                return Err(Error::DuplicateBinding);
+                return Err(Error::DuplicateBinding.into());
             }
             // Every jury voted on one network about one proposal, in full.
             if let Some(ballot) = binding.ballot() {
@@ -583,12 +632,14 @@ impl AnonymousGovernanceCertificateV1 {
                 if network_id != closure.network_id {
                     return Err(Error::BallotContext {
                         field: "network_id",
-                    });
+                    }
+                    .into());
                 }
                 if proposal_digest != closure.proposal_digest {
                     return Err(Error::BallotContext {
                         field: "proposal_digest",
-                    });
+                    }
+                    .into());
                 }
             }
         }
@@ -599,7 +650,8 @@ impl AnonymousGovernanceCertificateV1 {
             {
                 return Err(Error::MissingBody {
                     body: required.body,
-                });
+                }
+                .into());
             }
         }
         let policy = self
@@ -621,7 +673,7 @@ impl AnonymousGovernanceCertificateV1 {
                 if confirmation
                     .sealed
                     .confirms(&policy.sealed, policy.result_height) => {}
-            _ => return Err(Error::ConfirmationJuryMismatch),
+            _ => return Err(Error::ConfirmationJuryMismatch.into()),
         }
 
         let certified_at = self.certified_at().ok_or(Error::InvalidLifecycle)?;
@@ -631,35 +683,32 @@ impl AnonymousGovernanceCertificateV1 {
             .any(|binding| binding.result_height > certified_at.height)
             || self.enact_at_ms().is_none()
         {
-            return Err(Error::InvalidLifecycle);
+            return Err(Error::InvalidLifecycle.into());
         }
         Ok(())
     }
 
-    fn validate_context(&self) -> Result<(), AnonymousGovernanceCertificateErrorV1> {
+    fn validate_context<I: checked::Identities>(&self, identities: &I) -> Result<(), I::Error> {
         use AnonymousGovernanceCertificateErrorV1 as Error;
 
         if self.proposal_content_id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
             || self.effect_preimage_hash == [0; 32]
         {
-            return Err(Error::ZeroBinding);
+            return Err(Error::ZeroBinding.into());
         }
         if self.governance_attempt_id
-            != anonymous_governance_attempt_id_v1(
-                self.proposal_content_id,
-                self.governance_attempt_sequence,
-            )
+            != identities.attempt(self.proposal_content_id, self.governance_attempt_sequence)?
         {
-            return Err(Error::NonCanonicalIdentifier);
+            return Err(Error::NonCanonicalIdentifier.into());
         }
         if self.governance_attempt_sequence
             > self.policy.sortition_policy.max_governance_attempt_retries
         {
-            return Err(Error::RetryLimitExceeded);
+            return Err(Error::RetryLimitExceeded.into());
         }
         if self.body_bindings.is_empty() {
-            return Err(Error::EmptyBodyBindings);
+            return Err(Error::EmptyBodyBindings.into());
         }
         let head_is_valid = match self.expected_head {
             GovernanceExpectedHeadV1::Absent(head) => head.subject_id != [0; 32],
@@ -668,7 +717,7 @@ impl AnonymousGovernanceCertificateV1 {
             }
         };
         if !head_is_valid {
-            return Err(Error::InvalidExpectedHead);
+            return Err(Error::InvalidExpectedHead.into());
         }
         Ok(())
     }
@@ -700,6 +749,26 @@ pub fn anonymous_execution_failure_root_v1(
     )
 }
 
+/// Derive the existing execution-failure root without erasing a local codec refusal.
+///
+/// Both the certificate identifier and the failure preimage use their original domains
+/// and bare Norito payloads. Callers must obtain this result before recording failure.
+///
+/// # Errors
+/// The original certificate or failure preimage encoder error.
+pub fn checked_anonymous_execution_failure_root_v1(
+    certificate: &AnonymousGovernanceCertificateV1,
+    failed_at: GovernanceAnchorV1,
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    crate::governance_fingerprint::checked_fingerprint(
+        ANONYMOUS_PARLIAMENT_EXECUTION_FAILURE_ROOT_V1,
+        &AnonymousExecutionFailureRootPreimageV1 {
+            certificate_id: checked_anonymous_governance_certificate_id_v1(certificate)?,
+            failed_at,
+        },
+    )
+}
+
 /// The content identifier of an exact anonymous certificate. Its domain is the family's
 /// own, so no baseline certificate shares it.
 #[must_use]
@@ -710,6 +779,20 @@ pub fn anonymous_governance_certificate_id_v1(
         ANONYMOUS_GOVERNANCE_CERTIFICATE_ID_V1,
         certificate,
     ))
+}
+
+/// Derive the existing certificate identifier while retaining original codec refusals.
+///
+/// # Errors
+/// The original bare certificate payload encoder error.
+pub fn checked_anonymous_governance_certificate_id_v1(
+    certificate: &AnonymousGovernanceCertificateV1,
+) -> Result<GovernanceCertificateId, norito::core::DecodeAttemptError> {
+    crate::governance_fingerprint::checked_fingerprint(
+        ANONYMOUS_GOVERNANCE_CERTIFICATE_ID_V1,
+        certificate,
+    )
+    .map(GovernanceCertificateId::new)
 }
 
 #[cfg(test)]
@@ -1012,6 +1095,14 @@ mod tests {
         let certificate = certificate(candidate());
         let at = anchor(100_000, 3, 99_000_000);
         let root = anonymous_execution_failure_root_v1(&certificate, at);
+        assert_eq!(
+            checked_anonymous_execution_failure_root_v1(&certificate, at).unwrap(),
+            root
+        );
+        assert_eq!(
+            checked_anonymous_governance_certificate_id_v1(&certificate).unwrap(),
+            anonymous_governance_certificate_id_v1(&certificate)
+        );
         assert_ne!(root, [0; 32]);
         assert_eq!(root, anonymous_execution_failure_root_v1(&certificate, at));
         for other in [
@@ -1033,6 +1124,114 @@ mod tests {
             root,
             *anonymous_governance_certificate_id_v1(&certificate).as_bytes()
         );
+    }
+
+    #[test]
+    fn checked_failure_identity_needs_no_output_frame_allocation() {
+        let certificate = certificate(candidate());
+        let at = anchor(100_000, 3, 99_000_000);
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let result = norito::core::with_decode_limits_scope(limits, || {
+            checked_anonymous_execution_failure_root_v1(&certificate, at)
+        });
+        assert_eq!(
+            result.unwrap(),
+            anonymous_execution_failure_root_v1(&certificate, at)
+        );
+    }
+
+    #[test]
+    fn checked_certificate_validation_preserves_all_nested_rule_verdicts() {
+        let valid = certificate(candidate());
+        assert!(valid.validate_checked_v1().is_ok());
+        for binding in &valid.body_bindings {
+            assert!(
+                binding
+                    .sealed
+                    .validate_checked_v1(valid.governance_attempt_id, &valid.policy)
+                    .is_ok()
+            );
+            assert!(
+                binding
+                    .validate_checked_v1(
+                        valid.proposal_content_id,
+                        valid.governance_attempt_id,
+                        valid.risk_tier,
+                        &valid.policy
+                    )
+                    .is_ok()
+            );
+            if let AnonymousBodyResultV1::PublicFinding(result) = &binding.result {
+                assert!(
+                    binding
+                        .sealed
+                        .validate_public_finding_checked_v1(valid.governance_attempt_id, result)
+                        .is_ok()
+                );
+            }
+        }
+        let mut cases = Vec::new();
+        let mut changed = valid.clone();
+        changed.governance_attempt_id = GovernanceAttemptId::new([0x99; 32]);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed.body_bindings[0]
+            .sealed
+            .sortition_request
+            .candidate_count = 0;
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed.body_bindings[0].sealed.body_instance_id = BodyInstanceId::new([0x88; 32]);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed.body_bindings[0].sealed.election_attempt_sequence += 1;
+        cases.push(changed);
+        let mut changed = valid.clone();
+        let AnonymousBodyResultV1::PublicFinding(finding) = &mut changed.body_bindings[0].result
+        else {
+            panic!("first fixture body is public")
+        };
+        finding.finding.endorsement_root = [0x77; 32];
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed.body_bindings.reverse();
+        cases.push(changed);
+        for changed in cases {
+            let original = changed.validate().unwrap_err();
+            assert!(
+                matches!(changed.validate_checked_v1(), Err(CheckedAnonymousGovernanceCertificateErrorV1::Rejected(error)) if error == original)
+            );
+        }
+        // Public finding identities stream their inputs. The Policy Jury's result root
+        // hashes the canonical owned closure frame, debiting its exact byte length.
+        let ballot = valid
+            .body(ParliamentBody::PolicyJury)
+            .unwrap()
+            .ballot()
+            .unwrap();
+        let frame_bytes = norito::encode_canonical(&ballot.closure).unwrap().len();
+        let limits =
+            |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 64);
+        for short in [0, frame_bytes - 1] {
+            let error = norito::core::with_decode_limits_scope(limits(short), || {
+                valid.validate_checked_v1()
+            })
+            .unwrap_err();
+            let CheckedAnonymousGovernanceCertificateErrorV1::ClosureUnavailable(original) = error
+            else {
+                panic!("valid certificate lost its original ballot result refusal")
+            };
+            assert_eq!(
+                original.resource_error(),
+                norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: frame_bytes as u64,
+                    limit: short as u64,
+                }
+            );
+        }
+        let exact = norito::core::DecodeBudgetContext::new(limits(frame_bytes));
+        exact.with(|| valid.validate_checked_v1()).unwrap();
+        assert_eq!(exact.consumed_allocated_bytes(), frame_bytes as u64);
     }
 
     #[test]

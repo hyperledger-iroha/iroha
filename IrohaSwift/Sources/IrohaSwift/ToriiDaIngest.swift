@@ -1,11 +1,10 @@
 import Foundation
 import CryptoKit
 
-private let ToriiDaEd25519FunctionCode: UInt8 = 0xED
 private let ToriiDaIngestSigningDomainV1 = Data("iroha:da-ingest-request:v1\0".utf8)
 private let ToriiDaIngestContentDomainV1 = Data("iroha:da-ingest-request:content:v1\0".utf8)
 
-private func requireExactDaFields<K: CodingKey>(
+func requireExactDaFields<K: CodingKey>(
     from decoder: Decoder,
     codingKeys: [K],
     context: String
@@ -95,6 +94,56 @@ public struct ToriiDaRetentionPolicy: Sendable, Equatable {
     public static var `default`: ToriiDaRetentionPolicy { ToriiDaRetentionPolicy() }
 }
 
+extension ToriiDaRetentionPolicy: Decodable {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case hot = "hot_retention_secs"
+        case cold = "cold_retention_secs"
+        case replicas = "required_replicas"
+        case storage = "storage_class"
+        case tag = "governance_tag"
+    }
+
+    private enum StorageKeys: String, CodingKey, CaseIterable {
+        case type, value
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "retention_policy")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        let policy = try fields.superDecoder(forKey: .storage)
+        try requireExactDaFields(from: policy, codingKeys: StorageKeys.allCases, context: "storage_class")
+        let storage = try policy.container(keyedBy: StorageKeys.self)
+        guard try storage.decodeNil(forKey: .value) else {
+            throw ToriiClientError.invalidPayload("storage_class must have a null value")
+        }
+        let storageClass: ToriiDaStorageClass
+        switch try storage.decode(String.self, forKey: .type) {
+        case "Hot": storageClass = .hot
+        case "Warm": storageClass = .warm
+        case "Cold": storageClass = .cold
+        default: throw ToriiClientError.invalidPayload("unknown DA storage class")
+        }
+        let tag = try fields.decode([String].self, forKey: .tag)
+        let replicas = try fields.decode(UInt16.self, forKey: .replicas)
+        // The nominal model (iroha_data_model::da::types::RetentionPolicy, and the
+        // retention_class of a commitment record) carries any u16 count and any tag.
+        guard tag.count == 1, let governanceTag = tag.first else {
+            throw ToriiClientError.invalidPayload("retention_policy.governance_tag must be a one-element wrapper")
+        }
+        self.init(hotRetentionSecs: try fields.decode(UInt64.self, forKey: .hot),
+                  coldRetentionSecs: try fields.decode(UInt64.self, forKey: .cold),
+                  requiredReplicas: replicas, storageClass: storageClass, governanceTag: governanceTag)
+    }
+
+    /// Torii's ingestion admission: an ingest receipt carries the configured network baseline
+    /// Torii enforced, whose replica count is positive and whose governance tag is non-empty.
+    fileprivate func requireIngestionAdmission() throws {
+        guard !governanceTag.isEmpty, requiredReplicas > 0 else {
+            throw ToriiClientError.invalidPayload("retention_policy requires a governance tag and a positive replica count")
+        }
+    }
+}
+
 public enum ToriiDaCompression: Sendable, Equatable {
     case identity
     case gzip
@@ -142,11 +191,16 @@ public struct ToriiDaBlobSubmission: Sendable {
     public var erasureProfile: ToriiDaErasureProfile
     public var retentionPolicy: ToriiDaRetentionPolicy
     public var compression: ToriiDaCompression
+    /// Exact compressed wire bytes when compression is selected. The payload remains the original data.
+    public var compressedPayload: Data?
+    var wireBytes: Data { compressedPayload ?? payload }
     public var metadata: [ToriiDaMetadataEntry]
     public var noritoManifest: Data?
     public var clientBlobId: Data?
     public var signerPublicKeyHex: String?
     public var signatureHex: String?
+    /// External witness over the independently verified pin scope on a follow-up submission.
+    public var pinScopeSignature: Data?
     public var privateKey: Data?
     public var privateKeyHex: String?
 
@@ -162,6 +216,7 @@ public struct ToriiDaBlobSubmission: Sendable {
                 erasureProfile: ToriiDaErasureProfile = .default,
                 retentionPolicy: ToriiDaRetentionPolicy = .default,
                 compression: ToriiDaCompression = .identity,
+                compressedPayload: Data? = nil,
                 metadata: [ToriiDaMetadataEntry] = [],
                 noritoManifest: Data? = nil,
                 clientBlobId: Data? = nil,
@@ -181,6 +236,7 @@ public struct ToriiDaBlobSubmission: Sendable {
         self.erasureProfile = erasureProfile
         self.retentionPolicy = retentionPolicy
         self.compression = compression
+        self.compressedPayload = compressedPayload
         self.metadata = metadata
         self.noritoManifest = noritoManifest
         self.clientBlobId = clientBlobId
@@ -204,17 +260,20 @@ public struct ToriiDaIngestSubmitResult: Sendable, Equatable {
     public let status: String
     public let duplicate: Bool
     public let receipt: ToriiDaIngestReceipt?
+    public let pinScope: ToriiDaPinScope?
     public let artifacts: ToriiDaIngestArtifacts
     public let pdpCommitmentHeaderBase64: String?
 
     public init(status: String,
                 duplicate: Bool,
                 receipt: ToriiDaIngestReceipt?,
+                pinScope: ToriiDaPinScope? = nil,
                 artifacts: ToriiDaIngestArtifacts,
                 pdpCommitmentHeaderBase64: String?) {
         self.status = status
         self.duplicate = duplicate
         self.receipt = receipt
+        self.pinScope = pinScope
         self.artifacts = artifacts
         self.pdpCommitmentHeaderBase64 = pdpCommitmentHeaderBase64
     }
@@ -341,6 +400,7 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
     public let pdpCommitment: Data?
     public let stripeLayout: ToriiDaStripeLayout
     public let queuedAtUnix: UInt64
+    public let retentionPolicy: ToriiDaRetentionPolicy
     public let rentQuote: ToriiDaRentQuote
     public let operatorSignatureHex: String
 
@@ -361,6 +421,7 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         case pdpCommitment = "pdp_commitment"
         case stripeLayout = "stripe_layout"
         case queuedAtUnix = "queued_at_unix"
+        case retentionPolicy = "retention_policy"
         case rentQuote = "rent_quote"
         case operatorSignature = "operator_signature"
     }
@@ -372,13 +433,13 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
             context: "DA ingest receipt"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.clientBlobId = try Self.decodeDigest(from: container, key: .clientBlobId)
+        self.clientBlobId = try decodeDaDigest(from: container, key: .clientBlobId)
         self.laneId = try container.decode(UInt64.self, forKey: .laneId)
         self.epoch = try container.decode(UInt64.self, forKey: .epoch)
-        self.blobHash = try Self.decodeDigest(from: container, key: .blobHash)
-        self.chunkRoot = try Self.decodeDigest(from: container, key: .chunkRoot)
-        self.manifestHash = try Self.decodeDigest(from: container, key: .manifestHash)
-        self.storageTicket = try Self.decodeDigest(from: container, key: .storageTicket)
+        self.blobHash = try decodeDaDigest(from: container, key: .blobHash)
+        self.chunkRoot = try decodeDaDigest(from: container, key: .chunkRoot)
+        self.manifestHash = try decodeDaDigest(from: container, key: .manifestHash)
+        self.storageTicket = try decodeDaDigest(from: container, key: .storageTicket)
         if let commitmentB64 = try container.decodeIfPresent(String.self, forKey: .pdpCommitment) {
             guard let decoded = Data(base64Encoded: commitmentB64) else {
                 throw ToriiClientError.invalidPayload("receipt.pdp_commitment was not valid base64")
@@ -389,28 +450,73 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
         }
         self.stripeLayout = try container.decode(ToriiDaStripeLayout.self, forKey: .stripeLayout)
         self.queuedAtUnix = try container.decode(UInt64.self, forKey: .queuedAtUnix)
+        let retentionPolicy = try container.decode(ToriiDaRetentionPolicy.self, forKey: .retentionPolicy)
+        try retentionPolicy.requireIngestionAdmission()
+        self.retentionPolicy = retentionPolicy
         self.rentQuote = try container.decode(ToriiDaRentQuote.self, forKey: .rentQuote)
         let signature = try container.decode(String.self, forKey: .operatorSignature)
-        self.operatorSignatureHex = signature.uppercased()
+        self.operatorSignatureHex = try requireCanonicalDaSignature(signature, field: "DA receipt operator")
     }
 
-    private static func decodeDigest(from container: KeyedDecodingContainer<CodingKeys>,
-                                     key: CodingKeys) throws -> Data {
-        let data: Data
-        if let wrapped = try? container.decode([[UInt8]].self, forKey: key) {
-            guard wrapped.count == 1, let first = wrapped.first else {
-                throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be a single byte tuple")
-            }
-            data = Data(first)
-        } else if let flat = try? container.decode([UInt8].self, forKey: key) {
-            data = Data(flat)
-        } else {
-            throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be a byte tuple")
+}
+
+private func decodeDaDigest<Key: CodingKey>(from fields: KeyedDecodingContainer<Key>, key: Key) throws -> Data {
+    let tuple = try fields.decode([[UInt8]].self, forKey: key)
+    guard tuple.count == 1, let bytes = tuple.first, bytes.count == 32 else {
+        throw ToriiClientError.invalidPayload("DA field \(key.stringValue) requires a single 32-byte digest tuple")
+    }
+    return Data(bytes)
+}
+
+/// Producer scope returned by Torii, including the digest of the complete proposed commitment.
+public struct ToriiDaPinScope: Codable, Equatable, Sendable {
+    public let networkId: NetworkId
+    public let owner: String
+    public let requestAuthorizationDigest: Data
+    public let laneId: UInt32
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let storageTicket: Data
+    public let manifestHash: Data
+    public let commitmentDigest: Data
+    public let alias: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case networkId = "network_id", owner, laneId = "lane_id", epoch, sequence, alias
+        case requestAuthorizationDigest = "request_authorization_digest", storageTicket = "storage_ticket"
+        case manifestHash = "manifest_hash", commitmentDigest = "commitment_digest"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA pin scope")
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        networkId = try fields.decode(NetworkId.self, forKey: .networkId)
+        owner = try fields.decode(String.self, forKey: .owner)
+        _ = try exactCanonicalToriiAccountAddress(owner)
+        requestAuthorizationDigest = try decodeDaDigest(from: fields, key: .requestAuthorizationDigest)
+        laneId = try fields.decode(UInt32.self, forKey: .laneId)
+        epoch = try fields.decode(UInt64.self, forKey: .epoch)
+        sequence = try fields.decode(UInt64.self, forKey: .sequence)
+        storageTicket = try decodeDaDigest(from: fields, key: .storageTicket)
+        manifestHash = try decodeDaDigest(from: fields, key: .manifestHash)
+        commitmentDigest = try decodeDaDigest(from: fields, key: .commitmentDigest)
+        alias = try fields.decodeIfPresent(String.self, forKey: .alias).map {
+            try requireDaPinIntentAlias($0, field: "DA pin alias")
         }
-        guard data.count == 32 else {
-            throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be 32 bytes")
-        }
-        return data
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(networkId, forKey: .networkId)
+        try fields.encode(owner, forKey: .owner)
+        try fields.encode([Array(requestAuthorizationDigest)], forKey: .requestAuthorizationDigest)
+        try fields.encode(laneId, forKey: .laneId)
+        try fields.encode(epoch, forKey: .epoch)
+        try fields.encode(sequence, forKey: .sequence)
+        try fields.encode([Array(storageTicket)], forKey: .storageTicket)
+        try fields.encode([Array(manifestHash)], forKey: .manifestHash)
+        try fields.encode([Array(commitmentDigest)], forKey: .commitmentDigest)
+        try fields.encode(alias, forKey: .alias)
     }
 }
 
@@ -418,11 +524,68 @@ struct ToriiDaIngestSubmitPayload: Decodable {
     let status: String
     let duplicate: Bool
     let receipt: ToriiDaIngestReceipt?
+    let pinScope: ToriiDaPinScope?
 
     private enum CodingKeys: String, CodingKey {
         case status
         case duplicate
         case receipt
+        case pinScope = "pin_scope"
+    }
+}
+
+enum ToriiDaUpload {
+    static let partBytes = 1024 * 1024
+
+    /// Submit a signed metadata body with an empty payload over individually authenticated parts.
+    static func transfer<Result>(_ submission: ToriiDaBlobSubmission, metadata: Data,
+                                 post: (String, Data, Int) async throws -> (Data, Result)) async throws -> (Data, Result) {
+        let bytes = submission.wireBytes
+        guard bytes.count > partBytes, bytes.count <= 64 * partBytes,
+              let hash = NoritoNativeBridge.shared.blake3Hash(data: bytes), hash.count == 32,
+              let request = try JSONSerialization.jsonObject(with: metadata) as? [String: Any],
+              request["payload"] as? String == "" else {
+            throw ToriiClientError.invalidPayload("invalid signed multipart DA metadata or payload")
+        }
+        let upload: [String: Any] = ["network_id": submission.networkId.literal, "lane_id": submission.laneId,
+                                      "epoch": submission.epoch, "wire_bytes": bytes.count, "wire_hash": [Array(hash)]]
+        let count = (bytes.count + partBytes - 1) / partBytes
+        func exchange(_ kind: String, _ value: Any, _ status: Int) async throws -> (Data, Result) {
+            let action: [String: Any] = ["kind": kind, "value": value]
+            let body = try JSONSerialization.data(withJSONObject: ["upload": upload, "action": action], options: [.withoutEscapingSlashes])
+            return try await post("/v1/da/ingest/parts", body, status)
+        }
+        func progress(_ kind: String, _ value: Any) async throws -> Int {
+            let (body, _) = try await exchange(kind, value, 200)
+            let next = try JSONDecoder().decode(DaUploadProgress.self, from: body).nextPart
+            guard (0...count).contains(next) else {
+                throw ToriiClientError.invalidPayload("invalid DA upload progress")
+            }
+            return next
+        }
+        let start = try await progress("Begin", NSNull())
+        for index in start..<count {
+            let first = bytes.startIndex + index * partBytes
+            let end = min(first + partBytes, bytes.endIndex)
+            let part: [String: Any] = ["index": index, "bytes_b64": bytes[first..<end].base64EncodedString()]
+            guard try await progress("Put", part) == index + 1 else {
+                throw ToriiClientError.invalidPayload("inconsistent DA part acknowledgment")
+            }
+        }
+        return try await exchange("Finish", request, 202)
+    }
+
+    private struct DaUploadProgress: Decodable {
+        let nextPart: Int
+
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case nextPart = "next_part"
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactDaFields(from: decoder, codingKeys: CodingKeys.allCases, context: "DA upload progress")
+            nextPart = try decoder.container(keyedBy: CodingKeys.self).decode(Int.self, forKey: .nextPart)
+        }
     }
 }
 
@@ -433,9 +596,16 @@ struct ToriiDaIngestRequestBuilder {
         self.submission = submission
     }
 
-    func makeRequestBody() throws -> (body: Data, artifacts: ToriiDaIngestArtifacts) {
+    func makeRequestBody(includePayload: Bool = true) throws -> (body: Data, artifacts: ToriiDaIngestArtifacts) {
         guard !submission.payload.isEmpty else {
             throw ToriiClientError.invalidPayload("payload must contain at least one byte")
+        }
+        guard submission.payload.count <= 64 * 1024 * 1024 else {
+            throw ToriiClientError.invalidPayload("DA payload exceeds 64 MiB")
+        }
+        guard (submission.compression == .identity) == (submission.compressedPayload == nil),
+              !submission.wireBytes.isEmpty, submission.wireBytes.count <= 64 * 1024 * 1024 else {
+            throw ToriiClientError.invalidPayload("DA compression requires a bounded compressed payload")
         }
         let chunkSize = try normalizeInteger(submission.chunkSize,
                                              field: "chunkSize",
@@ -446,10 +616,7 @@ struct ToriiDaIngestRequestBuilder {
         }
         let ownerAddress: AccountAddress
         do {
-            guard submission.owner == submission.owner.trimmingCharacters(in: .whitespacesAndNewlines) else {
-                throw AccountAddressError.unsupportedAddressFormat
-            }
-            ownerAddress = try AccountAddress.parseEncoded(submission.owner)
+            ownerAddress = try exactCanonicalToriiAccountAddress(submission.owner).address
         } catch {
             throw ToriiClientError.invalidPayload("owner must be an exact canonical I105 account id")
         }
@@ -483,14 +650,22 @@ struct ToriiDaIngestRequestBuilder {
         } else {
             payload["norito_manifest"] = NSNull()
         }
-        payload["payload"] = submission.payload.base64EncodedString()
+        payload["payload"] = includePayload ? submission.wireBytes.base64EncodedString() : ""
         payload["metadata"] = encodeMetadata(submission.metadata)
         payload["signatures"] = [[
             "signer": signatureResult.signer,
             "signature": signatureResult.signatureHex,
         ]]
 
-        let body = try JSONSerialization.data(withJSONObject: payload, options: [])
+        if let witness = submission.pinScopeSignature {
+            guard witness.count == 64 else {
+                throw ToriiClientError.invalidPayload("pin scope requires a 64-byte Ed25519 signature")
+            }
+            payload["pin_scope_signatures"] = [["signer": signatureResult.signer, "signature": witness.upperHexString()]]
+        } else {
+            payload["pin_scope_signatures"] = []
+        }
+        let body = try JSONSerialization.data(withJSONObject: payload, options: [.withoutEscapingSlashes])
         let artifacts = ToriiDaIngestArtifacts(
             clientBlobIdHex: digestResult.digest.upperHexString(),
             payloadHashHex: payloadHash.upperHexString(),
@@ -621,7 +796,7 @@ struct ToriiDaIngestRequestBuilder {
         } else {
             preimage.append(0)
         }
-        try appendLengthPrefixed(submission.payload, to: &preimage)
+        try appendLengthPrefixed(submission.wireBytes, to: &preimage)
 
         appendLittleEndian(metadataCount, to: &preimage)
         for entry in submission.metadata {
@@ -642,7 +817,7 @@ struct ToriiDaIngestRequestBuilder {
             }
         }
 
-        guard let contentHash = NoritoNativeBridge.shared.blake3Hash(data: preimage),
+        guard var contentHash = NoritoNativeBridge.shared.blake3Hash(data: preimage),
               contentHash.count == 32 else {
             throw ToriiClientError.invalidPayload(
                 NoritoNativeBridge.bridgeUnavailableMessage(
@@ -650,6 +825,8 @@ struct ToriiDaIngestRequestBuilder {
                 )
             )
         }
+        // The signed content commitment is an Iroha hash: BLAKE3 with its final bit set.
+        contentHash[contentHash.index(before: contentHash.endIndex)] |= 1
         var authorization = ToriiDaIngestSigningDomainV1
         authorization.append(submission.networkId.bytes)
         try appendLengthPrefixed(ownerAddress.canonicalBytes(), to: &authorization)
@@ -695,8 +872,8 @@ struct ToriiDaIngestRequestBuilder {
         if let signatureHex = submission.signatureHex {
             let canonicalSignature = try canonicalizeHex(signatureHex, field: "signatureHex")
             if let explicitSigner = submission.signerPublicKeyHex {
-                let signer = try canonicalizePublicKey(explicitSigner)
-                return (signer, canonicalSignature)
+                _ = try governancePublicKeyOrderV1(explicitSigner, codingPath: [])
+                return (explicitSigner, canonicalSignature)
             }
             guard let derived = try deriveSignerMultihash() else {
                 throw ToriiClientError.invalidPayload(
@@ -712,8 +889,10 @@ struct ToriiDaIngestRequestBuilder {
         }
         let signature = try privateKey.signature(for: signingDigest)
         let signatureHex = signature.upperHexString()
-        let signer = try submission.signerPublicKeyHex.map { try canonicalizePublicKey($0) }
-            ?? encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
+        let signer = CanonicalNorito.publicKeyMultihash(algorithm: .ed25519, payload: privateKey.publicKey.rawRepresentation)
+        if let explicit = submission.signerPublicKeyHex, explicit != signer {
+            throw ToriiClientError.invalidPayload("signerPublicKeyHex must match the signing private key")
+        }
         return (signer, signatureHex)
     }
 
@@ -734,7 +913,7 @@ struct ToriiDaIngestRequestBuilder {
         guard let key = try loadSigningKey() else {
             return nil
         }
-        return encodeEd25519Multihash(key.publicKey.rawRepresentation)
+        return CanonicalNorito.publicKeyMultihash(algorithm: .ed25519, payload: key.publicKey.rawRepresentation)
     }
 
     private func encodeBlobClass(_ value: ToriiDaBlobClass) -> [String: Any] {
@@ -869,73 +1048,6 @@ struct ToriiDaIngestRequestBuilder {
             throw ToriiClientError.invalidPayload("\(field) must be a hex string")
         }
         return trimmed.uppercased()
-    }
-
-    private func canonicalizePublicKey(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("signerPublicKeyHex must be a non-empty string")
-        }
-        if let separator = trimmed.firstIndex(of: ":") {
-            let body = String(trimmed[trimmed.index(after: separator)...])
-            return try canonicalizeMultihashHex(body)
-        }
-        return try canonicalizeMultihashHex(trimmed)
-    }
-
-    private func canonicalizeMultihashHex(_ value: String) throws -> String {
-        let cleaned = try canonicalizeHex(value, field: "signerPublicKeyHex")
-        guard let bytes = Data(hexString: cleaned) else {
-            throw ToriiClientError.invalidPayload("signerPublicKeyHex must decode to bytes")
-        }
-        guard !bytes.isEmpty else {
-            throw ToriiClientError.invalidPayload("signerPublicKeyHex must contain multihash bytes")
-        }
-        // Basic validation: ensure we can walk the varints.
-        var index = 0
-        try skipVarint(bytes: bytes, index: &index, field: "signerPublicKeyHex.fn")
-        try skipVarint(bytes: bytes, index: &index, field: "signerPublicKeyHex.len")
-        guard index < bytes.count else {
-            throw ToriiClientError.invalidPayload("signerPublicKeyHex missing payload bytes")
-        }
-        return cleaned
-    }
-
-    private func skipVarint(bytes: Data, index: inout Int, field: String) throws {
-        var consumed = false
-        while index < bytes.count {
-            let byte = bytes[index]
-            index += 1
-            consumed = true
-            if (byte & 0x80) == 0 {
-                break
-            }
-        }
-        if !consumed || index > bytes.count {
-            throw ToriiClientError.invalidPayload("\(field) missing varint bytes")
-        }
-    }
-
-    private func encodeEd25519Multihash(_ publicKey: Data) -> String {
-        var bytes: [UInt8] = []
-        bytes.append(contentsOf: encodeVarint(Int(ToriiDaEd25519FunctionCode)))
-        bytes.append(contentsOf: encodeVarint(publicKey.count))
-        bytes.append(contentsOf: publicKey)
-        return Data(bytes).upperHexString()
-    }
-
-    private func encodeVarint(_ value: Int) -> [UInt8] {
-        var remaining = value
-        var output: [UInt8] = []
-        repeat {
-            var next = UInt8(remaining & 0x7F)
-            remaining >>= 7
-            if remaining != 0 {
-                next |= 0x80
-            }
-            output.append(next)
-        } while remaining != 0
-        return output
     }
 }
 

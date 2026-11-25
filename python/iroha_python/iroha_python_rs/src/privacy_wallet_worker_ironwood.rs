@@ -312,18 +312,12 @@ fn scan_ironwood_request_key(
     for proof in proofs.iter().skip(1) {
         let block = decode_framed_signed_block(&proof.block_wire)
             .map_err(|_| WorkerError::InvalidPayload)?;
-        for output in block.execution_outputs() {
-            use iroha_data_model::block::execution_output::ExecutionOutputV1 as O;
-            let execution = match output {
-                O::Network(n) => n,
-                O::NetworkWithLifecycle(n) => &n.execution,
-                _ => continue,
-            };
-            if execution.result.0.is_err() {
+        for (input_index, result) in crate::ironwood_payment::network_outcomes(&block) {
+            if !result.is_ok() {
                 continue;
             }
             let input_index =
-                usize::try_from(execution.input_index).map_err(|_| WorkerError::InvalidPayload)?;
+                usize::try_from(input_index).map_err(|_| WorkerError::InvalidPayload)?;
             let Some((hash, signed)) = block.external_signed_transaction_at(input_index) else {
                 continue;
             };
@@ -387,7 +381,7 @@ fn scan_ironwood_request_key(
                     "receipt_identity": {"transaction_hash_hex": (hex::encode(hash.as_ref())), "action_index": (note.action_index())},
                     "height": (block.header().height().get()),
                     "transaction_hash_hex": (hex::encode(hash.as_ref())),
-                    "input_index": (execution.input_index),
+                    "input_index": (input_index),
                     "direct_instruction_index": direct_index,
                     "action_index": (note.action_index()),
                     "note_commitment_hex": (hex::encode(note.commitment())),

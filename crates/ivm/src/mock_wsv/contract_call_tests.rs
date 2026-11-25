@@ -1,6 +1,7 @@
 //! Typed local calls use admitted artifacts, exact instance roles, and atomic effects.
 
 use super::*;
+use crate::error::{VmErrorRef, VmTrap};
 use iroha_data_model::smart_contract::{ContractLifecycleControlV1, manifest::EntryPointKind};
 use ivm_abi::contract_call::ContractCallBindingV1;
 
@@ -158,7 +159,7 @@ fn typed_mock_call_commits_success_and_rolls_back_result_error_and_emissions() {
         host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     let token = PermissionToken::ContractPermission {
         contract: callee.clone(),
@@ -202,7 +203,7 @@ fn typed_mock_call_commits_success_and_rolls_back_result_error_and_emissions() {
         host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert!(host.drain_contract_events().is_empty());
 }
@@ -246,7 +247,7 @@ fn typed_mock_call_rejects_wrong_instance_hash_suspension_reentry_and_view_mutat
             host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
                 .unwrap_err()
                 .as_unmetered(),
-            VMError::PermissionDenied
+            VmErrorRef::Trap(VmTrap::PermissionDenied)
         ));
         assert_eq!(vm.load_u64(registers[4]).unwrap(), 0);
     }
@@ -256,7 +257,7 @@ fn typed_mock_call_rejects_wrong_instance_hash_suspension_reentry_and_view_mutat
         host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        VMError::ReentrantCall
+        VmErrorRef::Trap(VmTrap::ReentrantCall)
     ));
     let active_hash = host
         .contract_fixture(&target)
@@ -284,7 +285,7 @@ fn typed_mock_call_rejects_wrong_instance_hash_suspension_reentry_and_view_mutat
         host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert_eq!(vm.load_u64(registers[4]).unwrap(), 0);
 }
@@ -338,7 +339,7 @@ fn mock_replacement_checks_owner_revision_schema_and_real_migration_state() {
     ] {
         assert!(matches!(
             host.replace_contract_fixture(&address, replacement.clone(), authority, revision),
-            Err(VMError::PermissionDenied)
+            Err(VMError::Trap(VmTrap::PermissionDenied))
         ));
         assert_eq!(
             host.contract_fixture(&address).unwrap().code_hash(),
@@ -363,7 +364,7 @@ fn mock_replacement_checks_owner_revision_schema_and_real_migration_state() {
                 ),
                 revision
             ),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
         assert_eq!(
             host.contract_fixture(&address).unwrap().code_hash(),
@@ -397,7 +398,7 @@ fn mock_replacement_checks_owner_revision_schema_and_real_migration_state() {
             ),
             revision + 1
         ),
-        Err(VMError::PermissionDenied)
+        Err(VMError::Trap(VmTrap::PermissionDenied))
     ));
     assert!(
         host.finish_contract_fixture_hook(&address, EntryPointKind::Hajimari)
@@ -469,7 +470,7 @@ fn diagnostic_fixture_state_scope_does_not_grant_runtime_invocation_authority() 
         host.syscall(syscalls::SYSCALL_CALL_CONTRACT, &mut vm)
             .unwrap_err()
             .as_unmetered(),
-        VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     host.bind_contract_runtime_context(
         test_account_id(

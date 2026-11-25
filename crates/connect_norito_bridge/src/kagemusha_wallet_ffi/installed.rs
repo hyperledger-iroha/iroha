@@ -25,6 +25,7 @@ mod memo;
 mod originals;
 mod registration;
 mod selection;
+mod spartan;
 pub use attempt::WalletInstallationAttempt;
 pub use exports::*;
 use originals::{CatalogMetadata, CatalogOriginals};
@@ -190,19 +191,33 @@ static ADMITTED: memo::Memo<AdmittedGraph> = memo::Memo::new();
 /// One installation attempt: complete admission, which reuses the memoized graph only after
 /// every check of a fresh load has passed, then a fresh platform, custody root, provider and
 /// owner. Complete success memoizes its graph; an INVALID or CUSTODY_LOST result evicts it.
+///
+/// The authenticated selection alone chooses the profile. A release that explicitly names
+/// the Spartan profile is admitted by `spartan::install`, which never loads, reuses or
+/// evicts the retained wallet graph; every other release keeps the path below unchanged.
 fn install<P: advance::KagemushaWalletPlatformV1 + 'static>(
     input: RuntimeOriginals<'_>,
     android: bool,
     platform: impl FnOnce() -> Result<(P, std::path::PathBuf)>,
 ) -> Result<Box<WalletInstallationAttempt>> {
-    ADMITTED.settle(installation(input, android, platform))
+    let (selected, opening) = match PreparedInstallation::select(&input) {
+        Ok(selected) => selected,
+        // A refused selection settles the memo exactly as a refused retained-graph attempt.
+        Err(error) => return ADMITTED.settle(Err(error)),
+    };
+    if selected.spartan.is_some() {
+        return spartan::install(&input, selected, opening, android, platform);
+    }
+    ADMITTED.settle(installation(input, selected, opening, android, platform))
 }
 fn installation<P: advance::KagemushaWalletPlatformV1 + 'static>(
     input: RuntimeOriginals<'_>,
+    selected: Arc<Selection>,
+    opening: OpeningMetricsV1,
     android: bool,
     platform: impl FnOnce() -> Result<(P, std::path::PathBuf)>,
 ) -> Result<(Box<WalletInstallationAttempt>, Memoized)> {
-    let prepared = PreparedInstallation::load(input)?;
+    let prepared = PreparedInstallation::from_selected(input, selected, opening)?;
     let (platform, root) = platform()?;
     let (owner, opening, admitted) = prepared.runtime(platform, root, android)?;
     Ok((
@@ -239,11 +254,19 @@ struct PreparedInstallation {
     opening: OpeningMetricsV1,
 }
 impl PreparedInstallation {
-    fn load(input: RuntimeOriginals<'_>) -> Result<Self> {
+    /// Authenticate the whole signed base under immutable Native build trust. The result
+    /// names at most one financial profile and grants no platform, custody root or owner.
+    fn select(input: &RuntimeOriginals<'_>) -> Result<(Arc<Selection>, OpeningMetricsV1)> {
         input.validate_bounds()?;
         let mut opening = OpeningMetricsV1::start();
-        let selected = Arc::new(Selection::installed(&input)?);
+        let selected = Arc::new(Selection::installed(input)?);
         opening.lap("selection");
+        Ok((selected, opening))
+    }
+    /// Complete retained-graph admission from the raw originals, as `install` performs it.
+    #[cfg(test)]
+    fn load(input: RuntimeOriginals<'_>) -> Result<Self> {
+        let (selected, opening) = Self::select(&input)?;
         Self::from_selected(input, selected, opening)
     }
     fn from_selected(
@@ -254,6 +277,11 @@ impl PreparedInstallation {
         // Both closed application adapters have authenticated their whole base here.
         // Complete financial absence never acquires a platform, custody root or owner.
         input.validate_bounds()?;
+        // The explicit Spartan profile has its own intake. Its pins, carrier and programs
+        // never reach this graph loader, its memo or the retained proof engine.
+        if selected.spartan.is_some() {
+            return Err(Failure::code(INVALID));
+        }
         match (selected.financial.as_ref(), input.verifier_pack.is_empty()) {
             (None, true) => return Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
             (Some(financial), false)

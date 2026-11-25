@@ -206,6 +206,7 @@ fn check_schema(field: &'static Field, schema: Schema) -> Result<(), CompleteInv
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => {
             if layout != V1_LAYOUT {
                 return Err(CompleteInventoryError::NonV1Layout(field.id));

@@ -797,6 +797,12 @@ fn rekey_account_id(
             authority: old_account.clone(),
         }
         .into();
+    let (c10_rekeys, c10_grantees) =
+        crate::smartcontracts::isi::triggers::isi::preflight_c10_rekey(
+            state_transaction,
+            old_account,
+            new_account,
+        )?;
     let global_trigger_permission_grantees = state_transaction
         .world
         .triggers
@@ -807,6 +813,7 @@ fn rekey_account_id(
             )
         })?
         .into_iter()
+        .chain(c10_grantees)
         .filter_map(|(current_grantee, migrated_grantee)| {
             state_transaction
                 .world
@@ -830,6 +837,12 @@ fn rekey_account_id(
                 format!("cannot apply preflighted data-trigger account rekey: {error}").into(),
             )
         })?;
+    crate::smartcontracts::isi::triggers::isi::apply_c10_rekey(
+        state_transaction,
+        c10_rekeys,
+        old_account,
+        new_account,
+    )?;
     // A controller change ends the lifecycle of the old controller-derived AccountId. Remove
     // permissions whose payload targets that identifier before it becomes absent; otherwise an
     // aliasless rekey followed by re-registration of the old ID would reactivate stale direct or
@@ -3385,6 +3398,7 @@ mod tests {
         };
     }
     include!("multisig/parliament_rekey_tests.rs");
+    include!("multisig/tests/contract_call_arguments.rs");
     fn spec(signatories: BTreeMap<AccountId, u8>, quorum: u16) -> MultisigSpec {
         MultisigSpec {
             signatories,

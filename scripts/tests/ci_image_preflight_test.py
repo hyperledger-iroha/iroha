@@ -120,3 +120,63 @@ def test_image_recipe_uses_current_pinned_tools_without_a_remote_installer() -> 
     assert "provenance: mode=max" in publish
     assert "sbom: true" in publish
     assert "${{ steps.build.outputs.digest }}" in publish
+
+
+def candidate_qualification_violations(source: str) -> list[str]:
+    """Require scan and native checks to consume the validated build identity."""
+    blocks = jobs(source)
+    errors = []
+    build = blocks.get("dockerhub", "")
+    if "image: ${{ steps.candidate.outputs.image }}" not in build:
+        errors.append("missing validated build output")
+    for name in ("image_scan", "linux_components"):
+        block = blocks.get(name, "")
+        if ("needs: dockerhub" not in block
+                or "image: ${{ needs.dockerhub.outputs.image }}" not in block
+                or "continue-on-error:" in block):
+            errors.append(name + " lost mandatory candidate custody")
+    scan = blocks.get("image_scan", "")
+    if "fail-build: true" not in scan or "severity-cutoff: high" not in scan:
+        errors.append("vulnerability refusal weakened")
+    return errors
+
+
+def test_candidate_image_checks_cannot_substitute_identity_or_ignore_refusal() -> None:
+    source = (WORKFLOWS / "ci_image.yml").read_text()
+    assert candidate_qualification_violations(source) == []
+    for before, after in (
+        ("image: ${{ steps.candidate.outputs.image }}", "image: mutable:latest"),
+        ("needs: dockerhub", "needs: unrelated"),
+        ("image: ${{ needs.dockerhub.outputs.image }}", "image: mutable:latest"),
+        ("fail-build: true", "fail-build: false"),
+        ("severity-cutoff: high", "severity-cutoff: critical"),
+        ("  linux_components:\n", "  linux_components:\n    continue-on-error: true\n"),
+    ):
+        assert before in source
+        assert candidate_qualification_violations(source.replace(before, after))
+
+
+@pytest.mark.parametrize("uid,gid,valid", [(1001, 1001, True), (0, 1001, False), (1001, 0, False)])
+def test_candidate_builder_uses_the_unprivileged_runner_identity(
+    tmp_path: Path, uid: int, gid: int, valid: bool,
+) -> None:
+    source = (WORKFLOWS / "ci_image.yml").read_text()
+    assert '"BUILDER_UID=${{ steps.builder_identity.outputs.uid }}"' in source
+    assert '"BUILDER_GID=${{ steps.builder_identity.outputs.gid }}"' in source
+    assert 'test "$(id -u)" -gt 0' in jobs(source)["linux_components"]
+    step = source.split("        id: builder_identity\n", 1)[1].split("      - name:", 1)[0]
+    command = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+    fake_id = tmp_path / "id"
+    fake_id.write_text(f'#!/bin/sh\ncase "$1" in -u) echo {uid};; -g) echo {gid};; *) exit 2;; esac\n')
+    fake_id.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", command],
+        env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"], "GITHUB_OUTPUT": str(output)},
+        capture_output=True, text=True, check=False,
+    )
+    assert (result.returncode == 0) is valid
+    if valid:
+        assert output.read_text() == f"uid={uid}\ngid={gid}\n"
+    else:
+        assert not output.exists()

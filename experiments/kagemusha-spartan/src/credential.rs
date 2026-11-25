@@ -46,13 +46,12 @@ pub struct Credential {
 }
 
 pub fn message(credential: &Credential) -> Fp {
+    signing_body(&credential.body)
+}
+
+pub(crate) fn signing_body(body: &[u8; BODY_BYTES]) -> Fp {
     let inputs: Vec<_> = std::iter::once(Fp::from(BODY_BYTES as u64))
-        .chain(
-            credential
-                .body
-                .chunks(31)
-                .map(|b| fp(&BigUint::from_bytes_le(b))),
-        )
+        .chain(body.chunks(31).map(|b| fp(&BigUint::from_bytes_le(b))))
         .collect();
     poseidon::hash_with_domain(SIGN_DOMAIN, &inputs)
 }
