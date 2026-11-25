@@ -424,6 +424,11 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   and 0.95 s. In back-to-back `two_wallet_round_trip_from_bundle` runs, the skip cut the primary wiring's CPU by
   71% for Load and the first Send (their claims also keep `c1 = 1`, so Receive and Send vanish too) and by 30-41%
   for the later Send and both Receives. Finalize CPU fell 9-23% per operation. The phone is unmeasured.
+- The installed evaluator classifies public scale coefficients once per program. A coefficient whose magnitude fits
+  in a `u64` uses a one-word Pasta product. Larger coefficients use a full field product. On the 968f bundle,
+  the sum of median CPU times across all ten programs fell from 2.144 s to 2.017 s (6.0%) for 16 points per program.
+  The primary Receive program took 0.500 s versus 0.529 s with full products. The benchmark used four lanes on one
+  M4 Max worker, alternated execution order across four paired samples, and checked each result against scalar evaluation.
 
 ### 7.4 Generator claims
 
