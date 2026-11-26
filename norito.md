@@ -1868,7 +1868,8 @@ segment when prediction from the previous decoded frame increases texture energy
 Video quantization favors zero at equal error, and luma RDO ranks
 coefficients by reconstruction gain per block record. A centered-energy bound
 lets the encoder emit the DC delta and end marker directly when every AC
-level must quantize to zero. The forward transform folds the block into four
+level must quantize to zero. It computes the residual sums and squared sums
+for one row of blocks at a time. The forward transform folds the block into four
 reflection groups. The encoder uses a magnitude bound for each group to skip
 additional frequencies whose quantization steps guarantee zero. Prediction
 reuses the reference pixels when all residual levels quantize to zero.

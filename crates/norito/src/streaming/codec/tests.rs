@@ -2132,7 +2132,13 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
         for i in 0..dims.block_count() {
             let (residual, predictor) = build_residual_block(&frame, reference, dims, i, kind);
             assert!(matches!(
-                BlockQuantization::new(16).classify(&frame, reference, dims, i),
+                BlockQuantization::new(16).classify(
+                    &frame,
+                    reference,
+                    dims,
+                    i,
+                    reference_moments(&frame, reference, dims, i)
+                ),
                 BlockSpectrum::DcLevel(_)
             ));
             let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), 16);
@@ -2207,7 +2213,7 @@ fn centered_energy_bound_preserves_quantized_levels() {
         match BlockQuantization::new(qp).ac_limit(sum, squares) {
             None => {
                 assert_eq!(
-                    quantized_dc(sum, quantization_step(0, qp), || *block),
+                    BlockQuantization::new(qp).quantized_dc(sum, || *block),
                     levels[0]
                 );
                 assert!(levels[1..].iter().all(|&v| v == 0));
@@ -2262,6 +2268,65 @@ fn centered_energy_bound_preserves_quantized_levels() {
     }
 }
 
+/// Compute moments independently from the materialized residual for classification tests.
+fn reference_moments(
+    frame: &[u8],
+    prediction: Option<&[u8]>,
+    dims: FrameDimensions,
+    index: usize,
+) -> (i32, i32) {
+    let (residual, _) = build_residual_block(frame, prediction, dims, index, FrameType::Predicted);
+    residual.into_iter().fold((0, 0), |(sum, squares), value| {
+        let x = i32::from(value);
+        (sum + x, squares + x * x)
+    })
+}
+
+#[test]
+fn band_moments_match_materialized_blocks() {
+    for width in [8, 16, 24, 56, 72, 1280] {
+        let dims = FrameDimensions::new(width, 24);
+        let stride = usize::from(width);
+        let mut state = 0xa13bc5d9_u32;
+        let mut plane = || -> Vec<u8> {
+            (0..dims.pixel_count())
+                .map(|_| {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (state >> 24) as u8
+                })
+                .collect()
+        };
+        let source = plane();
+        let other = plane();
+        let zeros = vec![0; source.len()];
+        let peak = vec![255; source.len()];
+        for (frame, prediction) in [
+            (&source, None),
+            (&source, Some(&source)),
+            (&source, Some(&other)),
+            (&zeros, Some(&peak)),
+            (&peak, Some(&zeros)),
+        ] {
+            let mut row = vec![(0, 0); stride / BLOCK_SIZE];
+            for (band, samples) in frame.chunks_exact(BLOCK_SIZE * stride).enumerate() {
+                let start = band * samples.len();
+                let reference = prediction.map(|p| &p[start..start + samples.len()]);
+                row_moments(samples, reference, stride, &mut row);
+                for (col, &moments) in row.iter().enumerate() {
+                    let expected = reference_moments(
+                        frame,
+                        prediction.map(Vec::as_slice),
+                        dims,
+                        band * row.len() + col,
+                    );
+                    assert_eq!(moments, expected);
+                    assert_eq!(block_moments(samples, reference, stride, col), expected);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
     let dims = FrameDimensions::new(16, 16);
@@ -2277,7 +2342,13 @@ fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
             .map(|&p| if p == 0 { limit } else { 255 - limit })
             .collect();
         assert!(matches!(
-            quant.classify(&current, Some(&previous), dims, 3),
+            quant.classify(
+                &current,
+                Some(&previous),
+                dims,
+                3,
+                reference_moments(&current, Some(&previous), dims, 3)
+            ),
             BlockSpectrum::DcLevel(0)
         ));
         let (residual, _) =
@@ -2295,14 +2366,20 @@ fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
         };
         let (residual, _) =
             build_residual_block(&current, Some(&previous), dims, 3, FrameType::Predicted);
-        let expected_sum = residual.iter().map(|&v| i64::from(v)).sum();
-        let expected_squares = residual.iter().map(|&v| i64::from(v).pow(2)).sum();
+        let expected_sum = residual.iter().map(|&v| i32::from(v)).sum();
+        let expected_squares = residual.iter().map(|&v| i32::from(v).pow(2)).sum();
         assert_eq!(
-            block_moments(&current, Some(&previous), dims, 3),
+            block_moments(&current[128..], Some(&previous[128..]), 16, 1),
             (expected_sum, expected_squares)
         );
         assert!(matches!(
-            quant.classify(&current, Some(&previous), dims, 2),
+            quant.classify(
+                &current,
+                Some(&previous),
+                dims,
+                2,
+                reference_moments(&current, Some(&previous), dims, 2)
+            ),
             BlockSpectrum::DcLevel(0)
         ));
     }
@@ -2320,10 +2397,26 @@ fn dc_level_resolves_double_rounding_at_quantizer_boundaries() {
                 });
                 let dc = separable_dct(&block, u8::MAX, 0)[0];
                 assert_eq!(
-                    quantized_dc(i64::from(sum), step, || block),
+                    BlockQuantization::new(qp).quantized_dc(i64::from(sum), || block),
                     quantize_level(dc, step)
                 );
             }
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+#[test]
+fn dc_reciprocal_matches_integer_division_for_all_pixel_residuals() {
+    for qp in 1..=u8::MAX {
+        let geometry = BlockQuantization::new(qp);
+        for dc in -2040..=2040 {
+            let sum = i64::from(dc) * 8;
+            let expected = quantize_level(dc, geometry.dc_step);
+            assert_eq!(
+                geometry.quantized_dc(sum, || unreachable!("integral DC")),
+                expected
+            );
         }
     }
 }
