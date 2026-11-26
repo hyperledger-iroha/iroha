@@ -1078,6 +1078,152 @@ fn repeated_report_reuses_only_equal_aligned_patterns() {
 }
 
 #[test]
+fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
+    let mut previous = None;
+    for phase in [0, 37, 242] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|slots| {
+            BundleStreamRecorder::new(
+                slots,
+                4,
+                FrameDimensions::new(8, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        let (mut payload, mut reference) = (Vec::new(), Vec::new());
+        let (mut prev_dc, mut reference_dc) = (0, 0);
+        for i in 0..3 * FIRST_FIVE_CLASSES {
+            let mut digits = (i + phase) % FIRST_FIVE_CLASSES;
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = -7;
+            for &slot in &ZIG_ZAG[1..6] {
+                levels[slot] = [0, 1, -1][digits % 3];
+                digits /= 3;
+            }
+            // Alternate whole templates, shared suffixes and literal high frequencies.
+            if i >= FIRST_FIVE_CLASSES && i % 11 == 0 {
+                levels[18] = i16::MAX;
+            } else if i >= FIRST_FIVE_CLASSES && i % 17 == 0 {
+                levels[63] = i16::MIN;
+            }
+            encode_block_rle(
+                &levels,
+                &mut prev_dc,
+                &mut payload,
+                &mut cached,
+                0,
+                FrameType::Predicted,
+            );
+            encode_block_rle(
+                &levels,
+                &mut reference_dc,
+                &mut reference,
+                &mut NoopBundledHooks,
+                0,
+                FrameType::Predicted,
+            );
+            direct.record_ac_range(0, &levels, FrameType::Predicted, 1..BLOCK_PIXELS);
+            direct.record_dc(if i == 0 { -7 } else { 0 });
+            let mut zeros = 0;
+            for &slot in &ZIG_ZAG[1..] {
+                if levels[slot] == 0 {
+                    zeros += 1;
+                } else {
+                    direct.record_ac(zeros, levels[slot]);
+                    zeros = 0;
+                }
+            }
+            direct.record_eob();
+        }
+        assert_eq!(payload, reference);
+        assert!(cached.omitted_tail_records > 0);
+        let report = cached.finish_segment(previous);
+        assert!(
+            report
+                .repeat_keys
+                .iter()
+                .any(|&k| (TAIL_KEY..u16::MAX).contains(&k))
+        );
+        assert_eq!(
+            crate::core::to_bytes(&report.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(report);
+    }
+}
+
+#[test]
+fn last_predicted_tile_replaces_an_unkeyed_literal_with_its_shared_suffix() {
+    let mut previous = None;
+    for replace_literal in [false, true] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|slots| {
+            BundleStreamRecorder::new(
+                slots,
+                3,
+                FrameDimensions::new(64, 64),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for block in 0..3 {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[18] = 2;
+            if block == 2 && !replace_literal {
+                levels[63] = -3;
+            }
+            cached.record_block(63, &levels, FrameType::Predicted);
+            direct.record_ac_range(63, &levels, FrameType::Predicted, 1..BLOCK_PIXELS);
+            cached.record_eob();
+            direct.record_eob();
+        }
+        let report = cached.finish_segment(previous);
+        assert_eq!(
+            crate::core::to_bytes(&report.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        assert_eq!(report.repeat_keys[2] == u16::MAX, !replace_literal);
+        previous = Some(report);
+    }
+}
+
+#[test]
+fn implicit_switch_counts_exclude_unterminated_and_same_context_records() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    for (id, flush) in [
+        (9, BundleFlushReason::TypeComplete),
+        (9, BundleFlushReason::ContextSwitch),
+        (3, BundleFlushReason::TypeComplete),
+        (3, BundleFlushReason::EndOfBlock),
+    ] {
+        recorder.record_bundle(BundleType::SignParity, BundleContextId(id), 5, 3, flush);
+    }
+    let report = recorder.finish(None);
+    // One observed 9 -> 3 transition and one explicit switch flush on context 9.
+    assert_eq!(report.stats.flush_context_switch, 2);
+    assert_eq!(report.context_stats[0].flush_context_switch, 0);
+    assert_eq!(report.context_stats[1].flush_context_switch, 2);
+    assert_eq!(report.context_stats[0].flush_end_of_block, 1);
+}
+
+#[test]
 fn zero_pattern_cycles_preserve_partial_rows_and_terminal_contexts() {
     for width in [8, 136, 160] {
         let mut slots = Vec::new();
@@ -1212,19 +1358,21 @@ fn dc_only_after_quantization_matches_full_block_coding() {
             dims,
             0,
         );
-        assert_eq!(
-            BaselineEncoder::encode_frame_payload(
-                &frame,
-                kind,
-                reference,
-                dims,
-                16,
-                true,
-                &mut NoopBundledHooks,
-                None
-            ),
-            (expected, Some(pixels))
+        let mut payload = vec![0xeb; FRAME_HEADER_LEN];
+        let recon = BaselineEncoder::encode_frame_payload(
+            &mut payload,
+            &frame,
+            kind,
+            reference,
+            dims,
+            16,
+            true,
+            &mut NoopBundledHooks,
+            None,
         );
+        assert_eq!(payload[..FRAME_HEADER_LEN], [0xeb; FRAME_HEADER_LEN]);
+        assert_eq!(payload[FRAME_HEADER_LEN..], expected);
+        assert_eq!(recon, Some(pixels));
     }
 }
 
@@ -2274,11 +2422,12 @@ fn verify_segment_rejects_audio_skew_beyond_tolerance() {
 }
 #[test]
 fn frame_packing_requires_a_size_win_and_preserves_the_header() {
+    let mut compressor = None;
     for len in [MIN_FRAME_COMPRESSION_BYTES - 1, MIN_FRAME_COMPRESSION_BYTES] {
         let mut chunk = vec![0; FRAME_HEADER_LEN + len];
         chunk[12] = FrameType::Predicted.as_byte();
         let original = chunk.clone();
-        compress_frame_body(&mut chunk).unwrap();
+        let chunk = compress_frame_body(&mut chunk, &mut compressor).unwrap();
         if len < MIN_FRAME_COMPRESSION_BYTES {
             assert_eq!(chunk, original);
         } else {
@@ -2296,7 +2445,7 @@ fn frame_packing_requires_a_size_win_and_preserves_the_header() {
     // A sequence of distinct literals is cheaper to transmit directly at this length.
     literal.extend(0..=255);
     let original = literal.clone();
-    compress_frame_body(&mut literal).unwrap();
+    let literal = compress_frame_body(&mut literal, &mut compressor).unwrap();
     assert_eq!(literal, original);
 }
 
@@ -2448,7 +2597,9 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
             let spatial = inverse_dct_full(&dequantize_coeffs(&levels, 16));
             write_reconstructed_block(&mut pixels, &spatial, &predictor, dims, i);
         }
-        let encoded = BaselineEncoder::encode_frame_payload(
+        let mut payload = Vec::new();
+        let recon = BaselineEncoder::encode_frame_payload(
+            &mut payload,
             &frame,
             kind,
             reference.map(<[u8]>::to_vec),
@@ -2458,7 +2609,7 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
             &mut NoopBundledHooks,
             None,
         );
-        assert_eq!(encoded, (expected, Some(pixels)));
+        assert_eq!((payload, recon), (expected, Some(pixels)));
     }
 }
 
@@ -2472,7 +2623,9 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
         (FrameType::Predicted, Some(previous.as_slice())),
     ] {
         let encode = |retain| {
-            BaselineEncoder::encode_frame_payload(
+            let mut payload = Vec::new();
+            let recon = BaselineEncoder::encode_frame_payload(
+                &mut payload,
                 &plane,
                 kind,
                 reference.map(<[u8]>::to_vec),
@@ -2481,7 +2634,8 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
                 retain,
                 &mut NoopBundledHooks,
                 None,
-            )
+            );
+            (payload, recon)
         };
         let (with_reference, pixels) = encode(true);
         let (terminal, discarded) = encode(false);

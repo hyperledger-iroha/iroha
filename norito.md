@@ -1875,8 +1875,10 @@ and stops when the remaining levels are provably zero. Integer dot products
 produce the retained coefficients, with reference-order evaluation at
 ambiguous binary64 rounding boundaries. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
-The bundled entropy recorder counts common zero runs by multiplicity and
-retains aligned record spans when their quantized patterns match exactly.
+The bundled entropy recorder counts repeated low-frequency patterns and neutral
+zero suffixes by multiplicity. Matching aligned spans in successive reports
+reuse both the records and their projected symbols. The encoder writes luma
+and chroma run/level records directly into the frame buffer.
 Reconstruction sums the contributions of the nonzero coefficients in raster
 order. The native audio encoder scores step
 sizes against the receiver's reconstructed samples.

@@ -111,21 +111,20 @@ all zero levels retain their pixels in place. With RDO disabled, successive
 such blocks share a bulk write of the standard DC-delta and end-marker
 records. At Q0 the early copy requires every predicted pixel to match.
 
-A common sparse block has nonzero AC levels only at the first horizontal
-and vertical frequencies, each in `{-1, 0, 1}`. For these nine cases the
-ordered entropy records depend only on those two levels, the repeating 8×8
-block position, frame class and whether DC is zero. Within a segment the
-recorder reuses the first emitted sequence for each such pattern. Its
-histogram and context-switch counts add once per occurrence, and each block
-still contributes its own ordered tokens. The recorder stores one key per
-repeat and the literal spans between runs. Each pattern includes at least
-one significance-RLE record, so
-the entropy stream in that segment is the masked symbol byte of each record.
-This projection distributes over concatenation. The encoder projects each
-literal once. A full 63-record span can retain its previous records and
-symbol bytes when its exact sparse-pattern key matches at the same aligned
-offset in this encoder's preceding report. Other spans are written in block
-order before returning the segment.
+When each of the first five zigzag AC levels lies in `{-1, 0, 1}` and
+all higher AC levels are zero, five base-three digits identify one of 243
+patterns. Together with the 8×8 tile position, frame class and DC significance,
+these digits determine the block's ordered entropy records. The recorder
+counts repeated patterns by multiplicity and emits each block's ordered
+tokens. The same support bound limits the run/level writer's zigzag scan.
+
+Each repeated pattern contains a significance-RLE record, so the segment's
+entropy stream is the masked symbol byte of each record. The recorder projects
+literal records once and expands repeats in block order. An aligned 63-record
+span can retain both arrays from the preceding report when its canonical key
+matches. When just the neutral suffix matches at the same offset, only the
+prefix needs to be written. The canonical keys are independent of the order
+in which patterns first appear in either segment.
 
 For unmapped contexts, blocks supported in the upper-left 3×3 share one
 more sequence per tile and frame class. From zigzag order 26 onward, the
@@ -147,7 +146,11 @@ byte lanes per row. Adding the left, upper-left, upper and upper-right
 occupancies gives at most four in a lane, which prevents carries between
 pixels. A one-zero run of the configured width contributes one record, a
 known bit length and one count for symbol 1. Its multiplicity is sufficient
-to reconstruct those fields in each context histogram.
+to reconstruct those fields in each context histogram. For a context with
+`N` records, the observed outgoing switch count is `N − S − E − U`, where
+`S` counts consecutive records in that same context, `E` counts block
+terminators attributed to it, and `U` is one if its record ends an
+unterminated stream. Explicit flush reasons are added separately.
 [FNV-1 recurrence, RFC 9923 §2](https://www.rfc-editor.org/rfc/rfc9923.html#section-2)
 
 A zero residual transforms to 64 zeros. When only the DC coefficient survives
