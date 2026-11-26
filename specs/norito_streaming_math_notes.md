@@ -29,15 +29,23 @@ scene changes follows the approach used in x265. The block sampling, cost and
 threshold here are specific to Norito.
 [x265 scene-cut analysis](https://github.com/videolan/x265/blob/master/source/encoder/slicetype.cpp)
 
-The forward transform applies the 8-point basis along each axis. The Q15
-implementation keeps the intermediate sums in 64-bit integers and rounds once
-after both passes. The default floating-point implementation reevaluates a
-coefficient in the reference summation order if it falls within `1e-8` of a
-rounding midpoint. For 16-bit samples and basis factors of magnitude at most
-one half, the absolute-product sum is bounded by 524,288. The combined
-roundoff bound is at most `524288 * (γ₆₆ + γ₁₈) < 1e-8`, using
-`γₙ = n*u/(1-n*u)` and binary64 unit roundoff `u = 2^-53`. Both paths
-therefore preserve the reference integer coefficients before quantization.
+The forward DCT pairs samples reflected about each axis. Let `a,b,c,d` be
+the top-left, top-right, bottom-left and bottom-right samples of one such
+quartet. For frequency indices `u,v`, an 8×8 projection uses a 4×4 array
+with entries `a + (-1)^v b + (-1)^u c + (-1)^(u+v) d`. The encoder forms
+the four arrays once and evaluates each frequency from its parity group.
+Mirror symmetry is exact in the Q15 table. All folds are exact integers,
+and the two Q15 passes round only the final 64-bit sum.
+[Feig and Winograd, Fast Algorithms for the Discrete Cosine Transform](https://research.ibm.com/publications/fast-algorithms-for-the-discrete-cosine-transform)
+
+In the floating-point table the reflected factors differ by at most
+`1e-15` after applying the parity sign. Over a full-range 16-bit block,
+replacing both factors perturbs a projection by less than `2.2e-9`.
+The absolute-product sum is at most `64 * 32768 * 0.5² = 524288`.
+The direct and folded evaluation errors together are bounded by
+`524288 * (γ₆₆ + γ₁₈)`, where `γₙ = n*u/(1-n*u)` and `u = 2^-53`.
+Within `2e-8` of a rounding midpoint the encoder evaluates the original
+table in reference summation order.
 [Higham, Accuracy and Stability of Numerical Algorithms, ch. 3](https://eprints.maths.manchester.ac.uk/238/)
 
 At nonzero quantizers the encoder can prove that all 63 AC levels will be zero
@@ -62,16 +70,24 @@ The same energy bounds individual frequencies when the smallest AC step is
 insufficient. With `U = isqrt(E) + 1`, the encoder bounds each rounded AC
 magnitude by `B = ceil(65 * U / 512) + 2`. A matrix weight `w` with
 `w * quantizer > 2B` guarantees a zero level. The encoder skips these
-projections and skips the first transform pass for a row when every weight
-in it qualifies. It always evaluates DC and retains the exact source
-coefficient for every nonzero level used by RDO.
+projections. Within a reflection group, let `L` be the sum of absolute
+folded samples. Each 2-D basis factor has magnitude at most one quarter,
+so `ceil(L/4) + 2` gives a second bound for that group's AC coefficients.
+In the even/even group the encoder subtracts the integer mean of the 16
+folded entries for this bound, since a constant contributes only to DC up to
+the table error above. The tighter of the two bounds determines which
+weights to evaluate. Every retained AC coefficient keeps its reference
+value for RDO.
 
-For prediction, if every absolute pixel difference is at most `t`, the
-residual norm is at most `8t`. At Q16, `t = 9` certifies that every level,
-including DC, is zero. At Q0 the shortcut requires identical pixels. The
-encoder emits the DC delta and end marker and retains the reference pixels
-in place. Other predicted blocks can overwrite their own eight-by-eight area
-after reading it because prediction uses only the collocated samples.
+The encoder accumulates sample sums and squared sums directly from the
+source and collocated reference rows. A DC-only block can use these moments
+without constructing either sample block. For the floating-point DC term,
+`sum/8` can round to either neighboring integer at a midpoint. If both
+integers map to the same quantized level the encoder uses that level
+directly. Otherwise it evaluates the reference sum. Predicted blocks with
+all zero levels retain their pixels in place. With RDO disabled, successive
+such blocks share a bulk write of the standard DC-delta and end-marker
+records. At Q0 the early copy requires every predicted pixel to match.
 
 A common sparse block has nonzero AC levels only at the first horizontal
 and vertical frequencies, each in `{-1, 0, 1}`. For these nine cases the
@@ -86,6 +102,14 @@ the entropy stream in that segment is the masked symbol byte of each record.
 This projection distributes over concatenation. The encoder projects each
 literal once, then copies its records and symbol bytes in block order to
 produce the complete telemetry before returning the segment.
+
+For unmapped contexts, blocks supported in the upper-left 3×3 share one
+more sequence per tile and frame class. From zigzag order 26 onward, the
+coefficient, preceding coefficient and every neighbor used in the context
+are zero. Orders 25 and 26 have the same context inputs except for their
+distinct final order bits, so a zero run ends at the boundary. Reusing
+the suffix preserves record order. Its histogram and the switch from the
+prefix add once per occurrence.
 
 A zero residual transforms to 64 zeros. When only the DC coefficient survives
 quantization, its inverse transforms to the same sample at all 64 positions.
