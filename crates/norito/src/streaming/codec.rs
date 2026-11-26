@@ -566,20 +566,6 @@ const MIN_AC_WEIGHT: u8 = {
     }
     min
 };
-const MIN_ROW_WEIGHT: [[u8; 2]; BLOCK_SIZE] = {
-    let mut weights = [[u8::MAX; 2]; BLOCK_SIZE];
-    let mut i = 1;
-    while i < BLOCK_PIXELS {
-        let row = i / BLOCK_SIZE;
-        let parity = i % 2;
-        if BASELINE_QUANT_MATRIX[i] < weights[row][parity] {
-            weights[row][parity] = BASELINE_QUANT_MATRIX[i];
-        }
-        i += 1;
-    }
-    weights[0][0] = 0;
-    weights
-};
 const ZIG_ZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
@@ -1924,16 +1910,14 @@ impl BaselineEncoder {
                     BlockSpectrum::WeightsThrough(limit) => {
                         let (residual, predictor) =
                             build_residual_block(frame, prediction, dims, block_index, frame_type);
-                        let coeffs = forward_dct(&residual, limit, quantizer);
-                        let mut quantized = quantize_coeffs(&coeffs, quantizer);
-                        if let Some(optimizer) = rdo.as_deref_mut() {
-                            optimizer.select_levels(
-                                &coeffs,
-                                &mut quantized,
-                                frame_type,
-                                block_index,
-                            );
-                        }
+                        let quantized = if let Some(optimizer) = rdo.as_deref_mut() {
+                            let coeffs = forward_dct(&residual, limit, quantizer);
+                            let mut levels = quantize_coeffs(&coeffs, quantizer);
+                            optimizer.select_levels(&coeffs, &mut levels, frame_type, block_index);
+                            levels
+                        } else {
+                            geometry.forward_quantized(&residual, limit)
+                        };
                         if quantized[1..].iter().any(|&ac| ac != 0) {
                             encode_block_rle(
                                 &quantized,
@@ -2106,17 +2090,27 @@ pub(crate) fn build_residual_block(
     let mut predictor = [0i16; BLOCK_PIXELS];
     let (origin_x, origin_y) = block_origin(dims, block_index);
     let stride = dims.width as usize;
-    for y in 0..BLOCK_SIZE {
-        for x in 0..BLOCK_SIZE {
-            let idx = (origin_y + y) * stride + (origin_x + x);
-            let pixel = frame[idx] as i16;
-            let pred = if let (FrameType::Predicted, Some(prev)) = (frame_type, prev_frame) {
-                prev[idx] as i16
-            } else {
-                0
-            };
-            predictor[y * BLOCK_SIZE + x] = pred;
-            residual[y * BLOCK_SIZE + x] = pixel - pred;
+    let reference = prev_frame.filter(|_| frame_type == FrameType::Predicted);
+    for (y, (samples, predictions)) in residual
+        .as_chunks_mut::<BLOCK_SIZE>()
+        .0
+        .iter_mut()
+        .zip(predictor.as_chunks_mut::<BLOCK_SIZE>().0)
+        .enumerate()
+    {
+        let start = (origin_y + y) * stride + origin_x;
+        let source = frame[start..]
+            .first_chunk::<BLOCK_SIZE>()
+            .expect("complete source row");
+        *samples = source.map(i16::from);
+        if let Some(previous) = reference {
+            let row = previous[start..]
+                .first_chunk::<BLOCK_SIZE>()
+                .expect("complete predictor row");
+            *predictions = row.map(i16::from);
+            for i in 0..BLOCK_SIZE {
+                samples[i] -= predictions[i];
+            }
         }
     }
     (residual, predictor)
@@ -2271,10 +2265,25 @@ pub(crate) fn forward_dct(
     limit: u8,
     quantizer: u8,
 ) -> [i32; BLOCK_PIXELS] {
-    if block.iter().all(|&sample| sample == 0) {
-        return [0; BLOCK_PIXELS];
-    }
-    separable_dct(block, limit, quantizer)
+    let mut coeffs = [0; BLOCK_PIXELS];
+    let sum = visit_ac(block, limit, quantizer, |slot, value| coeffs[slot] = value);
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    let dc = {
+        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+        round_q30(i64::from(sum) * basis * basis) as i32
+    };
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    let dc = {
+        // The constant basis makes DC equal to sum/8 up to rounding. Only
+        // a half-integer can depend on the original table and addition order.
+        if sum & 7 == 4 {
+            direct_dct_coefficient(block, &DCT_FACTORS[0], &DCT_FACTORS[0])
+        } else {
+            (sum + 4) >> 3
+        }
+    };
+    coeffs[0] = dc;
+    coeffs
 }
 
 /// All 64 residuals lie in [-255, 255], so their squared sum fits in i32.
@@ -2452,6 +2461,17 @@ impl BlockQuantization {
         Some((2 * bound / u64::from(self.quantizer)).min(u64::from(u8::MAX)) as u8)
     }
 
+    /// Write the retained AC levels directly and round DC only as precisely
+    /// as its quantizer boundary requires. RDO also needs raw coefficients.
+    fn forward_quantized(&self, block: &[i16; BLOCK_PIXELS], limit: u8) -> [i16; BLOCK_PIXELS] {
+        let mut levels = [0; BLOCK_PIXELS];
+        let sum = visit_ac(block, limit, self.quantizer, |slot, value| {
+            levels[slot] = quantized_coefficient(slot, value, self.quantizer);
+        });
+        levels[0] = self.quantized_dc(i64::from(sum), || *block);
+        levels
+    }
+
     fn quantized_dc(&self, sum: i64, _residual: impl FnOnce() -> [i16; BLOCK_PIXELS]) -> i16 {
         #[cfg(feature = "streaming-fixed-point-dct")]
         {
@@ -2508,13 +2528,66 @@ use self::DCT_FACTORS as FORWARD_BASIS;
 #[cfg(feature = "streaming-fixed-point-dct")]
 use self::DCT_FACTORS_Q15 as FORWARD_BASIS;
 
-#[cfg(feature = "streaming-fixed-point-dct")]
-type DctSum = i64;
-#[cfg(not(feature = "streaming-fixed-point-dct"))]
-type DctSum = f64;
+#[derive(Clone, Copy)]
+struct DctProjection {
+    slot: usize,
+    weight: u32,
+    factors: [i32; 16],
+}
 
-/// Factor the transform by reflection about the center of each axis.
-fn separable_dct(block: &[i16; BLOCK_PIXELS], limit: u8, quantizer: u8) -> [i32; BLOCK_PIXELS] {
+/// Within each reflection group, sort the AC projections by quantization weight
+/// so that the first excluded entry also rules out every one that follows.
+static AC_PROJECTIONS: [[DctProjection; 16]; 4] = {
+    let empty = DctProjection {
+        slot: 0,
+        weight: 256,
+        factors: [0; 16],
+    };
+    // The even/even group has only 15 AC slots. Its last weight exceeds every u8 limit.
+    let mut groups = [[empty; 16]; 4];
+    let mut slot = 1;
+    while slot < BLOCK_PIXELS {
+        let (u, v) = (slot / 8, slot % 8);
+        let weight = BASELINE_QUANT_MATRIX[slot] as u32;
+        let group = &mut groups[(u % 2) * 2 + v % 2];
+        let mut index = 0;
+        while group[index].weight <= weight {
+            index += 1;
+        }
+        let mut end = 15;
+        while end > index {
+            group[end] = group[end - 1];
+            end -= 1;
+        }
+        let mut factors = [0; 16];
+        let mut i = 0;
+        while i < 16 {
+            let a = FORWARD_BASIS[u][i / 4];
+            let b = FORWARD_BASIS[v][i % 4];
+            #[cfg(feature = "streaming-fixed-point-dct")]
+            {
+                factors[i] = (a as i32) * (b as i32);
+            }
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            {
+                factors[i] = (a * b * 4_294_967_296.0).round() as i32;
+            }
+            i += 1;
+        }
+        group[index] = DctProjection {
+            slot,
+            weight,
+            factors,
+        };
+        slot += 1;
+    }
+    groups
+};
+
+type FoldedBlock = [[[i32; 4]; 4]; 4];
+
+#[cfg(any(test, not(all(feature = "simd-accel", target_arch = "aarch64"))))]
+fn fold_scalar(block: &[i16; BLOCK_PIXELS]) -> FoldedBlock {
     const HALF: usize = BLOCK_SIZE / 2;
     let mut folded = [[[0_i32; HALF]; HALF]; 4];
     for y in 0..HALF {
@@ -2534,67 +2607,138 @@ fn separable_dct(block: &[i16; BLOCK_PIXELS], limit: u8, quantizer: u8) -> [i32;
             folded[3][y][x] = top_diff - bottom_diff;
         }
     }
-    let mut out = [0; BLOCK_PIXELS];
-    for (group, samples) in folded.iter().enumerate() {
-        let (uy, vx) = (group / 2, group % 2);
-        let mut group_limit = limit;
-        if quantizer != 0 {
-            // In the even/even group a constant affects only the DC coefficient.
-            let center = if group == 0 {
-                samples.as_flattened().iter().sum::<i32>() / 16
-            } else {
-                0
-            };
-            let l1: u32 = samples
-                .as_flattened()
-                .iter()
-                .map(|&s| s.abs_diff(center))
-                .sum();
-            // The largest 2-D basis factor is <= 1/4. Two units cover
-            // rounded table asymmetry and signed coefficient rounding.
-            let bound = l1.div_ceil(4) + 2;
-            group_limit = u32::from(limit).min(2 * bound / u32::from(quantizer)) as u8;
-        }
-        for u in (uy..BLOCK_SIZE).step_by(2) {
-            if MIN_ROW_WEIGHT[u][vx] > group_limit {
-                continue;
-            }
-            let basis_u = &FORWARD_BASIS[u];
-            let mut row = [DctSum::from(0); HALF];
-            for (&factor, line) in basis_u.iter().zip(samples) {
-                for (acc, &sample) in row.iter_mut().zip(line) {
-                    *acc += DctSum::from(sample) * DctSum::from(factor);
-                }
-            }
-            for v in (vx..BLOCK_SIZE).step_by(2) {
-                let slot = u * BLOCK_SIZE + v;
-                if slot != 0 && BASELINE_QUANT_MATRIX[slot] > group_limit {
-                    continue;
-                }
-                let basis_v = &FORWARD_BASIS[v];
-                let value: DctSum = row
-                    .iter()
-                    .zip(basis_v)
-                    .map(|(&a, &b)| a * DctSum::from(b))
-                    .sum();
-                #[cfg(feature = "streaming-fixed-point-dct")]
-                let coefficient = round_q30(value) as i32;
-                #[cfg(not(feature = "streaming-fixed-point-dct"))]
-                let coefficient = {
-                    let rounded = value.round();
-                    // The tabulated mirror pairs differ by at most 1e-15. Including
-                    // both evaluation orders, 2e-8 bounds the error for i16 input.
-                    if (value - rounded).abs() >= 0.5 - 2e-8 {
-                        direct_dct_coefficient(block, basis_u, basis_v)
-                    } else {
-                        rounded as i32
-                    }
-                };
-                out[slot] = coefficient;
-            }
+    folded
+}
+
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+fn fold_neon(block: &[i16; BLOCK_PIXELS]) -> FoldedBlock {
+    use std::arch::aarch64::*;
+    let mut folded = [[[0; 4]; 4]; 4];
+    // SAFETY: AArch64 has baseline NEON. Each load covers a full eight-sample
+    // row, and each store writes one complete four-lane row of a parity group.
+    unsafe {
+        for y in 0..4 {
+            let upper = vld1q_s16(block.as_ptr().add(8 * y));
+            let lower = vld1q_s16(block.as_ptr().add(8 * (7 - y)));
+            let (a, b) = (vget_low_s16(upper), vrev64_s16(vget_high_s16(upper)));
+            let (c, d) = (vget_low_s16(lower), vrev64_s16(vget_high_s16(lower)));
+            let (upper_sum, lower_sum) = (vaddl_s16(a, b), vaddl_s16(c, d));
+            let (upper_diff, lower_diff) = (vsubl_s16(a, b), vsubl_s16(c, d));
+            vst1q_s32(folded[0][y].as_mut_ptr(), vaddq_s32(upper_sum, lower_sum));
+            vst1q_s32(folded[1][y].as_mut_ptr(), vaddq_s32(upper_diff, lower_diff));
+            vst1q_s32(folded[2][y].as_mut_ptr(), vsubq_s32(upper_sum, lower_sum));
+            vst1q_s32(folded[3][y].as_mut_ptr(), vsubq_s32(upper_diff, lower_diff));
         }
     }
-    out
+    folded
+}
+
+/// Visit the retained AC coefficients and return the unscaled DC sample sum.
+fn visit_ac(
+    block: &[i16; BLOCK_PIXELS],
+    limit: u8,
+    quantizer: u8,
+    mut visit: impl FnMut(usize, i32),
+) -> i32 {
+    if quantizer == 0 && block.iter().all(|&sample| sample == 0) {
+        return 0;
+    }
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    let folded = fold_neon(block);
+    #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+    let folded = fold_scalar(block);
+    let sum: i32 = folded[0].as_flattened().iter().sum();
+
+    let scale = u32::from(quantizer.max(1));
+    let block_threshold = u32::from(limit) * scale;
+    for (group, (samples, projections)) in folded.iter().zip(&AC_PROJECTIONS).enumerate() {
+        let mut threshold = block_threshold;
+        if quantizer != 0 {
+            let center = if group == 0 { sum / 16 } else { 0 };
+            let l1 = folded_l1(samples, center);
+            threshold = threshold.min(2 * (l1.div_ceil(4) + 2));
+        }
+        for projection in projections {
+            if scale * projection.weight > threshold {
+                break;
+            }
+            let slot = projection.slot;
+            let value = folded_dot(samples, &projection.factors);
+            #[cfg(feature = "streaming-fixed-point-dct")]
+            let coefficient = round_q30(value) as i32;
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            let coefficient = {
+                // Quantizing the weights costs at most half a Q32 unit per
+                // absolute folded sample. The extra 128 cover table asymmetry
+                // and binary64 summation for the full i16 input range.
+                if (value as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
+                    direct_dct_coefficient(
+                        block,
+                        &FORWARD_BASIS[slot / 8],
+                        &FORWARD_BASIS[slot % 8],
+                    )
+                } else {
+                    ((value + (1 << 31)) >> 32) as i32
+                }
+            };
+            visit(slot, coefficient);
+        }
+    }
+    sum
+}
+
+fn folded_l1(samples: &[[i32; 4]; 4], center: i32) -> u32 {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    {
+        use std::arch::aarch64::*;
+        // SAFETY: all four elements of each row are initialized and in bounds.
+        unsafe {
+            let center = vdupq_n_s32(center);
+            let mut total = vdupq_n_s32(0);
+            for row in samples {
+                total = vabaq_s32(total, vld1q_s32(row.as_ptr()), center);
+            }
+            vaddvq_s32(total) as u32
+        }
+    }
+    #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+    {
+        samples
+            .as_flattened()
+            .iter()
+            .map(|&v| v.abs_diff(center))
+            .sum()
+    }
+}
+
+/// The product sum fits in i64 for all i16 blocks, so partial sums can be
+/// combined in any order. Widen before multiplication on every target.
+fn folded_dot(samples: &[[i32; 4]; 4], weights: &[i32; 16]) -> i64 {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    {
+        use std::arch::aarch64::*;
+        // SAFETY: each row and its corresponding four weights are in bounds.
+        unsafe {
+            let mut low = vdupq_n_s64(0);
+            let mut high = vdupq_n_s64(0);
+            for (row, factors) in samples.iter().zip(weights.as_chunks::<4>().0) {
+                let x = vld1q_s32(row.as_ptr());
+                let w = vld1q_s32(factors.as_ptr());
+                low = vmlal_s32(low, vget_low_s32(x), vget_low_s32(w));
+                high = vmlal_high_s32(high, x, w);
+            }
+            vaddvq_s64(vaddq_s64(low, high))
+        }
+    }
+    #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+    {
+        samples
+            .as_flattened()
+            .iter()
+            .zip(weights)
+            .map(|(&x, &w)| i64::from(x) * i64::from(w))
+            .sum()
+    }
 }
 
 /// Preserve the reference multiplication and summation order at rounding boundaries.
@@ -2691,23 +2835,22 @@ fn quantize_level(coeff: i32, step: i32) -> i16 {
 }
 
 pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i16; BLOCK_PIXELS] {
-    let mut out = [0i16; BLOCK_PIXELS];
-    if quantizer == 0 {
-        for (idx, coeff) in coeffs.iter().enumerate() {
-            out[idx] = (*coeff).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        }
-        return out;
-    }
-    for (idx, coeff) in coeffs.iter().enumerate() {
-        let step = quantization_step(idx, quantizer);
-        // At the first AC midpoint zero has the same distortion and saves a token.
-        if idx != 0 && coeff.unsigned_abs() <= (step / 2) as u32 {
-            continue;
-        }
-        out[idx] = quantize_level(*coeff, step);
-    }
-    out
+    std::array::from_fn(|slot| quantized_coefficient(slot, coeffs[slot], quantizer))
 }
+
+fn quantized_coefficient(slot: usize, coeff: i32, quantizer: u8) -> i16 {
+    if quantizer == 0 {
+        return coeff.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+    }
+    let step = quantization_step(slot, quantizer);
+    // At the first AC midpoint zero has the same distortion and saves a token.
+    if slot != 0 && coeff.unsigned_abs() <= (step / 2) as u32 {
+        0
+    } else {
+        quantize_level(coeff, step)
+    }
+}
+
 pub(crate) fn dequantize_coeffs(
     coeffs: &[i16; BLOCK_PIXELS],
     quantizer: u8,

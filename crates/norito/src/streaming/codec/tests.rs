@@ -1193,7 +1193,7 @@ fn dc_only_after_quantization_matches_full_block_coding() {
         ));
         let (residual, predictor) =
             build_residual_block(&frame, reference.as_deref(), dims, 0, kind);
-        let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), 16);
+        let levels = quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), 16);
         assert!(levels[1..].iter().all(|&v| v == 0));
         let mut expected = Vec::new();
         encode_block_rle(
@@ -2330,15 +2330,15 @@ fn compressed_payload_requires_one_sized_frame_within_the_block_budget() {
 #[test]
 fn sparse_dct_paths_match_the_full_kernels() {
     let mut residual = [0; BLOCK_PIXELS];
-    assert_eq!(
-        forward_dct(&residual, u8::MAX, 0),
-        separable_dct(&residual, u8::MAX, 0)
-    );
+    assert_eq!(forward_dct(&residual, u8::MAX, 0), [0; BLOCK_PIXELS]);
     residual[BLOCK_PIXELS - 1] = -255;
-    assert_eq!(
-        forward_dct(&residual, u8::MAX, 0),
-        separable_dct(&residual, u8::MAX, 0)
-    );
+    for quantizer in [0, 1, 16, 255] {
+        let geometry = BlockQuantization::new(quantizer);
+        assert_eq!(
+            geometry.forward_quantized(&residual, u8::MAX),
+            quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), quantizer)
+        );
+    }
 
     let mut coeffs = [0; BLOCK_PIXELS];
     for dc in (-36..=36).chain([
@@ -2436,7 +2436,7 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
                 ),
                 BlockSpectrum::DcLevel(_)
             ));
-            let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), 16);
+            let levels = quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), 16);
             encode_block_rle(
                 &levels,
                 &mut dc,
@@ -2502,7 +2502,7 @@ fn centered_energy_bound_preserves_quantized_levels() {
             })
     };
     let check = |block: &[i16; BLOCK_PIXELS], qp| {
-        let full = separable_dct(block, u8::MAX, 0);
+        let full = forward_dct(block, u8::MAX, 0);
         let levels = quantize_coeffs(&full, qp);
         let (sum, squares) = moments(block);
         match BlockQuantization::new(qp).ac_limit(sum, squares) {
@@ -2527,7 +2527,7 @@ fn centered_energy_bound_preserves_quantized_levels() {
     // At Q16, alternating +/-9 lies just below the threshold and +/-10 above it.
     for (swing, skipped) in [(9, true), (10, false)] {
         let block = std::array::from_fn(|i| if i % 2 == 0 { 120 + swing } else { 120 - swing });
-        let full = separable_dct(&block, u8::MAX, 0);
+        let full = forward_dct(&block, u8::MAX, 0);
         assert!(full[1..].iter().any(|&v| v != 0));
         let (sum, squares) = moments(&block);
         assert_eq!(
@@ -2649,7 +2649,7 @@ fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
         let (residual, _) =
             build_residual_block(&current, Some(&previous), dims, 3, FrameType::Predicted);
         assert_eq!(
-            quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), qp),
+            quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), qp),
             [0; BLOCK_PIXELS]
         );
         // The last sample belongs to block 3. Its neighbors in block 2 stay within the bound.
@@ -2690,7 +2690,7 @@ fn dc_level_resolves_double_rounding_at_quantizer_boundaries() {
                 let block = std::array::from_fn(|i| {
                     (sum.div_euclid(64) + i32::from((i as i32) < sum.rem_euclid(64))) as i16
                 });
-                let dc = separable_dct(&block, u8::MAX, 0)[0];
+                let dc = forward_dct(&block, u8::MAX, 0)[0];
                 assert_eq!(
                     BlockQuantization::new(qp).quantized_dc(i64::from(sum), || block),
                     quantize_level(dc, step)
@@ -2728,9 +2728,9 @@ fn reflection_groups_preserve_all_retained_coefficients() {
         for delta in [-1, 0, 1] {
             let mut block = base;
             block[63] += delta;
-            let reference = separable_dct(&block, u8::MAX, 0);
+            let reference = forward_dct(&block, u8::MAX, 0);
             for qp in [1, 4, 16, 255] {
-                let candidate = separable_dct(&block, u8::MAX, qp);
+                let candidate = forward_dct(&block, u8::MAX, qp);
                 let levels = quantize_coeffs(&reference, qp);
                 assert_eq!(quantize_coeffs(&candidate, qp), levels);
                 for i in 0..BLOCK_PIXELS {
@@ -2850,9 +2850,91 @@ fn dct_tables_satisfy_centered_projection_bound() {
 }
 
 #[test]
-fn separable_forward_dct_matches_direct_evaluation() {
+fn folded_projection_kernels_match_wide_scalar_sums() {
+    let mut state = 0xbadecafe_u32;
+    for iteration in 0..64 {
+        let block = std::array::from_fn(|i| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            match iteration {
+                0 => i16::MIN,
+                1 if i % 2 == 0 => i16::MAX,
+                1 => i16::MIN,
+                _ => (state >> 16) as i16,
+            }
+        });
+        let folded = fold_scalar(&block);
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        assert_eq!(fold_neon(&block), folded);
+        for (samples, projections) in folded.iter().zip(&AC_PROJECTIONS) {
+            let center = samples.as_flattened().iter().sum::<i32>() / 16;
+            for center in [0, center] {
+                let expected: u32 = samples.iter().flatten().map(|v| v.abs_diff(center)).sum();
+                assert_eq!(folded_l1(samples, center), expected);
+            }
+            assert!(projections.windows(2).all(|p| p[0].weight <= p[1].weight));
+            for projection in projections {
+                let expected: i128 = samples
+                    .iter()
+                    .flatten()
+                    .zip(projection.factors)
+                    .map(|(&x, w)| i128::from(x) * i128::from(w))
+                    .sum();
+                assert_eq!(
+                    i128::from(folded_dot(samples, &projection.factors)),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+#[test]
+fn q32_midpoint_uses_reference_order_for_ac() {
+    let mut block = [0; BLOCK_PIXELS];
+    block[37] = 10;
+    block[51] = -58;
+    let slot = 4 * BLOCK_SIZE;
+    let projection = AC_PROJECTIONS[0].iter().find(|p| p.slot == slot).unwrap();
+    let value = folded_dot(&fold_scalar(&block)[0], &projection.factors);
+    assert_eq!(value, (8_i64 << 32) + (1 << 31));
+    for sign in [1, -1] {
+        let signed = block.map(|v| v * sign);
+        assert_eq!(
+            direct_dct_coefficient(&signed, &DCT_FACTORS[4], &DCT_FACTORS[0]),
+            8 * i32::from(sign)
+        );
+        assert_eq!(forward_dct(&signed, u8::MAX, 0)[slot], 8 * i32::from(sign));
+    }
+}
+
+#[test]
+fn fused_forward_levels_match_full_transform_at_every_quantizer() {
+    let mut state = 0x52f3e9d1_u32;
+    for quantizer in 0..=255 {
+        let geometry = BlockQuantization::new(quantizer);
+        for amplitude in [3, 127, 255, i16::MAX] {
+            let block = std::array::from_fn(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((state >> 16) as i16) % amplitude
+            });
+            let sum = block.iter().copied().map(i64::from).sum();
+            let squares = block.iter().map(|&x| i64::from(x).pow(2)).sum();
+            let limit = geometry.ac_limit(sum, squares).unwrap_or(0);
+            let expected = quantize_coeffs(&forward_dct(&block, u8::MAX, 0), quantizer);
+            assert_eq!(
+                geometry.forward_quantized(&block, limit),
+                expected,
+                "Q{quantizer} amplitude {amplitude}"
+            );
+        }
+    }
+}
+
+#[test]
+fn folded_forward_dct_matches_direct_evaluation() {
     fn check(block: &[i16; BLOCK_PIXELS]) {
-        let transformed = separable_dct(block, u8::MAX, 0);
+        let transformed = forward_dct(block, u8::MAX, 0);
         for u in 0..BLOCK_SIZE {
             for v in 0..BLOCK_SIZE {
                 #[cfg(feature = "streaming-fixed-point-dct")]
@@ -2888,8 +2970,8 @@ fn separable_forward_dct_matches_direct_evaluation() {
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     assert_eq!(
         (
-            separable_dct(&tie, u8::MAX, 0)[0],
-            separable_dct(&tie.map(|v| -v), u8::MAX, 0)[0]
+            forward_dct(&tie, u8::MAX, 0)[0],
+            forward_dct(&tie.map(|v| -v), u8::MAX, 0)[0]
         ),
         (1, -1)
     );

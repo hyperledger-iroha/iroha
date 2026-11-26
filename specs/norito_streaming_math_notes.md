@@ -34,18 +34,24 @@ the top-left, top-right, bottom-left and bottom-right samples of one such
 quartet. For frequency indices `u,v`, an 8×8 projection uses a 4×4 array
 with entries `a + (-1)^v b + (-1)^u c + (-1)^(u+v) d`. The encoder forms
 the four arrays once and evaluates each frequency from its parity group.
-Mirror symmetry is exact in the Q15 table. All folds are exact integers,
-and the two Q15 passes round only the final 64-bit sum.
+The 16 weights of each projection are the outer product of the vertical and
+horizontal basis factors. In the Q15 transform these products are exact Q30
+integers. A signed 64-bit dot product accumulates all terms before rounding.
+Scalar code and AArch64 NEON use this same integer sum.
 [Feig and Winograd, Fast Algorithms for the Discrete Cosine Transform](https://research.ibm.com/publications/fast-algorithms-for-the-discrete-cosine-transform)
 
-In the floating-point table the reflected factors differ by at most
-`1e-15` after applying the parity sign. Over a full-range 16-bit block,
-replacing both factors perturbs a projection by less than `2.2e-9`.
-The absolute-product sum is at most `64 * 32768 * 0.5² = 524288`.
-The direct and folded evaluation errors together are bounded by
-`524288 * (γ₆₆ + γ₁₈)`, where `γₙ = n*u/(1-n*u)` and `u = 2^-53`.
-Within `2e-8` of a rounding midpoint the encoder evaluates the original
-table in reference summation order.
+For the binary64 transform, each outer-product weight is rounded to the
+nearest multiple of 2⁻³². For 16-bit input, the sum of absolute folded
+samples in a group is at most `64 × 32768 = 2²¹`, so weight quantization
+contributes at most 2²⁰ units in the Q32 accumulator. The tabulated mirror
+pairs differ by at most `1e-15` after applying the parity sign. Replacing
+both factors perturbs a full projection by less than `2.2e-9`. The
+absolute-product sum is at most `64 × 32768 × 0.5² = 524288`. The error
+from forming the binary64 weight products and from direct reference evaluation
+is at most `524288 × (γ₁ + γ₆₆)`, where `γₙ = n·u/(1−n·u)` and
+`u = 2⁻⁵³`. Together these last errors fit within 128 Q32 units. When
+the integer sum is within `2²⁰ + 128` units of a half-integer, the
+encoder evaluates that coefficient in the original binary64 order.
 [Higham, Accuracy and Stability of Numerical Algorithms, ch. 3](https://eprints.maths.manchester.ac.uk/238/)
 
 At nonzero quantizers the encoder can prove that all 63 AC levels will be zero
@@ -76,8 +82,10 @@ so `ceil(L/4) + 2` gives a second bound for that group's AC coefficients.
 In the even/even group the encoder subtracts the integer mean of the 16
 folded entries for this bound, since a constant contributes only to DC up to
 the table error above. The tighter of the two bounds determines which
-weights to evaluate. Every retained AC coefficient keeps its reference
-value for RDO.
+weights to evaluate. Each group's projections are stored in ascending weight
+order. The first weight above the threshold ends that group. The default
+path quantizes each visited projection immediately. RDO also receives its
+reference coefficient before selecting levels.
 
 Each block needs two integer moments, the sum of the residuals and their
 squared sum. The encoder computes one band of eight scanlines before writing

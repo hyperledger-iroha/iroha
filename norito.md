@@ -1870,8 +1870,10 @@ coefficients by reconstruction gain per block record. A centered-energy bound
 lets the encoder emit the DC delta and end marker directly when every AC
 level must quantize to zero. It computes the residual sums and squared sums
 for one row of blocks at a time. The forward transform folds the block into four
-reflection groups. The encoder uses a magnitude bound for each group to skip
-additional frequencies whose quantization steps guarantee zero. Prediction
+reflection groups. Within each group it evaluates frequencies in order of quantization weight
+and stops when the remaining levels are provably zero. Integer dot products
+produce the retained coefficients, with reference-order evaluation at
+ambiguous binary64 rounding boundaries. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
 The bundled entropy recorder counts common zero runs by multiplicity and
 retains aligned record spans when their quantized patterns match exactly.
