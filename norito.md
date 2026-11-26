@@ -1868,7 +1868,9 @@ segment when prediction from the previous decoded frame increases texture energy
 Video quantization favors zero at equal error, and luma RDO ranks
 coefficients by reconstruction gain per block record. A centered-energy bound
 lets the encoder emit the DC delta and end marker directly when every AC
-level must quantize to zero. Reconstruction sums the contributions of the
+level must quantize to zero. The same bound skips individual frequencies whose
+quantization steps guarantee zero. A bounded pixel difference can also
+certify an all-zero predicted residual at the quantizer. Reconstruction sums the contributions of the
 nonzero coefficients in raster order. The native audio encoder scores step
 sizes against the receiver's reconstructed samples.
 [Streaming quantization and rate model](specs/norito_streaming_math_notes.md#encoder-decisions)

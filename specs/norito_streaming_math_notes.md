@@ -58,13 +58,30 @@ This is a sufficient condition adapted to the Norito matrices. Early
 zero-coefficient detection from transform bounds is described by Ji et al.
 [Early Determination of Zero-Quantized 8×8 DCT Coefficients](https://mcl.usc.edu/wp-content/uploads/2014/01/200912-Early-determination-of-zero-quantized-8%C3%978-DCT-coefficients.pdf)
 
-When all quantized AC levels are zero, the ordered bundle records depend only
-on the repeating 8×8 block position, frame class and whether DC is zero. The
-recorder reuses the first emitted sequence for each of these 256 cases within
-a segment. Its histogram and internal context-switch counts add once per
-occurrence. Each block still contributes its own DC token and end marker.
-The recorder stores the literal sequences and the insertion position of each
-repeat. Any repeated zero-AC sequence contains a significance-RLE record, so
+The same energy bounds individual frequencies when the smallest AC step is
+insufficient. With `U = isqrt(E) + 1`, the encoder bounds each rounded AC
+magnitude by `B = ceil(65 * U / 512) + 2`. A matrix weight `w` with
+`w * quantizer > 2B` guarantees a zero level. The encoder skips these
+projections and skips the first transform pass for a row when every weight
+in it qualifies. It always evaluates DC and retains the exact source
+coefficient for every nonzero level used by RDO.
+
+For prediction, if every absolute pixel difference is at most `t`, the
+residual norm is at most `8t`. At Q16, `t = 9` certifies that every level,
+including DC, is zero. At Q0 the shortcut requires identical pixels. The
+encoder emits the DC delta and end marker and retains the reference pixels
+in place. Other predicted blocks can overwrite their own eight-by-eight area
+after reading it because prediction uses only the collocated samples.
+
+A common sparse block has nonzero AC levels only at the first horizontal
+and vertical frequencies, each in `{-1, 0, 1}`. For these nine cases the
+ordered entropy records depend only on those two levels, the repeating 8×8
+block position, frame class and whether DC is zero. Within a segment the
+recorder reuses the first emitted sequence for each such pattern. Its
+histogram and context-switch counts add once per occurrence, and each block
+still contributes its own ordered tokens. The recorder stores one key per
+repeat and the literal spans between runs. Each pattern includes at least
+one significance-RLE record, so
 the entropy stream in that segment is the masked symbol byte of each record.
 This projection distributes over concatenation. The encoder projects each
 literal once, then copies its records and symbol bytes in block order to

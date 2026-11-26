@@ -786,7 +786,9 @@ fn bundled_context_stats_cover_flushes() {
 fn bundle_stream_recorder_counts_zero_runs_and_tokens() {
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         2,
         dims,
         4,
@@ -826,7 +828,7 @@ fn bundle_stream_recorder_counts_zero_runs_and_tokens() {
     );
 }
 #[test]
-fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
+fn repeated_sparse_blocks_match_individual_bundle_accounting() {
     let escape = BundleContextId(u16::MAX);
     for width in 1..=4 {
         for remap in [
@@ -838,8 +840,10 @@ fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
                 0,
             ))),
         ] {
-            let recorder = || {
+            let mut slots = [Vec::new(), Vec::new()];
+            let [mut cached, mut individual] = slots.each_mut().map(|slots| {
                 BundleStreamRecorder::new(
+                    slots,
                     width,
                     FrameDimensions::new(128, 128),
                     16,
@@ -848,26 +852,44 @@ fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
                     0,
                     remap.clone(),
                 )
-            };
-            let (mut cached, mut individual) = (recorder(), recorder());
+            });
             for pass in 0..3 {
                 for frame_type in [FrameType::Intra, FrameType::Predicted] {
                     for index in [0, 1, 16, 119, 136] {
                         for dc in [0, -2, 3] {
                             let mut levels = [0; BLOCK_PIXELS];
                             levels[0] = dc;
-                            if pass == 1 && index == 1 {
-                                levels[ZIG_ZAG[8]] = -1;
-                            }
-                            cached.record_block(index, &levels, frame_type);
-                            let tile = ((index % 16) & 7) | (((index / 16) & 7) << 3);
-                            individual.record_ac_slots(tile as u8, &levels, frame_type);
-                            for recorder in [&mut cached, &mut individual] {
-                                recorder.record_dc(dc);
-                                if levels[ZIG_ZAG[8]] != 0 {
-                                    recorder.record_ac(7, -1);
+                            for (h, v) in [
+                                (0, 0),
+                                (1, 0),
+                                (-1, 0),
+                                (0, 1),
+                                (0, -1),
+                                (1, 1),
+                                (1, -1),
+                                (-1, 1),
+                                (-1, -1),
+                                (2, -1),
+                            ] {
+                                levels[1] = h;
+                                levels[BLOCK_SIZE] = v;
+                                levels[ZIG_ZAG[8]] = if pass == 1 && index == 1 { -1 } else { 0 };
+                                cached.record_block(index, &levels, frame_type);
+                                let tile = ((index % 16) & 7) | (((index / 16) & 7) << 3);
+                                individual.record_ac_slots(tile as u8, &levels, frame_type);
+                                for recorder in [&mut cached, &mut individual] {
+                                    recorder.record_dc(dc);
+                                    let mut run = 0;
+                                    for &slot in &ZIG_ZAG[1..] {
+                                        if levels[slot] == 0 {
+                                            run += 1;
+                                        } else {
+                                            recorder.record_ac(run, levels[slot]);
+                                            run = 0;
+                                        }
+                                    }
+                                    recorder.record_eob();
                                 }
-                                recorder.record_eob();
                             }
                         }
                     }
@@ -875,7 +897,7 @@ fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
             }
             assert!(
                 cached
-                    .zero_ac_patterns
+                    .sparse_patterns
                     .iter()
                     .any(|pattern| pattern.repeats > 1)
             );
@@ -902,7 +924,9 @@ fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
 
 #[test]
 fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         2,
         FrameDimensions::new(8, 8),
         16,
@@ -940,7 +964,9 @@ fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
 fn recorder_splits_remapped_zero_runs_at_nonzero_coefficients_and_end_of_block() {
     let escape = BundleContextId(u16::MAX);
     let remap = BundleContextRemap::new(BTreeMap::new(), escape, 0, 0);
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         2,
         FrameDimensions::new(8, 8),
         16,
@@ -972,7 +998,9 @@ fn recorder_splits_remapped_zero_runs_at_nonzero_coefficients_and_end_of_block()
 fn bundle_stream_recorder_flushes_zero_only_blocks() {
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         2,
         dims,
         4,
@@ -1013,7 +1041,9 @@ fn bundle_stream_recorder_accumulates_significance_stats() {
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
     // Use width four so both parity and geq2 counters are active.
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         4,
         dims,
         4,
@@ -1046,7 +1076,9 @@ fn bundle_stream_recorder_accumulates_significance_stats() {
 fn bundle_prefetch_keeps_stream_deterministic() {
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         2,
         dims,
         6,
@@ -1205,7 +1237,9 @@ fn simd_bundle_stream_matches_scalar_output() {
     }
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
+    let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
         3,
         dims,
         5,
@@ -1990,9 +2024,15 @@ fn compressed_payload_requires_one_sized_frame_within_the_block_budget() {
 #[test]
 fn sparse_dct_paths_match_the_full_kernels() {
     let mut residual = [0; BLOCK_PIXELS];
-    assert_eq!(forward_dct(&residual), forward_dct_full(&residual));
+    assert_eq!(
+        forward_dct(&residual, u8::MAX),
+        separable_dct(&residual, u8::MAX)
+    );
     residual[BLOCK_PIXELS - 1] = -255;
-    assert_eq!(forward_dct(&residual), forward_dct_full(&residual));
+    assert_eq!(
+        forward_dct(&residual, u8::MAX),
+        separable_dct(&residual, u8::MAX)
+    );
 
     let mut coeffs = [0; BLOCK_PIXELS];
     for dc in (-36..=36).chain([
@@ -2080,8 +2120,11 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
         let mut pixels = vec![0; dims.pixel_count()];
         for i in 0..dims.block_count() {
             let (residual, predictor) = build_residual_block(&frame, reference, dims, i, kind);
-            assert!(certified_dc(&residual, 16).is_some());
-            let levels = quantize_coeffs(&forward_dct_full(&residual), 16);
+            assert!(matches!(
+                block_spectrum(&residual, 16),
+                BlockSpectrum::Dc(_)
+            ));
+            let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX), 16);
             encode_block_rle(
                 &levels,
                 &mut dc,
@@ -2096,7 +2139,7 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
         let encoded = BaselineEncoder::encode_frame_payload(
             &frame,
             kind,
-            reference,
+            reference.map(<[u8]>::to_vec),
             dims,
             16,
             true,
@@ -2120,7 +2163,7 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
             BaselineEncoder::encode_frame_payload(
                 &plane,
                 kind,
-                reference,
+                reference.map(<[u8]>::to_vec),
                 dims,
                 16,
                 retain,
@@ -2139,20 +2182,34 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
 #[test]
 fn centered_energy_bound_preserves_quantized_levels() {
     let check = |block: &[i16; BLOCK_PIXELS], qp| {
-        let full = forward_dct_full(block);
-        if let Some(dc) = certified_dc(block, qp) {
-            assert_eq!(dc, full[0]);
-            let levels = quantize_coeffs(&full, qp);
-            assert_eq!(quantize_level(dc, quantization_step(0, qp)), levels[0]);
-            assert!(levels[1..].iter().all(|&v| v == 0));
+        let full = separable_dct(block, u8::MAX);
+        let levels = quantize_coeffs(&full, qp);
+        match block_spectrum(block, qp) {
+            BlockSpectrum::Dc(dc) => {
+                assert_eq!(dc, full[0]);
+                assert_eq!(quantize_level(dc, quantization_step(0, qp)), levels[0]);
+                assert!(levels[1..].iter().all(|&v| v == 0));
+            }
+            BlockSpectrum::WeightsThrough(limit) => {
+                let pruned = forward_dct(block, limit);
+                assert_eq!(quantize_coeffs(&pruned, qp), levels);
+                for slot in 0..BLOCK_PIXELS {
+                    if slot == 0 || levels[slot] != 0 {
+                        assert_eq!(pruned[slot], full[slot], "RDO source coefficient {slot}");
+                    }
+                }
+            }
         }
     };
     // At Q16, alternating +/-9 lies just below the threshold and +/-10 above it.
     for (swing, skipped) in [(9, true), (10, false)] {
         let block = std::array::from_fn(|i| if i % 2 == 0 { 120 + swing } else { 120 - swing });
-        let full = forward_dct_full(&block);
+        let full = separable_dct(&block, u8::MAX);
         assert!(full[1..].iter().any(|&v| v != 0));
-        assert_eq!(certified_dc(&block, 16).is_some(), skipped);
+        assert_eq!(
+            matches!(block_spectrum(&block, 16), BlockSpectrum::Dc(_)),
+            skipped
+        );
         check(&block, 16);
     }
     // Exercise DC midpoints of both signs, extremes, and both sides of the bound.
@@ -2183,6 +2240,84 @@ fn centered_energy_bound_preserves_quantized_levels() {
 }
 
 #[test]
+fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
+    let dims = FrameDimensions::new(16, 16);
+    let previous: Vec<u8> = (0..dims.pixel_count())
+        .map(|i| if (i + i / 16) % 2 == 0 { 0 } else { 255 })
+        .collect();
+    for qp in 0..=u8::MAX {
+        let limit = prediction_zero_limit(qp);
+        let mut current: Vec<_> = previous
+            .iter()
+            .map(|&p| if p == 0 { limit } else { 255 - limit })
+            .collect();
+        assert!(prediction_within_limit(&current, &previous, dims, 3, limit));
+        let (residual, _) =
+            build_residual_block(&current, Some(&previous), dims, 3, FrameType::Predicted);
+        assert_eq!(
+            quantize_coeffs(&separable_dct(&residual, u8::MAX), qp),
+            [0; BLOCK_PIXELS]
+        );
+        // The last sample belongs to block 3. Its neighbors in block 2 stay within the bound.
+        let last = dims.pixel_count() - 1;
+        current[last] = if previous[last] == 0 {
+            limit + 1
+        } else {
+            254 - limit
+        };
+        assert!(!prediction_within_limit(
+            &current, &previous, dims, 3, limit
+        ));
+        assert!(prediction_within_limit(&current, &previous, dims, 2, limit));
+    }
+}
+
+#[test]
+fn reused_context_slots_recover_after_an_invalid_segment() {
+    let dims = FrameDimensions::new(16, 16);
+    let config = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        frames_per_segment: 2,
+        ..Default::default()
+    };
+    let flat = RawFrame::new(dims, vec![83; dims.pixel_count()]).unwrap();
+    let textured = RawFrame::new(
+        dims,
+        (0..dims.pixel_count()).map(|n| (n * 61) as u8).collect(),
+    )
+    .unwrap();
+    let mut encoder = BaselineEncoder::new(config.clone());
+    encoder
+        .encode_segment(0, 0, 0, std::slice::from_ref(&flat), None)
+        .unwrap();
+    let previous_report = crate::core::to_bytes(encoder.bundled_telemetry().unwrap()).unwrap();
+    let invalid = RawFrame { luma: Vec::new() };
+    assert!(
+        encoder
+            .encode_segment(1, 0, 0, &[textured.clone(), invalid], None)
+            .is_err()
+    );
+    assert_eq!(
+        crate::core::to_bytes(encoder.bundled_telemetry().unwrap()).unwrap(),
+        previous_report
+    );
+    let mut fresh = BaselineEncoder::new(config);
+    let frames = [textured, flat];
+    let expected = fresh.encode_segment(1, 0, 0, &frames, None).unwrap();
+    assert_eq!(
+        encoder
+            .encode_segment(1, 0, 0, &frames, None)
+            .unwrap()
+            .chunks,
+        expected.chunks
+    );
+    assert_eq!(
+        crate::core::to_bytes(encoder.bundled_telemetry().unwrap()).unwrap(),
+        crate::core::to_bytes(fresh.bundled_telemetry().unwrap()).unwrap()
+    );
+}
+
+#[test]
 fn dct_tables_satisfy_centered_projection_bound() {
     #[cfg(feature = "streaming-fixed-point-dct")]
     let basis = DCT_FACTORS_Q15.map(|r| r.map(|v| f64::from(v) / 32768.0));
@@ -2201,7 +2336,7 @@ fn dct_tables_satisfy_centered_projection_bound() {
 #[test]
 fn separable_forward_dct_matches_direct_evaluation() {
     fn check(block: &[i16; BLOCK_PIXELS]) {
-        let transformed = forward_dct_full(block);
+        let transformed = separable_dct(block, u8::MAX);
         for u in 0..BLOCK_SIZE {
             for v in 0..BLOCK_SIZE {
                 #[cfg(feature = "streaming-fixed-point-dct")]
@@ -2237,8 +2372,8 @@ fn separable_forward_dct_matches_direct_evaluation() {
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     assert_eq!(
         (
-            forward_dct_full(&tie)[0],
-            forward_dct_full(&tie.map(|v| -v))[0]
+            separable_dct(&tie, u8::MAX)[0],
+            separable_dct(&tie.map(|v| -v), u8::MAX)[0]
         ),
         (1, -1)
     );
@@ -2259,7 +2394,7 @@ fn separable_forward_dct_matches_direct_evaluation() {
 
 #[test]
 fn forward_dct_quantization_matches_golden() {
-    let dct = forward_dct(&JPEG_SAMPLE_BLOCK);
+    let dct = forward_dct(&JPEG_SAMPLE_BLOCK, u8::MAX);
     assert_eq!(dct, JPEG_SAMPLE_DCT_Q4);
     let quant = quantize_coeffs(&dct, 4);
     assert_eq!(quant, JPEG_SAMPLE_QUANT_Q4);

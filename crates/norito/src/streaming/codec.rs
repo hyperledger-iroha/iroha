@@ -566,6 +566,19 @@ const MIN_AC_WEIGHT: u8 = {
     }
     min
 };
+const MIN_ROW_WEIGHT: [u8; BLOCK_SIZE] = {
+    let mut weights = [u8::MAX; BLOCK_SIZE];
+    let mut i = 1;
+    while i < BLOCK_PIXELS {
+        let row = i / BLOCK_SIZE;
+        if BASELINE_QUANT_MATRIX[i] < weights[row] {
+            weights[row] = BASELINE_QUANT_MATRIX[i];
+        }
+        i += 1;
+    }
+    weights[0] = 0; // Always evaluate DC.
+    weights
+};
 const ZIG_ZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
@@ -1376,6 +1389,7 @@ pub struct BaselineEncoder {
     config: BaselineEncoderConfig,
     audio: Option<AudioEncoderState>,
     bundled_telemetry: Option<BundledTelemetry>,
+    context_slots: Vec<u32>,
     bundle_tables: Arc<BundleAnsTables>,
     neural_predictor: Option<NeuralPredictor>,
 }
@@ -1453,6 +1467,7 @@ impl BaselineEncoder {
             config,
             audio: None,
             bundled_telemetry: None,
+            context_slots: Vec::new(),
             neural_predictor,
         }
     }
@@ -1639,13 +1654,14 @@ impl BaselineEncoder {
         let mut reconstructed_prev: Option<Vec<u8>> = None;
         let mut previous_chroma_u: Option<Vec<u8>> = None;
         let mut previous_chroma_v: Option<Vec<u8>> = None;
-        let mut bundler = self.config.entropy_mode.is_bundled().then(|| {
+        let mut bundler = {
             let width = self
                 .config
                 .bundle_width
                 .min(self.bundle_tables.max_width())
                 .max(1);
             BundleStreamRecorder::new(
+                &mut self.context_slots,
                 width,
                 aligned_dims,
                 self.config.quantizer,
@@ -1654,7 +1670,7 @@ impl BaselineEncoder {
                 self.config.bundle_prefetch_distance,
                 self.config.bundle_context_remap.clone(),
             )
-        });
+        };
         let mut rdo = BlockRdo::new(
             self.config.rdo_mode,
             self.config.quantizer,
@@ -1705,20 +1721,16 @@ impl BaselineEncoder {
             let pts = timeline_start_ns
                 .checked_add(idx_delta)
                 .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
-            let hooks: &mut dyn BundledHooks = bundler
-                .as_mut()
-                .map(|rec| rec as &mut dyn BundledHooks)
-                .unwrap_or(&mut noop_hooks);
             // Prediction references live only until the next frame in this segment.
             let retain_reference = idx + 1 < frames.len();
             let (payload, recon) = Self::encode_frame_payload(
                 &luma,
                 frame_type,
-                prev_ref,
+                reconstructed_prev.take(),
                 aligned_dims,
                 self.config.quantizer,
                 retain_reference,
-                hooks,
+                &mut bundler,
                 rdo.as_mut(),
             );
             let mut chunk = Vec::with_capacity(
@@ -1739,7 +1751,7 @@ impl BaselineEncoder {
                 let (u_payload, u_recon) = Self::encode_frame_payload(
                     &u,
                     frame_type,
-                    previous_chroma_u.as_deref(),
+                    previous_chroma_u.take(),
                     chroma_aligned,
                     self.config.quantizer,
                     retain_reference,
@@ -1749,7 +1761,7 @@ impl BaselineEncoder {
                 let (v_payload, v_recon) = Self::encode_frame_payload(
                     &v,
                     frame_type,
-                    previous_chroma_v.as_deref(),
+                    previous_chroma_v.take(),
                     chroma_aligned,
                     self.config.quantizer,
                     retain_reference,
@@ -1774,11 +1786,9 @@ impl BaselineEncoder {
                 apply_neural_filter(pixels, aligned_dims);
             }
         }
-        self.bundled_telemetry = bundler.map(|rec| {
-            let mut telemetry = rec.finish(self.bundled_telemetry.take());
-            telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
-            telemetry
-        });
+        let mut telemetry = bundler.finish(self.bundled_telemetry.take());
+        telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
+        self.bundled_telemetry = Some(telemetry);
         let offsets_and_lengths = compute_offsets(&chunks);
         let chunk_ids: Vec<u16> = (0..frame_count).collect();
         let nonce_salt = derive_nonce_salt(segment_number, frames.len(), &chunks);
@@ -1846,50 +1856,75 @@ impl BaselineEncoder {
     fn encode_frame_payload(
         frame: &[u8],
         frame_type: FrameType,
-        prev_frame: Option<&[u8]>,
+        mut reference: Option<Vec<u8>>,
         dims: FrameDimensions,
         quantizer: u8,
         retain_reference: bool,
-        hooks: &mut dyn BundledHooks,
+        hooks: &mut impl BundledHooks,
         mut rdo: Option<&mut BlockRdo<'_>>,
     ) -> (Vec<u8>, Option<Vec<u8>>) {
         debug_assert_eq!(frame.len(), dims.pixel_count());
         let mut payload = Vec::with_capacity(frame.len() / 2);
-        let mut reconstructed = retain_reference.then(|| vec![0u8; dims.pixel_count()]);
+        // Prediction reads only the collocated block. Once captured, its old
+        // pixels can be replaced in place, including on a scene refresh.
+        if retain_reference && reference.is_none() {
+            reference = Some(vec![0; dims.pixel_count()]);
+        }
         let mut prev_dc = 0i16;
         let mut dc_levels = [0; BLOCK_PIXELS];
         let dc_step = quantization_step(0, quantizer);
+        let zero_limit = prediction_zero_limit(quantizer);
         for block_index in 0..dims.block_count() {
-            let (residual, predictor) =
-                build_residual_block(frame, prev_frame, dims, block_index, frame_type);
-            if let Some(dc) = certified_dc(&residual, quantizer) {
-                let level = quantize_level(dc, dc_step);
-                dc_levels[0] = level;
-                if let Some(optimizer) = rdo.as_deref_mut() {
-                    let mut transform = [0; BLOCK_PIXELS];
-                    transform[0] = dc;
-                    optimizer.select_levels(&transform, &mut dc_levels, frame_type, block_index);
-                }
-                hooks.record_block_coeffs(&dc_levels, block_index, frame_type);
-                let diff = level.wrapping_sub(prev_dc);
-                let [lo, hi] = diff.to_le_bytes();
-                payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
-                hooks.record_dc(diff);
-                hooks.record_eob();
-                prev_dc = level;
-                if let Some(pixels) = reconstructed.as_mut() {
-                    let value = inverse_dc_sample(i32::from(level) * dc_step);
-                    write_reconstructed_block(
-                        pixels,
-                        &[value; BLOCK_PIXELS],
-                        &predictor,
-                        dims,
-                        block_index,
-                    );
-                }
+            if frame_type == FrameType::Predicted
+                && let Some(previous) = reference.as_deref()
+                && prediction_within_limit(frame, previous, dims, block_index, zero_limit)
+            {
+                dc_levels[0] = 0;
+                emit_dc_block(
+                    &mut dc_levels,
+                    &mut prev_dc,
+                    &mut payload,
+                    hooks,
+                    block_index,
+                    frame_type,
+                    rdo.as_deref_mut(),
+                );
                 continue;
             }
-            let coeffs = forward_dct(&residual);
+            let (residual, predictor) =
+                build_residual_block(frame, reference.as_deref(), dims, block_index, frame_type);
+            let limit = match block_spectrum(&residual, quantizer) {
+                BlockSpectrum::WeightsThrough(limit) => limit,
+                BlockSpectrum::Dc(dc) => {
+                    let level = quantize_level(dc, dc_step);
+                    dc_levels[0] = level;
+                    emit_dc_block(
+                        &mut dc_levels,
+                        &mut prev_dc,
+                        &mut payload,
+                        hooks,
+                        block_index,
+                        frame_type,
+                        rdo.as_deref_mut(),
+                    );
+                    let value = inverse_dc_sample(i32::from(level) * dc_step);
+                    // A zero predicted residual leaves every pixel in this block in place.
+                    if retain_reference
+                        && (frame_type == FrameType::Intra || value != 0)
+                        && let Some(pixels) = reference.as_mut()
+                    {
+                        write_reconstructed_block(
+                            pixels,
+                            &[value; BLOCK_PIXELS],
+                            &predictor,
+                            dims,
+                            block_index,
+                        );
+                    }
+                    continue;
+                }
+            };
+            let coeffs = forward_dct(&residual, limit);
             let mut quantized = quantize_coeffs(&coeffs, quantizer);
             if let Some(optimizer) = rdo.as_deref_mut() {
                 optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
@@ -1902,13 +1937,13 @@ impl BaselineEncoder {
                 block_index,
                 frame_type,
             );
-            if let Some(pixels) = reconstructed.as_mut() {
+            if retain_reference && let Some(pixels) = reference.as_mut() {
                 let dequantized = dequantize_coeffs(&quantized, quantizer);
                 let spatial = inverse_dct(&dequantized);
                 write_reconstructed_block(pixels, &spatial, &predictor, dims, block_index);
             }
         }
-        (payload, reconstructed)
+        (payload, if retain_reference { reference } else { None })
     }
 }
 /// Pack the whole plane payload before computing chunk offsets and commitments.
@@ -2190,17 +2225,58 @@ fn round_q30(sum: i64) -> i64 {
     }
 }
 
-pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS], limit: u8) -> [i32; BLOCK_PIXELS] {
     if block.iter().all(|&sample| sample == 0) {
         return [0; BLOCK_PIXELS];
     }
-    forward_dct_full(block)
+    separable_dct(block, limit)
 }
 
-/// Return the DC projection if every AC level is provably zero after quantization.
-fn certified_dc(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> Option<i32> {
+/// Bound every transform coefficient, including DC, for an 8-bit prediction residual.
+fn prediction_zero_limit(quantizer: u8) -> u8 {
+    let min_step = u32::from(MIN_AC_WEIGHT.min(BASELINE_QUANT_MATRIX[0])) * u32::from(quantizer);
+    // ||residual||_2 <= 8 * max_abs. Every 2-D basis has norm <= 65/64.
+    // Two coefficient units cover signed rounding in either transform.
+    (((min_step / 2).saturating_sub(2) * 8 / 65).min(255)) as u8
+}
+
+fn prediction_within_limit(
+    frame: &[u8],
+    previous: &[u8],
+    dims: FrameDimensions,
+    block_index: usize,
+    limit: u8,
+) -> bool {
+    let (x, y) = block_origin(dims, block_index);
+    let stride = usize::from(dims.width);
+    for dy in 0..BLOCK_SIZE {
+        let start = (y + dy) * stride + x;
+        let a = frame[start..]
+            .first_chunk::<BLOCK_SIZE>()
+            .expect("complete block row");
+        let b = previous[start..]
+            .first_chunk::<BLOCK_SIZE>()
+            .expect("complete block row");
+        let mut max_diff = 0;
+        for i in 0..BLOCK_SIZE {
+            max_diff = max_diff.max(a[i].abs_diff(b[i]));
+        }
+        if max_diff > limit {
+            return false;
+        }
+    }
+    true
+}
+
+/// Sufficient transform information to reproduce quantization and RDO exactly.
+enum BlockSpectrum {
+    Dc(i32),
+    WeightsThrough(u8),
+}
+
+fn block_spectrum(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> BlockSpectrum {
     if quantizer == 0 {
-        return None;
+        return BlockSpectrum::WeightsThrough(u8::MAX);
     }
     let (mut sum, mut squares) = (0_i64, 0_i64);
     for &sample in block {
@@ -2215,18 +2291,23 @@ fn certified_dc(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> Option<i32> {
     let radius = (half_step - 2) * 64 / 65;
     let energy = BLOCK_PIXELS as i64 * squares - sum * sum;
     if half_step < 2 || energy > BLOCK_PIXELS as i64 * radius * radius {
-        return None;
+        // ||x - mean(x)|| = sqrt(energy)/8. Bound each AC separately using
+        // its own quantization step once the smallest step is insufficient.
+        let radius_upper = (energy as u64).isqrt() + 1;
+        let bound = (65 * radius_upper).div_ceil(512) + 2;
+        let limit = (2 * bound / u64::from(quantizer)).min(u64::from(u8::MAX));
+        return BlockSpectrum::WeightsThrough(limit as u8);
     }
     #[cfg(feature = "streaming-fixed-point-dct")]
     {
         let basis = i64::from(DCT_FACTORS_Q15[0][0]);
-        Some(round_q30(sum * basis * basis) as i32)
+        BlockSpectrum::Dc(round_q30(sum * basis * basis) as i32)
     }
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     {
         // DC equals sum/8 to within the table and evaluation error. Only
         // sums congruent to 4 modulo 8 can land on a rounding midpoint.
-        Some(if sum.rem_euclid(8) == 4 {
+        BlockSpectrum::Dc(if sum.rem_euclid(8) == 4 {
             direct_dct_coefficient(block, &DCT_FACTORS[0], &DCT_FACTORS[0])
         } else {
             (sum as f64 * 0.125).round() as i32
@@ -2234,11 +2315,14 @@ fn certified_dc(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> Option<i32> {
     }
 }
 
-/// Apply the Q15 basis along each axis, rounding only the final Q30 sum.
+/// Apply the Q15 basis along each axis for weights through `limit`, always including DC.
 #[cfg(feature = "streaming-fixed-point-dct")]
-fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+fn separable_dct(block: &[i16; BLOCK_PIXELS], limit: u8) -> [i32; BLOCK_PIXELS] {
     let mut out = [0; BLOCK_PIXELS];
     for (u, basis_u) in DCT_FACTORS_Q15.iter().enumerate() {
+        if MIN_ROW_WEIGHT[u] > limit {
+            continue;
+        }
         let mut row = [0_i64; BLOCK_SIZE];
         for (&factor, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
             for (sum, &sample) in row.iter_mut().zip(samples) {
@@ -2247,6 +2331,9 @@ fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         }
         // Even with full-range i16 samples the final sum is bounded by 64 * 2^15 * 2^28.
         for (v, basis_v) in DCT_FACTORS_Q15.iter().enumerate() {
+            if u * BLOCK_SIZE + v != 0 && BASELINE_QUANT_MATRIX[u * BLOCK_SIZE + v] > limit {
+                continue;
+            }
             let sum = row
                 .iter()
                 .zip(basis_v)
@@ -2259,9 +2346,12 @@ fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
 }
 
 #[cfg(not(feature = "streaming-fixed-point-dct"))]
-fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+fn separable_dct(block: &[i16; BLOCK_PIXELS], limit: u8) -> [i32; BLOCK_PIXELS] {
     let mut out = [0; BLOCK_PIXELS];
     for (u, basis_u) in DCT_FACTORS.iter().enumerate() {
+        if MIN_ROW_WEIGHT[u] > limit {
+            continue;
+        }
         let mut row = [0.0; BLOCK_SIZE];
         for (&factor, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
             for (sum, &sample) in row.iter_mut().zip(samples) {
@@ -2269,6 +2359,9 @@ fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
             }
         }
         for (v, basis_v) in DCT_FACTORS.iter().enumerate() {
+            if u * BLOCK_SIZE + v != 0 && BASELINE_QUANT_MATRIX[u * BLOCK_SIZE + v] > limit {
+                continue;
+            }
             let value: f64 = row.iter().zip(basis_v).map(|(&a, &b)| a * b).sum();
             let rounded = value.round();
             // The absolute-product sum is at most 64 * 32768 * 0.5² = 524288.
@@ -2416,6 +2509,7 @@ pub(crate) trait BundledHooks {
     fn record_dc(&mut self, _diff: i16) {}
     fn record_ac(&mut self, _zeros: u8, _value: i16) {}
     fn record_eob(&mut self) {}
+    fn record_dc_only(&mut self, _levels: &[i16; BLOCK_PIXELS], _index: usize, _kind: FrameType) {}
     fn record_block_coeffs(
         &mut self,
         _coeffs: &[i16; BLOCK_PIXELS],
@@ -3050,8 +3144,17 @@ mod rdo_tests {
     fn context_frequency_records_symbols() {
         let dims = FrameDimensions::new(8, 8);
         let tables = default_bundle_tables();
-        let mut recorder =
-            BundleStreamRecorder::new(2, dims, 4, tables, BundleAcceleration::None, 0, None);
+        let mut slots = Vec::new();
+        let mut recorder = BundleStreamRecorder::new(
+            &mut slots,
+            2,
+            dims,
+            4,
+            tables,
+            BundleAcceleration::None,
+            0,
+            None,
+        );
         recorder.record_bundle(
             BundleType::SignAndMagnitude,
             BundleContextId::new(7),
@@ -3090,9 +3193,12 @@ mod rdo_tests {
         let _ = std::fs::remove_file(&path);
     }
 }
-/// Range of an already emitted block whose 63 AC levels are zero.
+/// Literal range and counters for one frequently occurring low-frequency pattern.
 #[derive(Clone, Copy, Default)]
-struct ZeroAcPattern {
+struct SparseAcPattern {
+    last_slot: usize,
+    nonzero: u8,
+    negative: u8,
     start: usize,
     end: usize,
     repeats: u64,
@@ -3108,17 +3214,18 @@ fn telemetry_buffer<T>(mut previous: Vec<T>, len: usize) -> Vec<T> {
     }
 }
 
-struct BundleStreamRecorder {
+struct BundleStreamRecorder<'a> {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
     bundles: Vec<BundleRecord>,
     // One-based slots indexed by the 16-bit wire context. Only active contexts own counters.
-    context_slots: Vec<u32>,
+    context_slots: &'a mut [u32],
     contexts: Vec<(BundleContextStats, ContextFrequency)>,
-    // Tile (6 bits), frame class, and DC significance fully determine this sequence.
-    zero_ac_patterns: Vec<ZeroAcPattern>,
-    // Explicit record offset at the time of the repeat, and its template index.
-    repeats: Vec<(usize, u8)>,
+    // Tile, frame class, DC significance and two ternary AC levels identify the records.
+    sparse_patterns: Vec<SparseAcPattern>,
+    // One template key per repeated block. Literal spans mark the gaps between repeat runs.
+    repeats: Vec<u16>,
+    literal_spans: Vec<(usize, usize)>,
     width: u8,
     blocks_per_row: usize,
     quantizer_bucket: u8,
@@ -3128,8 +3235,10 @@ struct BundleStreamRecorder {
     last_context_slot: Option<usize>,
     context_remap: Option<Arc<BundleContextRemap>>,
 }
-impl BundleStreamRecorder {
+impl<'a> BundleStreamRecorder<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        context_slots: &'a mut Vec<u32>,
         bundle_width: u8,
         dims: FrameDimensions,
         quantizer: u8,
@@ -3138,6 +3247,8 @@ impl BundleStreamRecorder {
         prefetch_distance: u16,
         context_remap: Option<Arc<BundleContextRemap>>,
     ) -> Self {
+        context_slots.clear();
+        context_slots.resize(usize::from(u16::MAX) + 1, 0);
         Self {
             stats: BundledStats {
                 bundle_width,
@@ -3145,10 +3256,11 @@ impl BundleStreamRecorder {
             },
             tokens: Vec::new(),
             bundles: Vec::new(),
-            context_slots: vec![0; usize::from(u16::MAX) + 1],
+            context_slots,
             contexts: Vec::new(),
-            zero_ac_patterns: vec![ZeroAcPattern::default(); 64 * 2 * 2],
+            sparse_patterns: vec![SparseAcPattern::default(); 64 * 2 * 2],
             repeats: Vec::new(),
+            literal_spans: Vec::new(),
             width: bundle_width.clamp(1, 4),
             blocks_per_row: (dims.width as usize / BLOCK_SIZE).max(1),
             quantizer_bucket: quantizer_to_bucket(quantizer),
@@ -3181,10 +3293,35 @@ impl BundleStreamRecorder {
         }
     }
     fn finish(mut self, previous: Option<BundledTelemetry>) -> BundledTelemetry {
-        for index in 0..self.zero_ac_patterns.len() {
-            let pattern = self.zero_ac_patterns[index];
+        for index in 0..self.sparse_patterns.len() {
+            let pattern = self.sparse_patterns[index];
             if pattern.repeats == 0 {
                 continue;
+            }
+            let nonzero = u64::from(pattern.nonzero);
+            let negative = u64::from(pattern.negative);
+            let count = pattern.repeats;
+            self.stats.significance_one = self
+                .stats
+                .significance_one
+                .saturating_add(nonzero.saturating_mul(count));
+            self.stats.significance_zero = self
+                .stats
+                .significance_zero
+                .saturating_add((63 - nonzero).saturating_mul(count));
+            self.stats.sign_negative = self
+                .stats
+                .sign_negative
+                .saturating_add(negative.saturating_mul(count));
+            self.stats.sign_positive = self
+                .stats
+                .sign_positive
+                .saturating_add((63 - negative).saturating_mul(count));
+            if self.width >= 3 {
+                self.stats.parity_one = self
+                    .stats
+                    .parity_one
+                    .saturating_add(nonzero.saturating_mul(count));
             }
             // A block starts after EOB. Its internal context switches and histogram
             // are additive; record_eob has already counted its terminal context.
@@ -3206,7 +3343,7 @@ impl BundleStreamRecorder {
             // masked symbol projection, which distributes over concatenation.
             let symbols: Vec<_> = self.bundles.iter().map(bundle_symbol).collect();
             let total = self
-                .zero_ac_patterns
+                .sparse_patterns
                 .iter()
                 .fold(self.bundles.len(), |len, p| {
                     len.saturating_add((p.end - p.start).saturating_mul(p.repeats as usize))
@@ -3220,16 +3357,19 @@ impl BundleStreamRecorder {
                 records.extend_from_slice(&self.bundles[start..end]);
                 stream.extend_from_slice(&symbols[start..end]);
             };
-            let mut cursor = 0;
-            for (literal_end, key) in self.repeats {
-                if literal_end != cursor {
-                    append(cursor, literal_end);
-                    cursor = literal_end;
+            let (mut repeat_start, mut literal_start) = (0, 0);
+            for (repeat_end, literal_end) in self
+                .literal_spans
+                .into_iter()
+                .chain(std::iter::once((self.repeats.len(), self.bundles.len())))
+            {
+                for &key in &self.repeats[repeat_start..repeat_end] {
+                    let p = self.sparse_patterns[usize::from(key)];
+                    append(p.start, p.end);
                 }
-                let p = &self.zero_ac_patterns[usize::from(key)];
-                append(p.start, p.end);
+                append(literal_start, literal_end);
+                (repeat_start, literal_start) = (repeat_end, literal_end);
             }
-            append(cursor, self.bundles.len());
             (records, stream, BundleAcceleration::None)
         };
         let remap = self.context_remap.as_ref().map(|map| ContextRemapSummary {
@@ -3339,32 +3479,66 @@ impl BundleStreamRecorder {
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
     ) {
-        let tile = ((block_index % self.blocks_per_row) & 7)
-            | (((block_index / self.blocks_per_row) & 7) << 3);
-        if self.last_context_slot.is_some() || coeffs[1..].iter().any(|&v| v != 0) {
-            self.record_ac_slots(tile as u8, coeffs, frame_type);
+        let h = coeffs[1];
+        let v = coeffs[BLOCK_SIZE];
+        if self.last_context_slot.is_some()
+            || h.unsigned_abs() > 1
+            || v.unsigned_abs() > 1
+            || coeffs[2..BLOCK_SIZE]
+                .iter()
+                .chain(&coeffs[BLOCK_SIZE + 1..])
+                .any(|&c| c != 0)
+        {
+            self.record_ac_slots(self.tile(block_index), coeffs, frame_type);
             return;
         }
-        let key =
-            tile | (usize::from(frame_type.as_byte()) << 6) | (usize::from(coeffs[0] != 0) << 7);
-        let pattern = &mut self.zero_ac_patterns[key];
+        // Map 0, +1, -1 to 0, 1, 2. Class zero is the DC-only block.
+        let digit = |level: i16| (level != 0) as usize + (level < 0) as usize;
+        let class = digit(h) + 3 * digit(v);
+        self.record_pattern(block_index, coeffs, frame_type, class);
+    }
+    fn tile(&self, block_index: usize) -> u8 {
+        let (row, col) = (
+            block_index / self.blocks_per_row,
+            block_index % self.blocks_per_row,
+        );
+        ((col & 7) | ((row & 7) << 3)) as u8
+    }
+    fn record_pattern(
+        &mut self,
+        block_index: usize,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        class: usize,
+    ) {
+        let tile = usize::from(self.tile(block_index));
+        let key = (class << 8)
+            | tile
+            | (usize::from(frame_type.as_byte()) << 6)
+            | (usize::from(coeffs[0] != 0) << 7);
+        if key >= self.sparse_patterns.len() {
+            self.sparse_patterns
+                .resize((class + 1) << 8, SparseAcPattern::default());
+        }
+        let pattern = &mut self.sparse_patterns[key];
         if pattern.end != 0 {
             pattern.repeats += 1;
-            self.stats.significance_zero = self
-                .stats
-                .significance_zero
-                .saturating_add((BLOCK_PIXELS - 1) as u64);
-            self.stats.sign_positive = self
-                .stats
-                .sign_positive
-                .saturating_add((BLOCK_PIXELS - 1) as u64);
-            let last = self.bundles[pattern.end - 1].context;
-            self.repeats.push((self.bundles.len(), key as u8));
-            self.last_context_slot = Some(self.context_slot(last));
+            if self.literal_spans.last().map(|&(_, end)| end) != Some(self.bundles.len()) {
+                self.literal_spans
+                    .push((self.repeats.len(), self.bundles.len()));
+            }
+            self.repeats.push(key as u16);
+            self.last_context_slot = Some(pattern.last_slot);
         } else {
             let start = self.bundles.len();
             self.record_ac_slots(tile as u8, coeffs, frame_type);
-            self.zero_ac_patterns[key] = ZeroAcPattern {
+            let (h, v) = (coeffs[1], coeffs[BLOCK_SIZE]);
+            self.sparse_patterns[key] = SparseAcPattern {
+                last_slot: self
+                    .last_context_slot
+                    .expect("every AC block emits a bundle"),
+                nonzero: (h != 0) as u8 + (v != 0) as u8,
+                negative: (h < 0) as u8 + (v < 0) as u8,
                 start,
                 end: self.bundles.len(),
                 repeats: 0,
@@ -3454,7 +3628,11 @@ impl BundleStreamRecorder {
         BundleContextId::new((hash & 0xFFFF) as u16)
     }
 }
-impl BundledHooks for BundleStreamRecorder {
+impl BundledHooks for BundleStreamRecorder<'_> {
+    fn record_dc_only(&mut self, levels: &[i16; BLOCK_PIXELS], index: usize, kind: FrameType) {
+        debug_assert!(self.last_context_slot.is_none());
+        self.record_pattern(index, levels, kind, 0);
+    }
     fn record_block_coeffs(
         &mut self,
         coeffs: &[i16; BLOCK_PIXELS],
@@ -4090,11 +4268,33 @@ fn level_bucket(value: u8) -> u8 {
 fn hash_mix(acc: u32, value: u32) -> u32 {
     acc.wrapping_mul(16777619) ^ value
 }
+fn emit_dc_block(
+    levels: &mut [i16; BLOCK_PIXELS],
+    prev_dc: &mut i16,
+    payload: &mut Vec<u8>,
+    hooks: &mut impl BundledHooks,
+    block_index: usize,
+    frame_type: FrameType,
+    rdo: Option<&mut BlockRdo<'_>>,
+) {
+    // RDO observes every block but reads transform values only for nonzero AC levels.
+    if let Some(optimizer) = rdo {
+        optimizer.select_levels(&[0; BLOCK_PIXELS], levels, frame_type, block_index);
+    }
+    hooks.record_dc_only(levels, block_index, frame_type);
+    let diff = levels[0].wrapping_sub(*prev_dc);
+    let [lo, hi] = diff.to_le_bytes();
+    payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
+    hooks.record_dc(diff);
+    hooks.record_eob();
+    *prev_dc = levels[0];
+}
+
 pub(crate) fn encode_block_rle(
     coeffs: &[i16; BLOCK_PIXELS],
     prev_dc: &mut i16,
     out: &mut Vec<u8>,
-    hooks: &mut dyn BundledHooks,
+    hooks: &mut impl BundledHooks,
     block_index: usize,
     frame_type: FrameType,
 ) {
