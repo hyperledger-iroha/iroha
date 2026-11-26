@@ -401,6 +401,11 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
 
 - q needs P at the curve's points. Each kind's program runs only at its own degree + 1 points, in groups of four
   points per instruction over all cores; equispaced extension fills in the rest.
+- One-proof Load and Send steps have claim points `[A, B, A, B]`. Their cubic is
+  `γ(t) = A + (B − A) h(t)`, where `h = L₁ + L₃` in the four-node Lagrange basis.
+  The prover first computes `R(u) = P(A + (B − A)u)` on the line. A matrix program of line degree
+  `d` takes `d + 1` samples there. Composing with `h` recovers every coefficient of the original
+  `q(t) = R(h(t))`. The two-proof Receive uses the cubic through its four input points.
 - Every batched q equals the pointwise q.
 - A fold evaluates every kind whose selector times padding is nonzero somewhere on its curve, each on its own
   degree-sized grid, so the largest such program dominates; a kind zero at every point adds nothing and is not run.
@@ -429,6 +434,14 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   the sum of median CPU times across all ten programs fell from 2.144 s to 2.017 s (6.0%) for 16 points per program.
   The primary Receive program took 0.500 s versus 0.529 s with full products. The benchmark used four lanes on one
   M4 Max worker, alternated execution order across four paired samples, and checked each result against scalar evaluation.
+- On the same signed 968f bundle, the one-proof fold evaluated each active primary matrix program at 53 points
+  instead of 157. On six M4 Max workers, primary and secondary restriction together used 1.33 s of process CPU
+  for a first Load, down from 3.79 s, and 3.80 s for a later Send, down from 10.93 s. Each number is the mean
+  of two runs with alternating order on the same public points. The benchmark compared all 187 primary and
+  175 secondary coefficients in each pair.
+  Four signed two-wallet runs (baseline, candidate, candidate, baseline) all completed the seven operations.
+  The primary circuit wiring for Load and both Sends averaged 21.08 s of CPU on the baseline and 11.03 s on
+  the candidate. The full round trip averaged 408.56 s and 436.26 s of process CPU respectively on the loaded Mac.
 
 ### 7.4 Generator claims
 

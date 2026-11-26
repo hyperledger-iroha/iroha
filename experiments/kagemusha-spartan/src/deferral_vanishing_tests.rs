@@ -11,26 +11,26 @@ use iroha_pasta::Fp;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Five kinds of distinct dimensions (so padding coordinates exist) and
-/// matrices, each counting its evaluations.
-fn counted_five_kinds() -> (MatPoly<Fp>, Vec<Arc<AtomicUsize>>) {
-    let calls: Vec<Arc<AtomicUsize>> = (0..MAX_KINDS).map(|_| Arc::default()).collect();
-    let kinds = (0..MAX_KINDS)
+/// Distinct matrix dimensions and challenge degrees, counting each evaluated point.
+fn counted_kinds<F: PrimeField>(installed: usize) -> (MatPoly<F>, Vec<Arc<AtomicUsize>>) {
+    let calls: Vec<Arc<AtomicUsize>> = (0..installed).map(|_| Arc::default()).collect();
+    let kinds = (0..installed)
         .map(|index| {
             let count = calls[index].clone();
             Kind {
                 sx: 4 + index % 3,
                 sz: 3 + index % 2,
-                deg: (1, 1),
-                eval: Box::new(move |ch: &[Fp], rx: &[Fp], ry: &[Fp]| {
+                deg: (usize::from(index != 0), 1),
+                eval: Box::new(move |ch: &[F], rx: &[F], ry: &[F]| {
                     count.fetch_add(1, Ordering::Relaxed);
-                    let x = rx.iter().copied().sum::<Fp>();
-                    let y = ry.iter().copied().sum::<Fp>();
-                    let tag = Fp::from((index + 1) as u64);
+                    let x = rx.iter().copied().product::<F>();
+                    let y = ry.iter().copied().product::<F>();
+                    let tag = F::from((index + 1) as u64);
+                    let challenges = if index == 0 { ch[1] } else { ch[0] * ch[1] };
                     (
-                        tag + x + ch[0] * y,
+                        tag + x + ch[1] * y,
                         tag.double() + x * y + rx[0],
-                        tag * tag + ch[1] * x + y * ry[0],
+                        tag * tag + tag * challenges * x * y,
                     )
                 }),
                 eval_many: None,
@@ -88,7 +88,7 @@ fn inherited(poly: &MatPoly<Fp>, rng: &mut SpikeRng, archive: bool) -> Claim<Fp>
 
 #[test]
 fn a_fold_without_archive_sent_skips_its_matrices_and_keeps_q() {
-    let (poly, calls) = counted_five_kinds();
+    let (poly, calls) = counted_kinds(MAX_KINDS);
     let mut rng = SpikeRng::new(b"vanishing kinds: fold");
     for (predecessor, incoming) in [(1, 0), (3, 1), (2, 1), (0, 1)] {
         let claims = [
@@ -115,7 +115,7 @@ fn a_fold_without_archive_sent_skips_its_matrices_and_keeps_q() {
 
 #[test]
 fn a_fold_over_an_archive_sent_history_evaluates_every_kind() {
-    let (poly, calls) = counted_five_kinds();
+    let (poly, calls) = counted_kinds(MAX_KINDS);
     let mut rng = SpikeRng::new(b"vanishing kinds: archive history");
     // An accumulator from a history with ArchiveSent in any slot, or a
     // fresh ArchiveSent claim, puts c2 off zero somewhere on the curve.
@@ -144,7 +144,7 @@ fn a_fold_over_an_archive_sent_history_evaluates_every_kind() {
 
 #[test]
 fn a_fresh_corner_evaluates_only_its_kind() {
-    let (poly, calls) = counted_five_kinds();
+    let (poly, calls) = counted_kinds(MAX_KINDS);
     let mut rng = SpikeRng::new(b"vanishing kinds: corners");
     for kind in 0..MAX_KINDS {
         let claim = fresh(&poly, &mut rng, kind);
@@ -169,4 +169,96 @@ fn a_fresh_corner_evaluates_only_its_kind() {
         assert_eq!(value, reference_eval(&poly, point));
         assert_eq!(value, poly.eval(point));
     }
+}
+
+/// The cubic reference also permits different asserted values at duplicate
+/// points. Restriction depends only on the points; the caller bends q later.
+fn compare_repeated_pair<F: PrimeField>(
+    poly: &MatPoly<F>,
+    calls: &[Arc<AtomicUsize>],
+    first: &[F],
+    second: &[F],
+    active: &[bool],
+) -> Vec<F> {
+    let _ = counts(calls);
+    let q = restrict_repeated_pair(poly, first, second);
+    let samples = counts(calls);
+    for ((kind, &count), &active) in poly.kinds.iter().zip(&samples).zip(active) {
+        let line_samples = kind.sx + kind.sz + kind.deg.0 + kind.deg.1 + 1;
+        if active {
+            assert!(
+                (1..=line_samples).contains(&count),
+                "{count} points, bound {line_samples}"
+            );
+        } else {
+            assert_eq!(count, 0, "the kind vanishes everywhere on the line");
+        }
+    }
+    assert_eq!(
+        q.len(),
+        poly.degree() + 1,
+        "the complete coefficient layout"
+    );
+    let claims = std::array::from_fn(|i| Claim {
+        point: if i % 2 == 0 { first } else { second }.to_vec(),
+        value: F::from((i + 17) as u64),
+    });
+    assert_eq!(q, restrict(poly, &claims), "all cubic coefficients");
+    // An independently evaluated off-grid point also checks the composition.
+    let beta = F::from(poly.degree() as u64 + 23);
+    assert_eq!(horner(&q, beta), poly.eval(&curve(&claims, beta)));
+    q
+}
+
+#[test]
+fn repeated_pair_keeps_cubic_coefficients_at_affine_matrix_cost() {
+    fn check_field<F: crate::fs::Scalar>() {
+        let mut rng = SpikeRng::new(b"repeated matrix pair");
+        for installed in 2..=MAX_KINDS {
+            let (poly, calls) = counted_kinds::<F>(installed);
+            let mut first: Vec<_> = (0..poly.n()).map(|_| rng.scalar()).collect();
+            let mut second: Vec<_> = (0..poly.n()).map(|_| rng.scalar()).collect();
+            let all = vec![true; installed];
+            let q = compare_repeated_pair(&poly, &calls, &first, &second, &all);
+            assert_ne!(q[poly.degree()], F::ZERO, "the full degree is attained");
+
+            let constant = compare_repeated_pair(&poly, &calls, &first, &first, &all);
+            assert_eq!(constant[0], poly.eval(&first));
+            assert!(constant[1..].iter().all(|&v| v == F::ZERO));
+
+            // Only kinds with at least five x variables can contribute when
+            // this coordinate is fixed at one, even with all selectors mixed.
+            let padded = 4 + 4;
+            // The two-kind profile already has five x variables.
+            first[padded] = F::ONE;
+            second[padded] = F::ONE;
+            let active: Vec<_> = poly.kinds.iter().map(|k| k.sx > 4).collect();
+            compare_repeated_pair(&poly, &calls, &first, &second, &active);
+
+            if installed == MAX_KINDS {
+                // Receive and Control endpoints, c2 identically zero. Send's
+                // and Bootstrap's selectors vanish at both ends but are
+                // nonzero in between, so their matrices must still be sampled.
+                first[padded] = rng.scalar();
+                second[padded] = rng.scalar();
+                let c1 = poly.c1_at().unwrap();
+                let c2 = poly.c2_at().unwrap();
+                first[0] = F::ZERO;
+                first[c1] = F::ZERO;
+                second[0] = F::ONE;
+                second[c1] = F::ONE;
+                first[c2] = F::ZERO;
+                second[c2] = F::ZERO;
+                compare_repeated_pair(
+                    &poly,
+                    &calls,
+                    &first,
+                    &second,
+                    &[true, true, true, true, false],
+                );
+            }
+        }
+    }
+    check_field::<Fp>();
+    check_field::<iroha_pasta::Fq>();
 }

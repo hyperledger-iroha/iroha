@@ -227,9 +227,14 @@ impl<F: PrimeField> MatPoly<F> {
     /// and per matrix variable, 9 for rho (cubic), and 3 times the
     /// challenges' degrees.
     pub fn degree(&self) -> usize {
+        3 * self.line_degree()
+    }
+
+    /// Total degree of the combined polynomial on an affine line.
+    fn line_degree(&self) -> usize {
         let da = self.kinds.iter().map(|k| k.deg.0).max().unwrap();
         let db = self.kinds.iter().map(|k| k.deg.1).max().unwrap();
-        3 * (self.selector_degree() + self.x + self.y) + 9 + 3 * da + 3 * db
+        self.selector_degree() + self.x + self.y + 3 + da + db
     }
     /// The x and y coordinates of `point`.
     fn xy<'p>(&self, point: &'p [F]) -> (&'p [F], &'p [F]) {
@@ -333,12 +338,11 @@ impl<F: PrimeField> MatPoly<F> {
             .into_iter()
             .sum()
     }
-    /// The degree of kind `k`'s matrices along a cubic curve: 3 per variable
-    /// it has and 3 per degree in the challenges (no selector, `rho` or
-    /// padding, which `degree` adds).
-    pub fn kind_degree(&self, k: usize) -> usize {
+    /// Degree bound for kind `k`'s matrices along a curve of the given degree.
+    /// The combined polynomial also includes the selector, padding and rho factors.
+    pub fn kind_degree(&self, k: usize, curve_degree: usize) -> usize {
         let kind = &self.kinds[k];
-        3 * (kind.sx + kind.sz + kind.deg.0 + kind.deg.1)
+        curve_degree * (kind.sx + kind.sz + kind.deg.0 + kind.deg.1)
     }
     /// Kind `k`'s `(A, B, C)` at many points at once.
     fn kind_values(&self, k: usize, points: &[Vec<F>]) -> Vec<(F, F, F)> {
@@ -556,18 +560,55 @@ pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec
     let points: Vec<Vec<F>> = (0..=d)
         .map(|t| curve_with(&l, claims, F::from(t as u64)))
         .collect();
-    let inv = small_inverses::<F>(d + 1);
-    let mut values = vec![F::ZERO; d + 1];
+    restrict_on_nodes(poly, &points, 3)
+}
+
+/// The restriction to a curve sampled at consecutive integer nodes. Each kind
+/// needs only enough samples for its own matrices along that curve.
+fn restrict_on_nodes<F: PrimeField>(
+    poly: &MatPoly<F>,
+    points: &[Vec<F>],
+    curve_degree: usize,
+) -> Vec<F> {
+    let inv = small_inverses::<F>(points.len());
+    let mut values = vec![F::ZERO; points.len()];
     for k in 0..poly.kinds.len() {
-        if poly.vanishes(k, &points) {
+        if poly.vanishes(k, points) {
             continue;
         }
-        let m = (poly.kind_degree(k) + 1).min(d + 1);
-        let abc = extend(&poly.kind_values(k, &points[..m]), d + 1, &inv);
-        for ((v, p), e) in values.iter_mut().zip(&points).zip(abc) {
+        let m = poly.kind_degree(k, curve_degree) + 1;
+        let abc = extend(&poly.kind_values(k, &points[..m]), points.len(), &inv);
+        for ((v, p), e) in values.iter_mut().zip(points).zip(abc) {
             *v += poly.kind_term(k, p, e);
         }
     }
+    interpolate(&values)
+}
+
+/// The same unmasked cubic restriction as `restrict` for the one-proof slot order
+/// `[A, B, A, B]`. Its curve is exactly `A + (B - A) h(t)`, where
+/// `h = L₁ + L₃`. Evaluate the matrices on the affine line first, then
+/// compose with h to recover every coefficient committed by the fold.
+pub(crate) fn restrict_repeated_pair<F: PrimeField>(
+    poly: &MatPoly<F>,
+    first: &[F],
+    second: &[F],
+) -> Vec<F> {
+    assert_eq!(first.len(), poly.n());
+    assert_eq!(second.len(), poly.n());
+    let delta: Vec<_> = first.iter().zip(second).map(|(&a, &b)| b - a).collect();
+    let points: Vec<Vec<F>> = (0..=poly.line_degree())
+        .map(|i| {
+            let u = F::from(i as u64);
+            first.iter().zip(&delta).map(|(&a, &d)| a + u * d).collect()
+        })
+        .collect();
+    let line = restrict_on_nodes(poly, &points, 1);
+    let basis = lagrange4::<F>();
+    let h: [F; 4] = std::array::from_fn(|i| basis[1][i] + basis[3][i]);
+    let values: Vec<_> = (0..=poly.degree())
+        .map(|i| horner(&line, horner(&h, F::from(i as u64))))
+        .collect();
     interpolate(&values)
 }
 

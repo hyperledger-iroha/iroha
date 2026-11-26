@@ -5610,7 +5610,13 @@ where
     }
     let claims: [Claim<S<C>>; 4] = claims.try_into().map_err(|_| ()).unwrap();
     let q_clock = std::time::Instant::now();
-    let mut q = deferral::restrict(poly, &claims);
+    // The one-proof layout repeats the predecessor's two points in slots 2
+    // and 3. Its cubic traverses the line through the first two points.
+    let mut q = if proofs.len() == 1 {
+        deferral::restrict_repeated_pair(poly, &claims[0].point, &claims[1].point)
+    } else {
+        deferral::restrict(poly, &claims)
+    };
     let q_secs = q_clock.elapsed().as_secs_f64();
     // A claim false on this polynomial (an accumulator from a hop whose
     // polynomial differs, before the chain restarts from a Bootstrap at the

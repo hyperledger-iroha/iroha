@@ -1220,8 +1220,9 @@ mod tests {
     /// instruction profile and live registers, the process CPU per
     /// instruction and point on one thread at each lane width, and the time of
     /// its `kind_degree + 1` evaluations on the pool. Paired runs compare word
-    /// multiplication with full field multiplication at the same points. It then times `restrict` for random
-    /// claims and for claims that keep `c2` zero, which skip ArchiveSent.
+    /// multiplication with full field multiplication at the same points. It
+    /// also measures four-claim folds with and without ArchiveSent and compares
+    /// both restriction algorithms on the repeated points of one-proof steps.
     #[test]
     #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS, an authenticated five-family bundle"]
     fn native_q_on_the_installed_bundle() {
@@ -1256,7 +1257,7 @@ mod tests {
                 );
                 let ((muls, scales, ops), (registers, slots)) =
                     (c.plan_stats(), c.plan_registers());
-                let m = poly.kind_degree(k) + 1;
+                let m = poly.kind_degree(k, 3) + 1;
                 let points: Vec<(Vec<F>, Vec<F>, Vec<F>)> = (0..m)
                     .map(|_| {
                         (
@@ -1364,6 +1365,51 @@ mod tests {
                     if archive { "random" } else { "c2 = 0" },
                     poly.degree(),
                     q.len()
+                );
+            }
+            for (step, k) in [
+                ("first Load", crate::full::BOOTSTRAP),
+                ("later Send", crate::full::RECEIVE),
+            ] {
+                let inherited = if k == crate::full::BOOTSTRAP {
+                    poly.empty_claim()
+                } else {
+                    let mut point: Vec<F> = (0..n).map(|_| rng.scalar()).collect();
+                    point[c2.expect("five installed kinds")] = F::ZERO;
+                    Claim {
+                        point,
+                        value: F::ZERO,
+                    }
+                };
+                let kind = &poly.kinds[k];
+                let rx: Vec<_> = (0..kind.sx).map(|_| rng.scalar()).collect();
+                let ry: Vec<_> = (0..kind.sz).map(|_| rng.scalar()).collect();
+                let challenges = [rng.scalar(), rng.scalar()];
+                let fresh = Claim {
+                    point: poly.fresh_point(k, rng.scalar(), &challenges, &rx, &ry),
+                    value: F::ZERO,
+                };
+                let claims = [inherited.clone(), fresh.clone(), inherited, fresh];
+                let mut samples = [[0.0; 2]; 2];
+                for round in 0..2 {
+                    let mut outputs = Vec::new();
+                    for variant in [round, 1 - round] {
+                        let (q, _, cpu) = timed(|| match variant {
+                            0 => crate::deferral::restrict(poly, &claims),
+                            _ => crate::deferral::restrict_repeated_pair(
+                                poly,
+                                &claims[0].point,
+                                &claims[1].point,
+                            ),
+                        });
+                        samples[variant][round] = cpu;
+                        outputs.push(q);
+                    }
+                    assert_eq!(outputs[0], outputs[1], "{name} {step}: all q coefficients");
+                }
+                let [cubic, line] = samples.map(|[a, b]| (a + b) / 2.0);
+                println!(
+                    "native q {name}, one-proof {step}: mean CPU across two alternating runs, generic cubic {cubic:.3} s, repeated pair {line:.3} s"
                 );
             }
         }
