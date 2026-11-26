@@ -803,7 +803,7 @@ fn bundle_stream_recorder_counts_zero_runs_and_tokens() {
     recorder.record_ac(0, 5);
     recorder.record_ac(2, -2);
     recorder.record_eob();
-    let telemetry = recorder.finish();
+    let telemetry = recorder.finish(None);
     assert_eq!(telemetry.stats.blocks_encoded, 1);
     assert_eq!(telemetry.stats.ac_events, 2);
     assert_eq!(telemetry.stats.zero_run_total, 2);
@@ -879,9 +879,20 @@ fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
                     .iter()
                     .any(|pattern| pattern.repeats > 1)
             );
+            assert!(cached.bundles.len() < individual.bundles.len());
+            let reference = individual.finish(None);
+            let mut previous = reference.clone();
+            previous.ans_stream.fill(0xff);
+            previous.bundles.reverse();
+            let buffers = (previous.bundles.as_ptr(), previous.ans_stream.as_ptr());
+            let expanded = cached.finish(Some(previous));
             assert_eq!(
-                crate::core::to_bytes(&cached.finish()).unwrap(),
-                crate::core::to_bytes(&individual.finish()).unwrap(),
+                buffers,
+                (expanded.bundles.as_ptr(), expanded.ans_stream.as_ptr())
+            );
+            assert_eq!(
+                crate::core::to_bytes(&expanded).unwrap(),
+                crate::core::to_bytes(&reference).unwrap(),
                 "width {width}, remap {}",
                 remap.is_some()
             );
@@ -910,7 +921,7 @@ fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
         );
     }
     recorder.record_eob();
-    let report = recorder.finish();
+    let report = recorder.finish(None);
     assert_eq!(report.stats.flush_context_switch, 2);
     assert_eq!(report.context_stats.len(), 2);
     for (i, id) in [0, u16::MAX].into_iter().enumerate() {
@@ -942,7 +953,7 @@ fn recorder_splits_remapped_zero_runs_at_nonzero_coefficients_and_end_of_block()
     coeffs[ZIG_ZAG[6]] = -1;
     recorder.record_block(0, &coeffs, FrameType::Predicted);
     recorder.record_eob();
-    let report = recorder.finish();
+    let report = recorder.finish(None);
     let (first, rest) = report.bundles.split_at(3);
     assert_eq!(first[0].bits, 3);
     assert_eq!(first[1].bits, 2);
@@ -974,7 +985,7 @@ fn bundle_stream_recorder_flushes_zero_only_blocks() {
     recorder.record_block(0, &coeffs, FrameType::Intra);
     recorder.record_dc(0);
     recorder.record_eob();
-    let telemetry = recorder.finish();
+    let telemetry = recorder.finish(None);
     assert_eq!(telemetry.stats.blocks_encoded, 1);
     let expected_slots = u16::try_from(BLOCK_PIXELS - 1).expect("block pixel count fits u16");
     let consumed: u16 = telemetry
@@ -1022,7 +1033,7 @@ fn bundle_stream_recorder_accumulates_significance_stats() {
     recorder.record_ac(0, -4);
     recorder.record_ac(0, 1);
     recorder.record_eob();
-    let telemetry = recorder.finish();
+    let telemetry = recorder.finish(None);
     let total_ac = u64::try_from(BLOCK_PIXELS - 1).expect("block size fits u64");
     assert_eq!(telemetry.stats.significance_one, 3);
     assert_eq!(telemetry.stats.significance_zero, total_ac - 3);
@@ -1052,7 +1063,7 @@ fn bundle_prefetch_keeps_stream_deterministic() {
         recorder.record_ac(0, coeffs[ZIG_ZAG[1]]);
         recorder.record_eob();
     }
-    let telemetry = recorder.finish();
+    let telemetry = recorder.finish(None);
     let baseline_stream = encode_bundle_stream_scalar(tables.as_ref(), &telemetry.bundles, 0);
     let prefetch_stream = encode_bundle_stream_scalar(
         tables.as_ref(),
@@ -1213,7 +1224,7 @@ fn simd_bundle_stream_matches_scalar_output() {
     recorder.record_ac(0, coeffs[ZIG_ZAG[2]]);
     recorder.record_ac(1, coeffs[ZIG_ZAG[4]]);
     recorder.record_eob();
-    let telemetry = recorder.finish();
+    let telemetry = recorder.finish(None);
     let scalar_stream = encode_bundle_stream_scalar(tables.as_ref(), &telemetry.bundles, 0);
     let simd_decoded =
         decode_bundle_stream(&telemetry.ans_stream, &telemetry.bundles, tables.as_ref())
@@ -2003,6 +2014,100 @@ fn sparse_dct_paths_match_the_full_kernels() {
 }
 
 #[test]
+fn sparse_inverse_matches_direct_spatial_sums() {
+    let check = |coeffs: &[i32; BLOCK_PIXELS]| {
+        let spatial = inverse_dct(coeffs);
+        for (index, &sample) in spatial.iter().enumerate() {
+            let (x, y) = (index / BLOCK_SIZE, index % BLOCK_SIZE);
+            #[cfg(feature = "streaming-fixed-point-dct")]
+            let direct = {
+                let mut sum = 0_i64;
+                for (slot, &c) in coeffs.iter().enumerate() {
+                    let u = i64::from(DCT_FACTORS_Q15[slot / BLOCK_SIZE][x]);
+                    let v = i64::from(DCT_FACTORS_Q15[slot % BLOCK_SIZE][y]);
+                    sum = sum.saturating_add(i64::from(c) * u * v);
+                }
+                round_q30(sum).clamp(-32768, 32767) as i32
+            };
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            let direct = {
+                let mut sum = 0.0_f64;
+                for (slot, &c) in coeffs.iter().enumerate() {
+                    sum += f64::from(c)
+                        * DCT_FACTORS[slot / BLOCK_SIZE][x]
+                        * DCT_FACTORS[slot % BLOCK_SIZE][y];
+                }
+                sum.round().clamp(-32768.0, 32767.0) as i32
+            };
+            assert_eq!(sample, direct, "pixel ({x}, {y})");
+        }
+    };
+    for slot in 0..BLOCK_PIXELS {
+        for value in [i32::MIN, -13, -4, 4, 13, i32::MAX] {
+            let mut coeffs = [0; BLOCK_PIXELS];
+            coeffs[slot] = value;
+            check(&coeffs);
+        }
+    }
+    for stride in [1, 2, 5, 17] {
+        let coeffs = std::array::from_fn(|i| {
+            if i % stride == 0 {
+                (i as i32 * 971) % 4093 - 2046
+            } else {
+                0
+            }
+        });
+        check(&coeffs);
+    }
+}
+
+#[test]
+fn certified_blocks_match_full_transform_payload_and_reference() {
+    let dims = FrameDimensions::new(32, 8);
+    let frame: Vec<u8> = (0..dims.pixel_count())
+        .map(|i| {
+            let x = i % 32;
+            [24, 193, 8, 137][x / 8] + (x % 3) as u8
+        })
+        .collect();
+    let previous = vec![100; dims.pixel_count()];
+    for (kind, reference) in [
+        (FrameType::Intra, None),
+        (FrameType::Predicted, Some(previous.as_slice())),
+    ] {
+        let mut dc = 0;
+        let mut expected = Vec::new();
+        let mut pixels = vec![0; dims.pixel_count()];
+        for i in 0..dims.block_count() {
+            let (residual, predictor) = build_residual_block(&frame, reference, dims, i, kind);
+            assert!(certified_dc(&residual, 16).is_some());
+            let levels = quantize_coeffs(&forward_dct_full(&residual), 16);
+            encode_block_rle(
+                &levels,
+                &mut dc,
+                &mut expected,
+                &mut NoopBundledHooks,
+                i,
+                kind,
+            );
+            let spatial = inverse_dct_full(&dequantize_coeffs(&levels, 16));
+            write_reconstructed_block(&mut pixels, &spatial, &predictor, dims, i);
+        }
+        let encoded = BaselineEncoder::encode_frame_payload(
+            &frame,
+            kind,
+            reference,
+            dims,
+            16,
+            true,
+            &mut NoopBundledHooks,
+            None,
+        );
+        assert_eq!(encoded, (expected, Some(pixels)));
+    }
+}
+
+#[test]
 fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
     let dims = FrameDimensions::new(16, 8);
     let plane: Vec<_> = (0..dims.pixel_count()).map(|i| (i * 37) as u8).collect();
@@ -2035,17 +2140,19 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
 fn centered_energy_bound_preserves_quantized_levels() {
     let check = |block: &[i16; BLOCK_PIXELS], qp| {
         let full = forward_dct_full(block);
-        let screened = forward_dct_for_quantization(block, qp);
-        assert_eq!(screened[0], full[0]);
-        assert_eq!(quantize_coeffs(&screened, qp), quantize_coeffs(&full, qp));
+        if let Some(dc) = certified_dc(block, qp) {
+            assert_eq!(dc, full[0]);
+            let levels = quantize_coeffs(&full, qp);
+            assert_eq!(quantize_level(dc, quantization_step(0, qp)), levels[0]);
+            assert!(levels[1..].iter().all(|&v| v == 0));
+        }
     };
     // At Q16, alternating +/-9 lies just below the threshold and +/-10 above it.
     for (swing, skipped) in [(9, true), (10, false)] {
         let block = std::array::from_fn(|i| if i % 2 == 0 { 120 + swing } else { 120 - swing });
         let full = forward_dct_full(&block);
         assert!(full[1..].iter().any(|&v| v != 0));
-        let screened = forward_dct_for_quantization(&block, 16);
-        assert_eq!(screened[1..].iter().all(|&v| v == 0), skipped);
+        assert_eq!(certified_dc(&block, 16).is_some(), skipped);
         check(&block, 16);
     }
     // Exercise DC midpoints of both signs, extremes, and both sides of the bound.

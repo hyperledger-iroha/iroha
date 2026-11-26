@@ -1775,7 +1775,7 @@ impl BaselineEncoder {
             }
         }
         self.bundled_telemetry = bundler.map(|rec| {
-            let mut telemetry = rec.finish();
+            let mut telemetry = rec.finish(self.bundled_telemetry.take());
             telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
             telemetry
         });
@@ -1857,13 +1857,39 @@ impl BaselineEncoder {
         let mut payload = Vec::with_capacity(frame.len() / 2);
         let mut reconstructed = retain_reference.then(|| vec![0u8; dims.pixel_count()]);
         let mut prev_dc = 0i16;
-        if frame_type.reset_dc() {
-            prev_dc = 0;
-        }
+        let mut dc_levels = [0; BLOCK_PIXELS];
+        let dc_step = quantization_step(0, quantizer);
         for block_index in 0..dims.block_count() {
             let (residual, predictor) =
                 build_residual_block(frame, prev_frame, dims, block_index, frame_type);
-            let coeffs = forward_dct_for_quantization(&residual, quantizer);
+            if let Some(dc) = certified_dc(&residual, quantizer) {
+                let level = quantize_level(dc, dc_step);
+                dc_levels[0] = level;
+                if let Some(optimizer) = rdo.as_deref_mut() {
+                    let mut transform = [0; BLOCK_PIXELS];
+                    transform[0] = dc;
+                    optimizer.select_levels(&transform, &mut dc_levels, frame_type, block_index);
+                }
+                hooks.record_block_coeffs(&dc_levels, block_index, frame_type);
+                let diff = level.wrapping_sub(prev_dc);
+                let [lo, hi] = diff.to_le_bytes();
+                payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
+                hooks.record_dc(diff);
+                hooks.record_eob();
+                prev_dc = level;
+                if let Some(pixels) = reconstructed.as_mut() {
+                    let value = inverse_dc_sample(i32::from(level) * dc_step);
+                    write_reconstructed_block(
+                        pixels,
+                        &[value; BLOCK_PIXELS],
+                        &predictor,
+                        dims,
+                        block_index,
+                    );
+                }
+                continue;
+            }
+            let coeffs = forward_dct(&residual);
             let mut quantized = quantize_coeffs(&coeffs, quantizer);
             if let Some(optimizer) = rdo.as_deref_mut() {
                 optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
@@ -2171,10 +2197,10 @@ pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
     forward_dct_full(block)
 }
 
-/// Omit AC projections only when every omitted coefficient quantizes to zero.
-fn forward_dct_for_quantization(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> [i32; BLOCK_PIXELS] {
+/// Return the DC projection if every AC level is provably zero after quantization.
+fn certified_dc(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> Option<i32> {
     if quantizer == 0 {
-        return forward_dct(block);
+        return None;
     }
     let (mut sum, mut squares) = (0_i64, 0_i64);
     for &sample in block {
@@ -2189,25 +2215,23 @@ fn forward_dct_for_quantization(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> [
     let radius = (half_step - 2) * 64 / 65;
     let energy = BLOCK_PIXELS as i64 * squares - sum * sum;
     if half_step < 2 || energy > BLOCK_PIXELS as i64 * radius * radius {
-        return forward_dct_full(block);
+        return None;
     }
-    let mut coeffs = [0; BLOCK_PIXELS];
     #[cfg(feature = "streaming-fixed-point-dct")]
     {
         let basis = i64::from(DCT_FACTORS_Q15[0][0]);
-        coeffs[0] = round_q30(sum * basis * basis) as i32;
+        Some(round_q30(sum * basis * basis) as i32)
     }
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     {
         // DC equals sum/8 to within the table and evaluation error. Only
         // sums congruent to 4 modulo 8 can land on a rounding midpoint.
-        coeffs[0] = if sum.rem_euclid(8) == 4 {
+        Some(if sum.rem_euclid(8) == 4 {
             direct_dct_coefficient(block, &DCT_FACTORS[0], &DCT_FACTORS[0])
         } else {
             (sum as f64 * 0.125).round() as i32
-        };
+        })
     }
-    coeffs
 }
 
 /// Apply the Q15 basis along each axis, rounding only the final Q30 sum.
@@ -2276,62 +2300,66 @@ fn direct_dct_coefficient(
     sum.round() as i32
 }
 
+fn inverse_dc_sample(dc: i32) -> i32 {
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    {
+        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+        round_q30(i64::from(dc) * basis * basis).clamp(-32768, 32767) as i32
+    }
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    {
+        let basis = DCT_FACTORS[0][0];
+        (f64::from(dc) * basis * basis)
+            .round()
+            .clamp(-32768.0, 32767.0) as i32
+    }
+}
+
 pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
     if coeffs[1..].iter().all(|&ac| ac == 0) {
-        // The DC basis is constant across every row and column.
-        #[cfg(feature = "streaming-fixed-point-dct")]
-        let sample = {
-            let basis = i64::from(DCT_FACTORS_Q15[0][0]);
-            round_q30(i64::from(coeffs[0]) * basis * basis).clamp(-32768, 32767) as i32
-        };
-        #[cfg(not(feature = "streaming-fixed-point-dct"))]
-        let sample = {
-            let basis = DCT_FACTORS[0][0];
-            (f64::from(coeffs[0]) * basis * basis)
-                .round()
-                .clamp(-32768.0, 32767.0) as i32
-        };
-        return [sample; BLOCK_PIXELS];
+        return [inverse_dc_sample(coeffs[0]); BLOCK_PIXELS];
     }
     inverse_dct_full(coeffs)
 }
 
 #[cfg(feature = "streaming-fixed-point-dct")]
 fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for x in 0..8 {
-        for y in 0..8 {
-            let mut sum: i64 = 0;
-            for u in 0..8 {
-                for v in 0..8 {
-                    let coeff = i64::from(coeffs[u * 8 + v]);
-                    let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
-                    let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                    sum =
-                        sum.saturating_add(coeff.saturating_mul(factor_u).saturating_mul(factor_v));
+    let mut sums = [0_i64; BLOCK_PIXELS];
+    for (u, row) in coeffs.chunks_exact(BLOCK_SIZE).enumerate() {
+        for (v, &coeff) in row.iter().enumerate() {
+            if coeff != 0 {
+                for (samples, &factor_u) in
+                    sums.chunks_exact_mut(BLOCK_SIZE).zip(&DCT_FACTORS_Q15[u])
+                {
+                    // An i32 coefficient times two Q15 factors fits in i64.
+                    let scaled = i64::from(coeff) * i64::from(factor_u);
+                    for (sum, &factor_v) in samples.iter_mut().zip(&DCT_FACTORS_Q15[v]) {
+                        *sum = sum.saturating_add(scaled * i64::from(factor_v));
+                    }
                 }
             }
-            out[x * 8 + y] = round_q30(sum).clamp(-32768, 32767) as i32;
         }
     }
-    out
+    sums.map(|s| round_q30(s).clamp(-32768, 32767) as i32)
 }
 #[cfg(not(feature = "streaming-fixed-point-dct"))]
 fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for x in 0..8 {
-        for y in 0..8 {
-            let mut sum = 0.0;
-            for u in 0..8 {
-                for v in 0..8 {
-                    let coeff = coeffs[u * 8 + v] as f64;
-                    sum += coeff * DCT_FACTORS[u][x] * DCT_FACTORS[v][y];
+    // Each coefficient contributes one scaled outer product. Visit only active
+    // coefficients, in the original raster order for every output sample.
+    let mut sums = [0.0; BLOCK_PIXELS];
+    for (u, row) in coeffs.chunks_exact(BLOCK_SIZE).enumerate() {
+        for (v, &coeff) in row.iter().enumerate() {
+            if coeff != 0 {
+                for (samples, &factor_u) in sums.chunks_exact_mut(BLOCK_SIZE).zip(&DCT_FACTORS[u]) {
+                    let scaled = f64::from(coeff) * factor_u;
+                    for (sum, &factor_v) in samples.iter_mut().zip(&DCT_FACTORS[v]) {
+                        *sum += scaled * factor_v;
+                    }
                 }
             }
-            out[x * 8 + y] = sum.round().clamp(-32768.0, 32767.0) as i32;
         }
     }
-    out
+    sums.map(|s| s.round().clamp(-32768.0, 32767.0) as i32)
 }
 fn quantization_step(slot: usize, quantizer: u8) -> i32 {
     if quantizer == 0 {
@@ -2340,6 +2368,15 @@ fn quantization_step(slot: usize, quantizer: u8) -> i32 {
         i32::from(BASELINE_QUANT_MATRIX[slot]) * i32::from(quantizer)
     }
 }
+fn quantize_level(coeff: i32, step: i32) -> i16 {
+    let adjusted = if coeff >= 0 {
+        coeff.saturating_add(step / 2)
+    } else {
+        coeff.saturating_sub(step / 2)
+    };
+    (adjusted / step).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+}
+
 pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i16; BLOCK_PIXELS] {
     let mut out = [0i16; BLOCK_PIXELS];
     if quantizer == 0 {
@@ -2354,13 +2391,7 @@ pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i
         if idx != 0 && coeff.unsigned_abs() <= (step / 2) as u32 {
             continue;
         }
-        let adjusted = if *coeff >= 0 {
-            coeff.saturating_add(step / 2)
-        } else {
-            coeff.saturating_sub(step / 2)
-        };
-        let quantized = adjusted / step;
-        out[idx] = quantized.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        out[idx] = quantize_level(*coeff, step);
     }
     out
 }
@@ -3028,7 +3059,7 @@ mod rdo_tests {
             2,
             BundleFlushReason::TypeComplete,
         );
-        let telemetry = recorder.finish();
+        let telemetry = recorder.finish(None);
         let entry = telemetry
             .context_frequencies
             .iter()
@@ -3067,6 +3098,16 @@ struct ZeroAcPattern {
     repeats: u64,
 }
 
+/// Reuse a completed report's allocation when it fits this segment at its exact size.
+fn telemetry_buffer<T>(mut previous: Vec<T>, len: usize) -> Vec<T> {
+    if previous.capacity() == len {
+        previous.clear();
+        previous
+    } else {
+        Vec::with_capacity(len)
+    }
+}
+
 struct BundleStreamRecorder {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
@@ -3076,6 +3117,8 @@ struct BundleStreamRecorder {
     contexts: Vec<(BundleContextStats, ContextFrequency)>,
     // Tile (6 bits), frame class, and DC significance fully determine this sequence.
     zero_ac_patterns: Vec<ZeroAcPattern>,
+    // Explicit record offset at the time of the repeat, and its template index.
+    repeats: Vec<(usize, u8)>,
     width: u8,
     blocks_per_row: usize,
     quantizer_bucket: u8,
@@ -3105,6 +3148,7 @@ impl BundleStreamRecorder {
             context_slots: vec![0; usize::from(u16::MAX) + 1],
             contexts: Vec::new(),
             zero_ac_patterns: vec![ZeroAcPattern::default(); 64 * 2 * 2],
+            repeats: Vec::new(),
             width: bundle_width.clamp(1, 4),
             blocks_per_row: (dims.width as usize / BLOCK_SIZE).max(1),
             quantizer_bucket: quantizer_to_bucket(quantizer),
@@ -3136,7 +3180,7 @@ impl BundleStreamRecorder {
             context
         }
     }
-    fn finish(mut self) -> BundledTelemetry {
+    fn finish(mut self, previous: Option<BundledTelemetry>) -> BundledTelemetry {
         for index in 0..self.zero_ac_patterns.len() {
             let pattern = self.zero_ac_patterns[index];
             if pattern.repeats == 0 {
@@ -3149,25 +3193,68 @@ impl BundleStreamRecorder {
                 self.count_bundle(self.bundles[i], pattern.repeats);
             }
         }
-        let (ans_stream, used_acceleration) = encode_bundle_stream_with_opts(
-            self.tables.as_ref(),
-            &self.bundles,
-            self.acceleration,
-            self.prefetch_distance,
-        );
+        let (bundles, ans_stream, used_acceleration) = if self.repeats.is_empty() {
+            let (stream, acceleration) = encode_bundle_stream_with_opts(
+                &self.tables,
+                &self.bundles,
+                self.acceleration,
+                self.prefetch_distance,
+            );
+            (self.bundles, stream, acceleration)
+        } else {
+            // Each repeat contains SignificanceRle. Its entropy stream is the
+            // masked symbol projection, which distributes over concatenation.
+            let symbols: Vec<_> = self.bundles.iter().map(bundle_symbol).collect();
+            let total = self
+                .zero_ac_patterns
+                .iter()
+                .fold(self.bundles.len(), |len, p| {
+                    len.saturating_add((p.end - p.start).saturating_mul(p.repeats as usize))
+                });
+            let (old_records, old_stream) = previous
+                .map(|report| (report.bundles, report.ans_stream))
+                .unwrap_or_default();
+            let mut records = telemetry_buffer(old_records, total);
+            let mut stream = telemetry_buffer(old_stream, total);
+            let mut append = |start, end| {
+                records.extend_from_slice(&self.bundles[start..end]);
+                stream.extend_from_slice(&symbols[start..end]);
+            };
+            let mut cursor = 0;
+            for (literal_end, key) in self.repeats {
+                if literal_end != cursor {
+                    append(cursor, literal_end);
+                    cursor = literal_end;
+                }
+                let p = &self.zero_ac_patterns[usize::from(key)];
+                append(p.start, p.end);
+            }
+            append(cursor, self.bundles.len());
+            (records, stream, BundleAcceleration::None)
+        };
         let remap = self.context_remap.as_ref().map(|map| ContextRemapSummary {
             escape_context: map.escape_context(),
             remapped: map.remapped_count(),
             dropped: map.dropped_count(),
         });
         // Reports are ordered by wire context, independent of insertion order.
-        let mut contexts = self.contexts;
-        contexts.sort_unstable_by_key(|(stats, _)| stats.context);
-        let (context_stats, context_frequencies) = contexts.into_iter().unzip();
+        let mut ids: Vec<_> = self
+            .contexts
+            .iter()
+            .map(|(stats, _)| stats.context)
+            .collect();
+        ids.sort_unstable();
+        let (context_stats, context_frequencies) = ids
+            .into_iter()
+            .map(|id| {
+                let slot = self.context_slots[usize::from(id.0)] as usize - 1;
+                self.contexts[slot]
+            })
+            .unzip();
         BundledTelemetry {
             stats: self.stats,
             tokens: self.tokens,
-            bundles: self.bundles,
+            bundles,
             context_frequencies,
             ans_stream,
             ans_precision_bits: self.tables.precision_bits(),
@@ -3272,7 +3359,7 @@ impl BundleStreamRecorder {
                 .sign_positive
                 .saturating_add((BLOCK_PIXELS - 1) as u64);
             let last = self.bundles[pattern.end - 1].context;
-            self.bundles.extend_from_within(pattern.start..pattern.end);
+            self.repeats.push((self.bundles.len(), key as u8));
             self.last_context_slot = Some(self.context_slot(last));
         } else {
             let start = self.bundles.len();
@@ -3689,6 +3776,10 @@ fn encode_bundle_stream(tables: &BundleAnsTables, bundles: &[BundleRecord]) -> V
         encode_bundle_stream_with_opts(tables, bundles, BundleAcceleration::None, 0);
     stream
 }
+fn bundle_symbol(record: &BundleRecord) -> u8 {
+    record.bits & ((1u8 << record.bit_len) - 1)
+}
+
 fn encode_bundle_stream_with_opts(
     tables: &BundleAnsTables,
     bundles: &[BundleRecord],
@@ -3699,10 +3790,7 @@ fn encode_bundle_stream_with_opts(
         .iter()
         .any(|record| matches!(record.bundle_type, BundleType::SignificanceRle));
     if has_rle {
-        let mut stream = Vec::with_capacity(bundles.len());
-        for record in bundles {
-            stream.push(record.bits & ((1u8 << record.bit_len) - 1));
-        }
+        let stream = bundles.iter().map(bundle_symbol).collect();
         // RLE bundles are scalar-only until SIMD tables are calibrated.
         return (stream, BundleAcceleration::None);
     }

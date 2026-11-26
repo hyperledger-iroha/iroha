@@ -50,7 +50,10 @@ product. With `H` equal to half the smallest AC step rounded down, a block
 qualifies when `E <= 64 * floor((H - 2) * 64 / 65)²` and `H >= 2`.
 The two-unit margin covers the fixed-point signed rounding error (less than
 1.5 units), or the floating-point rounding and tiny nonzero AC row sums.
-The DC term keeps the reference rounding, including binary64 midpoints.
+For a qualifying block the encoder quantizes the DC term with the reference
+rounding, including binary64 midpoints. It writes the DC delta and end marker
+directly. When a later frame needs the reconstruction, each pixel receives
+the same inverse DC contribution before prediction and clipping.
 This is a sufficient condition adapted to the Norito matrices. Early
 zero-coefficient detection from transform bounds is described by Ji et al.
 [Early Determination of Zero-Quantized 8×8 DCT Coefficients](https://mcl.usc.edu/wp-content/uploads/2014/01/200912-Early-determination-of-zero-quantized-8%C3%978-DCT-coefficients.pdf)
@@ -60,11 +63,22 @@ on the repeating 8×8 block position, frame class and whether DC is zero. The
 recorder reuses the first emitted sequence for each of these 256 cases within
 a segment. Its histogram and internal context-switch counts add once per
 occurrence. Each block still contributes its own DC token and end marker.
+The recorder stores the literal sequences and the insertion position of each
+repeat. Any repeated zero-AC sequence contains a significance-RLE record, so
+the entropy stream in that segment is the masked symbol byte of each record.
+This projection distributes over concatenation. The encoder projects each
+literal once, then copies its records and symbol bytes in block order to
+produce the complete telemetry before returning the segment.
 
 A zero residual transforms to 64 zeros. When only the DC coefficient survives
 quantization, its inverse transforms to the same sample at all 64 positions.
-The scalar shortcuts preserve the basis, multiplication order, rounding and
-clipping of their respective reference kernels.
+For mixed blocks, each nonzero transform coefficient contributes a rank-one
+term to the spatial block: `C[u,v] * B[u,x] * B[v,y]` at pixel `(x,y)`.
+With `k` nonzero coefficients, reconstruction adds `64k` terms instead of
+4,096. Visiting the coefficients in raster order preserves each pixel’s
+multiplication and addition order, including Q15 saturation before the final
+rounding and clipping. Choi, Lee and Jang also exploit coefficient sparsity
+in their [zero coefficient-aware inverse DCT](https://doi.org/10.1109/TCE.2010.5606332).
 
 For enabled luma RDO modes, the existing lambda schedule sets a nonzero-token
 budget by counting levels whose squared quantized magnitude exceeds the price of
