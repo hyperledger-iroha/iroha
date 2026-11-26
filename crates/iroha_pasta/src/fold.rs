@@ -32,6 +32,9 @@ use crate::curve::endo::wnaf_u128;
 use crate::curve::{PastaAffine, PastaCurve};
 use crate::field::PastaField;
 
+mod four;
+pub use four::folded_generators_four_vartime;
+
 /// Lanes per lockstep block.
 pub const FOLD_BLOCK: usize = 2048;
 /// Fewest lanes per block when several workers share a fold. A block's steps

@@ -665,7 +665,15 @@ where
         .map(|_| challenge(&mut t, &mut ch, false))
         .collect::<Vec<_>>();
     let zeta = challenge(&mut t, &mut ch, true);
-    let mut g = Zeroizing::new(gens.g[..n].to_vec());
+    // With exact source blocks, the first four L/R pairs are independent of
+    // the evolving generator vector. Derive all four public challenges in
+    // transcript order before reducing the borrowed basis to n/16 points.
+    let fuse_leading = blocks.is_some() && depth == 4;
+    let mut g = Zeroizing::new(if fuse_leading {
+        Vec::new()
+    } else {
+        gens.g[..n].to_vec()
+    });
     let mut lr = vec![];
     let mut us = vec![];
     let mut b_scale = Zeroizing::new(F::<C>::ONE);
@@ -701,11 +709,17 @@ where
             *weight *= challenge + s.us[round];
         }
         *b_scale *= F::<C>::ONE - point[round] + challenge * point[round];
-        let half = iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
-        g.truncate(half);
+        if !fuse_leading {
+            let half = iroha_pasta::fold::fold_generators_vartime::<C>(&mut g, &challenge);
+            g.truncate(half);
+        }
         lr.push((l, r));
     }
     drop(half);
+    if fuse_leading {
+        let challenges = us.as_slice().try_into().expect("four leading challenges");
+        *g = iroha_pasta::fold::folded_generators_four_vartime::<C>(&gens.g[..n], challenges);
+    }
     // Materialize only the folded `n >> depth` vectors for the remaining rounds.
     let mut coeff = Zeroizing::new(vec![F::<C>::ZERO; n >> depth]);
     for (s, weight) in sources.iter().zip(weights.iter()) {

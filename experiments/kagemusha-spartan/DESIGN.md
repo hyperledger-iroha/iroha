@@ -760,6 +760,20 @@ installed programs, projected inputs, link word and both proof encodings match. 
 values and incoming verdicts once for both circuits. Generator folding uses four independent prefix products
 per batch inversion.
 
+For a predecessor with cached source blocks, the prover obtains the first four IPA challenges from the usual
+L/R messages before reducing the generator basis. Each output is a sum of 16 generators whose weights are the
+subset products of those challenges. A single GLV Straus multiplication shares doublings across the 15 weighted
+terms. For a verified two-parent Receive, later L/R messages use the intermediate bases, so each fold still runs
+in transcript order. At 262,144 input generators, four paired six-worker comparisons on the M4 Max measured
+42% less CPU for the four Pallas folds and 44% less for Vesta. Every output point matched the sequential folds.
+
+The native RP57 Poseidon permutation also uses a cheaper representation for its 57 partial rounds. Write the
+MDS matrix in blocks `[m a; v B]`. For passive state `Y`, the coordinates `p = aY` and `q = aBY` give
+`aB²Y = tr(B)q − det(B)p` by Cayley–Hamilton. This reduces the linear layer from nine field multiplications to
+five per partial round, with one basis conversion at each end. The public parameters determine the transformed
+constants. Custom matrices with dependent basis rows use the dense calculation. In eight paired batches of
+16,384 complete permutations, process CPU fell 24% on each Pasta field. The pinned hash vectors agree on both.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
