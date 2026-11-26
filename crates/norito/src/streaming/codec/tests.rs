@@ -826,6 +826,138 @@ fn bundle_stream_recorder_counts_zero_runs_and_tokens() {
     );
 }
 #[test]
+fn repeated_zero_ac_blocks_match_individual_bundle_accounting() {
+    let escape = BundleContextId(u16::MAX);
+    for width in 1..=4 {
+        for remap in [
+            None,
+            Some(Arc::new(BundleContextRemap::new(
+                BTreeMap::new(),
+                escape,
+                0,
+                0,
+            ))),
+        ] {
+            let recorder = || {
+                BundleStreamRecorder::new(
+                    width,
+                    FrameDimensions::new(128, 128),
+                    16,
+                    default_bundle_tables(),
+                    BundleAcceleration::None,
+                    0,
+                    remap.clone(),
+                )
+            };
+            let (mut cached, mut individual) = (recorder(), recorder());
+            for pass in 0..3 {
+                for frame_type in [FrameType::Intra, FrameType::Predicted] {
+                    for index in [0, 1, 16, 119, 136] {
+                        for dc in [0, -2, 3] {
+                            let mut levels = [0; BLOCK_PIXELS];
+                            levels[0] = dc;
+                            if pass == 1 && index == 1 {
+                                levels[ZIG_ZAG[8]] = -1;
+                            }
+                            cached.record_block(index, &levels, frame_type);
+                            let tile = ((index % 16) & 7) | (((index / 16) & 7) << 3);
+                            individual.record_ac_slots(tile as u8, &levels, frame_type);
+                            for recorder in [&mut cached, &mut individual] {
+                                recorder.record_dc(dc);
+                                if levels[ZIG_ZAG[8]] != 0 {
+                                    recorder.record_ac(7, -1);
+                                }
+                                recorder.record_eob();
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                cached
+                    .zero_ac_patterns
+                    .iter()
+                    .any(|pattern| pattern.repeats > 1)
+            );
+            assert_eq!(
+                crate::core::to_bytes(&cached.finish()).unwrap(),
+                crate::core::to_bytes(&individual.finish()).unwrap(),
+                "width {width}, remap {}",
+                remap.is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
+    let mut recorder = BundleStreamRecorder::new(
+        2,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    for id in [u16::MAX, 0, 0, u16::MAX] {
+        recorder.record_bundle(
+            BundleType::SignificanceOnly,
+            BundleContextId(id),
+            1,
+            1,
+            BundleFlushReason::TypeComplete,
+        );
+    }
+    recorder.record_eob();
+    let report = recorder.finish();
+    assert_eq!(report.stats.flush_context_switch, 2);
+    assert_eq!(report.context_stats.len(), 2);
+    for (i, id) in [0, u16::MAX].into_iter().enumerate() {
+        let stats = &report.context_stats[i];
+        let freq = &report.context_frequencies[i];
+        assert_eq!(stats.context, BundleContextId(id));
+        assert_eq!(freq.context, stats.context);
+        assert_eq!(stats.flush_context_switch, 1);
+        assert_eq!(stats.flush_end_of_block, i as u64);
+        assert_eq!(stats.bundles_total, 2);
+        assert_eq!(freq.symbol_counts[1], 2);
+    }
+}
+
+#[test]
+fn recorder_splits_remapped_zero_runs_at_nonzero_coefficients_and_end_of_block() {
+    let escape = BundleContextId(u16::MAX);
+    let remap = BundleContextRemap::new(BTreeMap::new(), escape, 0, 0);
+    let mut recorder = BundleStreamRecorder::new(
+        2,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        Some(Arc::new(remap)),
+    );
+    let mut coeffs = [0; BLOCK_PIXELS];
+    coeffs[ZIG_ZAG[6]] = -1;
+    recorder.record_block(0, &coeffs, FrameType::Predicted);
+    recorder.record_eob();
+    let report = recorder.finish();
+    let (first, rest) = report.bundles.split_at(3);
+    assert_eq!(first[0].bits, 3);
+    assert_eq!(first[1].bits, 2);
+    assert!(matches!(first[2].bundle_type, BundleType::SignAndMagnitude));
+    assert_eq!(first[2].bits, 3);
+    assert_eq!(rest.len(), 19);
+    assert!(
+        rest.iter()
+            .all(|b| b.bits == 3 && matches!(b.bundle_type, BundleType::SignificanceRle))
+    );
+    assert!(report.bundles.iter().all(|b| b.context == escape));
+    assert_eq!(report.stats.flush_context_switch, 0);
+}
+
+#[test]
 fn bundle_stream_recorder_flushes_zero_only_blocks() {
     let dims = FrameDimensions::new(8, 8);
     let tables = default_bundle_tables();
@@ -1361,9 +1493,303 @@ fn segment_bundle_roundtrip_validates_payloads() {
     assert_eq!(chroma_roundtrip, vec![chroma0, chroma1]);
 }
 #[test]
+fn sampled_ac_energy_excludes_dc_and_handles_full_range_residuals() {
+    let dims = FrameDimensions::new(8, 8);
+    let source: Vec<_> = (0..64).map(|i| if i % 2 == 0 { 255 } else { 0 }).collect();
+    let opposite: Vec<_> = source.iter().map(|v| 255 - v).collect();
+    let mut costs = PredictionEnergy::default();
+    costs.add_plane(&source, &opposite, dims);
+    assert_eq!(costs.intra, 32 * 32 * 255 * 255);
+    assert_eq!(costs.predicted, 4 * costs.intra);
+    assert_eq!(costs.frame_type(), FrameType::Intra);
+
+    let mut costs = PredictionEnergy::default();
+    costs.add_plane(&[255; 64], &[0; 64], dims);
+    assert_eq!((costs.intra, costs.predicted), (0, 0));
+    assert_eq!(costs.frame_type(), FrameType::Predicted);
+    costs.add_plane(&source, &source, dims);
+    assert_eq!(costs.frame_type(), FrameType::Predicted);
+}
+
+#[test]
+fn sampled_cost_weights_uneven_regions_and_requires_a_strict_margin() {
+    let dims = FrameDimensions::new(7 * 8, 5 * 8);
+    let mut frame = vec![0; dims.pixel_count()];
+    let previous = frame.clone();
+    // The last 2×2-block region is represented by the block at (6, 4).
+    for y in 4 * 8..5 * 8 {
+        for x in 6 * 8..7 * 8 {
+            frame[y * usize::from(dims.width) + x] = if x % 2 == 0 { 255 } else { 0 };
+        }
+    }
+    let mut costs = PredictionEnergy::default();
+    costs.add_plane(&frame, &previous, dims);
+    assert_eq!(costs.intra, 4 * 32 * 32 * 255 * 255);
+    assert_eq!(costs.predicted, costs.intra);
+
+    let mut boundary = PredictionEnergy {
+        intra: 80,
+        predicted: 100,
+    };
+    assert_eq!(boundary.frame_type(), FrameType::Predicted);
+    boundary.intra -= 1;
+    assert_eq!(boundary.frame_type(), FrameType::Intra);
+}
+
+#[test]
+fn chroma_only_cut_refreshes_all_planes_and_the_next_frame_predicts_from_it() {
+    let dims = FrameDimensions::new(18, 14);
+    let cfg = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        frames_per_segment: 3,
+        quantizer: 1,
+        ..Default::default()
+    };
+    let decoder = BaselineDecoder::new(dims, cfg.frame_duration_ns);
+    let luma = vec![RawFrame::new(dims, vec![0; dims.pixel_count()]).unwrap(); 3];
+    let uv_len = dims.pixel_count() / 4;
+    let black = Chroma420Frame::new(dims, vec![0; uv_len], vec![0; uv_len]).unwrap();
+    let mut pattern = black.clone();
+    for (i, sample) in pattern.v.iter_mut().enumerate() {
+        *sample = if i % 2 == 0 { 255 } else { 0 };
+    }
+    let segment = BaselineEncoder::new(cfg)
+        .encode_segment_with_chroma(
+            0,
+            0,
+            0,
+            &luma,
+            Some(&[pattern, black.clone(), black.clone()]),
+            None,
+        )
+        .unwrap();
+    let types: Vec<_> = segment
+        .chunks
+        .iter()
+        .map(|c| FrameType::from_byte(c[12]).unwrap())
+        .collect();
+    assert_eq!(
+        types,
+        [FrameType::Intra, FrameType::Intra, FrameType::Predicted]
+    );
+    // Six luma blocks and two blocks on each padded chroma plane, all DC-only.
+    assert_eq!(segment.chunks[1].len(), FRAME_HEADER_LEN + 8 + 10 * 5);
+    let decoded = decoder.decode_segment(&segment).unwrap();
+    for frame in &decoded[1..] {
+        assert_eq!(frame.luma, luma[0].luma);
+        assert_eq!(frame.chroma.as_ref(), Some(&black));
+    }
+}
+
+#[test]
+fn scene_analysis_validates_both_chroma_planes_before_sampling() {
+    let dims = FrameDimensions::new(18, 14);
+    let cfg = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        ..Default::default()
+    };
+    let frames = vec![RawFrame::new(dims, vec![100; dims.pixel_count()]).unwrap(); 2];
+    let valid = Chroma420Frame::neutral(dims);
+    for short_u in [false, true] {
+        let mut short = valid.clone();
+        if short_u {
+            short.u.pop();
+        } else {
+            short.v.pop();
+        }
+        let constructed = Chroma420Frame::new(dims, short.u.clone(), short.v.clone());
+        let result = BaselineEncoder::new(cfg.clone()).encode_segment_with_chroma(
+            1,
+            0,
+            0,
+            &frames,
+            Some(&[valid.clone(), short]),
+            None,
+        );
+        for error in [constructed.unwrap_err(), result.unwrap_err()] {
+            assert!(matches!(
+                error,
+                CodecError::InvalidFrameLength(FrameLengthMismatch {
+                    actual: 62,
+                    expected: 63
+                })
+            ));
+        }
+    }
+}
+
+#[cfg(feature = "streaming-neural-filter")]
+#[test]
+fn predicted_frame_uses_the_filtered_luma_seen_by_the_decoder() {
+    let dims = FrameDimensions::new(16, 16);
+    let cfg = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        quantizer: 0,
+        frames_per_segment: 2,
+        ..Default::default()
+    };
+    let frame = RawFrame::new(
+        dims,
+        (0..dims.pixel_count()).map(|i| (i * 77) as u8).collect(),
+    )
+    .unwrap();
+    let decoder = BaselineDecoder::new(dims, cfg.frame_duration_ns);
+    let mut encoder = BaselineEncoder::new(cfg);
+    let first = encoder
+        .encode_segment(1, 0, 0, std::slice::from_ref(&frame), None)
+        .unwrap();
+    let displayed = decoder.decode_segment(&first).unwrap().remove(0).luma;
+    assert_ne!(frame.luma, displayed);
+    let repeat = RawFrame::new(dims, displayed.clone()).unwrap();
+    let encoded = encoder
+        .encode_segment(1, 0, 0, &[frame, repeat], None)
+        .unwrap();
+    assert_eq!(encoded.chunks[1][12], FrameType::Predicted.as_byte());
+    assert_eq!(
+        encoded.chunks[1].len(),
+        FRAME_HEADER_LEN + dims.block_count() * 5
+    );
+    let mut expected = displayed;
+    apply_neural_filter(&mut expected, dims);
+    assert_eq!(decoder.decode_segment(&encoded).unwrap()[1].luma, expected);
+}
+
+#[test]
+fn ac_zero_midpoints_save_tokens_for_both_signs() {
+    for sign in [1, -1] {
+        let mut transform = [0; BLOCK_PIXELS];
+        transform[0] = 8 * sign; // DC delta always occupies two bytes.
+        transform[2] = 5 * sign; // AC step 10, exact midpoint.
+        transform[3] = 9 * sign; // AC step 16, past the midpoint.
+        transform[1] = 6 * sign; // AC step 11, odd steps have no tie.
+        let levels = quantize_coeffs(&transform, 1);
+        assert_eq!(&levels[..4], &[sign as i16, sign as i16, 0, sign as i16]);
+        assert_eq!(quantize_coeffs(&transform, 0)[2], (5 * sign) as i16);
+    }
+}
+
+#[test]
+fn rdo_minimizes_transform_error_for_the_available_tokens() {
+    // Exhaustively compare all subsets on a small set of coefficients. Vary the
+    // source magnitude to exercise empty, partial, and full budgets.
+    let slots = [1, 4, 8, 15, 40, 63];
+    for amplitude in [0, 1, 3, 8, 32] {
+        let mut transform = [0; BLOCK_PIXELS];
+        for (&slot, c) in slots.iter().zip([18, -22, 45, -91, 15, 133]) {
+            transform[slot] = amplitude * c;
+        }
+        let original = quantize_coeffs(&transform, 1);
+        let budget = slots
+            .iter()
+            .filter(|&&i| original[i].unsigned_abs() >= 4)
+            .count() as u32;
+        let mut selected = original;
+        let mut optimizer = BlockRdo::new(RdoMode::DynamicProgramming, 1, 2, None).unwrap();
+        optimizer.select_levels(&transform, &mut selected, FrameType::Intra, 0);
+        let error = |levels: &[i16; BLOCK_PIXELS]| -> i64 {
+            let decoded = dequantize_coeffs(levels, 1);
+            slots
+                .iter()
+                .map(|&i| i64::from(transform[i] - decoded[i]).pow(2))
+                .sum()
+        };
+        let selected_error = error(&selected);
+        assert_eq!(
+            selected.iter().filter(|&&x| x != 0).count(),
+            budget as usize
+        );
+        for mask in 0u32..(1 << slots.len()) {
+            if mask.count_ones() <= budget {
+                let mut alternative = [0; BLOCK_PIXELS];
+                for (i, &slot) in slots.iter().enumerate() {
+                    if mask & (1 << i) != 0 {
+                        alternative[slot] = original[slot];
+                    }
+                }
+                assert!(
+                    selected_error <= error(&alternative),
+                    "amplitude={amplitude}, mask={mask}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rdo_breaks_equal_reconstruction_gains_by_raster_position() {
+    let mut transform = [0; BLOCK_PIXELS];
+    transform[2] = 40; // The one level of magnitude 4 sets a one-token budget.
+    transform[3] = -48;
+    transform[18] = 48; // Same step and reconstruction gain as slot 3.
+    let mut levels = quantize_coeffs(&transform, 1);
+    let mut optimizer = BlockRdo::new(RdoMode::DynamicProgramming, 1, 2, None).unwrap();
+    optimizer.select_levels(&transform, &mut levels, FrameType::Predicted, 3);
+    assert_eq!((levels[2], levels[3], levels[18]), (0, -3, 0));
+}
+
+#[test]
+fn rdo_reports_luma_record_bits_before_frame_compression() {
+    let dims = FrameDimensions::new(15, 11);
+    let frames: Vec<_> = (0..3)
+        .map(|n| {
+            RawFrame::new(
+                dims,
+                (0..dims.pixel_count())
+                    .map(|i| ((i * 13 + n * 23) % 256) as u8)
+                    .collect(),
+            )
+            .unwrap()
+        })
+        .collect();
+    for mode in [
+        RdoMode::DynamicProgramming,
+        RdoMode::Perceptual,
+        RdoMode::Neural,
+    ] {
+        let cfg = BaselineEncoderConfig {
+            frame_dimensions: dims,
+            frames_per_segment: 3,
+            quantizer: 1,
+            rdo_mode: mode,
+            ..Default::default()
+        };
+        let decoder = BaselineDecoder::new(dims, cfg.frame_duration_ns);
+        let mut encoder = BaselineEncoder::new(cfg);
+        let segment = encoder.encode_segment(1, 0, 0, &frames, None).unwrap();
+        let decoded = decoder.decode_segment(&segment).unwrap();
+        assert_eq!(decoded.len(), frames.len());
+        assert!(decoded.iter().all(|f| f.luma.len() == dims.pixel_count()));
+        let report = encoder.bundled_telemetry().unwrap().rdo.as_ref().unwrap();
+        let block_bytes: usize = segment
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let body = &chunk[FRAME_HEADER_LEN..];
+                if chunk[12] & FRAME_ZSTD == 0 {
+                    body.len()
+                } else {
+                    zstd::decompressed_size(body).unwrap() as usize
+                }
+            })
+            .sum();
+        assert_eq!(report.after_rate_bits, block_bytes as u64 * 8);
+        assert!(report.after_rate_bits < report.before_rate_bits);
+        assert_eq!(report.blocks_optimized, 12);
+        if mode == RdoMode::Neural {
+            assert_eq!(
+                report.neural_class_histogram.iter().sum::<u64>(),
+                report.blocks_optimized
+            );
+        }
+        let repeat = encoder.encode_segment(1, 0, 0, &frames, None).unwrap();
+        assert_eq!(repeat.chunks, segment.chunks);
+    }
+}
+
+#[test]
 fn rdo_perceptual_uses_softer_lambda() {
-    let default = rdo_lambda_for_mode(RdoMode::DynamicProgramming, 20);
-    let perceptual = rdo_lambda_for_mode(RdoMode::Perceptual, 20);
+    let default = rdo_lambda_hundredths(RdoMode::DynamicProgramming, 20);
+    let perceptual = rdo_lambda_hundredths(RdoMode::Perceptual, 20);
     assert!(
         perceptual < default,
         "perceptual lambda should be softer than default for SSIM bias"
@@ -1495,6 +1921,235 @@ fn verify_segment_rejects_audio_skew_beyond_tolerance() {
         SegmentError::AudioTimestampMismatch(info) if info.index == 1
     ));
 }
+#[test]
+fn frame_packing_requires_a_size_win_and_preserves_the_header() {
+    for len in [MIN_FRAME_COMPRESSION_BYTES - 1, MIN_FRAME_COMPRESSION_BYTES] {
+        let mut chunk = vec![0; FRAME_HEADER_LEN + len];
+        chunk[12] = FrameType::Predicted.as_byte();
+        let original = chunk.clone();
+        compress_frame_body(&mut chunk).unwrap();
+        if len < MIN_FRAME_COMPRESSION_BYTES {
+            assert_eq!(chunk, original);
+        } else {
+            assert!(chunk.len() < original.len());
+            assert_eq!(chunk[12], FRAME_ZSTD | 1);
+            let mut header = chunk[..FRAME_HEADER_LEN].to_vec();
+            header[12] &= !FRAME_ZSTD;
+            assert_eq!(header, original[..FRAME_HEADER_LEN]);
+            let records = decompress_frame_body(&chunk[FRAME_HEADER_LEN..], 4, 0).unwrap();
+            assert_eq!(records, original[FRAME_HEADER_LEN..]);
+        }
+    }
+
+    let mut literal = vec![0; FRAME_HEADER_LEN];
+    // A sequence of distinct literals is cheaper to transmit directly at this length.
+    literal.extend(0..=255);
+    let original = literal.clone();
+    compress_frame_body(&mut literal).unwrap();
+    assert_eq!(literal, original);
+}
+
+#[test]
+fn compressed_payload_requires_one_sized_frame_within_the_block_budget() {
+    let records = [0; 256];
+    let compressed = zstd::bulk::compress(&records, 1).unwrap();
+    assert!(matches!(
+        decompress_frame_body(&compressed, 1, 0),
+        Err(CodecError::InvalidCompressedFrame)
+    ));
+    assert!(matches!(
+        decompress_frame_body(&compressed, 64, 0),
+        Err(CodecError::InvalidCompressedFrame)
+    ));
+    let unsized_frame = zstd::stream::encode_all(records.as_slice(), 1).unwrap();
+    let concatenated = [compressed.as_slice(), compressed.as_slice()].concat();
+    let truncated = &compressed[..compressed.len() - 1];
+    for body in [unsized_frame.as_slice(), &concatenated, truncated, &[]] {
+        assert!(matches!(
+            decompress_frame_body(body, 4, 0),
+            Err(CodecError::InvalidCompressedFrame)
+        ));
+    }
+    assert!(matches!(
+        FrameType::from_byte(FRAME_ZSTD | 2),
+        Err(CodecError::UnknownFrameType(0x82))
+    ));
+}
+
+#[test]
+fn sparse_dct_paths_match_the_full_kernels() {
+    let mut residual = [0; BLOCK_PIXELS];
+    assert_eq!(forward_dct(&residual), forward_dct_full(&residual));
+    residual[BLOCK_PIXELS - 1] = -255;
+    assert_eq!(forward_dct(&residual), forward_dct_full(&residual));
+
+    let mut coeffs = [0; BLOCK_PIXELS];
+    for dc in (-36..=36).chain([
+        i32::MIN,
+        -262_145,
+        -262_140,
+        -255,
+        255,
+        262_140,
+        262_145,
+        i32::MAX,
+    ]) {
+        coeffs[0] = dc;
+        assert_eq!(inverse_dct(&coeffs), inverse_dct_full(&coeffs), "DC {dc}");
+    }
+    coeffs[0] = 23;
+    coeffs[BLOCK_PIXELS - 1] = -97;
+    assert_eq!(inverse_dct(&coeffs), inverse_dct_full(&coeffs));
+}
+
+#[test]
+fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
+    let dims = FrameDimensions::new(16, 8);
+    let plane: Vec<_> = (0..dims.pixel_count()).map(|i| (i * 37) as u8).collect();
+    let previous: Vec<_> = plane.iter().map(|v| v / 3).collect();
+    for (kind, reference) in [
+        (FrameType::Intra, None),
+        (FrameType::Predicted, Some(previous.as_slice())),
+    ] {
+        let encode = |retain| {
+            BaselineEncoder::encode_frame_payload(
+                &plane,
+                kind,
+                reference,
+                dims,
+                16,
+                retain,
+                &mut NoopBundledHooks,
+                None,
+            )
+        };
+        let (with_reference, pixels) = encode(true);
+        let (terminal, discarded) = encode(false);
+        assert_eq!(terminal, with_reference);
+        assert_eq!(pixels.unwrap().len(), dims.pixel_count());
+        assert!(discarded.is_none());
+    }
+}
+
+#[test]
+fn centered_energy_bound_preserves_quantized_levels() {
+    let check = |block: &[i16; BLOCK_PIXELS], qp| {
+        let full = forward_dct_full(block);
+        let screened = forward_dct_for_quantization(block, qp);
+        assert_eq!(screened[0], full[0]);
+        assert_eq!(quantize_coeffs(&screened, qp), quantize_coeffs(&full, qp));
+    };
+    // At Q16, alternating +/-9 lies just below the threshold and +/-10 above it.
+    for (swing, skipped) in [(9, true), (10, false)] {
+        let block = std::array::from_fn(|i| if i % 2 == 0 { 120 + swing } else { 120 - swing });
+        let full = forward_dct_full(&block);
+        assert!(full[1..].iter().any(|&v| v != 0));
+        let screened = forward_dct_for_quantization(&block, 16);
+        assert_eq!(screened[1..].iter().all(|&v| v == 0), skipped);
+        check(&block, 16);
+    }
+    // Exercise DC midpoints of both signs, extremes, and both sides of the bound.
+    let mut tie = [0; BLOCK_PIXELS];
+    tie[10] = 14;
+    tie[50] = -10;
+    let mut state = 0x9e37_79b9u32;
+    for qp in [0, 1, 2, 7, 16, 63, 127, 255] {
+        for block in [
+            tie,
+            tie.map(|v| -v),
+            [i16::MIN; BLOCK_PIXELS],
+            [i16::MAX; BLOCK_PIXELS],
+        ] {
+            check(&block, qp);
+        }
+        for span in [1_i32, 4, 9, 32, 255, 32767] {
+            for offset in [-64_i32, 0, 192] {
+                let block = std::array::from_fn(|_| {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let x = (state >> 16) as i32 % (2 * span + 1) - span + offset;
+                    x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+                });
+                check(&block, qp);
+            }
+        }
+    }
+}
+
+#[test]
+fn dct_tables_satisfy_centered_projection_bound() {
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    let basis = DCT_FACTORS_Q15.map(|r| r.map(|v| f64::from(v) / 32768.0));
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    let basis = DCT_FACTORS;
+    for (i, row) in basis.iter().enumerate() {
+        assert!(row.iter().map(|x| x * x).sum::<f64>() <= 65.0 / 64.0);
+        if i > 0 {
+            assert!(row.iter().sum::<f64>().abs() < 1e-12);
+        } else {
+            assert!(row.iter().all(|&v| v == row[0]));
+        }
+    }
+}
+
+#[test]
+fn separable_forward_dct_matches_direct_evaluation() {
+    fn check(block: &[i16; BLOCK_PIXELS]) {
+        let transformed = forward_dct_full(block);
+        for u in 0..BLOCK_SIZE {
+            for v in 0..BLOCK_SIZE {
+                #[cfg(feature = "streaming-fixed-point-dct")]
+                let direct = {
+                    let mut sum = 0_i64;
+                    for x in 0..BLOCK_SIZE {
+                        for y in 0..BLOCK_SIZE {
+                            sum += i64::from(block[x * BLOCK_SIZE + y])
+                                * i64::from(DCT_FACTORS_Q15[u][x])
+                                * i64::from(DCT_FACTORS_Q15[v][y]);
+                        }
+                    }
+                    round_q30(sum) as i32
+                };
+                #[cfg(not(feature = "streaming-fixed-point-dct"))]
+                let direct = direct_dct_coefficient(block, &DCT_FACTORS[u], &DCT_FACTORS[v]);
+                assert_eq!(
+                    transformed[u * BLOCK_SIZE + v],
+                    direct,
+                    "coefficient ({u}, {v})"
+                );
+            }
+        }
+    }
+
+    // At DC these two samples sum to exactly +0.5 in direct evaluation.
+    // Rounding the unguarded two-pass result would choose zero.
+    let mut tie = [0; BLOCK_PIXELS];
+    tie[10] = 14;
+    tie[50] = -10;
+    check(&tie);
+    check(&tie.map(|v| -v));
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    assert_eq!(
+        (
+            forward_dct_full(&tie)[0],
+            forward_dct_full(&tie.map(|v| -v))[0]
+        ),
+        (1, -1)
+    );
+
+    for value in [i16::MIN, -255, 0, 255, i16::MAX] {
+        check(&[value; BLOCK_PIXELS]);
+    }
+    let mut state = 0x32d0_37b5u32;
+    for i in 0..256 {
+        let block = std::array::from_fn(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let value = (state >> 16) as i16;
+            if i % 2 == 0 { value % 256 } else { value }
+        });
+        check(&block);
+    }
+}
+
 #[test]
 fn forward_dct_quantization_matches_golden() {
     let dct = forward_dct(&JPEG_SAMPLE_BLOCK);

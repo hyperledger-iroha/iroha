@@ -18,7 +18,8 @@ use crate as norito;
 use norito_derive::{NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    borrow::Cow,
+    collections::BTreeMap,
     convert::TryInto,
     fs,
     path::Path,
@@ -29,11 +30,14 @@ use toml::Value as TomlValue;
 pub(crate) const BLOCK_SIZE: usize = 8;
 pub(crate) const BLOCK_PIXELS: usize = BLOCK_SIZE * BLOCK_SIZE;
 pub(crate) const FRAME_HEADER_LEN: usize = 16;
+pub(super) const FRAME_ZSTD: u8 = 0x80;
+// Avoid starting a compressor for tiny plane payloads.
+const MIN_FRAME_COMPRESSION_BYTES: usize = 256;
 const RLE_EOB: u8 = 0xFF;
 const MAX_ZERO_RUN: usize = 254;
 const RLE_TOKEN_BITS: u64 = 24;
-const RLE_TOKEN_BITS_F: f32 = 24.0;
-const RLE_EOB_BITS_F: f32 = 24.0;
+// One AC run always fits in the byte that accompanies its nonzero level.
+const _: () = assert!(BLOCK_PIXELS - 1 <= MAX_ZERO_RUN);
 const RDO_ENERGY_BUCKETS: [u32; RDO_BUCKET_COUNT - 1] = [64, 256, 1024, 4096];
 const NEURAL_FEATURES: usize = 8;
 const NEURAL_HIDDEN: usize = 32;
@@ -551,6 +555,17 @@ const BASELINE_QUANT_MATRIX: [u8; 64] = [
     14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
     92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
 ];
+const MIN_AC_WEIGHT: u8 = {
+    let mut min = u8::MAX;
+    let mut i = 1;
+    while i < BLOCK_PIXELS {
+        if BASELINE_QUANT_MATRIX[i] < min {
+            min = BASELINE_QUANT_MATRIX[i];
+        }
+        i += 1;
+    }
+    min
+};
 const ZIG_ZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
@@ -570,10 +585,10 @@ impl FrameType {
         }
     }
     pub(crate) fn from_byte(byte: u8) -> Result<Self, CodecError> {
-        match byte {
+        match byte & !FRAME_ZSTD {
             0 => Ok(Self::Intra),
             1 => Ok(Self::Predicted),
-            other => Err(CodecError::UnknownFrameType(other)),
+            _ => Err(CodecError::UnknownFrameType(byte)),
         }
     }
     pub(crate) fn reset_dc(self) -> bool {
@@ -1297,13 +1312,20 @@ impl Chroma420Frame {
     pub fn new(dimensions: FrameDimensions, u: Bytes, v: Bytes) -> Result<Self, CodecError> {
         ensure_chroma_even_dimensions(dimensions)?;
         let expected = usize::from(dimensions.width / 2) * usize::from(dimensions.height / 2);
-        if u.len() != expected || v.len() != expected {
-            return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
-                expected: saturating_usize_to_u32(expected),
-                actual: saturating_usize_to_u32(u.len().max(v.len())),
-            }));
+        let frame = Self { u, v };
+        frame.validate_plane_lengths(expected)?;
+        Ok(frame)
+    }
+    fn validate_plane_lengths(&self, expected: usize) -> Result<(), CodecError> {
+        for actual in [self.u.len(), self.v.len()] {
+            if actual != expected {
+                return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
+                    expected: saturating_usize_to_u32(expected),
+                    actual: saturating_usize_to_u32(actual),
+                }));
+            }
         }
-        Ok(Self { u, v })
+        Ok(())
     }
     /// Build a neutral 4:2:0 chroma frame (U/V filled with 128).
     pub fn neutral(dimensions: FrameDimensions) -> Self {
@@ -1355,7 +1377,6 @@ pub struct BaselineEncoder {
     audio: Option<AudioEncoderState>,
     bundled_telemetry: Option<BundledTelemetry>,
     bundle_tables: Arc<BundleAnsTables>,
-    rdo_lambda: f32,
     neural_predictor: Option<NeuralPredictor>,
 }
 pub(crate) fn pad_frame_luma(
@@ -1427,13 +1448,11 @@ impl BaselineEncoder {
         let neural_seed = config.rdo_neural_seed.unwrap_or(DEFAULT_NEURAL_SEED);
         let neural_predictor =
             (config.rdo_mode == RdoMode::Neural).then(|| NeuralPredictor::from_seed(neural_seed));
-        let rdo_lambda = rdo_lambda_for_mode(config.rdo_mode, config.quantizer);
         Self {
             bundle_tables,
             config,
             audio: None,
             bundled_telemetry: None,
-            rdo_lambda,
             neural_predictor,
         }
     }
@@ -1636,8 +1655,12 @@ impl BaselineEncoder {
                 self.config.bundle_context_remap.clone(),
             )
         });
-        let mut rdo_builder =
-            RdoTelemetryBuilder::new(self.config.rdo_mode, self.rdo_lambda, NEURAL_OUTPUT);
+        let mut rdo = BlockRdo::new(
+            self.config.rdo_mode,
+            self.config.quantizer,
+            self.config.bundle_width,
+            self.neural_predictor.as_ref(),
+        );
         let mut noop_hooks = NoopBundledHooks;
         for (idx, frame) in frames.iter().enumerate() {
             if frame.luma.len() != frame_len {
@@ -1646,20 +1669,35 @@ impl BaselineEncoder {
                     actual: saturating_usize_to_u32(frame.luma.len()),
                 }));
             }
-            let padded_storage = if dims == aligned_dims {
-                None
-            } else {
-                Some(pad_frame_luma(&frame.luma, dims, aligned_dims))
-            };
-            let frame_slice: &[u8] = if let Some(ref buf) = padded_storage {
-                buf.as_slice()
-            } else {
-                frame.luma.as_slice()
-            };
-            let frame_type = if idx == 0 {
-                FrameType::Intra
-            } else {
-                FrameType::Predicted
+            let luma = padded_plane(&frame.luma, dims, aligned_dims);
+            let chroma = chroma_frames
+                .get(idx)
+                .map(|planes| -> Result<_, CodecError> {
+                    planes.validate_plane_lengths(chroma_dims.pixel_count())?;
+                    Ok((
+                        padded_plane(&planes.u, chroma_dims, chroma_aligned),
+                        padded_plane(&planes.v, chroma_dims, chroma_aligned),
+                    ))
+                })
+                .transpose()?;
+            let prev_ref = reconstructed_prev.as_deref();
+            let frame_type = match prev_ref {
+                None => FrameType::Intra,
+                // Without quantization, smaller AC magnitudes need just as many run/level bytes.
+                Some(_) if self.config.quantizer == 0 => FrameType::Predicted,
+                Some(previous) => {
+                    let mut costs = PredictionEnergy::default();
+                    costs.add_plane(&luma, previous, aligned_dims);
+                    if let (Some((u, v)), Some(prev_u), Some(prev_v)) = (
+                        &chroma,
+                        previous_chroma_u.as_deref(),
+                        previous_chroma_v.as_deref(),
+                    ) {
+                        costs.add_plane(u, prev_u, chroma_aligned);
+                        costs.add_plane(v, prev_v, chroma_aligned);
+                    }
+                    costs.frame_type()
+                }
             };
             let idx_delta = frame_step
                 .checked_mul(idx as u64)
@@ -1667,29 +1705,28 @@ impl BaselineEncoder {
             let pts = timeline_start_ns
                 .checked_add(idx_delta)
                 .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
-            let prev_ref = reconstructed_prev.as_deref();
             let hooks: &mut dyn BundledHooks = bundler
                 .as_mut()
                 .map(|rec| rec as &mut dyn BundledHooks)
                 .unwrap_or(&mut noop_hooks);
+            // Prediction references live only until the next frame in this segment.
+            let retain_reference = idx + 1 < frames.len();
             let (payload, recon) = Self::encode_frame_payload(
-                frame_slice,
+                &luma,
                 frame_type,
                 prev_ref,
                 aligned_dims,
                 self.config.quantizer,
+                retain_reference,
                 hooks,
-                rdo_builder.as_mut(),
-                self.neural_predictor.as_ref(),
-                self.config.bundle_width,
-                self.config.rdo_mode,
-            )?;
-            let chroma_planes = chroma_frames.get(idx);
+                rdo.as_mut(),
+            );
             let mut chunk = Vec::with_capacity(
                 FRAME_HEADER_LEN
                     + payload.len()
-                    + chroma_planes
-                        .map(|planes| planes.u.len().saturating_add(planes.v.len()) + 8)
+                    + chroma
+                        .as_ref()
+                        .map(|_| 2 * chroma_dims.pixel_count() + 8)
                         .unwrap_or(0),
             );
             chunk.extend_from_slice(&(idx as u32).to_le_bytes());
@@ -1698,54 +1735,29 @@ impl BaselineEncoder {
             chunk.push(self.config.quantizer);
             chunk.extend_from_slice(&chunk_count_u16.to_le_bytes());
             chunk.extend_from_slice(&payload);
-            if let Some(planes) = chroma_planes {
-                let expected_chroma_len = chroma_dims.pixel_count();
-                if planes.u.len() != expected_chroma_len || planes.v.len() != expected_chroma_len {
-                    return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
-                        expected: saturating_usize_to_u32(expected_chroma_len),
-                        actual: saturating_usize_to_u32(planes.u.len().max(planes.v.len())),
-                    }));
-                }
-                let padded_u = if chroma_dims == chroma_aligned {
-                    None
-                } else {
-                    Some(pad_frame_luma(&planes.u, chroma_dims, chroma_aligned))
-                };
-                let padded_v = if chroma_dims == chroma_aligned {
-                    None
-                } else {
-                    Some(pad_frame_luma(&planes.v, chroma_dims, chroma_aligned))
-                };
+            if let Some((u, v)) = chroma {
                 let (u_payload, u_recon) = Self::encode_frame_payload(
-                    padded_u
-                        .as_ref()
-                        .map_or_else(|| planes.u.as_slice(), Vec::as_slice),
+                    &u,
                     frame_type,
                     previous_chroma_u.as_deref(),
                     chroma_aligned,
                     self.config.quantizer,
+                    retain_reference,
                     &mut noop_hooks,
                     None,
-                    None,
-                    1,
-                    RdoMode::None,
-                )?;
+                );
                 let (v_payload, v_recon) = Self::encode_frame_payload(
-                    padded_v
-                        .as_ref()
-                        .map_or_else(|| planes.v.as_slice(), Vec::as_slice),
+                    &v,
                     frame_type,
                     previous_chroma_v.as_deref(),
                     chroma_aligned,
                     self.config.quantizer,
+                    retain_reference,
                     &mut noop_hooks,
                     None,
-                    None,
-                    1,
-                    RdoMode::None,
-                )?;
-                previous_chroma_u = Some(u_recon);
-                previous_chroma_v = Some(v_recon);
+                );
+                previous_chroma_u = u_recon;
+                previous_chroma_v = v_recon;
                 chunk.extend_from_slice(&(u_payload.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(&(v_payload.len() as u32).to_le_bytes());
                 chunk.extend_from_slice(&u_payload);
@@ -1754,13 +1766,17 @@ impl BaselineEncoder {
                 previous_chroma_u = None;
                 previous_chroma_v = None;
             }
+            compress_frame_body(&mut chunk)?;
             chunks.push(chunk);
-            reconstructed_prev = Some(recon);
+            reconstructed_prev = recon;
+            #[cfg(feature = "streaming-neural-filter")]
+            if let Some(pixels) = reconstructed_prev.as_mut() {
+                apply_neural_filter(pixels, aligned_dims);
+            }
         }
-        let rdo_report = rdo_builder.and_then(RdoTelemetryBuilder::finish);
         self.bundled_telemetry = bundler.map(|rec| {
             let mut telemetry = rec.finish();
-            telemetry.rdo = rdo_report;
+            telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
             telemetry
         });
         let offsets_and_lengths = compute_offsets(&chunks);
@@ -1833,15 +1849,13 @@ impl BaselineEncoder {
         prev_frame: Option<&[u8]>,
         dims: FrameDimensions,
         quantizer: u8,
+        retain_reference: bool,
         hooks: &mut dyn BundledHooks,
-        mut rdo: Option<&mut RdoTelemetryBuilder>,
-        neural_predictor: Option<&NeuralPredictor>,
-        bundle_width: u8,
-        rdo_mode: RdoMode,
-    ) -> Result<(Vec<u8>, Vec<u8>), CodecError> {
+        mut rdo: Option<&mut BlockRdo<'_>>,
+    ) -> (Vec<u8>, Option<Vec<u8>>) {
         debug_assert_eq!(frame.len(), dims.pixel_count());
         let mut payload = Vec::with_capacity(frame.len() / 2);
-        let mut reconstructed = vec![0u8; dims.pixel_count()];
+        let mut reconstructed = retain_reference.then(|| vec![0u8; dims.pixel_count()]);
         let mut prev_dc = 0i16;
         if frame_type.reset_dc() {
             prev_dc = 0;
@@ -1849,20 +1863,10 @@ impl BaselineEncoder {
         for block_index in 0..dims.block_count() {
             let (residual, predictor) =
                 build_residual_block(frame, prev_frame, dims, block_index, frame_type);
-            let coeffs = forward_dct(&residual);
+            let coeffs = forward_dct_for_quantization(&residual, quantizer);
             let mut quantized = quantize_coeffs(&coeffs, quantizer);
-            if let Some(builder) = rdo.as_deref_mut() {
-                let report = optimize_block_dp(
-                    &mut quantized,
-                    rdo_mode,
-                    builder.lambda_bits,
-                    neural_predictor,
-                    bundle_width,
-                    quantizer,
-                    frame_type,
-                    block_index,
-                );
-                builder.record(&report);
+            if let Some(optimizer) = rdo.as_deref_mut() {
+                optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
             }
             encode_block_rle(
                 &quantized,
@@ -1872,11 +1876,115 @@ impl BaselineEncoder {
                 block_index,
                 frame_type,
             );
-            let dequantized = dequantize_coeffs(&quantized, quantizer);
-            let spatial = inverse_dct(&dequantized);
-            write_reconstructed_block(&mut reconstructed, &spatial, &predictor, dims, block_index);
+            if let Some(pixels) = reconstructed.as_mut() {
+                let dequantized = dequantize_coeffs(&quantized, quantizer);
+                let spatial = inverse_dct(&dequantized);
+                write_reconstructed_block(pixels, &spatial, &predictor, dims, block_index);
+            }
         }
-        Ok((payload, reconstructed))
+        (payload, reconstructed)
+    }
+}
+/// Pack the whole plane payload before computing chunk offsets and commitments.
+fn compress_frame_body(chunk: &mut Vec<u8>) -> Result<(), CodecError> {
+    let body = &chunk[FRAME_HEADER_LEN..];
+    if body.len() >= MIN_FRAME_COMPRESSION_BYTES {
+        let compressed =
+            zstd::bulk::compress(body, 1).map_err(|_| CodecError::FrameCompressionFailed)?;
+        if compressed.len() < body.len() {
+            chunk[12] |= FRAME_ZSTD;
+            chunk.truncate(FRAME_HEADER_LEN);
+            chunk.extend_from_slice(&compressed);
+            // The segment retains every chunk until delivery.
+            chunk.shrink_to_fit();
+        }
+    }
+    Ok(())
+}
+
+/// Open a single sized Zstandard frame within the geometry's largest possible RLE payload.
+pub(super) fn decompress_frame_body(
+    body: &[u8],
+    luma_blocks: usize,
+    chroma_blocks: usize,
+) -> Result<Vec<u8>, CodecError> {
+    // Each block holds a DC delta, up to 63 AC records and an end marker.
+    let max_bytes = (luma_blocks + 2 * chroma_blocks) * (2 + 3 * BLOCK_PIXELS) + 8;
+    let min_bytes = (5 * luma_blocks).max(1);
+    let size = zstd::decompressed_size(body)
+        .and_then(|size| usize::try_from(size).ok())
+        .filter(|size| (min_bytes..=max_bytes).contains(size))
+        .ok_or(CodecError::InvalidCompressedFrame)?;
+    if zstd::zstd_safe::find_frame_compressed_size(body) != Ok(body.len()) {
+        return Err(CodecError::InvalidCompressedFrame);
+    }
+    let decoded =
+        zstd::bulk::decompress(body, size).map_err(|_| CodecError::InvalidCompressedFrame)?;
+    if decoded.len() != size {
+        return Err(CodecError::InvalidCompressedFrame);
+    }
+    Ok(decoded)
+}
+
+/// Borrow an aligned input plane or extend its edge pixels once for analysis and encoding.
+fn padded_plane(input: &[u8], dims: FrameDimensions, aligned: FrameDimensions) -> Cow<'_, [u8]> {
+    if dims == aligned {
+        Cow::Borrowed(input)
+    } else {
+        Cow::Owned(pad_frame_luma(input, dims, aligned))
+    }
+}
+
+#[derive(Default)]
+struct PredictionEnergy {
+    intra: u64,
+    predicted: u64,
+}
+
+impl PredictionEnergy {
+    // The DC delta always costs two bytes. Estimate AC energy, i.e. variance
+    // about each block's own mean, for the source and previous-frame residual.
+    fn add_plane(&mut self, source: &[u8], previous: &[u8], dims: FrameDimensions) {
+        let stride = usize::from(dims.width);
+        let cols = stride / BLOCK_SIZE;
+        let rows = usize::from(dims.height) / BLOCK_SIZE;
+        let grid_x = cols.min(4);
+        let grid_y = rows.min(4);
+        for y in 0..grid_y {
+            let top = y * rows / grid_y;
+            let bottom = (y + 1) * rows / grid_y;
+            for x in 0..grid_x {
+                let left = x * cols / grid_x;
+                let right = (x + 1) * cols / grid_x;
+                let offset = ((top + bottom) / 2 * stride + (left + right) / 2) * BLOCK_SIZE;
+                let weight = ((right - left) * (bottom - top)) as u64;
+                let (mut sum, mut squares) = (0_i32, 0_i32);
+                let (mut diff_sum, mut diff_squares) = (0_i32, 0_i32);
+                for dy in 0..BLOCK_SIZE {
+                    let start = offset + dy * stride;
+                    for i in start..start + BLOCK_SIZE {
+                        let pixel = i32::from(source[i]);
+                        let diff = pixel - i32::from(previous[i]);
+                        sum += pixel;
+                        squares += pixel * pixel;
+                        diff_sum += diff;
+                        diff_squares += diff * diff;
+                    }
+                }
+                self.intra += weight * (BLOCK_PIXELS as i32 * squares - sum * sum) as u64;
+                self.predicted +=
+                    weight * (BLOCK_PIXELS as i32 * diff_squares - diff_sum * diff_sum) as u64;
+            }
+        }
+    }
+
+    fn frame_type(&self) -> FrameType {
+        // A margin avoids switching references on small changes in sampled texture.
+        if 5 * self.intra < 4 * self.predicted {
+            FrameType::Intra
+        } else {
+            FrameType::Predicted
+        }
     }
 }
 pub(crate) fn block_origin(dims: FrameDimensions, block_index: usize) -> (usize, usize) {
@@ -2047,52 +2155,149 @@ mod block_tests {
         assert_ne!(frame, untouched, "neural filter should change the frame");
     }
 }
-/// Deterministic scalar fixed-point DCT used as the cross-hardware reference.
-/// Accelerated variants must prove bit-exact parity against this path.
 #[cfg(feature = "streaming-fixed-point-dct")]
+fn round_q30(sum: i64) -> i64 {
+    if sum >= 0 {
+        (sum + DCT_ROUND) >> DCT_SHIFT
+    } else {
+        (sum - DCT_ROUND) >> DCT_SHIFT
+    }
+}
+
 pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for u in 0..8 {
-        for v in 0..8 {
-            let mut sum: i64 = 0;
-            for x in 0..8 {
-                for y in 0..8 {
-                    let sample = i64::from(block[x * 8 + y]);
-                    let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
-                    let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                    sum = sum
-                        .saturating_add(sample.saturating_mul(factor_u).saturating_mul(factor_v));
-                }
+    if block.iter().all(|&sample| sample == 0) {
+        return [0; BLOCK_PIXELS];
+    }
+    forward_dct_full(block)
+}
+
+/// Omit AC projections only when every omitted coefficient quantizes to zero.
+fn forward_dct_for_quantization(block: &[i16; BLOCK_PIXELS], quantizer: u8) -> [i32; BLOCK_PIXELS] {
+    if quantizer == 0 {
+        return forward_dct(block);
+    }
+    let (mut sum, mut squares) = (0_i64, 0_i64);
+    for &sample in block {
+        let x = i64::from(sample);
+        sum += x;
+        squares += x * x;
+    }
+    // Cauchy-Schwarz bounds each AC projection by the centered block norm
+    // times the basis norm (at most 65/64 for both coefficient tables).
+    // Two coefficient units cover DC leakage and final signed rounding.
+    let half_step = i64::from(MIN_AC_WEIGHT) * i64::from(quantizer) / 2;
+    let radius = (half_step - 2) * 64 / 65;
+    let energy = BLOCK_PIXELS as i64 * squares - sum * sum;
+    if half_step < 2 || energy > BLOCK_PIXELS as i64 * radius * radius {
+        return forward_dct_full(block);
+    }
+    let mut coeffs = [0; BLOCK_PIXELS];
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    {
+        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+        coeffs[0] = round_q30(sum * basis * basis) as i32;
+    }
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    {
+        // DC equals sum/8 to within the table and evaluation error. Only
+        // sums congruent to 4 modulo 8 can land on a rounding midpoint.
+        coeffs[0] = if sum.rem_euclid(8) == 4 {
+            direct_dct_coefficient(block, &DCT_FACTORS[0], &DCT_FACTORS[0])
+        } else {
+            (sum as f64 * 0.125).round() as i32
+        };
+    }
+    coeffs
+}
+
+/// Apply the Q15 basis along each axis, rounding only the final Q30 sum.
+#[cfg(feature = "streaming-fixed-point-dct")]
+fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    let mut out = [0; BLOCK_PIXELS];
+    for (u, basis_u) in DCT_FACTORS_Q15.iter().enumerate() {
+        let mut row = [0_i64; BLOCK_SIZE];
+        for (&factor, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
+            for (sum, &sample) in row.iter_mut().zip(samples) {
+                *sum += i64::from(sample) * i64::from(factor);
             }
-            let rounded = if sum >= 0 {
-                (sum + DCT_ROUND) >> DCT_SHIFT
-            } else {
-                (sum - DCT_ROUND) >> DCT_SHIFT
-            };
-            out[u * 8 + v] = rounded as i32;
+        }
+        // Even with full-range i16 samples the final sum is bounded by 64 * 2^15 * 2^28.
+        for (v, basis_v) in DCT_FACTORS_Q15.iter().enumerate() {
+            let sum = row
+                .iter()
+                .zip(basis_v)
+                .map(|(&a, &b)| a * i64::from(b))
+                .sum();
+            out[u * BLOCK_SIZE + v] = round_q30(sum) as i32;
         }
     }
     out
 }
+
 #[cfg(not(feature = "streaming-fixed-point-dct"))]
-pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for u in 0..8 {
-        for v in 0..8 {
-            let mut sum = 0.0;
-            for x in 0..8 {
-                for y in 0..8 {
-                    let sample = block[x * 8 + y] as f64;
-                    sum += sample * DCT_FACTORS[u][x] * DCT_FACTORS[v][y];
-                }
+fn forward_dct_full(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    let mut out = [0; BLOCK_PIXELS];
+    for (u, basis_u) in DCT_FACTORS.iter().enumerate() {
+        let mut row = [0.0; BLOCK_SIZE];
+        for (&factor, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
+            for (sum, &sample) in row.iter_mut().zip(samples) {
+                *sum += f64::from(sample) * factor;
             }
-            out[u * 8 + v] = sum.round() as i32;
+        }
+        for (v, basis_v) in DCT_FACTORS.iter().enumerate() {
+            let value: f64 = row.iter().zip(basis_v).map(|(&a, &b)| a * b).sum();
+            let rounded = value.round();
+            // The absolute-product sum is at most 64 * 32768 * 0.5² = 524288.
+            // Both evaluation orders together contribute < 1e-8 absolute error
+            // (at most 66 + 18 rounding steps at unit roundoff 2^-53).
+            out[u * BLOCK_SIZE + v] = if (value - rounded).abs() >= 0.5 - 1e-8 {
+                direct_dct_coefficient(block, basis_u, basis_v)
+            } else {
+                rounded as i32
+            };
         }
     }
     out
 }
-#[cfg(feature = "streaming-fixed-point-dct")]
+
+/// Preserve the reference multiplication and summation order at rounding boundaries.
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+fn direct_dct_coefficient(
+    block: &[i16; BLOCK_PIXELS],
+    basis_u: &[f64; BLOCK_SIZE],
+    basis_v: &[f64; BLOCK_SIZE],
+) -> i32 {
+    let mut sum = 0.0;
+    for (&factor_u, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
+        for (&sample, &factor_v) in samples.iter().zip(basis_v) {
+            sum += f64::from(sample) * factor_u * factor_v;
+        }
+    }
+    sum.round() as i32
+}
+
 pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    if coeffs[1..].iter().all(|&ac| ac == 0) {
+        // The DC basis is constant across every row and column.
+        #[cfg(feature = "streaming-fixed-point-dct")]
+        let sample = {
+            let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+            round_q30(i64::from(coeffs[0]) * basis * basis).clamp(-32768, 32767) as i32
+        };
+        #[cfg(not(feature = "streaming-fixed-point-dct"))]
+        let sample = {
+            let basis = DCT_FACTORS[0][0];
+            (f64::from(coeffs[0]) * basis * basis)
+                .round()
+                .clamp(-32768.0, 32767.0) as i32
+        };
+        return [sample; BLOCK_PIXELS];
+    }
+    inverse_dct_full(coeffs)
+}
+
+#[cfg(feature = "streaming-fixed-point-dct")]
+fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
     let mut out = [0i32; BLOCK_PIXELS];
     for x in 0..8 {
         for y in 0..8 {
@@ -2106,18 +2311,13 @@ pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
                         sum.saturating_add(coeff.saturating_mul(factor_u).saturating_mul(factor_v));
                 }
             }
-            let rounded = if sum >= 0 {
-                (sum + DCT_ROUND) >> DCT_SHIFT
-            } else {
-                (sum - DCT_ROUND) >> DCT_SHIFT
-            };
-            out[x * 8 + y] = rounded.clamp(-32768, 32767) as i32;
+            out[x * 8 + y] = round_q30(sum).clamp(-32768, 32767) as i32;
         }
     }
     out
 }
 #[cfg(not(feature = "streaming-fixed-point-dct"))]
-pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
     let mut out = [0i32; BLOCK_PIXELS];
     for x in 0..8 {
         for y in 0..8 {
@@ -2133,8 +2333,12 @@ pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
     }
     out
 }
-fn qp_scale(quantizer: u8) -> i32 {
-    (quantizer as i32).max(1)
+fn quantization_step(slot: usize, quantizer: u8) -> i32 {
+    if quantizer == 0 {
+        1
+    } else {
+        i32::from(BASELINE_QUANT_MATRIX[slot]) * i32::from(quantizer)
+    }
 }
 pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i16; BLOCK_PIXELS] {
     let mut out = [0i16; BLOCK_PIXELS];
@@ -2144,9 +2348,12 @@ pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i
         }
         return out;
     }
-    let scale = qp_scale(quantizer);
     for (idx, coeff) in coeffs.iter().enumerate() {
-        let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
+        let step = quantization_step(idx, quantizer);
+        // At the first AC midpoint zero has the same distortion and saves a token.
+        if idx != 0 && coeff.unsigned_abs() <= (step / 2) as u32 {
+            continue;
+        }
         let adjusted = if *coeff >= 0 {
             coeff.saturating_add(step / 2)
         } else {
@@ -2168,9 +2375,8 @@ pub(crate) fn dequantize_coeffs(
         }
         return out;
     }
-    let scale = qp_scale(quantizer);
     for (idx, coeff) in coeffs.iter().enumerate() {
-        let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
+        let step = quantization_step(idx, quantizer);
         out[idx] = i32::from(*coeff) * step;
     }
     out
@@ -2216,16 +2422,16 @@ pub struct BundledStats {
     pub flush_end_of_block: u64,
 }
 impl BundledStats {
-    fn record_flush(&mut self, reason: BundleFlushReason) {
+    fn record_flush(&mut self, reason: BundleFlushReason, count: u64) {
         match reason {
             BundleFlushReason::TypeComplete => {
-                self.flush_type_complete = self.flush_type_complete.saturating_add(1);
+                self.flush_type_complete = self.flush_type_complete.saturating_add(count);
             }
             BundleFlushReason::ContextSwitch => {
-                self.flush_context_switch = self.flush_context_switch.saturating_add(1);
+                self.flush_context_switch = self.flush_context_switch.saturating_add(count);
             }
             BundleFlushReason::EndOfBlock => {
-                self.flush_end_of_block = self.flush_end_of_block.saturating_add(1);
+                self.flush_end_of_block = self.flush_end_of_block.saturating_add(count);
             }
         }
     }
@@ -2241,8 +2447,11 @@ pub struct RdoTelemetry {
     pub lambda_bits: f32,
     pub blocks_optimized: u64,
     pub energy_histogram: [u64; RDO_BUCKET_COUNT],
+    /// Luma block payload bits before AC selection, including DC and end markers.
     pub before_rate_bits: u64,
+    /// Luma RLE bits after AC selection, before frame compression and excluding chroma.
     pub after_rate_bits: u64,
+    /// Sum of squared discarded quantized levels.
     pub distortion_penalty: u64,
     pub neural_class_histogram: Vec<u64>,
 }
@@ -2463,107 +2672,145 @@ impl BundleContextStats {
             flush_end_of_block: 0,
         }
     }
-    fn record_bundle(&mut self, bundle_type: BundleType, flush: BundleFlushReason) {
-        self.bundles_total = self.bundles_total.saturating_add(1);
+    fn record_bundle(&mut self, bundle_type: BundleType, flush: BundleFlushReason, count: u64) {
+        self.bundles_total = self.bundles_total.saturating_add(count);
         match bundle_type {
             BundleType::SignificanceOnly => {
-                self.type_significance_only = self.type_significance_only.saturating_add(1);
+                self.type_significance_only = self.type_significance_only.saturating_add(count);
             }
             BundleType::SignAndMagnitude => {
-                self.type_sign_and_magnitude = self.type_sign_and_magnitude.saturating_add(1);
+                self.type_sign_and_magnitude = self.type_sign_and_magnitude.saturating_add(count);
             }
             BundleType::SignParity => {
-                self.type_sign_parity = self.type_sign_parity.saturating_add(1);
+                self.type_sign_parity = self.type_sign_parity.saturating_add(count);
             }
             BundleType::SignParityLevel => {
-                self.type_sign_parity_level = self.type_sign_parity_level.saturating_add(1);
+                self.type_sign_parity_level = self.type_sign_parity_level.saturating_add(count);
             }
             BundleType::SignificanceRle => {
-                self.type_significance_rle = self.type_significance_rle.saturating_add(1);
+                self.type_significance_rle = self.type_significance_rle.saturating_add(count);
             }
         }
-        self.record_flush(flush);
+        self.record_flush(flush, count);
     }
-    fn record_flush(&mut self, flush: BundleFlushReason) {
+    fn record_flush(&mut self, flush: BundleFlushReason, count: u64) {
         match flush {
             BundleFlushReason::TypeComplete => {
-                self.flush_type_complete = self.flush_type_complete.saturating_add(1);
+                self.flush_type_complete = self.flush_type_complete.saturating_add(count);
             }
             BundleFlushReason::ContextSwitch => {
-                self.flush_context_switch = self.flush_context_switch.saturating_add(1);
+                self.flush_context_switch = self.flush_context_switch.saturating_add(count);
             }
             BundleFlushReason::EndOfBlock => {
-                self.flush_end_of_block = self.flush_end_of_block.saturating_add(1);
+                self.flush_end_of_block = self.flush_end_of_block.saturating_add(count);
             }
         }
     }
 }
-#[derive(Clone, Copy)]
-struct DpReport {
-    energy: u32,
-    before_bits: u64,
-    after_bits: u64,
-    distortion_penalty: u64,
-    neural_class: Option<usize>,
+struct BlockRdo<'a> {
+    quantizer: u8,
+    bundle_width: u8,
+    predictor: Option<&'a NeuralPredictor>,
+    lambda_hundredths: u32,
+    telemetry: RdoTelemetry,
 }
-struct RdoTelemetryBuilder {
-    mode: RdoMode,
-    lambda_bits: f32,
-    energy_histogram: [u64; RDO_BUCKET_COUNT],
-    before_bits: u64,
-    after_bits: u64,
-    distortion_penalty: u64,
-    neural_histogram: Vec<u64>,
-    blocks: u64,
-}
-impl RdoTelemetryBuilder {
-    fn new(mode: RdoMode, lambda_bits: f32, neural_classes: usize) -> Option<Self> {
+impl<'a> BlockRdo<'a> {
+    fn new(
+        mode: RdoMode,
+        quantizer: u8,
+        bundle_width: u8,
+        predictor: Option<&'a NeuralPredictor>,
+    ) -> Option<Self> {
         if !mode.is_enabled() {
             return None;
         }
-        let mut neural_histogram = Vec::new();
-        if matches!(mode, RdoMode::Neural) && neural_classes > 0 {
-            neural_histogram.resize(neural_classes, 0);
-        }
-        Some(Self {
+        let lambda_hundredths = rdo_lambda_hundredths(mode, quantizer);
+        let telemetry = RdoTelemetry {
             mode,
-            lambda_bits,
-            energy_histogram: [0; RDO_BUCKET_COUNT],
-            before_bits: 0,
-            after_bits: 0,
-            distortion_penalty: 0,
-            neural_histogram,
-            blocks: 0,
+            lambda_bits: lambda_hundredths as f32 / 100.0,
+            neural_class_histogram: if predictor.is_some() {
+                vec![0; NEURAL_OUTPUT]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        };
+        Some(Self {
+            quantizer,
+            bundle_width,
+            predictor,
+            lambda_hundredths,
+            telemetry,
         })
     }
-    fn record(&mut self, report: &DpReport) {
-        let bucket = energy_bucket(report.energy);
-        if let Some(slot) = self.energy_histogram.get_mut(bucket) {
-            *slot = slot.saturating_add(1);
+    fn select_levels(
+        &mut self,
+        transform: &[i32; BLOCK_PIXELS],
+        levels: &mut [i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        block_index: usize,
+    ) {
+        let report = &mut self.telemetry;
+        let energy = block_energy(levels);
+        let bucket = energy_bucket(energy);
+        report.energy_histogram[bucket] = report.energy_histogram[bucket].saturating_add(1);
+        let class_scale = if let Some(net) = self.predictor {
+            let features = build_neural_features(
+                levels,
+                energy,
+                self.bundle_width,
+                self.quantizer,
+                frame_type,
+                block_index,
+            );
+            let class = net.predict(&features);
+            report.neural_class_histogram[class] =
+                report.neural_class_histogram[class].saturating_add(1);
+            [85, 100, 112, 128][class]
+        } else {
+            100
+        };
+        // The existing lambda schedule budgets one 24-bit token for each level
+        // whose squared magnitude warrants its rate. Price it in 1/10,000 units.
+        let token_cost = RLE_TOKEN_BITS * u64::from(self.lambda_hundredths * class_scale);
+        let mut candidates = [(0_i64, 0_usize); BLOCK_PIXELS - 1];
+        let mut count = 0;
+        let mut budget = 0;
+        for (slot, &level) in levels.iter().enumerate().skip(1) {
+            if level == 0 {
+                continue;
+            }
+            let magnitude = u64::from(level.unsigned_abs());
+            budget += usize::from(magnitude * magnitude * 10_000 > token_cost);
+            let reconstructed =
+                i64::from(level) * i64::from(quantization_step(slot, self.quantizer));
+            // c² - (c - reconstructed)² is the transform SSE saved by this token.
+            let gain = reconstructed * (2 * i64::from(transform[slot]) - reconstructed);
+            candidates[count] = (gain, slot);
+            count += 1;
         }
-        self.before_bits = self.before_bits.saturating_add(report.before_bits);
-        self.after_bits = self.after_bits.saturating_add(report.after_bits);
-        self.distortion_penalty = self
-            .distortion_penalty
-            .saturating_add(report.distortion_penalty);
-        if let Some(class) = report.neural_class
-            && let Some(slot) = self.neural_histogram.get_mut(class)
-        {
-            *slot = slot.saturating_add(1);
+
+        // All tokens cost the same. The largest gains minimize SSE at the given
+        // budget. Break equal gains by raster slot for reproducible selection.
+        if budget < count {
+            let candidates = &mut candidates[..count];
+            if budget != 0 {
+                candidates
+                    .select_nth_unstable_by(budget, |&(a, i), &(b, j)| b.cmp(&a).then(i.cmp(&j)));
+            }
+            for &(_, slot) in &candidates[budget..] {
+                let level = i64::from(levels[slot]);
+                report.distortion_penalty = report
+                    .distortion_penalty
+                    .saturating_add(level.pow(2) as u64);
+                levels[slot] = 0;
+            }
         }
-        self.blocks = self.blocks.saturating_add(1);
-    }
-    fn finish(self) -> Option<RdoTelemetry> {
-        Some(RdoTelemetry {
-            mode: self.mode,
-            lambda_bits: self.lambda_bits,
-            blocks_optimized: self.blocks,
-            energy_histogram: self.energy_histogram,
-            before_rate_bits: self.before_bits,
-            after_rate_bits: self.after_bits,
-            distortion_penalty: self.distortion_penalty,
-            neural_class_histogram: self.neural_histogram,
-        })
+        // The DC delta and end-of-block record are present even on a dense block.
+        let block_bits = |ac_count: usize| 16 + RLE_TOKEN_BITS * (1 + ac_count as u64);
+        report.before_rate_bits = report.before_rate_bits.saturating_add(block_bits(count));
+        report.after_rate_bits = report.after_rate_bits.saturating_add(block_bits(budget));
+        report.blocks_optimized = report.blocks_optimized.saturating_add(1);
     }
 }
 const fn energy_bucket(energy: u32) -> usize {
@@ -2576,28 +2823,11 @@ const fn energy_bucket(energy: u32) -> usize {
     }
     RDO_BUCKET_COUNT - 1
 }
-fn rdo_lambda_for_mode(mode: RdoMode, quantizer: u8) -> f32 {
+fn rdo_lambda_hundredths(mode: RdoMode, quantizer: u8) -> u32 {
+    let bucket = usize::from(quantizer_to_bucket(quantizer));
     match mode {
-        RdoMode::Perceptual => rdo_lambda_perceptual(quantizer),
-        _ => rdo_lambda_for_quantizer(quantizer),
-    }
-}
-fn rdo_lambda_for_quantizer(quantizer: u8) -> f32 {
-    match quantizer_to_bucket(quantizer) {
-        0 => 0.45,
-        1 => 0.75,
-        2 => 1.1,
-        _ => 1.35,
-    }
-}
-fn rdo_lambda_perceptual(quantizer: u8) -> f32 {
-    // Slightly soften lambda at mid/high Q to favour structure (SSIM proxy) while
-    // keeping low-Q output close to the rate-focused schedule.
-    match quantizer_to_bucket(quantizer) {
-        0 => 0.42,
-        1 => 0.65,
-        2 => 0.95,
-        _ => 1.15,
+        RdoMode::Perceptual => [42, 65, 95, 115][bucket],
+        _ => [45, 75, 110, 135][bucket],
     }
 }
 fn block_energy(coeffs: &[i16; BLOCK_PIXELS]) -> u32 {
@@ -2621,136 +2851,6 @@ fn max_zero_run_in_block(coeffs: &[i16; BLOCK_PIXELS]) -> u8 {
         }
     }
     max_run
-}
-fn estimate_rle_bits(coeffs: &[i16; BLOCK_PIXELS]) -> u64 {
-    let mut pos = 1usize;
-    let mut bits = 0u64;
-    while pos < BLOCK_PIXELS {
-        let mut zero_run = 0usize;
-        while pos < BLOCK_PIXELS && coeffs[ZIG_ZAG[pos]] == 0 {
-            zero_run = zero_run.saturating_add(1);
-            pos = pos.saturating_add(1);
-        }
-        if pos == BLOCK_PIXELS {
-            bits = bits.saturating_add(RLE_TOKEN_BITS);
-            break;
-        }
-        while zero_run > MAX_ZERO_RUN {
-            bits = bits.saturating_add(RLE_TOKEN_BITS);
-            zero_run = zero_run.saturating_sub(MAX_ZERO_RUN);
-        }
-        bits = bits.saturating_add(RLE_TOKEN_BITS);
-        pos = pos.saturating_add(1);
-    }
-    bits
-}
-fn token_rate_bits(zero_run: usize) -> f32 {
-    let mut tokens = 1u32;
-    let mut run = zero_run;
-    while run > MAX_ZERO_RUN {
-        tokens = tokens.saturating_add(1);
-        run = run.saturating_sub(MAX_ZERO_RUN);
-    }
-    tokens as f32 * RLE_TOKEN_BITS_F
-}
-#[allow(clippy::too_many_arguments)]
-fn optimize_block_dp(
-    coeffs: &mut [i16; BLOCK_PIXELS],
-    mode: RdoMode,
-    lambda_bits: f32,
-    predictor: Option<&NeuralPredictor>,
-    bundle_width: u8,
-    quantizer: u8,
-    frame_type: FrameType,
-    block_index: usize,
-) -> DpReport {
-    let original = *coeffs;
-    let energy = block_energy(&original);
-    if !mode.is_enabled() {
-        return DpReport {
-            energy,
-            before_bits: estimate_rle_bits(&original),
-            after_bits: estimate_rle_bits(coeffs),
-            distortion_penalty: 0,
-            neural_class: None,
-        };
-    }
-    let mut lambda = lambda_bits;
-    let mut neural_class = None;
-    if matches!(mode, RdoMode::Neural)
-        && let Some(net) = predictor
-    {
-        let features = build_neural_features(
-            &original,
-            energy,
-            bundle_width,
-            quantizer,
-            frame_type,
-            block_index,
-        );
-        let class_idx = net.predict(&features);
-        neural_class = Some(class_idx);
-        lambda *= match class_idx {
-            0 => 0.85,
-            1 => 1.0,
-            2 => 1.12,
-            _ => 1.28,
-        };
-    }
-    let ac_len = BLOCK_PIXELS - 1;
-    let mut best = vec![vec![f32::INFINITY; ac_len + 1]; ac_len + 1];
-    let mut keep = vec![vec![false; ac_len + 1]; ac_len];
-    for slot in best[ac_len].iter_mut().take(ac_len + 1) {
-        *slot = RLE_EOB_BITS_F;
-    }
-    for idx in (0..ac_len).rev() {
-        let coeff = original[ZIG_ZAG[idx + 1]];
-        let distortion_zero = f32::from(coeff) * f32::from(coeff);
-        for run in 0..=ac_len {
-            let next_run = (run + 1).min(ac_len);
-            let zero_cost = distortion_zero + best[idx + 1][next_run];
-            let keep_cost = if coeff == 0 {
-                f32::INFINITY
-            } else {
-                lambda * token_rate_bits(run) + best[idx + 1][0]
-            };
-            if keep_cost < zero_cost {
-                keep[idx][run] = true;
-                best[idx][run] = keep_cost;
-            } else {
-                best[idx][run] = zero_cost;
-            }
-        }
-    }
-    let mut run = 0usize;
-    for idx in 0..ac_len {
-        let slot = ZIG_ZAG[idx + 1];
-        if keep[idx][run] {
-            run = 0;
-        } else {
-            coeffs[slot] = 0;
-            run = (run + 1).min(ac_len);
-        }
-    }
-    coeffs[0] = original[0];
-    let before_bits = estimate_rle_bits(&original);
-    let after_bits = estimate_rle_bits(coeffs);
-    let distortion_penalty: u64 = original
-        .iter()
-        .zip(coeffs.iter())
-        .skip(1)
-        .map(|(&before, &after)| {
-            let diff = i64::from(before) - i64::from(after);
-            diff.saturating_mul(diff) as u64
-        })
-        .sum();
-    DpReport {
-        energy,
-        before_bits,
-        after_bits,
-        distortion_penalty,
-        neural_class,
-    }
 }
 struct TinyPrng(u64);
 impl TinyPrng {
@@ -2876,34 +2976,35 @@ fn build_neural_features(
 mod rdo_tests {
     use super::*;
     #[test]
-    fn dp_optimizer_reduces_rate_on_sparse_block() {
-        let mut coeffs = [0i16; BLOCK_PIXELS];
-        coeffs[0] = 10;
-        coeffs[1] = 2;
-        coeffs[5] = -1;
-        coeffs[12] = 1;
-        let before_bits = estimate_rle_bits(&coeffs);
-        let mut working = coeffs;
-        let report = optimize_block_dp(
-            &mut working,
-            RdoMode::DynamicProgramming,
-            1.5,
-            None,
-            3,
-            10,
-            FrameType::Intra,
+    fn token_budget_spends_the_only_token_on_the_larger_reconstruction_gain() {
+        // Quantizer 1 gives steps 11 and 99. Magnitude alone would retain
+        // level 4, although the negative level 2 saves much more squared error.
+        let mut transform = [0; BLOCK_PIXELS];
+        transform[0] = 160;
+        transform[1] = 44;
+        transform[63] = -198;
+        let mut levels = quantize_coeffs(&transform, 1);
+        let mut optimizer = BlockRdo::new(RdoMode::DynamicProgramming, 1, 2, None).unwrap();
+        optimizer.select_levels(&transform, &mut levels, FrameType::Intra, 0);
+        assert_eq!((levels[0], levels[1], levels[63]), (10, 0, -2));
+        assert_eq!(
+            (
+                optimizer.telemetry.before_rate_bits,
+                optimizer.telemetry.after_rate_bits
+            ),
+            (88, 64)
+        );
+        assert_eq!(optimizer.telemetry.distortion_penalty, 16);
+        let mut block = Vec::new();
+        encode_block_rle(
+            &levels,
+            &mut 0,
+            &mut block,
+            &mut NoopBundledHooks,
             0,
+            FrameType::Intra,
         );
-        assert!(
-            report.after_bits <= before_bits,
-            "RDO must not increase rate"
-        );
-        assert!(
-            report.distortion_penalty > 0,
-            "zeroing must record distortion"
-        );
-        // ensure DC preserved
-        assert_eq!(working[0], coeffs[0]);
+        assert_eq!(optimizer.telemetry.after_rate_bits, block.len() as u64 * 8);
     }
     #[test]
     fn neural_predictor_is_deterministic() {
@@ -2958,21 +3059,30 @@ mod rdo_tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+/// Range of an already emitted block whose 63 AC levels are zero.
+#[derive(Clone, Copy, Default)]
+struct ZeroAcPattern {
+    start: usize,
+    end: usize,
+    repeats: u64,
+}
+
 struct BundleStreamRecorder {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
     bundles: Vec<BundleRecord>,
-    context_stats: BTreeMap<BundleContextId, BundleContextStats>,
-    context_frequency: BTreeMap<BundleContextId, ContextFrequency>,
+    // One-based slots indexed by the 16-bit wire context. Only active contexts own counters.
+    context_slots: Vec<u32>,
+    contexts: Vec<(BundleContextStats, ContextFrequency)>,
+    // Tile (6 bits), frame class, and DC significance fully determine this sequence.
+    zero_ac_patterns: Vec<ZeroAcPattern>,
     width: u8,
     blocks_per_row: usize,
     quantizer_bucket: u8,
     tables: Arc<BundleAnsTables>,
     acceleration: BundleAcceleration,
     prefetch_distance: u16,
-    pending_blocks: VecDeque<BlockBundleState>,
-    current_block: Option<BlockBundleState>,
-    last_context: Option<BundleContextId>,
+    last_context_slot: Option<usize>,
     context_remap: Option<Arc<BundleContextRemap>>,
 }
 impl BundleStreamRecorder {
@@ -2992,24 +3102,32 @@ impl BundleStreamRecorder {
             },
             tokens: Vec::new(),
             bundles: Vec::new(),
-            context_stats: BTreeMap::new(),
-            context_frequency: BTreeMap::new(),
+            context_slots: vec![0; usize::from(u16::MAX) + 1],
+            contexts: Vec::new(),
+            zero_ac_patterns: vec![ZeroAcPattern::default(); 64 * 2 * 2],
             width: bundle_width.clamp(1, 4),
             blocks_per_row: (dims.width as usize / BLOCK_SIZE).max(1),
             quantizer_bucket: quantizer_to_bucket(quantizer),
             tables,
             acceleration,
             prefetch_distance,
-            pending_blocks: VecDeque::new(),
-            current_block: None,
-            last_context: None,
+            last_context_slot: None,
             context_remap,
         }
     }
-    fn context_stats_entry(&mut self, context: BundleContextId) -> &mut BundleContextStats {
-        self.context_stats
-            .entry(context)
-            .or_insert_with(|| BundleContextStats::new(context))
+    fn context_slot(&mut self, context: BundleContextId) -> usize {
+        let slot = &mut self.context_slots[usize::from(context.0)];
+        if *slot == 0 {
+            self.contexts.push((
+                BundleContextStats::new(context),
+                ContextFrequency {
+                    context,
+                    ..ContextFrequency::default()
+                },
+            ));
+            *slot = self.contexts.len() as u32;
+        }
+        (*slot - 1) as usize
     }
     fn map_context(&self, context: BundleContextId) -> BundleContextId {
         if let Some(remap) = self.context_remap.as_ref() {
@@ -3018,7 +3136,19 @@ impl BundleStreamRecorder {
             context
         }
     }
-    fn finish(self) -> BundledTelemetry {
+    fn finish(mut self) -> BundledTelemetry {
+        for index in 0..self.zero_ac_patterns.len() {
+            let pattern = self.zero_ac_patterns[index];
+            if pattern.repeats == 0 {
+                continue;
+            }
+            // A block starts after EOB. Its internal context switches and histogram
+            // are additive; record_eob has already counted its terminal context.
+            self.last_context_slot = None;
+            for i in pattern.start..pattern.end {
+                self.count_bundle(self.bundles[i], pattern.repeats);
+            }
+        }
         let (ans_stream, used_acceleration) = encode_bundle_stream_with_opts(
             self.tables.as_ref(),
             &self.bundles,
@@ -3030,15 +3160,19 @@ impl BundleStreamRecorder {
             remapped: map.remapped_count(),
             dropped: map.dropped_count(),
         });
+        // Reports are ordered by wire context, independent of insertion order.
+        let mut contexts = self.contexts;
+        contexts.sort_unstable_by_key(|(stats, _)| stats.context);
+        let (context_stats, context_frequencies) = contexts.into_iter().unzip();
         BundledTelemetry {
             stats: self.stats,
             tokens: self.tokens,
             bundles: self.bundles,
-            context_frequencies: self.context_frequency.into_values().collect(),
+            context_frequencies,
             ans_stream,
             ans_precision_bits: self.tables.precision_bits(),
             tables_checksum: self.tables.checksum(),
-            context_stats: self.context_stats.into_values().collect(),
+            context_stats,
             acceleration: used_acceleration,
             prefetch_distance: self.prefetch_distance,
             context_remap: remap,
@@ -3053,39 +3187,41 @@ impl BundleStreamRecorder {
         bit_len: u8,
         flush: BundleFlushReason,
     ) {
-        if let Some(previous_context) = self.last_context
-            && previous_context != context
-        {
-            self.stats.record_flush(BundleFlushReason::ContextSwitch);
-            self.context_stats_entry(previous_context)
-                .record_flush(BundleFlushReason::ContextSwitch);
-        }
-        self.last_context = Some(context);
-        self.stats.bundles_total = self.stats.bundles_total.saturating_add(1);
-        self.stats.record_flush(flush);
-        if matches!(bundle_type, BundleType::SignificanceRle) {
-            self.stats.significance_rle = self.stats.significance_rle.saturating_add(1);
-        }
-        self.context_stats_entry(context)
-            .record_bundle(bundle_type, flush);
-        let freq = self
-            .context_frequency
-            .entry(context)
-            .or_insert_with(|| ContextFrequency {
-                context,
-                ..ContextFrequency::default()
-            });
-        freq.bundles = freq.bundles.saturating_add(1);
-        freq.total_bits = freq.total_bits.saturating_add(u64::from(bit_len));
-        let symbol_idx = usize::from(bits) & (RDO_MAX_SYMBOLS - 1);
-        freq.symbol_counts[symbol_idx] = freq.symbol_counts[symbol_idx].saturating_add(1);
-        self.bundles.push(BundleRecord {
+        let record = BundleRecord {
             bundle_type,
             context,
             bits,
             bit_len,
             flush,
-        });
+        };
+        self.count_bundle(record, 1);
+        self.bundles.push(record);
+    }
+    fn count_bundle(&mut self, record: BundleRecord, count: u64) {
+        let slot = self.context_slot(record.context);
+        if let Some(previous_slot) = self.last_context_slot
+            && previous_slot != slot
+        {
+            self.stats
+                .record_flush(BundleFlushReason::ContextSwitch, count);
+            self.contexts[previous_slot]
+                .0
+                .record_flush(BundleFlushReason::ContextSwitch, count);
+        }
+        self.last_context_slot = Some(slot);
+        self.stats.bundles_total = self.stats.bundles_total.saturating_add(count);
+        self.stats.record_flush(record.flush, count);
+        if matches!(record.bundle_type, BundleType::SignificanceRle) {
+            self.stats.significance_rle = self.stats.significance_rle.saturating_add(count);
+        }
+        let (stats, freq) = &mut self.contexts[slot];
+        stats.record_bundle(record.bundle_type, record.flush, count);
+        freq.bundles = freq.bundles.saturating_add(count);
+        freq.total_bits = freq
+            .total_bits
+            .saturating_add(u64::from(record.bit_len).saturating_mul(count));
+        let symbol_idx = usize::from(record.bits) & (RDO_MAX_SYMBOLS - 1);
+        freq.symbol_counts[symbol_idx] = freq.symbol_counts[symbol_idx].saturating_add(count);
     }
     fn accumulate_stats(&mut self, value: i16) {
         let nonzero = value != 0;
@@ -3106,7 +3242,7 @@ impl BundleStreamRecorder {
                 self.stats.parity_one = self.stats.parity_one.saturating_add(1);
             }
         }
-        if self.width >= 4 && value.abs() >= 2 {
+        if self.width >= 4 && value.unsigned_abs() >= 2 {
             self.stats.geq2_one = self.stats.geq2_one.saturating_add(1);
         }
     }
@@ -3116,15 +3252,49 @@ impl BundleStreamRecorder {
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
     ) {
+        let tile = ((block_index % self.blocks_per_row) & 7)
+            | (((block_index / self.blocks_per_row) & 7) << 3);
+        if self.last_context_slot.is_some() || coeffs[1..].iter().any(|&v| v != 0) {
+            self.record_ac_slots(tile as u8, coeffs, frame_type);
+            return;
+        }
+        let key =
+            tile | (usize::from(frame_type.as_byte()) << 6) | (usize::from(coeffs[0] != 0) << 7);
+        let pattern = &mut self.zero_ac_patterns[key];
+        if pattern.end != 0 {
+            pattern.repeats += 1;
+            self.stats.significance_zero = self
+                .stats
+                .significance_zero
+                .saturating_add((BLOCK_PIXELS - 1) as u64);
+            self.stats.sign_positive = self
+                .stats
+                .sign_positive
+                .saturating_add((BLOCK_PIXELS - 1) as u64);
+            let last = self.bundles[pattern.end - 1].context;
+            self.bundles.extend_from_within(pattern.start..pattern.end);
+            self.last_context_slot = Some(self.context_slot(last));
+        } else {
+            let start = self.bundles.len();
+            self.record_ac_slots(tile as u8, coeffs, frame_type);
+            self.zero_ac_patterns[key] = ZeroAcPattern {
+                start,
+                end: self.bundles.len(),
+                repeats: 0,
+            };
+        }
+    }
+    fn record_ac_slots(&mut self, tile: u8, coeffs: &[i16; BLOCK_PIXELS], frame_type: FrameType) {
         let mut prev_level_abs = 0u8;
-        let mut slots = Vec::with_capacity(BLOCK_PIXELS - 1);
+        let mut zero_context = BundleContextId::default();
+        let mut zero_run = 0;
         for (order, &slot) in ZIG_ZAG.iter().enumerate().skip(1) {
             let coeff = coeffs[slot];
             self.accumulate_stats(coeff);
-            let (bundle_type, _, _) = bundle_bits(coeff, self.width);
+            let (bundle_type, bits, bit_len) = bundle_bits(coeff, self.width);
             let context = self.map_context(self.compute_context(
                 bundle_type,
-                block_index,
+                tile,
                 order,
                 slot,
                 coeff,
@@ -3132,79 +3302,25 @@ impl BundleStreamRecorder {
                 frame_type,
                 coeffs,
             ));
-            slots.push(SlotContext {
-                context,
-                is_non_zero: coeff != 0,
-            });
-            prev_level_abs = (coeff.saturating_abs() as u16).min(0xFF) as u8;
-        }
-        self.pending_blocks
-            .push_back(BlockBundleState::new(block_index, slots));
-    }
-    fn ensure_current_block(&mut self) {
-        if self.current_block.is_none()
-            && let Some(next) = self.pending_blocks.pop_front()
-        {
-            self.current_block = Some(next);
-        }
-    }
-    fn peek_slot(&mut self) -> Option<SlotContext> {
-        self.ensure_current_block();
-        self.current_block
-            .as_ref()
-            .and_then(BlockBundleState::peek_slot)
-    }
-    fn pop_slot(&mut self) -> Option<SlotContext> {
-        loop {
-            self.ensure_current_block();
-            {
-                let block = self.current_block.as_mut()?;
-                if let Some(slot) = block.next_slot() {
-                    return Some(slot);
-                }
-                self.current_block = None;
+            if zero_run > 0 && (coeff != 0 || context != zero_context) {
+                self.emit_zero_run_bundle(zero_context, zero_run);
+                zero_run = 0;
             }
-        }
-    }
-    fn flush_pending_zero_slots(&mut self) {
-        while let Some(slot) = self.pop_slot() {
-            debug_assert!(!slot.is_non_zero);
-            let mut run = 1u16;
-            while let Some(next) = self.peek_slot() {
-                if next.is_non_zero || next.context != slot.context {
-                    break;
-                }
-                self.pop_slot()
-                    .expect("peeked slot should still be available");
-                run = run.saturating_add(1);
+            if coeff == 0 {
+                zero_run += 1;
+                zero_context = context;
+            } else {
+                self.record_bundle(
+                    bundle_type,
+                    context,
+                    bits,
+                    bit_len,
+                    BundleFlushReason::TypeComplete,
+                );
             }
-            self.emit_zero_run_bundle(slot.context, run);
+            prev_level_abs = coeff.unsigned_abs().min(255) as u8;
         }
-    }
-    fn record_zero_run(&mut self, zeros: u8) {
-        let mut remaining = zeros;
-        while remaining > 0 {
-            let slot = self
-                .pop_slot()
-                .expect("zero slot must exist before nonzero run");
-            debug_assert!(!slot.is_non_zero);
-            let context = slot.context;
-            let mut run: u16 = 1;
-            while run < u16::from(remaining) {
-                if let Some(next) = self.peek_slot() {
-                    if next.is_non_zero || next.context != context {
-                        break;
-                    }
-                    self.pop_slot()
-                        .expect("peeked slot should still be available");
-                    run = run.saturating_add(1);
-                    continue;
-                }
-                break;
-            }
-            self.emit_zero_run_bundle(context, run);
-            remaining = remaining.saturating_sub(run as u8);
-        }
+        self.emit_zero_run_bundle(zero_context, zero_run);
     }
     fn emit_zero_run_bundle(&mut self, context: BundleContextId, mut run: u16) {
         while run > 0 {
@@ -3223,7 +3339,7 @@ impl BundleStreamRecorder {
     fn compute_context(
         &self,
         bundle_type: BundleType,
-        block_index: usize,
+        block_tile: u8,
         zigzag_order: usize,
         coeff_slot: usize,
         coeff: i16,
@@ -3231,9 +3347,6 @@ impl BundleStreamRecorder {
         frame_type: FrameType,
         coeffs: &[i16; BLOCK_PIXELS],
     ) -> BundleContextId {
-        let block_x = block_index % self.blocks_per_row;
-        let block_y = block_index / self.blocks_per_row;
-        let block_tile = (((block_x as u32) & 0x7) | (((block_y as u32) & 0x7) << 3)) as u8;
         let neighbor_nz = neighbor_nonzero_count(coeffs, coeff_slot);
         let subband = subband_class(coeff_slot);
         let pos_class = position_class(zigzag_order);
@@ -3264,7 +3377,6 @@ impl BundledHooks for BundleStreamRecorder {
         self.record_block(block_index, coeffs, frame_type);
     }
     fn record_dc(&mut self, diff: i16) {
-        self.ensure_current_block();
         self.stats.dc_events = self.stats.dc_events.saturating_add(1);
         self.tokens.push(BundledToken::DcDiff(diff));
     }
@@ -3275,62 +3387,17 @@ impl BundledHooks for BundleStreamRecorder {
         if value != 0 {
             self.stats.nonzero_levels = self.stats.nonzero_levels.saturating_add(1);
         }
-        self.record_zero_run(zeros);
-        let slot = self
-            .pop_slot()
-            .expect("non-zero slot must exist after zero run");
-        debug_assert!(slot.is_non_zero);
-        let (bundle_type, bits, len) = bundle_bits(value, self.width);
-        self.record_bundle(
-            bundle_type,
-            slot.context,
-            bits,
-            len,
-            BundleFlushReason::TypeComplete,
-        );
         self.tokens.push(BundledToken::Ac { run: zeros, value });
     }
     fn record_eob(&mut self) {
-        self.flush_pending_zero_slots();
         self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
-        if let Some(last_context) = self.bundles.last().map(|record| record.context) {
-            self.context_stats_entry(last_context)
-                .record_flush(BundleFlushReason::EndOfBlock);
+        if let Some(slot) = self.last_context_slot.take() {
+            self.contexts[slot]
+                .0
+                .record_flush(BundleFlushReason::EndOfBlock, 1);
         }
-        self.stats.record_flush(BundleFlushReason::EndOfBlock);
+        self.stats.record_flush(BundleFlushReason::EndOfBlock, 1);
         self.tokens.push(BundledToken::EndOfBlock);
-        self.current_block = None;
-        self.last_context = None;
-    }
-}
-#[derive(Clone, Copy)]
-struct SlotContext {
-    context: BundleContextId,
-    is_non_zero: bool,
-}
-struct BlockBundleState {
-    #[allow(dead_code)]
-    block_index: usize,
-    slots: Vec<SlotContext>,
-    cursor: usize,
-}
-impl BlockBundleState {
-    fn new(block_index: usize, slots: Vec<SlotContext>) -> Self {
-        Self {
-            block_index,
-            slots,
-            cursor: 0,
-        }
-    }
-    fn next_slot(&mut self) -> Option<SlotContext> {
-        let slot = self.slots.get(self.cursor).copied();
-        if slot.is_some() {
-            self.cursor = self.cursor.saturating_add(1);
-        }
-        slot
-    }
-    fn peek_slot(&self) -> Option<SlotContext> {
-        self.slots.get(self.cursor).copied()
     }
 }
 const BUNDLE_ANS_PRECISION_BITS: u8 = 12;

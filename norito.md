@@ -1857,6 +1857,19 @@ Encoders choose compression explicitly (`to_compressed_bytes`) or via the
 adaptive helper (`to_bytes_auto`) that applies deterministic heuristics. The
 chosen algorithm is recorded in the header; there is no on-wire negotiation.
 
+### Streaming media compression
+
+Kaigi’s video encoder losslessly compresses the plane records of each frame
+when Zstandard reduces the transmitted byte count. Bit 7 of the frame flags
+advertises this encoding. [Video chunk payload](specs/norito_streaming.md#video-chunk-payload)
+
+At nonzero quantizers, the video encoder can refresh all planes within a
+segment when prediction from the previous decoded frame increases texture energy.
+Video quantization favors zero at equal error, and luma RDO ranks
+coefficients by reconstruction gain per block record. The native audio
+encoder scores step sizes against the receiver's reconstructed samples.
+[Streaming quantization and rate model](specs/norito_streaming_math_notes.md#encoder-decisions)
+
 ## Schema Hash Details
 
 The 16-byte frame hash is the first 16 bytes of

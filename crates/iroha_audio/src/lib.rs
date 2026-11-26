@@ -426,6 +426,61 @@ mod tests {
         );
     }
     #[test]
+    fn native_step_search_reduces_decoded_error_at_fixed_packet_size() {
+        let config = EncoderConfig {
+            frame_samples: 64,
+            layout: ChannelLayout::FirstOrderAmbisonics,
+            ..Default::default()
+        };
+        let mut pcm = Vec::new();
+        for i in 0..config.frame_samples {
+            let pulse = match i {
+                0 => 0,
+                1 => 800,
+                _ => 100,
+            };
+            let square = if i % 2 == 0 { i16::MIN } else { i16::MAX };
+            pcm.extend_from_slice(&[pulse, -pulse, square, 73]);
+        }
+        let mut encoder = Encoder::new(config).unwrap();
+        let packet = encoder.encode(&pcm).unwrap();
+        assert_eq!(packet.len(), 5 + 4 * 4 + 63 * 4 / 2);
+        let (states, _) = packet[5..21].as_chunks::<4>();
+        let steps: Vec<_> = states
+            .iter()
+            .map(|state| u16::from_le_bytes([state[2], state[3]]))
+            .collect();
+        assert_eq!(steps, [101, 101, 9363, 1]);
+
+        let decoded = Decoder::new(config).unwrap().decode(&packet).unwrap();
+        let mut error = [0i64; 4];
+        for (i, (&sample, reconstructed)) in pcm.iter().zip(decoded).enumerate() {
+            error[i % 4] += (i64::from(sample) - i64::from(reconstructed)).pow(2);
+        }
+        // The peak-only step of 115 reconstructs the pulse magnitudes as 805 then
+        // 115, giving 5² + 62 × 15² = 13,975 squared error on each pulse channel.
+        assert_eq!(error, [8711, 126, 0, 0]);
+    }
+    #[test]
+    fn native_step_search_keeps_peak_step_for_ties_and_single_samples() {
+        for samples in [&[0i16, -8][..], &[i16::MAX]] {
+            let config = EncoderConfig {
+                frame_samples: samples.len() as u16,
+                layout: ChannelLayout::Mono,
+                backend: BackendPreference::Native,
+                ..Default::default()
+            };
+            let packet = Encoder::new(config).unwrap().encode(samples).unwrap();
+            // Both steps 1 and 2 represent -8 exactly.
+            let expected_step = if samples.len() == 2 { 2 } else { 1 };
+            assert_eq!(u16::from_le_bytes([packet[7], packet[8]]), expected_step);
+            assert_eq!(
+                Decoder::new(config).unwrap().decode(&packet).unwrap(),
+                samples
+            );
+        }
+    }
+    #[test]
     fn native_decoder_rejects_bad_version() {
         let config = EncoderConfig {
             backend: BackendPreference::Native,
@@ -764,8 +819,7 @@ mod native {
             let mut quant_steps = Vec::with_capacity(self.channels);
             for channel in 0..self.channels {
                 let baseline = pcm[channel];
-                let max_abs_diff = max_abs_delta(pcm, channel, self.channels, samples_per_channel);
-                let step = compute_step(max_abs_diff);
+                let step = select_step(pcm, channel, self.channels);
                 baselines.push(baseline);
                 quant_steps.push(step);
                 payload.extend_from_slice(&baseline.to_le_bytes());
@@ -780,8 +834,7 @@ mod native {
                     let step = i32::from(quant_steps[channel]);
                     let diff = sample - previous[channel];
                     let q = quantize(diff, step);
-                    previous[channel] = (previous[channel] + i32::from(q) * step)
-                        .clamp(i16::MIN as i32, i16::MAX as i32);
+                    previous[channel] = reconstruct(previous[channel], q, step);
                     let nibble = encode_nibble(q);
                     if !has_low_nibble {
                         nibble_acc = nibble;
@@ -885,8 +938,7 @@ mod native {
                     let nibble = nibble_iter.next().ok_or(CodecError::PacketTooShort)?;
                     let quant = decode_nibble(nibble);
                     let step = i32::from(steps[channel]);
-                    let predicted = previous[channel] + i32::from(quant) * step;
-                    let clamped = predicted.clamp(i16::MIN as i32, i16::MAX as i32);
+                    let clamped = reconstruct(previous[channel], quant, step);
                     previous[channel] = clamped;
                     output.push(clamped as i16);
                 }
@@ -894,24 +946,55 @@ mod native {
             Ok(output)
         }
     }
-    fn max_abs_delta(
-        pcm: &[i16],
-        channel: usize,
-        channels: usize,
-        samples_per_channel: usize,
-    ) -> i32 {
-        let mut prev = i32::from(pcm[channel]);
-        let mut max_abs = 0i32;
-        for sample_idx in 1..samples_per_channel {
-            let sample = i32::from(pcm[sample_idx * channels + channel]);
-            let diff = sample - prev;
-            let abs = diff.abs();
-            if abs > max_abs {
-                max_abs = abs;
-            }
-            prev = sample;
+    fn select_step(pcm: &[i16], channel: usize, channels: usize) -> u16 {
+        let baseline = i32::from(pcm[channel]);
+        let samples = pcm[channel..]
+            .iter()
+            .step_by(channels)
+            .skip(1)
+            .map(|&sample| i32::from(sample));
+        let mut previous = baseline;
+        let mut peak = 0;
+        for sample in samples.clone() {
+            peak = peak.max((sample - previous).abs());
+            previous = sample;
         }
-        max_abs
+        let peak_step = compute_step(peak);
+        if peak_step == 1 {
+            return 1;
+        }
+
+        // Test the peak step first so tied scores preserve its packet. Finer grids
+        // can afford brief overload in exchange for less noise in the rest of a frame.
+        let mut best_step = peak_step;
+        let mut best_error = u64::MAX;
+        let mut last_step = 0;
+        for eighths in [8, 7, 6, 4] {
+            let step = ((u32::from(peak_step) * eighths + 4) / 8).max(1) as u16;
+            if step == last_step {
+                continue;
+            }
+            last_step = step;
+            let mut reconstructed = baseline;
+            let mut error = 0u64;
+            for sample in samples.clone() {
+                let delta = quantize(sample - reconstructed, i32::from(step));
+                reconstructed = reconstruct(reconstructed, delta, i32::from(step));
+                let residual = i64::from(sample - reconstructed);
+                error += (residual * residual) as u64;
+                if error >= best_error {
+                    break;
+                }
+            }
+            if error < best_error {
+                best_step = step;
+                best_error = error;
+                if error == 0 {
+                    break;
+                }
+            }
+        }
+        best_step
     }
     fn compute_step(max_abs_diff: i32) -> u16 {
         if max_abs_diff <= 7 {
@@ -933,6 +1016,9 @@ mod native {
         };
         q = q.clamp(-8, 7);
         q as i8
+    }
+    fn reconstruct(previous: i32, delta: i8, step: i32) -> i32 {
+        (previous + i32::from(delta) * step).clamp(i32::from(i16::MIN), i32::from(i16::MAX))
     }
     fn encode_nibble(value: i8) -> u8 {
         (value as u8) & 0x0F
