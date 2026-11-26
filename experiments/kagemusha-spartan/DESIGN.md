@@ -434,7 +434,11 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   the sum of median CPU times across all ten programs fell from 2.144 s to 2.017 s (6.0%) for 16 points per program.
   The primary Receive program took 0.500 s versus 0.529 s with full products. The benchmark used four lanes on one
   M4 Max worker, alternated execution order across four paired samples, and checked each result against scalar evaluation.
-- On the same signed 968f bundle, the one-proof fold evaluated each active primary matrix program at 53 points
+- On the unmasked 968f bundle, a one-proof Load or Send follows the line `A + (B − A) h(t)`.
+  This line restriction relies on the whole curve. A quartic mask adds `t(t−1)(t−2)(t−3) s`, which
+  vanishes at all four claim nodes but changes the intermediate evaluations. A masked prover must restrict
+  the matrix polynomial along its masked curve even when it repeats the same two claims.
+  On the signed 968f bundle, the one-proof fold evaluated each active primary matrix program at 53 points
   instead of 157. On six M4 Max workers, primary and secondary restriction together used 1.33 s of process CPU
   for a first Load, down from 3.79 s, and 3.80 s for a later Send, down from 10.93 s. Each number is the mean
   of two runs with alternating order on the same public points. The benchmark compared all 187 primary and
@@ -759,6 +763,20 @@ generator claims directly. A Send reuses that successful verification for its ou
 installed programs, projected inputs, link word and both proof encodings match. Receive computes its two matrix
 values and incoming verdicts once for both circuits. Generator folding uses four independent prefix products
 per batch inversion.
+
+For a predecessor with cached source blocks, the prover obtains the first four IPA challenges from the usual
+L/R messages before reducing the generator basis. Each output is a sum of 16 generators whose weights are the
+subset products of those challenges. A single GLV Straus multiplication shares doublings across the 15 weighted
+terms. For a verified two-parent Receive, later L/R messages use the intermediate bases, so each fold still runs
+in transcript order. At 262,144 input generators, four paired six-worker comparisons on the M4 Max measured
+42% less CPU for the four Pallas folds and 44% less for Vesta. Every output point matched the sequential folds.
+
+The native RP57 Poseidon permutation also uses a cheaper representation for its 57 partial rounds. Write the
+MDS matrix in blocks `[m a; v B]`. For passive state `Y`, the coordinates `p = aY` and `q = aBY` give
+`aB²Y = tr(B)q − det(B)p` by Cayley–Hamilton. This reduces the linear layer from nine field multiplications to
+five per partial round, with one basis conversion at each end. The public parameters determine the transformed
+constants. Custom matrices with dependent basis rows use the dense calculation. In eight paired batches of
+16,384 complete permutations, process CPU fell 24% on each Pasta field. The pinned hash vectors agree on both.
 
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
