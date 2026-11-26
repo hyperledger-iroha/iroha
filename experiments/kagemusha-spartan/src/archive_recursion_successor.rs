@@ -1505,8 +1505,9 @@ fn native_archive_builder_matches_compiler_for_both_receiver_forms() {
             let folds =
                 full::GeneratorFolds::prepare(gens, &slots, &ProofEntropy::fresh().unwrap())
                     .unwrap();
+            let inputs = full::RecursiveInputs::new(gens, &slots);
             let wire = prepared
-                .primary(step, payer.released.head(), gens, &slots, &folds)
+                .primary(step, payer.released.head(), &inputs, &folds)
                 .unwrap();
             let (program, public, private) = full::backend_chain_tests::build_monetary_program(
                 wire,

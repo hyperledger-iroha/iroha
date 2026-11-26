@@ -425,8 +425,7 @@ impl PreparedArchive {
         &self,
         step: &ArchiveSentWitness,
         head: &VerifiedWalletHead,
-        gens: &full::PairGens,
-        slots: &[full::TracedPair],
+        recursive: &full::RecursiveInputs<'_>,
         folds: &full::GeneratorFolds,
     ) -> Result<full::Wiring<Fp>> {
         let before = relation::State {
@@ -477,8 +476,9 @@ impl PreparedArchive {
                 receipt: &step.receipt,
             },
         };
-        let (w, _) =
-            full::p_archive_operation(&relation, gens, slots, folds).map_err(Error::Malformed)?;
+        let (w, _) = recursive
+            .primary(full::OperationWitness::ArchiveSent(&relation), folds)
+            .map_err(Error::Malformed)?;
         if relation.derived.into_inner() != Some([Fp::ONE; 4]) {
             return Err(Error::AuthorityMismatch(
                 "ArchiveSent receiver evidence decision",

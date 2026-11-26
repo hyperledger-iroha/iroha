@@ -1024,7 +1024,7 @@ pub fn verify_circuit<C: PastaCurve>(
     bytes: &[u8],
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<(), String> {
-    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io, None)?;
     verify_inner(
         shape,
         gens,
@@ -1056,19 +1056,28 @@ pub fn fixed_for<C: PastaCurve>(
 }
 
 /// Fixed-row assembly at the verifier boundary. Check the wallet inputs
-/// before computing the circuit's ordinary verification-key commitments.
+/// before assembling the circuit's ordinary verification-key commitments.
+/// A mounted key contains only the circuit constants for these generators.
 fn fixed_for_verifier<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     circuit: &dyn Circuit<F<C>>,
     io: &[F<C>],
+    mounted_key: Option<&[Aff<C>]>,
 ) -> Result<Vec<Aff<C>>, String> {
     let nf = circuit.fixed_rows(shape);
     if nf > shape.rows() || circuit.wallet_rows() > nf {
         return Err("invalid fixed-row layout".into());
     }
     let mut fixed = wallet_commitments::<C>(circuit, io)?;
-    fixed.extend(fixed_commitments(shape, gens, circuit));
+    if let Some(key) = mounted_key {
+        if key.len() != nf - fixed.len() {
+            return Err("invalid fixed-row verification key".into());
+        }
+        fixed.extend_from_slice(key);
+    } else {
+        fixed.extend(fixed_commitments(shape, gens, circuit));
+    }
     Ok(fixed)
 }
 
@@ -2220,9 +2229,31 @@ pub fn verify_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<[u8; 32], String> {
-    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
+    verify_linked_circuit_with_io(shape, gens, inst, bytes, link, circuit, None)
+        .map(|verified| verified.word)
+}
+
+/// Link word and complete public inputs from one successfully verified proof.
+pub(crate) struct VerifiedLink<S> {
+    /// The transcript word bound to the other proof of the pair.
+    pub word: [u8; 32],
+    /// Public inputs used for the final relation, including link and late slots.
+    pub io: Vec<S>,
+}
+
+/// Also retain the exact early, link and late inputs used in the verified relation.
+pub(crate) fn verify_linked_circuit_with_io<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    mounted_key: Option<&[Aff<C>]>,
+) -> Result<VerifiedLink<F<C>>, String> {
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io, mounted_key)?;
     verify_inner(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
-        .map(|o| o.expect("linked").0)
+        .map(|o| o.expect("linked"))
 }
 
 pub fn verify_linked<C: PastaCurve>(
@@ -2244,7 +2275,7 @@ pub fn verify_linked<C: PastaCurve>(
         &ToyCircuit,
         &[],
     )
-    .map(|o| o.expect("linked").0)
+    .map(|o| o.expect("linked").word)
 }
 
 pub fn verify_unseparated<C: PastaCurve>(
@@ -2277,7 +2308,7 @@ fn verify_inner<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
-) -> Result<Option<([u8; 32], [u8; 32])>, String> {
+) -> Result<Option<VerifiedLink<F<C>>>, String> {
     shape.check();
     let nf = circuit.fixed_rows(shape);
     if nf > shape.rows() || fixed.len() != nf || circuit.wallet_rows() > nf {
@@ -2360,7 +2391,7 @@ fn verify_inner<C: PastaCurve>(
         b_final_slots(shape, &ch, coefficient, &r_col, &us) == b_final,
         "closed-form b_final"
     );
-    Ok(link_out)
+    Ok(link_out.map(|(word, _)| VerifiedLink { word, io: io_full }))
 }
 
 /// `q_0 = t_0 + J` with `sum_y eq(tau_0, y) q_0(y) = 0` and `q_0(r_0) = t_0(r_0)`:

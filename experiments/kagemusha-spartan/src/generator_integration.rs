@@ -28,13 +28,15 @@ fn coordinate_limbs<C: PastaCurve>(point: &crate::ipa::Aff<C>) -> [u128; 4] {
     ]
 }
 
-fn inherited_words<C: PastaCurve>(
-    tr: &crate::verifier::Trace<C>,
-    k: usize,
-) -> Result<&[F<C>], &'static str> {
+fn traced_io<C: PastaCurve>(tr: &crate::verifier::Trace<C>) -> Result<&[F<C>], &'static str> {
     tr.circuit
         .as_ref()
-        .and_then(|c| c.io_full.get(gc::IO_START..gc::IO_START + 4 + k))
+        .map(|c| c.io_full.as_slice())
+        .ok_or("missing inherited generator claim")
+}
+
+fn inherited_words<S>(io: &[S], k: usize) -> Result<&[S], &'static str> {
+    io.get(gc::IO_START..gc::IO_START + 4 + k)
         .ok_or("missing inherited generator claim")
 }
 
@@ -43,8 +45,15 @@ pub fn inherited_generator_claim<C: PastaCurve>(
     tr: &crate::verifier::Trace<C>,
     gens: &Gens<C>,
 ) -> Result<Claim<C>, &'static str> {
-    let k = gens.g.len().ilog2() as usize;
-    let words = inherited_words(tr, k)?;
+    inherited_generator_claim_from_io(traced_io(tr)?, gens)
+}
+
+/// Decode the generator claim in the complete public inputs of a linked proof.
+pub(crate) fn inherited_generator_claim_from_io<C: PastaCurve>(
+    io: &[F<C>],
+    gens: &Gens<C>,
+) -> Result<Claim<C>, &'static str> {
+    let words = inherited_words(io, gens.g.len().ilog2() as usize)?;
     let mut enc = [[0u8; 32]; 2];
     for i in 0..4 {
         let b = words[i].to_repr();
@@ -87,7 +96,7 @@ where
     let incoming = match proofs.get(1) {
         Some((_, trace)) => Some([
             trace.us.as_slice(),
-            &inherited_words(trace, gens.g.len().ilog2() as usize)?[4..],
+            &inherited_words(traced_io(trace)?, gens.g.len().ilog2() as usize)?[4..],
         ]),
         None => None,
     };
@@ -484,5 +493,37 @@ pub(super) fn bind_relation(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_claim_uses_the_canonical_words_of_verified_io() {
+        fn check<C: PastaCurve>() {
+            let gens = Gens::<C>::new(8);
+            let start = gc::IO_START;
+            let end = start + 4 + 3;
+            let mut io = vec![F::<C>::from(11); end + 1];
+            let point = gens.g[1];
+            io[start..start + 4]
+                .copy_from_slice(&coordinate_limbs::<C>(&point).map(F::<C>::from_u128));
+            let claim = inherited_generator_claim_from_io(&io, &gens).unwrap();
+            assert_eq!(claim.g, point);
+            assert_eq!(claim.us, io[start + 4..end]);
+            assert!(matches!(
+                inherited_generator_claim_from_io(&io[..end - 1], &gens),
+                Err("missing inherited generator claim")
+            ));
+            io[start] = F::<C>::from_u128(u128::MAX) + F::<C>::ONE;
+            assert!(matches!(
+                inherited_generator_claim_from_io(&io, &gens),
+                Err("generator coordinate limb exceeds 128 bits")
+            ));
+        }
+        check::<Ep>();
+        check::<Eq>();
     }
 }

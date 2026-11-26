@@ -67,6 +67,74 @@ fn same_head(a: &VerifiedWalletHead, b: &VerifiedWalletHead) -> bool {
 }
 
 #[test]
+#[ignore = "requires the selected program bundle and its two Payments"]
+fn outgoing_payment_reuses_only_the_exact_verified_send() {
+    use crate::native::engine::head_reuse_tests::{payer_head, selected_payments};
+    let (bundle, payments) = selected_payments();
+    let parameters = install(&bundle);
+    let engine = NativeEngine::default();
+    let (head, credential) = payer_head(&payments[0], &parameters);
+    let (_, pair) = engine
+        .verified_head_and_pair(&head, &credential, &parameters)
+        .unwrap();
+    let (trusted, candidate) = NativeEngine::payment_candidate(&payments[0], &parameters).unwrap();
+    let send = &parameters.inner.programs[full::SEND];
+    let raw = carrier::frame_projected_pair(&trusted, &candidate.pair_bytes).unwrap();
+    let matches =
+        |head: &full::UniformPair| same_send_proof(head, send, &candidate.projection, &raw);
+    assert!(matches(&pair));
+    let other_program = &parameters.inner.programs[full::RECEIVE];
+    for change in 0..8 {
+        let mut different = pair.clone();
+        match change {
+            0 => different.kind = full::RECEIVE,
+            1 => different.cp = other_program.primary.clone(),
+            2 => different.cs = other_program.secondary.clone(),
+            3 => different.ip.io[0] += Fp::ONE,
+            4 => different.is.io[0] += Fq::ONE,
+            5 => different.r[0] ^= 1,
+            6 => different.pp.ipa.z2 += Fp::ONE,
+            _ => different.ps.ipa.z2 += Fq::ONE,
+        }
+        assert!(!matches(&different), "changed Send component {change}");
+    }
+    let output = |payment| {
+        crate::native::encode(&OutputFrame {
+            version: 1,
+            head: head.clone(),
+            payment,
+        })
+        .unwrap()
+    };
+    let accepted = engine
+        .output_head(&output(payments[0].clone()), &parameters, &credential)
+        .unwrap();
+    assert_eq!(accepted.0.profile.as_slice(), pair.ip.io.as_slice());
+    assert!(
+        engine
+            .output_head(&output(payments[1].clone()), &parameters, &credential)
+            .is_err()
+    );
+
+    // Leave the correctly signed monetary originals and ordinary IO intact.
+    // A different, canonically encoded final response must go through verification.
+    let mut damaged = candidate.pair_bytes.clone();
+    let end = raw.ranges.primary.end;
+    damaged[end - 32..end].copy_from_slice(&(pair.pp.ipa.z2 + Fp::ONE).to_repr());
+    let profile = payment_wire::Profile {
+        pair: &trusted,
+        scheme: parameters.inner.scheme,
+        relation: parameters.inner.relation,
+    };
+    let altered = payment_wire::test_replace_pair(&profile, &payments[0], damaged).unwrap();
+    assert!(
+        engine
+            .output_head(&output(altered), &parameters, &credential)
+            .is_err()
+    );
+}
+
+#[test]
 #[ignore = "requires the signed device bundle and two retained Receive capsules with their completions"]
 fn completion_output_reuse_is_exact_and_local_to_its_owner() {
     let bundle = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());

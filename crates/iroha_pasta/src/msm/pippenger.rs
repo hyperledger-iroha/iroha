@@ -482,45 +482,16 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
     }
 }
 
-/// Inverts the nonzero queued denominators using the existing scratch.
-/// Four independent prefix chains expose field-multiplication parallelism;
-/// their product still uses exactly one inversion. Separating this phase from
-/// the affine updates keeps the four chain states out of those formulas.
+/// The queue gives cancellations a unit denominator. The secret path keeps its
+/// constant-time inversion and wipes all scratch through the shared batch kernel.
 fn invert_queued<F: PastaField, const SECRET: bool>(den: &mut [F], prefix: &mut [F]) {
-    debug_assert_eq!(den.len(), prefix.len());
-    let mut acc = Zeroizing::new([F::ONE; 4]);
-    for (ds, ps) in den.chunks(4).zip(prefix.chunks_mut(4)) {
-        for j in 0..ds.len() {
-            ps[j] = acc[j];
-            acc[j] *= ds[j];
-        }
-    }
-    // Every denominator is nonzero, including unused lanes' unit products.
-    // Every new secret-derived temporary buffer is wiped also on unwind.
-    let mut split = Zeroizing::new([F::ZERO; 5]);
-    split[0] = acc[0] * acc[1];
-    split[1] = acc[2] * acc[3];
-    split[2] = split[0] * split[1];
-    split[2] = if SECRET {
-        split[2].invert().unwrap_or(F::ZERO)
-    } else {
-        split[2].invert_vartime().unwrap_or(F::ZERO)
-    };
-    split[3] = split[2] * split[1];
-    split[4] = split[2] * split[0];
-    let mut inv = Zeroizing::new([
-        split[3] * acc[1],
-        split[3] * acc[0],
-        split[4] * acc[3],
-        split[4] * acc[2],
-    ]);
-    for (ds, ps) in den.chunks_mut(4).zip(prefix.chunks(4)).rev() {
-        for j in 0..ds.len() {
-            let value = inv[j] * ps[j];
-            inv[j] *= ds[j];
-            ds[j] = value;
-        }
-    }
+    crate::field::batch_invert_nonzero(den, prefix, |product| {
+        Some(if SECRET {
+            product.invert().unwrap_or(F::ZERO)
+        } else {
+            product.invert_vartime().unwrap_or(F::ZERO)
+        })
+    });
 }
 
 impl<C: PastaCurve, const SECRET: bool> Drop for Buckets<'_, C, SECRET> {

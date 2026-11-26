@@ -444,7 +444,7 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   the candidate. The full round trip averaged 408.56 s and 436.26 s of process CPU respectively on the loaded Mac.
   A final pair ran after the other local tests finished. The baseline and candidate used 19.92 s and 10.11 s for
   the same wiring, 394.44 s and 387.99 s for the whole process, and 172.80 s and 219.03 s of elapsed time.
-  The wiring improvement held across all three comparisons. Overall wallet latency remains unconfirmed.
+  The wiring improvement held across all three comparisons. Section 10.5 measures overall latency with independent wallets.
 
 ### 7.4 Generator claims
 
@@ -726,6 +726,36 @@ the IPA and the inner sumcheck.
   memory is unmeasured.
 
 None of these has been timed on a phone.
+
+### 10.5 Signed two-wallet round trip
+
+`native::device_fixture::tests::two_wallet_round_trip_from_bundle` times both signed parameter installations,
+two Bootstraps, a Load of 100, and two transfers of 10, one in each direction. Each wallet owns its engine and
+installation. Each recipient verifies the sender's exact Payment bytes with an empty entry for that Payment
+before proving its Receive. The timer includes signing with software fixture keys and ends when A completes its
+final Receive. The test checks final balances of 100 and 0, both credit roots, zero Burn and the QR size of each
+Payment. Physical-device signing, transport and durable storage require separate measurements.
+
+The signed 968f bundle on an M4 Max with six Rayon workers produced two 10,231-byte Payments per run.
+Four pairs of fresh release processes compared the wallet changes against `f058094475` with the same
+two-owner fixture. The baseline ran first in pairs 1 and 4. With the stage profiler disabled, mean elapsed time
+fell from 54.875 to 52.858 s (3.7%) and median elapsed time from 53.925 to 51.308 s (4.9%). The candidate was
+faster in two of four pairs. Mean process CPU fell from 189.481 to 174.661 s (7.8%), with a reduction in every
+pair. The two Sends together averaged 12.856 s to prepare and finalize, down from 14.897 s. The final Receive
+averaged 9.171 s, down from 11.234 s.
+
+The linked verifier returns the public inputs it checked on both curves so the engine can decide the inherited
+generator claims directly. A Send reuses that successful verification for its outgoing Payment only when its
+installed programs, projected inputs, link word and both proof encodings match. Receive computes its two matrix
+values and incoming verdicts once for both circuits. Generator folding uses four independent prefix products
+per batch inversion.
+
+Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
+
+```sh
+RAYON_NUM_THREADS=6 cargo test --locked --offline --release --lib \
+  native::device_fixture::tests::two_wallet_round_trip_from_bundle -- --exact --ignored --nocapture
+```
 
 ## 11. Security
 

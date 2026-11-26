@@ -470,7 +470,9 @@ impl NativeEngine {
         // its own projected pair later. A failed proof keeps the same bounded
         // envelope available for the hosted Request checks and noncredit refusal.
         let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
-        let valid = match self.verify_payment_candidate(bytes, parameters, &trusted, &candidate) {
+        let valid = match self
+            .verify_payment_candidate(bytes, parameters, &trusted, &candidate, None)
+        {
             Ok(_) => true,
             Err(
                 e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_)),

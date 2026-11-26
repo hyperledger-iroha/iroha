@@ -109,25 +109,9 @@ struct Scratch<F> {
     prefix: Vec<F>,
 }
 
-/// Inverts `den[..m]` in place; returns false if any entry is zero.
+/// Inverts the public denominators, returning false for an exceptional lane.
 fn invert_all<F: PastaField>(den: &mut [F], prefix: &mut [F]) -> bool {
-    let mut acc = F::ONE;
-    for (d, p) in den.iter().zip(prefix.iter_mut()) {
-        if d.is_zero_vartime() {
-            return false;
-        }
-        *p = acc;
-        acc *= d;
-    }
-    let Some(mut inv) = acc.invert_vartime() else {
-        return false;
-    };
-    for (d, p) in den.iter_mut().zip(prefix.iter()).rev() {
-        let t = inv * p;
-        inv *= *d;
-        *d = t;
-    }
-    true
+    crate::field::batch_invert_nonzero(den, prefix, F::invert_vartime)
 }
 
 /// `acc <- 2 acc` on every lane. Returns false on a zero denominator.

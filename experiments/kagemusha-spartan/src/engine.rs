@@ -35,6 +35,8 @@ mod archive_selector_signed_tests;
 #[cfg(test)]
 #[path = "engine_head_reuse_tests.rs"]
 mod head_reuse_tests;
+#[cfg(test)]
+pub(super) use head_reuse_tests::check_signed_receive_inputs;
 
 #[path = "native_credential.rs"]
 mod issued_credential;
@@ -1296,6 +1298,25 @@ fn assemble_pair(
     })
 }
 
+/// The exact Send statement and proof already accepted while verifying a head
+/// under this installation. The compact carrier transports both proofs and the
+/// link word; each envelope independently reconstructs its ordinary public IO.
+fn same_send_proof(
+    head: &full::UniformPair,
+    send: &Program,
+    inputs: &carrier::ProjectedInputs,
+    raw: &carrier::RawProjectedPair<'_>,
+) -> bool {
+    head.kind == full::SEND
+        && Arc::ptr_eq(&head.cp, &send.primary)
+        && Arc::ptr_eq(&head.cs, &send.secondary)
+        && head.ip.io == inputs.primary().io
+        && head.is.io == inputs.secondary().io
+        && head.r == raw.r
+        && head.pp.to_bytes() == raw.primary
+        && head.ps.to_bytes() == raw.secondary
+}
+
 fn verify_pair(
     parameters: &ParameterSet,
     kind: usize,
@@ -1304,28 +1325,39 @@ fn verify_pair(
     let u = assemble_pair(parameters, kind, decoded)?;
     let r = u.r;
     let rlc = move |_: &[u8; 32]| r;
-    let vp = spartan::verify_linked_circuit(
+    let vp = spartan::verify_linked_circuit_with_io(
         &u.cp.shape,
         &parameters.generators.p,
         &u.ip,
         &u.pp.to_bytes(),
         &Link::First { rho: u.rho, r },
         u.cp.as_ref(),
+        parameters
+            .generators
+            .keys_p
+            .as_ref()
+            .map(|keys| keys[kind].as_slice()),
     )
     .map_err(|_| Error::Rejected("primary linked proof".into()))?;
-    let vs = spartan::verify_linked_circuit(
+    let vs = spartan::verify_linked_circuit_with_io(
         &u.cs.shape,
         &parameters.generators.s,
         &u.is,
         &u.ps.to_bytes(),
         &Link::Second { d: u.d, rlc: &rlc },
         u.cs.as_ref(),
+        parameters
+            .generators
+            .keys_s
+            .as_ref()
+            .map(|keys| keys[kind].as_slice()),
     )
     .map_err(|_| Error::Rejected("secondary linked proof".into()))?;
-    if vp != u.d || vs != u.rho {
+    if vp.word != u.d || vs.word != u.rho {
         return Err(Error::Rejected("pair transcript binding".into()));
     }
-    decide_accumulators(&parameters.generators, &u)?;
+    decide_matrix_accumulators(&parameters.generators, &u)?;
+    decide_inherited_accumulators(&parameters.generators, &vp.io, &vs.io)?;
     Ok(u)
 }
 
@@ -1341,32 +1373,34 @@ pub(crate) fn matrix_accumulator<S: Scalar>(poly: &deferral::MatPoly<S>, late: &
     claim.point.len() == n && poly.eval(&claim.point) == claim.value
 }
 
-/// The decisions a linked verifier's success does not imply: both deferred
-/// matrix accumulators and both inherited generator accumulators. (Each linked
-/// verification already decided its own IPA generator claim.) Template pairs
-/// that a compiler warm-up builds from toy predecessors verify as linked
-/// proofs under the final programs but carry false accumulators; every native
-/// accepting boundary reaches this through `verify_pair` and refuses them.
-pub(crate) fn decide_accumulators(
-    generators: &full::PairGens,
-    pair: &full::UniformPair,
-) -> Result<()> {
+/// Decide both deferred matrix accumulators, including for linked compiler
+/// warm-up proofs that may carry false claims from toy predecessors.
+fn decide_matrix_accumulators(generators: &full::PairGens, pair: &full::UniformPair) -> Result<()> {
     if !matrix_accumulator(&generators.defer_p, &pair.pp.late) {
         return Err(Error::Rejected("native P matrix accumulator".into()));
     }
     if !matrix_accumulator(&generators.defer_s, &pair.ps.late) {
         return Err(Error::Rejected("native S matrix accumulator".into()));
     }
-    let traced = full::trace_uniform(pair.clone(), generators);
-    let inherited_p =
-        full::inherited_generator_claim(&traced.tr_p, &generators.p).map_err(Error::Malformed)?;
+    Ok(())
+}
+
+/// Each linked verifier already decided its own IPA generator claim. Decide
+/// its inherited claim from the very same complete public inputs it verified.
+fn decide_inherited_accumulators(
+    generators: &full::PairGens,
+    primary_io: &[Fp],
+    secondary_io: &[Fq],
+) -> Result<()> {
+    let inherited_p = full::inherited_generator_claim_from_io(primary_io, &generators.p)
+        .map_err(Error::Malformed)?;
     if !crate::generator_claim::decide(&generators.p, &inherited_p) {
         return Err(Error::Rejected(
             "native P inherited generator accumulator".into(),
         ));
     }
-    let inherited_s =
-        full::inherited_generator_claim(&traced.tr_s, &generators.s).map_err(Error::Malformed)?;
+    let inherited_s = full::inherited_generator_claim_from_io(secondary_io, &generators.s)
+        .map_err(Error::Malformed)?;
     if !crate::generator_claim::decide(&generators.s, &inherited_s) {
         return Err(Error::Rejected(
             "native S inherited generator accumulator".into(),
@@ -1375,7 +1409,32 @@ pub(crate) fn decide_accumulators(
     Ok(())
 }
 
-/// Whether a native refusal is one of `decide_accumulators`'s.
+/// Standalone accumulator decision used by compiler fixtures and mutation tests.
+#[cfg(test)]
+pub(crate) fn decide_accumulators(
+    generators: &full::PairGens,
+    pair: &full::UniformPair,
+) -> Result<()> {
+    decide_matrix_accumulators(generators, pair)?;
+    let traced = full::trace_uniform(pair.clone(), generators);
+    decide_inherited_accumulators(
+        generators,
+        &traced
+            .tr_p
+            .circuit
+            .as_ref()
+            .expect("uniform primary")
+            .io_full,
+        &traced
+            .tr_s
+            .circuit
+            .as_ref()
+            .expect("uniform secondary")
+            .io_full,
+    )
+}
+
+/// Whether a native refusal came from a deferred accumulator decision.
 #[cfg(test)]
 pub(crate) fn is_accumulator_refusal(e: &Error) -> bool {
     matches!(e, Error::Rejected(m) if m.starts_with("native ") && m.ends_with(" accumulator"))
@@ -1926,7 +1985,8 @@ impl NativeEngine {
         {
             return Ok(pair);
         }
-        decode_head(original, parameters).map(|(_, _, _, _, pair)| pair)
+        self.verified_head_and_pair(original, &prepared.predecessor.credential, parameters)
+            .map(|(_, pair)| pair)
     }
 
     fn require_minimum_memory(
@@ -1946,6 +2006,16 @@ impl NativeEngine {
         }
         Ok(())
     }
+    /// Whether this owner already verified the exact Payment under this installation.
+    #[cfg(test)]
+    pub(super) fn has_accepted_payment(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> bool {
+        self.accepted_payment(bytes, parameters).is_some()
+    }
+
     fn accepted_payment(
         &self,
         bytes: &[u8],
@@ -1976,15 +2046,27 @@ impl NativeEngine {
         Ok((trusted, candidate))
     }
 
+    fn verify_payment_with_head(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+        verified_head: Option<&full::UniformPair>,
+    ) -> Result<VerifiedIncomingPayment> {
+        if let Some(payment) = self.accepted_payment(bytes, parameters) {
+            return Ok(payment);
+        }
+        let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
+        self.verify_payment_candidate(bytes, parameters, &trusted, &candidate, verified_head)
+    }
+
     fn verify_payment_candidate(
         &self,
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
         trusted: &carrier::TrustedProfile,
         d: &payment_wire::Candidate,
+        verified_head: Option<&full::UniformPair>,
     ) -> Result<VerifiedIncomingPayment> {
-        let pair = carrier::decode_projected_pair(trusted, &d.pair_bytes, &d.projection)
-            .map_err(Error::Rejected)?;
         authenticate_credential(
             &parameters.inner,
             &d.originals.payer,
@@ -1998,7 +2080,22 @@ impl NativeEngine {
             .try_into()
             .map_err(|_| Error::Malformed("Payment profile"))?;
         profile_matches(&parameters.inner, &profile, &d.originals.payer)?;
-        verify_pair(&parameters.inner, full::SEND, pair)?;
+        // A Send's head and its outgoing Payment normally carry identical
+        // linked proofs. The carrier omits ordinary IO, so bind both independently
+        // reconstructed instances as well as the exact proof bytes and link word.
+        let already_verified = if let Some(head) = verified_head {
+            let send = &parameters.inner.programs[full::SEND];
+            let raw =
+                carrier::frame_projected_pair(trusted, &d.pair_bytes).map_err(Error::Rejected)?;
+            same_send_proof(head, send, &d.projection, &raw)
+        } else {
+            false
+        };
+        if !already_verified {
+            let pair = carrier::decode_projected_pair(trusted, &d.pair_bytes, &d.projection)
+                .map_err(Error::Rejected)?;
+            verify_pair(&parameters.inner, full::SEND, pair)?;
+        }
         let payment = VerifiedIncomingPayment {
             parameters_id: parameters.id,
             manifest_digest: parameters.manifest_digest,
@@ -2608,9 +2705,9 @@ impl NativeEngine {
         {
             return Ok((accepted.head.clone(), out));
         }
-        let head = self.verify_head(&out.head, c, parameters)?;
+        let (head, pair) = self.verified_head_and_pair(&out.head, c, parameters)?;
         if out.version == 1 && !out.payment.is_empty() {
-            let incoming = self.verify_payment(&out.payment, parameters)?;
+            let incoming = self.verify_payment_with_head(&out.payment, parameters, Some(&pair))?;
             if incoming.profile != head.profile {
                 return Err(Error::AuthorityMismatch("released Payment head"));
             }
@@ -2690,11 +2787,7 @@ impl Engine for NativeEngine {
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
     ) -> Result<VerifiedIncomingPayment> {
-        if let Some(payment) = self.accepted_payment(bytes, parameters) {
-            return Ok(payment);
-        }
-        let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
-        self.verify_payment_candidate(bytes, parameters, &trusted, &candidate)
+        self.verify_payment_with_head(bytes, parameters, None)
     }
     fn prepare(
         &self,
@@ -2863,19 +2956,19 @@ impl Engine for NativeEngine {
             ),
         };
         stage.mark("folds");
+        let recursive = full::RecursiveInputs::new(&p.generators, &pairs);
         let build_control = |control: &crate::control::Witness| -> Result<_> {
             Ok((
-                full::p_operation(
-                    full::OperationWitness::Control {
-                        root: &p.root,
-                        witness: control,
-                    },
-                    &p.generators,
-                    &pairs,
-                    folds.as_ref().expect("Control has predecessor folds"),
-                )
-                .map_err(Error::Malformed)?
-                .0,
+                recursive
+                    .primary(
+                        full::OperationWitness::Control {
+                            root: &p.root,
+                            witness: control,
+                        },
+                        folds.as_ref().expect("Control has predecessor folds"),
+                    )
+                    .map_err(Error::Malformed)?
+                    .0,
                 Some(control.mode),
             ))
         };
@@ -2892,25 +2985,20 @@ impl Engine for NativeEngine {
             ExactOperationWitness::RefreshTimeAnchor(step)
             | ExactOperationWitness::Unload { step, .. } => build_control(step)?,
             ExactOperationWitness::Send(step) => (
-                full::p_operation(
-                    full::OperationWitness::Send(step),
-                    &p.generators,
-                    &pairs,
-                    folds.as_ref().unwrap(),
-                )
-                .map_err(Error::Malformed)?
-                .0,
+                recursive
+                    .primary(full::OperationWitness::Send(step), folds.as_ref().unwrap())
+                    .map_err(Error::Malformed)?
+                    .0,
                 None,
             ),
             ExactOperationWitness::Receive { step, .. } => (
-                full::p_operation(
-                    full::OperationWitness::Receive(step),
-                    &p.generators,
-                    &pairs,
-                    folds.as_ref().unwrap(),
-                )
-                .map_err(Error::Malformed)?
-                .0,
+                recursive
+                    .primary(
+                        full::OperationWitness::Receive(step),
+                        folds.as_ref().unwrap(),
+                    )
+                    .map_err(Error::Malformed)?
+                    .0,
                 None,
             ),
             ExactOperationWitness::ArchiveSent { step, .. } => (
@@ -2921,8 +3009,7 @@ impl Engine for NativeEngine {
                     .primary(
                         step,
                         &prepared.predecessor,
-                        &p.generators,
-                        &pairs,
+                        &recursive,
                         folds.as_ref().expect("ArchiveSent folds"),
                     )?,
                 None,
@@ -2985,11 +3072,9 @@ impl Engine for NativeEngine {
             },
             || {
                 let ws = match folds.as_ref() {
-                    Some(folds) if k == full::ARCHIVE_SENT => {
-                        full::s_archive_operation(&p.generators, &pairs, folds).0
-                    }
                     Some(folds) => {
-                        full::s_operation(k, control_mode, &p.generators, &pairs, folds).0
+                        let own_kind = (k != full::ARCHIVE_SENT).then_some(k);
+                        recursive.secondary(own_kind, control_mode, folds).0
                     }
                     None => full::s_boot(&p.generators).0,
                 };
@@ -3004,6 +3089,7 @@ impl Engine for NativeEngine {
         );
         let d = primary.digest();
         stage.mark("phase1");
+        drop(recursive);
         drop(folds);
         drop(pairs);
         let (mut cs, is, ws, rows_s) = secondary?;

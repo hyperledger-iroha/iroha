@@ -191,6 +191,52 @@ pub fn batch_invert_vartime<F: PastaField>(values: &mut [F]) -> usize {
     values.len()
 }
 
+/// Invert a batch over four independent prefix products with a single inversion.
+/// The caller selects the inversion for its timing requirements. If it reports
+/// a zero product, the denominators are untouched and the result is false.
+pub(crate) fn batch_invert_nonzero<F: PastaField>(
+    den: &mut [F],
+    prefix: &mut [F],
+    invert: impl FnOnce(&F) -> Option<F>,
+) -> bool {
+    use zeroize::Zeroizing;
+
+    debug_assert_eq!(den.len(), prefix.len());
+    let mut acc = Zeroizing::new([F::ONE; 4]);
+    for (ds, ps) in den.chunks(4).zip(prefix.chunks_mut(4)) {
+        for j in 0..ds.len() {
+            ps[j] = acc[j];
+            acc[j] *= ds[j];
+        }
+    }
+    // Unused lanes contribute unit products.
+    // Every new secret-derived temporary buffer is wiped also on unwind.
+    let mut split = Zeroizing::new([F::ZERO; 5]);
+    split[0] = acc[0] * acc[1];
+    split[1] = acc[2] * acc[3];
+    split[2] = split[0] * split[1];
+    let Some(inverse) = invert(&split[2]) else {
+        return false;
+    };
+    split[2] = inverse;
+    split[3] = split[2] * split[1];
+    split[4] = split[2] * split[0];
+    let mut inv = Zeroizing::new([
+        split[3] * acc[1],
+        split[3] * acc[0],
+        split[4] * acc[3],
+        split[4] * acc[2],
+    ]);
+    for (ds, ps) in den.chunks_mut(4).zip(prefix.chunks(4)).rev() {
+        for j in 0..ds.len() {
+            let value = inv[j] * ps[j];
+            inv[j] *= ds[j];
+            ds[j] = value;
+        }
+    }
+    true
+}
+
 /// Exponentiation by a public 256-bit exponent with a 5-bit sliding window.
 ///
 /// The sequence of operations depends only on `exp`, so the running time is
@@ -788,6 +834,45 @@ mod tests {
         ] {
             assert_eq!(pow_public_exponent(&base, &exp), base.pow_vartime(exp));
         }
+    }
+
+    #[test]
+    fn nonzero_batch_inversion_handles_partial_chains_and_zero_products() {
+        fn check<F: PastaField>() {
+            for len in 0..=9 {
+                let values: Vec<_> = (0..len).map(|i| -F::from(i as u64 + 1)).collect();
+                let mut scratch = vec![F::ZERO; len];
+                for secret in [false, true] {
+                    let mut result = values.clone();
+                    let mut calls = 0;
+                    assert!(batch_invert_nonzero(&mut result, &mut scratch, |p| {
+                        calls += 1;
+                        if secret {
+                            Some(p.invert().unwrap_or(F::ZERO))
+                        } else {
+                            p.invert_vartime()
+                        }
+                    }));
+                    assert_eq!(calls, 1);
+                    for (&v, inverse) in values.iter().zip(result) {
+                        assert_eq!(v * inverse, F::ONE);
+                    }
+                }
+                for i in 0..len {
+                    let mut result = values.clone();
+                    result[i] = F::ZERO;
+                    let original = result.clone();
+                    assert!(!batch_invert_nonzero(
+                        &mut result,
+                        &mut scratch,
+                        F::invert_vartime
+                    ));
+                    assert_eq!(result, original);
+                }
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]

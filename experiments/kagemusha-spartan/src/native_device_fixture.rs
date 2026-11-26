@@ -949,13 +949,10 @@ mod tests {
         assert_eq!(payment.request().body, incoming.request().body);
     }
 
-    /// Two wallets through the real engine under the authenticated program
-    /// bundle of a complete compiler run: A Bootstrap, A Load100, B Bootstrap,
-    /// B-signed Request, A Send10 to B, B Receive; then back: A-signed
-    /// Request, B Send10 to A, A Receive after its own Send. The device runner
-    /// runs this flow with A in platform custody. Here wallet A is issued
-    /// through the `bootstrap` entry a device uses, with a software key
-    /// standing in for its hardware boundary.
+    /// Two software-signed wallets independently install the same authenticated
+    /// program bundle. A loads 100, sends 10 to B, and receives the 10 back.
+    /// Each recipient first sees the released Payment through its own verifier.
+    /// The total starts before both installations and ends after A's final Receive.
     #[test]
     #[ignore = "requires the authenticated full-backend-chain/native-device bundle"]
     fn two_wallet_round_trip_from_bundle() {
@@ -968,13 +965,40 @@ mod tests {
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("output/full-backend-chain/native-device")
                 });
-            let parameters = install_test_bundle(&path)?;
+            struct Wallet {
+                engine: NativeEngine,
+                parameters: AuthenticatedParameters,
+            }
+            let install = || -> Result<Wallet> {
+                Ok(Wallet {
+                    engine: NativeEngine::default(),
+                    parameters: install_test_bundle(&path)?,
+                })
+            };
+            let wallet_a = install()?;
+            let install_a = started.elapsed();
+            let begun = Instant::now();
+            let wallet_b = install()?;
+            let install_b = begun.elapsed();
             eprintln!(
                 "two-wallet timing install: {:.3}s",
                 started.elapsed().as_secs_f64()
             );
-            let engine = NativeEngine::default();
-            let advance = |label: &str,
+            eprintln!(
+                "two-wallet parameter installations: A={:.3}s B={:.3}s",
+                install_a.as_secs_f64(),
+                install_b.as_secs_f64()
+            );
+            assert!(!Arc::ptr_eq(
+                &wallet_a.parameters.installation,
+                &wallet_b.parameters.installation
+            ));
+            assert_eq!(
+                wallet_a.parameters.manifest_digest(),
+                wallet_b.parameters.manifest_digest()
+            );
+            let advance = |wallet: &Wallet,
+                           label: &str,
                            sign: &dyn Fn(&PreparedOperation) -> Result<HardwareAdvanceReceipt>,
                            head: &VerifiedWalletHead,
                            witness: &ExactOperationWitness|
@@ -988,17 +1012,36 @@ mod tests {
                 };
                 let from = unix_ms();
                 let begun = Instant::now();
-                let prepared = engine.prepare(witness, head, &parameters)?;
+                let prepared = wallet.engine.prepare(witness, head, &wallet.parameters)?;
                 let prepare = begun.elapsed().as_secs_f64();
                 let receipt = sign(&prepared)?;
                 let begun = Instant::now();
-                let completed = engine.finalize(prepared, &receipt, &parameters)?;
+                let completed = wallet
+                    .engine
+                    .finalize(prepared, &receipt, &wallet.parameters)?;
                 eprintln!(
                     "two-wallet timing {label}: prepare={prepare:.3}s finalize={:.3}s unix_ms={from}..{}",
                     begun.elapsed().as_secs_f64(),
                     unix_ms()
                 );
                 Ok(completed)
+            };
+
+            let verify_incoming = |wallet: &Wallet, label: &str, bytes: &[u8]| -> Result<_> {
+                assert!(
+                    !wallet
+                        .engine
+                        .has_accepted_payment(bytes, &wallet.parameters),
+                    "{label} must independently verify its incoming Payment"
+                );
+                let begun = Instant::now();
+                let payment = wallet.engine.verify_payment(bytes, &wallet.parameters)?;
+                eprintln!(
+                    "two-wallet timing {label} verifies Payment: {:.3}s",
+                    begun.elapsed().as_secs_f64()
+                );
+                assert_eq!(payment.exact_bytes(), bytes);
+                Ok(payment)
             };
 
             // Wallet A, issued as on a device from an enrollment challenge and
@@ -1016,29 +1059,29 @@ mod tests {
                 enrollment_policy: [0xa4; 32],
                 issuer_nonce: [0xa5; 32],
             };
-            let a_bootstrap = bootstrap(&parameters, &challenge, &device_key(&a_key.q))?;
+            let a_bootstrap = bootstrap(&wallet_a.parameters, &challenge, &device_key(&a_key.q))?;
             let ExactOperationWitness::Bootstrap(a_input) = &a_bootstrap else {
                 unreachable!()
             };
-            let a_origin = engine.enrollment_origin(
+            let a_origin = wallet_a.engine.enrollment_origin(
                 a_input,
                 enrollment_marker(&challenge, &device_key(&a_key.q))?,
-                &parameters,
+                &wallet_a.parameters,
             )?;
-            let a_enrolled = advance("A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
+            let a_enrolled = advance(&wallet_a, "A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
             let a_load = load100(&a_bootstrap)?;
-            let a_loaded = advance("A Load100", &a_sign, a_enrolled.head(), &a_load)?;
+            let a_loaded = advance(&wallet_a, "A Load100", &a_sign, a_enrolled.head(), &a_load)?;
 
             // Wallet B, the software counterparty under A's scheme and asset.
-            let b = Counterparty::new(&parameters, a_bootstrap.credential())?;
+            let b = Counterparty::new(&wallet_b.parameters, a_bootstrap.credential())?;
             let b_sign = |prepared: &PreparedOperation| b.sign(prepared);
-            let b_origin = b.origin(&engine, &parameters)?;
-            let b_enrolled = advance("B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
+            let b_origin = b.origin(&wallet_b.engine, &wallet_b.parameters)?;
+            let b_enrolled = advance(&wallet_b, "B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
 
             // B makes the Request; A pays it.
             let request = request_to(&a_load, b.credential())?;
             let send = send10_to(&a_load, b.credential(), b.sign_request(&request)?)?;
-            let sent = advance("A Send10 to B", &a_sign, a_loaded.head(), &send)?;
+            let sent = advance(&wallet_a, "A Send10 to B", &a_sign, a_loaded.head(), &send)?;
             let bytes = sent.completion().output_part(1)?;
             eprintln!(
                 "two-wallet complete Payment: {} B, blake3 {}",
@@ -1053,19 +1096,14 @@ mod tests {
             }
 
             // B verifies the exact Payment bytes and receives them.
-            let begun = Instant::now();
-            let payment = engine.verify_payment(&bytes, &parameters)?;
-            eprintln!(
-                "two-wallet timing B verifies Payment: {:.3}s",
-                begun.elapsed().as_secs_f64()
-            );
+            let payment = verify_incoming(&wallet_b, "B", &bytes)?;
             let receive = receive_from(
                 b.bootstrap(),
                 b.bootstrap(),
                 b_enrolled.head().profile(),
                 &payment,
             )?;
-            let received = advance("B Receive", &b_sign, b_enrolled.head(), &receive)?;
+            let received = advance(&wallet_b, "B Receive", &b_sign, b_enrolled.head(), &receive)?;
 
             // Back: A makes the Request, B pays it from what it received, and
             // A receives after its own Send.
@@ -1084,7 +1122,7 @@ mod tests {
                 "two-wallet fixture wallet A Request",
             );
             let back = send10_from(&b_origin, a_bootstrap.credential(), a_request_signature)?;
-            let b_sent = advance("B Send10 to A", &b_sign, received.head(), &back)?;
+            let b_sent = advance(&wallet_b, "B Send10 to A", &b_sign, received.head(), &back)?;
             let back_bytes = b_sent.completion().output_part(1)?;
             eprintln!(
                 "two-wallet complete return Payment: {} B, blake3 {}",
@@ -1098,15 +1136,10 @@ mod tests {
                 )
                 .map_err(|e| Error::Rejected(e.to_string()))?;
             }
-            let begun = Instant::now();
-            let back_payment = engine.verify_payment(&back_bytes, &parameters)?;
-            eprintln!(
-                "two-wallet timing A verifies Payment: {:.3}s",
-                begun.elapsed().as_secs_f64()
-            );
+            let back_payment = verify_incoming(&wallet_a, "A", &back_bytes)?;
             let a_receive =
                 receive_from(&a_bootstrap, &send, sent.head().profile(), &back_payment)?;
-            let a_received = advance("A Receive", &a_sign, sent.head(), &a_receive)?;
+            let a_received = advance(&wallet_a, "A Receive", &a_sign, sent.head(), &a_receive)?;
             eprintln!(
                 "two-wallet timing total: {:.3}s",
                 started.elapsed().as_secs_f64()
@@ -1451,7 +1484,10 @@ mod tests {
                            witness: &ExactOperationWitness|
              -> Result<CompletedOperation> {
                 let refused = |what: &str| Error::Rejected(format!("{label}: {what}"));
-                let prepared = engine.prepare(witness, head, &parameters)?;
+                let mut prepared = engine.prepare(witness, head, &parameters)?;
+                if matches!(witness, ExactOperationWitness::Receive { .. }) {
+                    engine::check_signed_receive_inputs(&engine, &mut prepared, &parameters)?;
+                }
                 let receipt = sign(&prepared)?;
                 let capsule = prepared.capsule().clone();
                 drop(prepared);

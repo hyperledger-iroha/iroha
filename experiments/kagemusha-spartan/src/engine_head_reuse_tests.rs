@@ -366,6 +366,97 @@ fn resume_with_reused_predecessor_rebuilds_the_same_preparation() {
     }
 }
 
+/// Exercise direct finalization with the head and incoming proof of a freshly
+/// prepared signed Receive. Its enclosing test also replays the exact capsule.
+pub(in crate::native) fn check_signed_receive_inputs(
+    owner: &NativeEngine,
+    direct: &mut PreparedOperation,
+    parameters: &AuthenticatedParameters,
+) -> Result<()> {
+    assert!(direct.resumed_under.is_none());
+    let (_, expected_pair) = owner.verified_head_and_pair(
+        &direct.predecessor.pair,
+        &direct.predecessor.credential,
+        parameters,
+    )?;
+    let before = decodes(parameters);
+    let hit = owner.predecessor_for_proof(direct, parameters)?;
+    assert!(same_pair(&expected_pair, &hit));
+    assert_eq!(decodes(parameters), before);
+    let other = NativeEngine::default();
+    let miss = other.predecessor_for_proof(direct, parameters)?;
+    assert!(same_pair(&expected_pair, &miss));
+    assert_eq!(decodes(parameters), before + 1);
+    direct.predecessor.credential.signature[0] ^= 1;
+    assert!(matches!(
+        other.predecessor_for_proof(direct, parameters),
+        Err(Error::AuthorityMismatch("requested head credential"))
+    ));
+    direct.predecessor.credential.signature[0] ^= 1;
+
+    let incoming = direct.receive.as_ref().expect("prepared Receive");
+    let pair = &incoming.pair;
+    let gens = &parameters.inner.generators;
+    let traced = full::trace_incoming_candidate(pair.clone(), gens, incoming.pair_bytes.clone());
+    fn check<C: iroha_pasta::PastaCurve>(
+        gens: &Gens<C>,
+        key: &[crate::ipa::Aff<C>],
+        circuit: &UniformCircuit<crate::ipa::F<C>>,
+        instance: &Instance<crate::ipa::F<C>>,
+        proof: &spartan::Proof<C>,
+        link: &Link,
+        trace: &crate::verifier::Trace<C>,
+        word: [u8; 32],
+    ) where
+        crate::ipa::F<C>: Scalar,
+    {
+        let verified = spartan::verify_linked_circuit_with_io(
+            &circuit.shape,
+            gens,
+            instance,
+            &proof.to_bytes(),
+            link,
+            circuit,
+            Some(key),
+        )
+        .unwrap();
+        assert_eq!(verified.word, word);
+        assert_eq!(verified.io, trace.circuit.as_ref().unwrap().io_full);
+        let expected = full::inherited_generator_claim(trace, gens).unwrap();
+        let inherited = full::inherited_generator_claim_from_io(&verified.io, gens).unwrap();
+        assert_eq!(inherited.g, expected.g);
+        assert_eq!(inherited.us, expected.us);
+        assert!(crate::generator_claim::decide(gens, &inherited));
+    }
+    check(
+        &gens.p,
+        &gens.keys_p.as_ref().expect("mounted primary keys")[full::SEND],
+        &pair.cp,
+        &pair.ip,
+        &pair.pp,
+        &Link::First {
+            rho: pair.rho,
+            r: pair.r,
+        },
+        &traced.tr_p,
+        pair.d,
+    );
+    check(
+        &gens.s,
+        &gens.keys_s.as_ref().expect("mounted secondary keys")[full::SEND],
+        &pair.cs,
+        &pair.is,
+        &pair.ps,
+        &Link::Second {
+            d: pair.d,
+            rlc: &|_| pair.r,
+        },
+        &traced.tr_s,
+        pair.rho,
+    );
+    Ok(())
+}
+
 fn retained_receive(parameters: &AuthenticatedParameters) -> (RecoveryCapsule, CompletionRecord) {
     let root = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
     let capsule = RecoveryCapsule::decode(
