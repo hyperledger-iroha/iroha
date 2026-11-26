@@ -323,7 +323,7 @@ impl Expansion<'_> {
 
 /// The transactions a global block may execute at most: the on-chain transaction cap and the
 /// execution output's network input capacity.
-fn block_capacity(world: &impl WorldReadOnly) -> usize {
+pub(super) fn block_capacity(world: &impl WorldReadOnly) -> usize {
     let parameters = world.parameters().block();
     let inputs = parameters
         .fastpq_source()

@@ -544,6 +544,57 @@ mod continuation_projection;
 mod paid_quantity_source;
 
 #[test]
+fn native_lane_queue_splits_at_global_input_capacity_and_merges_both_frames() {
+    use super::super::global::QueueLaneTransactions;
+    use crate::queue::Queue;
+    use iroha_primitives::time::TimeSource;
+
+    let mut fixture = Fixture::start();
+    fixture.chain.commit(Vec::new());
+    fixture.chain.commit(Vec::new());
+    let state = Arc::clone(fixture.chain.state());
+    assert_eq!(block_capacity(&state.world_view()), 11);
+    let (_, clock) = TimeSource::new_mock(Duration::from_millis(GENESIS_MS + 3_000));
+    let queue = Arc::new(Queue::test(Default::default(), &clock));
+    let lane = QueueLaneTransactions::new(LANE, Arc::clone(&queue), Arc::clone(&state), clock);
+    let budget = state.ivm_execution_budget();
+    let expected: Vec<_> = (0..12)
+        .map(|i| fixture.log(&lane_user(), &format!("lane input {i}"), GENESIS_MS - 1))
+        .map(TransactionEntrypoint::External)
+        .collect();
+    for tx in &expected {
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx.clone()));
+        queue.push_with_lane_with_state(accepted, &state).unwrap();
+    }
+
+    let (first, lease) = lane
+        .candidates(4, usize::MAX, &BTreeSet::new(), &budget)
+        .unwrap();
+    assert_eq!(
+        first.len(),
+        11,
+        "a fresh lane frame must fit one complete global block"
+    );
+    assert_eq!(first, expected[..11]);
+    assert!(lane.lease_is_current(&lease, &budget).unwrap());
+    fixture.certify_entrypoints(1, 3, first);
+    let full = fixture.chain.commit_entrypoints(Vec::new());
+    assert_eq!(full.block().merged_entrypoint_count(), 11);
+    assert_eq!(fixture.record().merged.height, 1);
+    drop(lease);
+
+    let (last, lease) = lane
+        .candidates(5, usize::MAX, &BTreeSet::new(), &budget)
+        .unwrap();
+    assert_eq!(last, expected[11..]);
+    assert!(lane.lease_is_current(&lease, &budget).unwrap());
+    fixture.certify_entrypoints(2, 4, last);
+    let remainder = fixture.chain.commit_entrypoints(Vec::new());
+    assert_eq!(remainder.block().merged_entrypoint_count(), 1);
+    assert_eq!(fixture.record().merged.height, 2);
+}
+
+#[test]
 fn global_blocks_merge_fresh_lane_blocks_and_drop_what_they_must_not_execute() {
     let mut fixture = Fixture::start();
     let record = fixture.record();

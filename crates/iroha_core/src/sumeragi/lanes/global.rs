@@ -282,9 +282,14 @@ impl LaneTransactions for QueueLaneTransactions {
         let inputs = routing.inputs(view.world());
         let mut selected = Vec::new();
         let mut bytes = 0usize;
+        // A certified fresh lane frame is merged whole, so it must fit one global block.
+        let max_inputs = super::merge::block_capacity(view.world());
         let wall_time = self.time_source.now();
         let mut future = false;
         for transaction in pending {
+            if selected.len() == max_inputs {
+                break;
+            }
             if skip.contains(&transaction.hash_as_entrypoint()) {
                 continue;
             }
